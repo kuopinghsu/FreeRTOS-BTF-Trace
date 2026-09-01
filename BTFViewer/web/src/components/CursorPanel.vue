@@ -180,10 +180,10 @@ const deltas = computed(() => {
   align-items: center;
   gap: 8px;
   padding: 5px 6px;
-  border-radius: var(--rp-r-1, 6px);
+  border-radius: var(--app-r-1, 6px);
 }
 .cursor-row:hover {
-  background: var(--rp-hover-bg, rgba(127,127,127,0.08));
+  background: var(--app-hover-bg, rgba(127,127,127,0.08));
 }
 
 .cursor-time.clickable {
@@ -313,7 +313,7 @@ const deltas = computed(() => {
 
 .cursor-actions {
   padding: var(--sp-2, 8px);
-  border-top: 1px solid var(--rp-border-soft, var(--border));
+  border-top: 1px solid var(--app-border-soft, var(--border));
 }
 
 .action-btn {
@@ -321,14 +321,14 @@ const deltas = computed(() => {
   font-size: var(--type-meta, 11px);
   padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--rp-r-1, 6px);
+  border-radius: var(--app-r-1, 6px);
   background: transparent;
   color: var(--fg);
   cursor: pointer;
 }
 .action-btn:hover:not(:disabled) {
   background: var(--tb-btn-hover);
-  border-color: var(--rp-accent-line, var(--accent));
+  border-color: var(--app-accent-line, var(--accent));
 }
 .action-btn:disabled {
   color: var(--fg-dim);

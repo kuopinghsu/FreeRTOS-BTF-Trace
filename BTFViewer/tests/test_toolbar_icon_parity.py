@@ -39,15 +39,20 @@ class ToolbarIconParityTests(unittest.TestCase):
 
     def test_desktop_file_cluster_uses_snapshot_perfetto_slice(self) -> None:
         mw = (BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py").read_text(encoding="utf-8")
-        self.assertIn("_IC_SHOT", mw)
         self.assertIn("_IC_PERFETTO", mw)
         self.assertIn("_IC_EXPORT_SLICE", mw)
-        self.assertIn('Snapshot &Editor', mw)
-        self.assertIn('Open snapshot editor  (Ctrl+S)', mw)
         self.assertNotIn('_ia("Save PNG"', mw)
-        self.assertIn("toolbar_right_spacer", mw)
-        self.assertIn("_IC_HELP", mw)
+        # Shell redesign: Snapshot / Help / Settings moved to the left activity
+        # rail (web-parity glyphs); the File / Help menus keep their entries.
+        self.assertIn('("snapshot", _RG_SNAPSHOT, "Snapshot editor")', mw)
+        self.assertIn('("help", _RG_HELP, ', mw)
+        self.assertIn('("settings", _RG_SETTINGS, "Settings")', mw)
+        self.assertIn('Snapshot &Editor', mw)
         self.assertIn("_on_keyboard_shortcuts", mw)
+        self.assertNotIn('_ia("Snapshot"', mw)
+        self.assertNotIn('_ia("Help"', mw)
+        self.assertNotIn('_ia("Settings"', mw)
+        self.assertIn("toolbar_right_spacer", mw)
 
     def test_limit_and_filter_badges_are_independent(self) -> None:
         """Toolbar shows C1–Cn only while Limit is on, and a separate Filtered
@@ -84,7 +89,9 @@ class ToolbarIconParityTests(unittest.TestCase):
         self.assertIn("tbLimitBadge", chunk)
         self.assertIn("tbFilterBadge", chunk)
         self.assertLess(chunk.find("tbLimitBadge"), chunk.find("tbFilterBadge"))
-        self.assertLess(chunk.find("tbFilterBadge"), chunk.find('_ia("Settings"'))
+        # Filtered badge is the last toolbar item now (Settings/Help moved to
+        # the activity rail); it comes after the right-spacer.
+        self.assertLess(chunk.find("toolbar_right_spacer"), chunk.find("tbFilterBadge"))
         self.assertNotIn("setFlat", chunk)
         self.assertIn('setText("C1–Cn")', mw)
         self.assertNotIn("C1–Cn On", mw)
@@ -119,16 +126,30 @@ class ToolbarIconParityTests(unittest.TestCase):
     def test_web_toolbar_uses_shared_file_icons(self) -> None:
         tb = (BTF_ROOT / "web" / "src" / "components" / "Toolbar.vue").read_text(
             encoding="utf-8")
+        app = (BTF_ROOT / "web" / "src" / "App.vue").read_text(encoding="utf-8")
         mw = (BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py").read_text(
             encoding="utf-8")
+        # What the slimmed toolbar still carries.
         for token in (
-            "IC.open", "IC.shot", "IC.saveSvg", "IC.perfetto", "IC.exportSlice",
-            "IC.oneToOne", "IC.help", "IC.settings", "IC.analysis", "IC.compare",
+            "IC.open", "IC.saveSvg", "IC.perfetto", "IC.exportSlice",
+            "IC.oneToOne", "IC.find",
         ):
             self.assertIn(token, tb)
-        self.assertLess(tb.find("IC.analysis"), tb.find("IC.compare"))
-        self.assertLess(mw.find('_tb_analysis_btn'), mw.find('_tb_compare_btn'))
-        self.assertIn("_IC_COMPARE", mw)
+        # Snapshot / Heatmap / Analysis / Compare / Settings / Help moved to the
+        # left activity rail (shell redesign) — gone from the toolbar.
+        for token in ("IC.shot", "IC.analysis", "IC.compare", "IC.settings", "IC.help"):
+            self.assertNotIn(token, tb)
+        for emit in ("showHeatmap", "showAnalysis", "showCompare",
+                     "showSettings", "showHelp"):
+            self.assertNotIn(f"emit('{emit}')", tb)
+        # Rail carries them, on both sides.
+        for dt in ("rail_heatmap", "rail_analysis", "rail_help", "rail_settings"):
+            self.assertIn(f'data-demo-target="{dt}"', app)
+        self.assertIn('@click="openHelpDialog"', app)
+        # Desktop rails render the same web SVG glyphs (config._RG_*).
+        for token in ("_RG_HEATMAP", "_RG_COMPARE", "_RG_HELP", "_RG_SETTINGS",
+                      "_RG_STATS", "_RG_AI", "_rail_glyph_icon"):
+            self.assertIn(token, mw)
 
 
 if __name__ == "__main__":

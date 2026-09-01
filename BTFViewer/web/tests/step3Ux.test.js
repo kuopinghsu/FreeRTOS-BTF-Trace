@@ -30,6 +30,13 @@ describe('step3 ux polish', () => {
     assert.equal(COMMAND_PALETTE_META.marks.shortcut, 'Ctrl+B')
   })
 
+  it('command palette offers Focus mode (needs a trace)', () => {
+    const focus = COMMAND_PALETTE_ACTIONS.find(([id]) => id === 'focus')
+    assert.equal(focus?.[1], 'Focus mode')
+    assert.equal(COMMAND_PALETTE_META.focus.requires, 'trace')
+    assert.ok(COMMAND_PALETTE_META.focus.synonyms.includes('zen'))
+  })
+
   it('Find status stays concise without Match Mode lecture', () => {
     const text = formatFindStatus({
       hitCount: 0,

@@ -315,17 +315,17 @@ class DemoInappSourceParityTests(unittest.TestCase):
         ).read_text(encoding="utf-8"))
 
     def test_toolbar_heatmap_live_target_lockstep(self) -> None:
-        """<move target="toolbar_heatmap"/> resolves the Heatmap button."""
+        """<move target="rail_heatmap"/> resolves the activity-rail Heatmap
+        button — Heatmap moved off the toolbar in the shell redesign."""
         mw = DESKTOP_MW.read_text(encoding="utf-8")
-        tb = (BTF_ROOT / "web" / "src" / "components" / "Toolbar.vue").read_text(
-            encoding="utf-8")
+        app = (BTF_ROOT / "web" / "src" / "App.vue").read_text(encoding="utf-8")
         readme = (BTF_ROOT / "demos" / "README.md").read_text(encoding="utf-8")
         xml = (BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml").read_text(
             encoding="utf-8")
-        self.assertIn('"toolbar_heatmap": "_tb_heatmap_btn"', mw)
-        self.assertIn('data-demo-target="toolbar_heatmap"', tb)
-        self.assertIn("`toolbar_heatmap`", readme)
-        self.assertIn('name="toolbar_heatmap"', xml)
+        self.assertIn('"rail_heatmap": "heatmap"', mw)
+        self.assertIn('data-demo-target="rail_heatmap"', app)
+        self.assertIn("`rail_heatmap`", readme)
+        self.assertIn('name="rail_heatmap"', xml)
 
     def test_hotkey_and_type_are_skipped(self) -> None:
         py = DESKTOP_INAPP.read_text(encoding="utf-8")

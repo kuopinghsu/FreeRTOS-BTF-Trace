@@ -1294,8 +1294,17 @@ class _IconRail(QWidget):
     """
 
     activated = Signal(int)
+    collapseToggled = Signal()
 
     RAIL_W = 44
+
+    # Panel-collapse toggle — Lucide panel-right-close / panel-right-open (the
+    # modern "hide the side panel" glyph).  Class-body literals: config._RG_*
+    # isn't flattened in until _bootstrap runs, after this class body executes.
+    _IC_COLLAPSE = ('<rect x="3" y="3" width="18" height="18" rx="2"/>'
+                    '<path d="M15 3v18"/><path d="m8 9 3 3-3 3"/>')
+    _IC_EXPAND = ('<rect x="3" y="3" width="18" height="18" rx="2"/>'
+                  '<path d="M15 3v18"/><path d="m10 15-3-3 3-3"/>')
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1311,6 +1320,7 @@ class _IconRail(QWidget):
         self._group.idClicked.connect(self.activated)
         self._buttons: List[QToolButton] = []
         self._icon_paths: List[str] = []
+        self._collapse_btn: Optional[QToolButton] = None
 
     def add_item(self, icon_path: str, label: str) -> int:
         btn = QToolButton()
@@ -1321,7 +1331,7 @@ class _IconRail(QWidget):
         btn.setAutoRaise(True)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        btn.setIcon(_svg_icon(icon_path, "#9E9E9E", 18))
+        btn.setIcon(_rail_glyph_icon(icon_path, "#9E9E9E", 18))
         btn.setIconSize(QSize(18, 18))
         btn.setFixedSize(self.RAIL_W, 40)
         idx = len(self._buttons)
@@ -1330,6 +1340,37 @@ class _IconRail(QWidget):
         self._group.addButton(btn, idx)
         self._lay.addWidget(btn)
         return idx
+
+    def add_collapse_button(self) -> QToolButton:
+        """Add a spring + a collapse/expand toggle pinned to the rail foot
+        (web App.vue: double-click the panel seam)."""
+        # Drop the top-hug so the stretch can push this button to the foot;
+        # the panel buttons are fixed-size and stay put.
+        self._lay.setAlignment(Qt.AlignmentFlag(0))
+        self._lay.addStretch(1)
+        btn = QToolButton()
+        btn.setObjectName("rail_collapse")
+        btn.setToolTip("Collapse panel")
+        btn.setText("Collapse panel")            # accessibility / tests
+        btn.setAutoRaise(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        btn.setIcon(_rail_glyph_icon(self._IC_COLLAPSE, "#9E9E9E", 16))
+        btn.setIconSize(QSize(16, 16))
+        btn.setFixedSize(self.RAIL_W, 32)
+        btn.clicked.connect(self.collapseToggled)
+        self._collapse_btn = btn
+        self._lay.addWidget(btn)
+        return btn
+
+    def set_collapsed_look(self, collapsed: bool, color: str = "#9E9E9E") -> None:
+        btn = self._collapse_btn
+        if btn is None:
+            return
+        btn.setIcon(_rail_glyph_icon(
+            self._IC_EXPAND if collapsed else self._IC_COLLAPSE, color, 16))
+        btn.setToolTip("Expand panel" if collapsed else "Collapse panel")
+        btn.setText("Expand panel" if collapsed else "Collapse panel")
 
     def set_active(self, index: int) -> None:
         if 0 <= index < len(self._buttons):
@@ -1345,7 +1386,113 @@ class _IconRail(QWidget):
 
     def refresh_icons(self, color: str, accent: str) -> None:
         for b, path in zip(self._buttons, self._icon_paths):
-            b.setIcon(_svg_icon(path, accent if b.isChecked() else color, 18))
+            b.setIcon(_rail_glyph_icon(path, accent if b.isChecked() else color, 18))
+
+
+class _ActivityRail(QWidget):
+    """Left-edge vertical rail of investigation entry points — mirror of the
+    web App.vue ``.activity-rail``.  Momentary glyph buttons (no checked
+    state); emits ``activated(key)`` on click.  ``add_spring()`` before the
+    last item pins Settings to the foot.
+    """
+
+    activated = Signal(str)
+
+    RAIL_W = 44
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("activity_rail")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedWidth(self.RAIL_W)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(0, 4, 0, 4)
+        self._lay.setSpacing(2)
+        self._lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._buttons: Dict[str, QToolButton] = {}
+        self._icon_paths: Dict[str, str] = {}
+
+    def add_item(self, key: str, icon_path: str, label: str) -> QToolButton:
+        btn = QToolButton()
+        btn.setObjectName("act_btn")
+        btn.setText(label)                       # accessibility / tests
+        btn.setToolTip(label)
+        btn.setAutoRaise(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        btn.setIcon(_rail_glyph_icon(icon_path, "#9E9E9E", 18))
+        btn.setIconSize(QSize(18, 18))
+        btn.setFixedSize(self.RAIL_W, 40)
+        btn.clicked.connect(lambda _=False, k=key: self.activated.emit(k))
+        self._buttons[key] = btn
+        self._icon_paths[key] = icon_path
+        self._lay.addWidget(btn)
+        return btn
+
+    def add_spring(self) -> None:
+        self._lay.addStretch(1)
+
+    def button(self, key: str) -> Optional[QToolButton]:
+        return self._buttons.get(key)
+
+    def set_item_visible(self, key: str, visible: bool) -> None:
+        b = self._buttons.get(key)
+        if b is not None:
+            b.setVisible(bool(visible))
+
+    def set_item_enabled(self, key: str, enabled: bool) -> None:
+        b = self._buttons.get(key)
+        if b is not None:
+            b.setEnabled(bool(enabled))
+
+    def refresh_icons(self, color: str) -> None:
+        for key, b in self._buttons.items():
+            b.setIcon(_rail_glyph_icon(self._icon_paths[key], color, 18))
+
+
+class _LoadSkeleton(QWidget):
+    """Placeholder timeline lanes shown over the central stack while a trace
+    parses — mirror of the web App.vue ``.timeline-skeleton``.  Keeps the
+    central area the right shape so nothing jumps when the real scene mounts.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._dark = True
+
+    def set_dark(self, dark: bool) -> None:
+        self._dark = bool(dark)
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 (Qt override)
+        import random
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        w, h = self.width(), self.height()
+        p.fillRect(self.rect(), QColor("#1E1E1E" if self._dark else "#FFFFFF"))
+        track = QColor(255, 255, 255, 16) if self._dark else QColor(0, 0, 0, 14)
+        seg = QColor(120, 160, 220, 46) if self._dark else QColor(0, 90, 160, 32)
+        p.setPen(Qt.PenStyle.NoPen)
+        rows, gutter, top = 9, 76, 26
+        row_h = max(14.0, (h - top - 12) / rows)
+        p.setBrush(track)
+        p.drawRoundedRect(QRectF(gutter, 8, max(0, w - gutter - 12), 14), 3, 3)
+        for i in range(rows):
+            y = top + i * row_h + 3
+            seg_h = min(16.0, row_h - 6)
+            p.setBrush(track)
+            p.drawRoundedRect(QRectF(12, y + seg_h / 2 - 6, 52, 12), 3, 3)
+            p.drawRoundedRect(QRectF(gutter, y, max(0, w - gutter - 12), seg_h), 3, 3)
+            rng = random.Random(i * 9973 + 7)
+            x = gutter + rng.random() * 30
+            p.setBrush(seg)
+            while x < w - 24:
+                sw = 20 + rng.random() * 120
+                p.drawRoundedRect(
+                    QRectF(x, y + 2, min(sw, w - 12 - x), seg_h - 4), 2, 2)
+                x += sw + 12 + rng.random() * 80
+        p.end()
 
 
 class _MarkRowWidget(QWidget):
@@ -2129,6 +2276,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._dock_width_pending: Optional[float] = None
         self._dock_stabilize_timer: Optional[QTimer] = None
         self._right_dock_custom_drag: bool = False
+        self._focus_mode: bool = False
         self._progress_dialog: Optional[QProgressDialog] = None
         self._pending_demo: Optional[dict] = None
         self._demo_runner: Optional[InAppDemoRunner] = None
@@ -2279,6 +2427,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._apply_dock_visibility_respecting_rc()
             if self._show_stats:
                 self._focus_statistics_panel()
+            self._apply_panel_collapsed_from_settings()
+            self._apply_focus_mode_from_settings()
         finally:
             self._dock_layout_settling = False
             self._restoring_settings = False
@@ -3052,10 +3202,97 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._panel_tabs.setCurrentIndex(tab_index)
 
     def _on_icon_rail_activated(self, index: int) -> None:
-        """Icon-rail click → switch the right-panel content stack."""
+        """Icon-rail click → switch the right-panel content stack.  If the
+        panel is collapsed to the rail, a click also pops it back open
+        (web App.vue ``selectRightPanelTab``)."""
+        if getattr(self, "_panel_collapsed", False):
+            self._set_panel_collapsed(False)
         tabs = getattr(self, "_panel_tabs", None)
         if tabs is not None and 0 <= index < tabs.count() and tabs.isTabVisible(index):
             tabs.setCurrentIndex(index)
+
+    def _toggle_panel_collapsed(self) -> None:
+        self._set_panel_collapsed(not getattr(self, "_panel_collapsed", False))
+
+    def _set_panel_collapsed(self, collapsed: bool, *, persist: bool = True) -> None:
+        """Collapse the right panel to just its icon rail, or restore it."""
+        collapsed = bool(collapsed)
+        dock = getattr(self, "_panel_dock", None)
+        content = getattr(self, "_rp_content", None)
+        rail = getattr(self, "_icon_rail", None)
+        if dock is None or content is None:
+            return
+        self._panel_collapsed = collapsed
+        if rail is not None:
+            dark = bool(getattr(self, "_is_dark", True))
+            rail.set_collapsed_look(collapsed, "#9E9E9E" if dark else "#666666")
+        if collapsed:
+            w = int(dock.width())
+            if w > _IconRail.RAIL_W + 8:
+                self._panel_saved_width = w
+            content.setVisible(False)
+            dock.setMinimumWidth(_IconRail.RAIL_W)
+            dock.setMaximumWidth(_IconRail.RAIL_W)
+            self.resizeDocks([dock], [_IconRail.RAIL_W], Qt.Orientation.Horizontal)
+        else:
+            content.setVisible(True)
+            dock.setMinimumWidth(_RIGHT_DOCK_MIN_W)
+            dock.setMaximumWidth(_RIGHT_DOCK_MAX_W)
+            target = self._panel_saved_width or _RIGHT_DOCK_DEFAULT_W
+            self._resize_right_dock_column(target)
+        if persist and hasattr(self, "_settings"):
+            self._settings.set("panel", "collapsed",
+                               "true" if collapsed else "false", flush=False)
+
+    def _apply_panel_collapsed_from_settings(self) -> None:
+        """Restore the collapsed state after the window is shown and the dock
+        layout has settled (deferred from _restore_settings)."""
+        s = getattr(self, "_settings", None)
+        if s is None:
+            return
+        if s.get_bool("panel", "collapsed", False):
+            self._set_panel_collapsed(True, persist=False)
+
+    # ---- Focus mode (web App.vue `focusMode`) --------------------------------
+
+    def _toggle_focus_mode(self) -> None:
+        self._set_focus_mode(not getattr(self, "_focus_mode", False))
+
+    def _set_focus_mode(self, on: bool, *, persist: bool = True) -> None:
+        """Hide the side panel, activity rail and trace tab bar — timeline only."""
+        on = bool(on)
+        self._focus_mode = on
+        act = getattr(self, "_act_focus_mode", None)
+        if act is not None and act.isChecked() != on:
+            act.blockSignals(True)
+            act.setChecked(on)
+            act.blockSignals(False)
+        rail = getattr(self, "_activity_rail", None)
+        if rail is not None:
+            rail.setVisible(not on)
+        tw = getattr(self, "_tab_widget", None)
+        if tw is not None and tw.tabBar() is not None:
+            tw.tabBar().setVisible(not on)
+        # _right_panel_wanted() now returns False while _focus_mode is set, so
+        # the shared pref-driven path hides the dock (and re-shows it on exit).
+        if getattr(self, "_panel_dock", None) is not None:
+            if on:
+                self._apply_dock_visibility_from_prefs()
+            else:
+                self._apply_dock_visibility_respecting_rc()
+        if not on:
+            self._unify_tab_strip_heights()
+        if persist and hasattr(self, "_settings"):
+            self._settings.set("view", "focus_mode",
+                               "true" if on else "false", flush=False)
+        if on:
+            self.statusBar().showMessage(
+                "Focus Mode — View ▸ Focus Mode (F) to exit", 4000)
+
+    def _apply_focus_mode_from_settings(self) -> None:
+        s = getattr(self, "_settings", None)
+        if s is not None and s.get_bool("view", "focus_mode", False):
+            self._set_focus_mode(True, persist=False)
 
     def _on_panel_tab_changed(self, index: int) -> None:
         """Sync the icon rail + per-panel header title to the active panel, and
@@ -3082,6 +3319,55 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         muted = "#9E9E9E" if dark else "#666666"
         accent = "#4a9eff" if dark else "#005A9E"
         rail.refresh_icons(muted, accent)
+        rail.set_collapsed_look(getattr(self, "_panel_collapsed", False), muted)
+        self._refresh_activity_rail_icons()
+
+    def _refresh_activity_rail_icons(self) -> None:
+        rail = getattr(self, "_activity_rail", None)
+        if rail is None:
+            return
+        dark = bool(getattr(self, "_is_dark", True))
+        rail.refresh_icons("#9E9E9E" if dark else "#666666")
+
+    def _on_activity_rail_activated(self, key: str) -> None:
+        """Left activity-rail click → open the matching entry point."""
+        {
+            "heatmap": self._open_migration_heatmap,
+            "analysis": self._open_analysis_findings,
+            "compare": self._open_trace_compare,
+            "snapshot": self._on_save_image,
+            "help": self._on_keyboard_shortcuts,
+            "settings": self._open_settings,
+        }.get(key, lambda: None)()
+
+    def _sync_activity_rail(self) -> None:
+        """Mirror the toolbar entry-point enable/visibility onto the left rail."""
+        rail = getattr(self, "_activity_rail", None)
+        if rail is None:
+            return
+        trace = getattr(self, "_trace", None)
+        rail.set_item_visible(
+            "heatmap", trace is not None and _trace_is_multi_core(trace))
+        rail.set_item_visible("analysis", trace is not None)
+        rail.set_item_visible("compare", len(getattr(self, "_tabs", ())) >= 2)
+        rail.set_item_visible("snapshot", trace is not None)
+
+    def _sync_context_strip_visibility(self) -> None:
+        """Show the context strip only while one of its bars wants to show.
+
+        Uses ``not isHidden()`` (the widget's own flag) rather than
+        ``isVisible()`` — a child of the still-hidden strip always reports
+        ``isVisible() == False``.
+        """
+        strip = getattr(self, "_context_strip", None)
+        if strip is None:
+            return
+        strip.setVisible(any(not w.isHidden() for w in (
+            getattr(self, "_trace_quality_banner", None),
+            getattr(self, "_trace_quality_details", None),
+            getattr(self, "_evidence_inspector_bar", None),
+            getattr(self, "_cursor_scope_banner", None),
+        ) if w is not None))
 
     def _sync_panel_tab_visibility(self) -> None:
         """Apply show_stats / show_marks / show_find / show_ai to panel tab visibility."""
@@ -3144,6 +3430,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return bool(getattr(self, "_show_ai", True)) and self._ai_feature_enabled()
 
     def _right_panel_wanted(self) -> bool:
+        if getattr(self, "_focus_mode", False):
+            return False   # focus mode hides the whole right panel
         return bool(
             self._show_stats
             or self._show_marks
@@ -3188,8 +3476,56 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             pass
         if self._progress_dialog is dlg:
             self._progress_dialog = None
+        self._end_inline_load()
         if QApplication.overrideCursor() is not None:
             QApplication.restoreOverrideCursor()
+
+    # ---- Inline load progress (web App.vue: status-bar line + skeleton) ----
+
+    def _request_active_load_cancel(self) -> None:
+        thread = getattr(self, "_parse_thread", None)
+        if thread is not None:
+            thread.requestInterruption()
+
+    def _begin_inline_load(self, label: str) -> None:
+        self._loading_name = label or "trace"
+        lbl = getattr(self, "_status_load_lbl", None)
+        if lbl is not None:
+            lbl.setText(f"  Loading {self._loading_name}…")
+            lbl.setVisible(True)
+        btn = getattr(self, "_status_load_cancel", None)
+        if btn is not None:
+            btn.setVisible(True)
+        stack = getattr(self, "_central_stack", None)
+        skel = getattr(self, "_load_skeleton", None)
+        if stack is not None and skel is not None:
+            skel.set_dark(bool(getattr(self, "_is_dark", True)))
+            # Skeleton only on a fresh load (web `v-if="loading && !trace"`);
+            # a reload keeps the current timeline visible.
+            if self._trace is None and stack.currentIndex() != 1:
+                stack.setCurrentWidget(skel)
+
+    def _on_load_progress(self, pct: int, msg: str) -> None:
+        lbl = getattr(self, "_status_load_lbl", None)
+        if lbl is None:
+            return
+        name = getattr(self, "_loading_name", "trace")
+        parts = [f"  Loading {name}…"]
+        if msg:
+            parts.append(str(msg))
+        if pct:
+            parts.append(f"{int(pct)}%")
+        lbl.setText(" · ".join(parts))
+
+    def _end_inline_load(self) -> None:
+        for attr in ("_status_load_lbl", "_status_load_cancel"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setVisible(False)
+        stack = getattr(self, "_central_stack", None)
+        skel = getattr(self, "_load_skeleton", None)
+        if stack is not None and skel is not None and stack.currentWidget() is skel:
+            stack.setCurrentIndex(1 if self._trace is not None else 0)
 
     def _sync_panels_light(self) -> None:
         """Legend and bindings without rebuilding the statistics panel."""
@@ -3535,6 +3871,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _stabilize_right_dock_layout(self) -> None:
         """Reconcile dock/central split after native splitter drags."""
+        if getattr(self, "_panel_collapsed", False):
+            return
         self._apply_right_dock_width(self._current_right_dock_width())
 
     def _apply_right_dock_width(self, width: float) -> None:
@@ -3543,6 +3881,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _run_right_dock_width_apply(self) -> None:
         if self._dock_width_apply_guard:
+            return
+        if getattr(self, "_panel_collapsed", False):
+            self._dock_width_pending = None
             return
         if self._dock_width_pending is None:
             return
@@ -3615,7 +3956,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _collect_dock_metrics(self) -> str:
         """Return compact CSV metrics snapshot for dock sizes."""
-        right_w = int(self._panel_dock.width())
+        # While collapsed the dock is ~44px — persist the pre-collapse width so
+        # a later expand restores the user's real column size.
+        right_w = int(
+            getattr(self, "_panel_saved_width", 0)
+            if getattr(self, "_panel_collapsed", False)
+            else self._panel_dock.width())
         panel_h = int(self._panel_dock.height())
         label_w = int(self._view._scene._label_width)
         return f"{right_w},0,{panel_h},{panel_h},{label_w}"
@@ -4375,64 +4721,79 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QStatusBar QLabel#zoomScaleLabel {{ font-size:{_ui_fs}; color:{c['status_text']}; }}
             QStatusBar QCheckBox {{ font-size:{_ui_fs}; color:{c['sub_text']}; padding: 0 4px; }}
             QLabel      {{ font-size:{_ui_fs}; }}
+            /* Unified context strip — one bordered zone; each bar keeps its
+               semantic colour as a 3px left stripe (web App.vue .ctx-row). */
+            QWidget#context_strip {{
+                background:{c['mid']};
+                border-bottom:1px solid {c['sep']};
+            }}
             QWidget#trace_quality_banner {{
-                background:#5c3d00; color:#ffe8a3;
-                border-bottom:1px solid #8a6200;
+                background:transparent; color:{c['text']};
+                border-left:3px solid #d8a13a;
             }}
             QWidget#trace_quality_banner QLabel#trace_quality_summary {{
-                color:#ffe8a3; font-size:12px;
+                color:{c['text']}; font-size:12px;
             }}
             QWidget#trace_quality_details {{
-                background:rgba(92,61,0,0.35); color:#ffe8a3;
-                border-bottom:1px solid #8a6200;
+                background:transparent; color:{c['text']};
+                border-left:3px solid #d8a13a;
+                border-top:1px solid {c['sep']};
             }}
             QWidget#trace_quality_details QLabel {{
-                color:#ffe8a3; font-size:11px;
+                color:{c['text']}; font-size:11px;
             }}
             QWidget#cursor_scope_banner {{
-                background:#1a3348; color:#cdefff;
-                border-bottom:1px solid #2a5a70;
+                background:transparent; color:{c['text']};
+                border-left:3px solid {_chip_accent};
+                border-top:1px solid {c['sep']};
             }}
             QWidget#cursor_scope_banner QLabel#cursor_scope_prompt {{
-                color:#cdefff; font-size:12px;
+                color:{c['text']}; font-size:12px;
             }}
             QWidget#cursor_scope_banner QLabel#cursor_scope_warn {{
-                color:#cdefff; font-size:11px;
+                color:{c['sub_text']}; font-size:11px;
             }}
             QWidget#cursor_scope_banner QToolButton#cursor_scope_close {{
                 background:transparent; border:none; border-radius:3px;
                 padding:0;
             }}
             QWidget#cursor_scope_banner QToolButton#cursor_scope_close:hover {{
-                background:rgba(255,255,255,0.14);
+                background:{c['list_hover']};
             }}
             QWidget#evidence_inspector_bar {{
-                background:#1a3348; color:#cdefff;
-                border-bottom:1px solid #2a5a70;
+                background:transparent; color:{c['text']};
+                border-left:3px solid {_chip_accent};
+                border-top:1px solid {c['sep']};
             }}
             QWidget#evidence_inspector_bar QLabel#evidence_inspector_text {{
-                color:#cdefff; font-size:11px;
+                color:{c['sub_text']}; font-size:11px;
                 font-family:Menlo,Consolas,Monaco,"Courier New",monospace;
             }}
             QPushButton#helper_banner_btn {{
-                background:rgba(255,255,255,0.08); color:inherit;
-                border:1px solid rgba(255,255,255,0.28); border-radius:4px;
+                background:{c['mid']}; color:{c['text']};
+                border:1px solid {c['sep']}; border-radius:4px;
                 padding:2px 8px; font-size:11px; min-height:0;
             }}
             QPushButton#helper_banner_btn:hover {{
-                background:rgba(255,255,255,0.16);
+                background:{c['tb_hover']};
             }}
             QPushButton#helper_banner_btn:disabled {{
-                color:rgba(255,255,255,0.35);
+                color:{c['tb_disabled']};
             }}
             QPushButton#helper_banner_btn_primary {{
-                background:rgba(42,111,178,0.22); color:#cdefff;
-                border:1px solid #2a6fb2; border-radius:4px;
+                background:{c['tb_checked_bg']}; color:{c['tb_checked_fg']};
+                border:1px solid {c['accent']}; border-radius:4px;
                 padding:2px 8px; font-size:11px; min-height:0;
             }}
             QPushButton#helper_banner_btn_primary:hover {{
-                background:rgba(42,111,178,0.35);
+                background:{c['accent']};
             }}
+            QWidget#activity_rail {{ background:{c['mid']};
+                                     border-right:1px solid {c['sep']}; }}
+            QToolButton#act_btn {{ background:transparent; border:none;
+                                   border-radius:6px; }}
+            QToolButton#act_btn:hover {{ background:{c['list_hover']}; }}
+            QToolButton#act_btn:disabled {{ background:transparent; }}
             QWidget#demo_status_banner {{
                 background:#1b3a4a; color:#cdefff; padding:0px;
                 border-bottom:1px solid #2a5a70;
@@ -4524,6 +4885,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QToolButton#rail_btn:hover {{ background:{c['list_hover']}; }}
             QToolButton#rail_btn:checked {{ background:{c['win_base']};
                          border-left:2px solid {c['accent']}; }}
+            QToolButton#rail_collapse {{ background:transparent; border:none;
+                         border-top:1px solid {c['sep']}; }}
+            QToolButton#rail_collapse:hover {{ background:{c['list_hover']}; }}
             QWidget#rp_page_header {{ background:{c['win_base']};
                          border-bottom:1px solid {c['sep']}; }}
             QLabel#rp_title {{ color:{c['text']}; font-weight:600;
@@ -4954,9 +5318,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tab_widget.tabCloseRequested.connect(self._close_trace_tab)
         self._tab_widget.currentChanged.connect(self._on_trace_tab_changed)
 
+        self._load_skeleton = _LoadSkeleton()
         self._central_stack = QStackedWidget()
-        self._central_stack.addWidget(self._welcome_page)
-        self._central_stack.addWidget(self._tab_widget)
+        self._central_stack.addWidget(self._welcome_page)   # 0
+        self._central_stack.addWidget(self._tab_widget)     # 1
+        self._central_stack.addWidget(self._load_skeleton)  # 2 (parsing)
         self._central_stack.setCurrentIndex(0)
 
         def _helper_btn(text: str, *, primary: bool = False) -> QPushButton:
@@ -5089,11 +5455,46 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _central_lay.setContentsMargins(0, 0, 0, 0)
         _central_lay.setSpacing(0)
         _central_lay.addWidget(self._demo_status_banner)
-        _central_lay.addWidget(self._trace_quality_banner)
-        _central_lay.addWidget(self._trace_quality_details)
-        _central_lay.addWidget(self._evidence_inspector_bar)
-        _central_lay.addWidget(self._cursor_scope_banner)
-        _central_lay.addWidget(self._central_stack, 1)
+
+        # Unified context strip: the trace-quality / evidence-inspector /
+        # cursor-scope bars share one bordered zone (web App.vue .context-strip)
+        # instead of stacking as loose full-width bars.  demo_status stays out
+        # of it (it is a playback control, not a context banner).
+        self._context_strip = QWidget()
+        self._context_strip.setObjectName("context_strip")
+        self._context_strip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._context_strip.setVisible(False)
+        _cx_lay = QVBoxLayout(self._context_strip)
+        _cx_lay.setContentsMargins(0, 0, 0, 0)
+        _cx_lay.setSpacing(0)
+        _cx_lay.addWidget(self._trace_quality_banner)
+        _cx_lay.addWidget(self._trace_quality_details)
+        _cx_lay.addWidget(self._evidence_inspector_bar)
+        _cx_lay.addWidget(self._cursor_scope_banner)
+        _central_lay.addWidget(self._context_strip)
+
+        # Left activity rail (investigation entry points) beside the timeline
+        # stack — mirror of the web App.vue .activity-rail next to .left-pane.
+        self._activity_rail = _ActivityRail()
+        for _k, _p, _lbl in (
+            ("heatmap", _RG_HEATMAP, "Migration heatmap"),
+            ("analysis", _RG_ANALYSIS, "Analysis findings"),
+            ("compare", _RG_COMPARE, "Compare traces"),
+            ("snapshot", _RG_SNAPSHOT, "Snapshot editor"),
+        ):
+            self._activity_rail.add_item(_k, _p, _lbl)
+        self._activity_rail.add_spring()
+        self._activity_rail.add_item("help", _RG_HELP, "Help & keyboard shortcuts")
+        self._activity_rail.add_item("settings", _RG_SETTINGS, "Settings")
+        self._activity_rail.activated.connect(self._on_activity_rail_activated)
+
+        _stack_row = QWidget()
+        _stack_row_lay = QHBoxLayout(_stack_row)
+        _stack_row_lay.setContentsMargins(0, 0, 0, 0)
+        _stack_row_lay.setSpacing(0)
+        _stack_row_lay.addWidget(self._activity_rail, 0)
+        _stack_row_lay.addWidget(self._central_stack, 1)
+        _central_lay.addWidget(_stack_row, 1)
         self.setCentralWidget(self._central_host)
 
         # --- Legend panel (hosted in the right-panel Legend tab) ---
@@ -5483,7 +5884,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _rp_hw.setSpacing(0)
         _rp_hw.addWidget(self._rp_page_header, 1)
 
-        _rp_content = QWidget()
+        self._rp_content = QWidget()
+        _rp_content = self._rp_content
         _rp_cc = QVBoxLayout(_rp_content)
         _rp_cc.setContentsMargins(0, 0, 0, 0)
         _rp_cc.setSpacing(0)
@@ -5492,14 +5894,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         self._icon_rail = _IconRail()
         for _ic_path, _ic_label in (
-            (_IC_TICK_DIST, "Statistics"),
-            (_IC_MARK, "Marks"),
-            (_IC_FIND, "Find"),
-            (_IC_LEGEND, "Legend"),
-            (_IC_ANALYSIS, "AI"),
+            (_RG_STATS, "Statistics"),
+            (_RG_MARKS, "Marks"),
+            (_RG_FIND, "Find"),
+            (_RG_LEGEND, "Legend"),
+            (_RG_AI, "AI"),
         ):
             self._icon_rail.add_item(_ic_path, _ic_label)
+        self._icon_rail.add_collapse_button()
         self._icon_rail.activated.connect(self._on_icon_rail_activated)
+        self._icon_rail.collapseToggled.connect(self._toggle_panel_collapsed)
+        # Restored from rc after the window is shown (_apply_panel_collapsed).
+        self._panel_collapsed = False
+        self._panel_saved_width = 0
 
         _rp_area = QWidget()
         _rp_area.setObjectName("rp_area")
@@ -5560,17 +5967,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._find_input.blockSignals(True)
             self._find_input.clear()
             self._find_input.blockSignals(False)
-        if hasattr(self, "_find_status"):
-            self._find_status.setText("")
+        self._set_find_counter("")
         if hasattr(self, "_find_empty"):
             self._find_empty.setVisible(True)
         if hasattr(self, "_find_note"):
             self._find_note.setVisible(False)
         self._close_heatmap_dialog()
         self._close_chord_dialog()
-        if hasattr(self, "_tb_analysis_btn"):
-            self._tb_analysis_btn.setEnabled(False)
-        self._sync_trace_compare_btn()
+        self._sync_activity_rail()
         self._evidence_history = empty_evidence_history()
         self._update_evidence_inspector_bar()
         self._update_cursor_scope_banner()
@@ -5766,6 +6170,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "STI waveform y-axis: toggle between linear and log\u2082 scale\n"
             "(only active when an STI row is expanded)")
         vm.addSeparator()
+        self._act_focus_mode = vm.addAction("&Focus Mode", self._toggle_focus_mode)
+        self._act_focus_mode.setCheckable(True)
+        self._act_focus_mode.setChecked(self._focus_mode)
+        self._act_focus_mode.setShortcut(QKeySequence("F"))
+        self._act_focus_mode.setToolTip(
+            "Hide the side panel, activity rail and trace tabs — timeline only")
+        vm.addSeparator()
         vm.addAction("⚙ &Settings…", self._open_settings, "Ctrl+,")
         vm.addSeparator()
         self._act_show_legend = vm.addAction("Show Le&gend Panel", self._toggle_show_legend_panel)
@@ -5838,11 +6249,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._tb_icon_actions.append((act, ic_path))
             return act
 
-        # --- File actions (same cluster as web: Open · Snapshot · SVG · Perfetto · Slice) ---
+        # --- File actions (same cluster as web: Open · SVG · Perfetto · Slice).
+        #     Snapshot / Heatmap / Analysis / Compare live on the left activity
+        #     rail now (shell redesign) — not the toolbar. ---
         self._tb_open_btn = _ia("Open", self._on_open, _IC_OPEN, "Open BTF trace file  (Ctrl+O)")
-        self._tb_snap_btn = _ia(
-            "Snapshot", self._on_save_image, _IC_SHOT,
-            "Open snapshot editor  (Ctrl+S)")
         self._tb_save_svg_btn = _ia(
             "Save SVG", self._on_save_svg, _IC_SAVE_SVG,
             "Save viewport as SVG  (Ctrl+Shift+S)")
@@ -5852,7 +6262,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tb_export_slice_btn = _ia(
             "Save BTF", self._on_export_btf_slice, _IC_EXPORT_SLICE,
             "Save cursor range as BTF (C1–Cn)")
-        self._tb_snap_btn.setEnabled(False)
         self._tb_save_svg_btn.setEnabled(False)
         self._tb_export_perfetto_btn.setEnabled(False)
         self._tb_export_slice_btn.setEnabled(False)
@@ -5924,16 +6333,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _clw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         tb.addSeparator()
 
-        # --- Investigation entry points (Find, Heatmap, Analysis, Compare) ---
+        # --- Find + the Migration-filter clear affordance.  Heatmap / Analysis /
+        #     Compare moved to the left activity rail (shell redesign). ---
         _ia("Find", self._focus_find, _IC_FIND,
             "Find task, annotation, or migration  (Ctrl+F)")
         self._tb_find_btn = self._tb_icon_actions[-1][0]
         self._tb_find_btn.setShortcut(QKeySequence.StandardKey.Find)
-        self._tb_heatmap_btn = _ia(
-            "Heatmap", self._open_migration_heatmap, _IC_HEATMAP,
-            "Migration & Corridor Inspector — topology + timeline "
-            "(multi-core traces only)")
-        self._tb_heatmap_btn.setEnabled(False)
         self._tb_show_all_tasks_btn = tb.addAction(
             "All tasks", self._clear_heatmap_task_filter)
         self._tb_show_all_tasks_btn.setCheckable(True)
@@ -5947,22 +6352,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if _saw:
             _saw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             _saw.setAutoExclusive(False)
-        self._tb_analysis_btn = _ia(
-            "Analysis", self._open_analysis_findings, _IC_ANALYSIS,
-            "Analysis Findings — heuristic load balance, WCET, blocking, "
-            "thrashing, deadlines, tick, sync")
-        self._tb_analysis_btn.setEnabled(False)
-        _aw = tb.widgetForAction(self._tb_analysis_btn)
-        if _aw:
-            _aw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._tb_compare_btn = _ia(
-            "Compare", self._open_trace_compare, _IC_COMPARE,
-            "Trace Compare — summary, top tasks, and core migrations "
-            "between two open trace tabs")
-        self._tb_compare_btn.setEnabled(False)
-        _cw = tb.widgetForAction(self._tb_compare_btn)
-        if _cw:
-            _cw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         tb.addSeparator()
 
         # --- STI waveform scale toggle ---
@@ -6030,9 +6419,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tb_filter_badge.clicked.connect(self._clear_all_filters)
         self._tb_filter_badge_act = tb.addWidget(self._tb_filter_badge)
         self._tb_filter_badge_act.setVisible(False)
-        _ia("Settings", self._open_settings, _IC_SETTINGS, "Open Settings  (Ctrl+,)")
-        _ia("Help", self._on_keyboard_shortcuts, _IC_HELP,
-            "Help & keyboard shortcuts")
+        # Settings and Help live on the left activity rail now (shell redesign).
         self._update_limit_badge()
         self._update_filter_badge()
 
@@ -6081,6 +6468,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             btn = getattr(self, "_trace_quality_details_btn", None)
             if btn is not None:
                 btn.setText("Review details")
+        self._sync_context_strip_visibility()
 
     def _toggle_trace_quality_details(self) -> None:
         self._trace_quality_details_open = not bool(
@@ -6096,6 +6484,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         btn = getattr(self, "_trace_quality_details_btn", None)
         if btn is not None:
             btn.setText("Review details")
+        self._sync_context_strip_visibility()
 
     def _open_trace_quality_guidance(self) -> None:
         """Open WORKFLOWS.md#trace-quality (Web Open capture guidance)."""
@@ -6140,11 +6529,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 warn_lbl.clear()
                 warn_lbl.setToolTip("")
                 warn_lbl.setVisible(False)
+            self._sync_context_strip_visibility()
             return
         dismissed_n = getattr(self, "_cursor_scope_dismissed_count", None)
         if dismissed_n is not None:
             if len(times) == int(dismissed_n):
                 banner.setVisible(False)
+                self._sync_context_strip_visibility()
                 return
             # Cursor count changed (e.g. C1–C2 dismissed, then C3 added) — show again.
             self._cursor_scope_dismissed_count = None
@@ -6160,6 +6551,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 warn_lbl.setToolTip("")
                 warn_lbl.setVisible(False)
         banner.setVisible(True)
+        self._sync_context_strip_visibility()
 
     def _dismiss_cursor_scope_banner(self) -> None:
         """Close the helper without enabling Limit to C1–Cn (no confirmation)."""
@@ -6173,6 +6565,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         banner = getattr(self, "_cursor_scope_banner", None)
         if banner is not None:
             banner.setVisible(False)
+        self._sync_context_strip_visibility()
 
     def _apply_cursors_as_scope(self) -> None:
         """Enable Limit to C1–Cn from the cursor-scope banner (Web applyCursorsAsScope)."""
@@ -6185,6 +6578,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if panel is None or not getattr(panel, "_scope_to_cursors", False):
             return False
         return int(getattr(self, "_placed_cursor_count", 0) or 0) >= 2
+
+    def _fit_toolbar_badge(self, btn) -> None:
+        """Pin a toolbar badge to its content width.  QToolButton.sizeHint()
+        reserves style padding / menu-indicator space that renders as blank
+        inside the pill (worse on the native macOS style than Fusion)."""
+        if btn is None:
+            return
+        fm = QFontMetrics(btn.font())
+        w = fm.horizontalAdvance(btn.text() or "") + 16   # ~7px pad + 1px border each side
+        if (btn.toolButtonStyle() != Qt.ToolButtonStyle.ToolButtonTextOnly
+                and not btn.icon().isNull()):
+            w += btn.iconSize().width() + 6               # icon + text/icon gap
+        btn.setFixedWidth(int(w))
 
     def _update_limit_badge(self) -> None:
         """Toolbar C1–Cn chip — shown only while Limit to C1–Cn is on (web:
@@ -6223,7 +6629,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "QToolButton#tbLimitBadge:hover,"
             "QToolButton#tbLimitBadge:pressed {"
             f" {chip} "
-            "}")
+            "}"
+            "QToolButton#tbLimitBadge::menu-indicator { image: none; width: 0; }")
+        self._fit_toolbar_badge(btn)
         btn.setToolTip(
             "Limit to C1–Cn is On — Statistics use the cursor range. "
             "Click to turn off.")
@@ -6257,7 +6665,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "QToolButton#tbFilterBadge:hover,"
             "QToolButton#tbFilterBadge:pressed {"
             f" {chip} "
-            "}")
+            "}"
+            "QToolButton#tbFilterBadge::menu-indicator { image: none; width: 0; }")
+        self._fit_toolbar_badge(btn)
         btn.setToolTip(f"Filtered: {label} — click to clear all filters")
 
     def _clear_all_filters(self, _checked: bool = False) -> None:
@@ -6302,6 +6712,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not text:
             bar.setVisible(False)
             text_lbl.clear()
+            self._sync_context_strip_visibility()
             return
         text_lbl.setText(text)
         back = getattr(self, "_evidence_back_btn", None)
@@ -6311,6 +6722,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if fwd is not None:
             fwd.setEnabled(bool(nav.get("can_forward")))
         bar.setVisible(True)
+        self._sync_context_strip_visibility()
 
     def _restore_evidence_jump(self, entry: Optional[dict]) -> None:
         if not isinstance(entry, dict) or entry.get("time") is None:
@@ -6353,6 +6765,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._status_inspect.setContentsMargins(4, 0, 8, 0)
         self._status_inspect.setToolTip("Selected task inspector")
 
+        # Inline load progress (replaces the modal card — web .status-loading).
+        self._status_load_lbl = QLabel("")
+        self._status_load_lbl.setObjectName("statusLoad")
+        self._status_load_lbl.setContentsMargins(4, 0, 8, 0)
+        self._status_load_lbl.setVisible(False)
+        self._status_load_cancel = QToolButton()
+        self._status_load_cancel.setObjectName("statusLoadCancel")
+        self._status_load_cancel.setText("Cancel")
+        self._status_load_cancel.setAutoRaise(True)
+        self._status_load_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._status_load_cancel.setVisible(False)
+        self._status_load_cancel.clicked.connect(self._request_active_load_cancel)
+
         # --- CENTER: cursor badge bar (permanent, but visually central) ---
         self._cursor_bar   = _CursorBarWidget()
         self._cursor_bar.jump_requested.connect(self._view.scroll_to_ns)
@@ -6391,6 +6816,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._status_core_filter_btn.setVisible(False)
         self._status_core_filter_btn.clicked.connect(self._clear_core_filter)
 
+        # --- Find position "N / M" (mirrors the Find panel counter; visible
+        # only while there are matches, so it can be read with the panel shut).
+        self._status_find_btn = QToolButton()
+        self._status_find_btn.setObjectName("statusFindBtn")
+        self._status_find_btn.setText("")
+        self._status_find_btn.setToolTip("Find matches — open the Find panel")
+        self._status_find_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._status_find_btn.setAutoRaise(True)
+        self._status_find_btn.setVisible(False)
+        self._status_find_btn.clicked.connect(self._focus_find)
+
         # --- RIGHT permanent zone ---
 
         # Quick view toggles - compact pill-style checkboxes
@@ -6415,12 +6851,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._zoom_visible_label.setContentsMargins(0, 0, 8, 0)
 
         sb.addWidget(self._status_file)
+        sb.addWidget(self._status_load_lbl)
+        sb.addWidget(self._status_load_cancel)
         sb.addWidget(self._status_inspect)
         sb.addPermanentWidget(self._cursor_bar)
         sb.addPermanentWidget(self._status_migrated_filter_btn)
         sb.addPermanentWidget(self._status_core_filter_btn)
         sb.addPermanentWidget(self._status_filter_btn)
         sb.addPermanentWidget(self._status_range)
+        sb.addPermanentWidget(self._status_find_btn)
         sb.addPermanentWidget(self._sti_toggle_cb)
         sb.addPermanentWidget(self._grid_toggle_cb)
         sb.addPermanentWidget(self._zoom_scale_label)
@@ -7642,14 +8081,23 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "toolbar_task": "_tb_task_btn",
             "toolbar_core": "_tb_core_btn",
             "toolbar_load": "_tb_cpu_load_btn",
-            "toolbar_heatmap": "_tb_heatmap_btn",
-            "toolbar_analysis": "_tb_analysis_btn",
             "toolbar_fit": "_tb_fit_btn",
             "toolbar_1to1": "_act_zoom_1to1",
             "toolbar_open": "_tb_open_btn",
         }
         if key in actions:
             return self._demo_action_center(getattr(self, actions[key], None))
+        # Heatmap / Analysis moved to the left activity rail (shell redesign);
+        # keep the historical demo-target names pointed at the rail buttons.
+        rail_keys = {"rail_heatmap": "heatmap", "rail_analysis": "analysis",
+                     "rail_compare": "compare", "rail_snapshot": "snapshot",
+                     "rail_help": "help", "rail_settings": "settings",
+                     "toolbar_heatmap": "heatmap", "toolbar_analysis": "analysis",
+                     "toolbar_settings": "settings"}
+        if key in rail_keys:
+            rail = getattr(self, "_activity_rail", None)
+            btn = rail.button(rail_keys[key]) if rail is not None else None
+            return self._demo_widget_screen_center(btn)
         tabs = {
             "stats_tab": _PANEL_TAB_STATS,
             "find_tab": _PANEL_TAB_FIND,
@@ -10221,13 +10669,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             f"Toolbar All tasks or Legend Clear to show all.",
             8000)
 
-    def _sync_heatmap_toolbar(self) -> None:
-        if not hasattr(self, "_tb_heatmap_btn"):
-            return
-        trace = self._trace
-        self._tb_heatmap_btn.setEnabled(
-            trace is not None and _trace_is_multi_core(trace))
-
     def _toggle_expand_all_cores(self) -> None:
         """Expand or collapse all timeline core rows (CPU load pane is independent)."""
         expanded = self._tb_expand_all_btn.isChecked()
@@ -10254,22 +10695,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             else:
                 self._autofit_cpu_load_height()
 
-    def _sync_trace_compare_btn(self) -> None:
-        """Enable toolbar Compare when two or more traces are loaded."""
-        if hasattr(self, "_tb_compare_btn"):
-            enabled = len(getattr(self, "_tabs", ())) >= 2
-            self._tb_compare_btn.setEnabled(enabled)
-            self._tb_compare_btn.setToolTip(
-                "Trace Compare — summary, top tasks, and core migrations "
-                "between two open trace tabs" if enabled
-                else "Open at least two traces to compare")
-
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
-        self._sync_heatmap_toolbar()
-        if hasattr(self, "_tb_analysis_btn"):
-            self._tb_analysis_btn.setEnabled(self._trace is not None)
-        self._sync_trace_compare_btn()
+        # Heatmap / Analysis / Compare availability is the activity rail's job now.
+        self._sync_activity_rail()
         if hasattr(self, "_tb_cpu_load_btn"):
             self._tb_cpu_load_btn.blockSignals(True)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)
@@ -10999,12 +11428,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_input.setText(query)
         self._find_input.setFocus()
 
+    def _set_find_counter(self, text: str) -> None:
+        """Update both the Find-panel counter and the status-bar Find pill."""
+        if hasattr(self, "_find_status"):
+            self._find_status.setText(text)
+        btn = getattr(self, "_status_find_btn", None)
+        if btn is not None:
+            btn.setText(f" Find {text} " if text else "")
+            btn.setVisible(bool(text))
+
     def _recompute_find_hits(self) -> None:
         vm = self._active_tab_vm
         q = self._find_input.text() if hasattr(self, "_find_input") else ""
         has_q = bool(str(q).strip())
         if vm is None or self._trace is None:
-            self._find_status.setText("")
+            self._set_find_counter("")
             self._set_find_ui_state(has_q, 0, None)
             self._view._scene.set_find_hits([])
             return
@@ -11020,9 +11458,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Inline "N / M" counter (web: FindPanel counterText).
         if n:
             pos = self._find_hit_idx + 1 if self._find_hit_idx >= 0 else 1
-            self._find_status.setText(f"{pos} / {n}")
+            self._set_find_counter(f"{pos} / {n}")
         else:
-            self._find_status.setText("")
+            self._set_find_counter("")
         note = "" if (not has_q or n) else (
             f"No matches for \u201c{str(q).strip()}\u201d. "
             "Try a different Match mode.")
@@ -11068,7 +11506,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_hit_idx = idx
         self._jump_to_ns(self._find_hits[idx])
         self._set_find_marker_ns(self._find_hits[idx])
-        self._find_status.setText(f"{idx + 1} / {n}")
+        self._set_find_counter(f"{idx + 1} / {n}")
 
     def _set_find_marker_ns(self, ns: Optional[int]) -> None:
         self._find_marker_ns = ns
@@ -11222,8 +11660,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Progress dialog - created before closures so progress_dialog is defined.
         progress_dialog = _LoadProgressDialog(
             f"Loading {load_label}…", self)
-        progress_dialog.show_centered(self.geometry())
+        progress_dialog.show_centered(self.geometry())   # no-op; kept for compat
         self._progress_dialog = progress_dialog
+        # Inline progress + timeline skeleton replace the modal card.
+        progress_dialog.progressed.connect(self._on_load_progress)
+        self._begin_inline_load(load_label)
 
         def _request_load_cancel() -> None:
             thread = getattr(self, "_parse_thread", None)
@@ -11240,6 +11681,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
             if self._progress_dialog is progress_dialog:
                 self._progress_dialog = None
+            self._end_inline_load()
             if clear_load_flag:
                 self._load_in_progress = False
             if QApplication.overrideCursor() is not None:

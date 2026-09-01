@@ -49,15 +49,16 @@
     <point name="ai_tab" x="0.92" y="0.12"/>
     <point name="load_strip" x="0.45" y="0.72"/>
     <point name="toolbar_open" x="0.025" y="0.055"/>
-    <point name="toolbar_analysis" x="0.62" y="0.055"/>
     <point name="toolbar_settings" x="0.78" y="0.055"/>
     <point name="toolbar_1to1" x="0.26" y="0.055"/>
     <point name="toolbar_fit" x="0.28" y="0.055"/>
     <point name="toolbar_core" x="0.40" y="0.055"/>
     <point name="toolbar_task" x="0.37" y="0.055"/>
     <point name="toolbar_load" x="0.43" y="0.055"/>
-    <point name="toolbar_heatmap" x="0.48" y="0.055"/>
     <point name="toolbar_find" x="0.52" y="0.055"/>
+    <!-- Heatmap / Analysis moved to the left activity rail (shell redesign). -->
+    <point name="rail_heatmap" x="0.017" y="0.13"/>
+    <point name="rail_analysis" x="0.017" y="0.18"/>
     <point name="limit_checkbox" x="0.82" y="0.16"/>
     <point name="stats_export_html" x="0.88" y="0.94"/>
     <point name="stats_health" x="0.84" y="0.32"/>
@@ -150,11 +151,11 @@
       <wait seconds="1.0" why="voice: Core view"/>
       <move target="toolbar_load"/>
       <wait seconds="2.25"/>
-      <move target="toolbar_heatmap"/>
+      <move target="rail_heatmap"/>
       <wait seconds="3.00"/>
       <cpu_load on="true"/>
       <wait seconds="5.2" why="voice: Load Heatmap Chord into Analysis"/>
-      <move target="toolbar_analysis"/>
+      <move target="rail_analysis"/>
       <wait seconds="5" why="voice: Analysis triage card"/>
       <wait seconds="3.25"/>
       <move target="stats_tab"/>
@@ -222,7 +223,7 @@
       <focus/>
       <audio file="${XML_DIR}/voice/08_analysis.mp3"/>
       <wait seconds="2.5" why="voice: Click Analysis on the toolbar"/>
-      <move target="toolbar_analysis"/>
+      <move target="rail_analysis"/>
       <wait seconds="0.25"/>
       <analysis/>
       <wait_audio/>

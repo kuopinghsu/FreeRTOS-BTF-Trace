@@ -192,8 +192,9 @@ Toolbar buttons, tabs, Analysis, and Find use API events instead of fixed screen
 | `toolbar_task` | Task view |
 | `toolbar_core` | Core view |
 | `toolbar_load` | CPU Load |
-| `toolbar_heatmap` | Migration Heatmap |
-| `toolbar_analysis` | Analysis |
+| `rail_heatmap` | Migration Heatmap (left activity rail) |
+| `rail_analysis` | Analysis (left activity rail) |
+| `rail_help` / `rail_settings` | Help / Settings (left activity rail foot) |
 | `toolbar_limit` | C1–Cn status chip |
 | `stats_tab` / `find_tab` / `ai_tab` | Right-panel tabs |
 | `stats_summary` / `stats_panel` | Statistics summary |
@@ -201,7 +202,7 @@ Toolbar buttons, tabs, Analysis, and Find use API events instead of fixed screen
 | `stats_tick_dist` | Tick distribution button |
 | `stats_export_html` | Statistics Export HTML |
 
-`toolbar_heatmap` only **points** at the Heatmap button; it does not open the
+`rail_heatmap` only **points** at the Heatmap button; it does not open the
 inspector. The 8-core pack also has XML-only fractions (`timeline`,
 `timeline_bar`, `status`, `load_strip`, `toolbar_settings`, `toolbar_find`,
 `limit_checkbox`) for canvas/status hover, not live widgets.

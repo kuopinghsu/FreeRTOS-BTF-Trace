@@ -314,18 +314,17 @@ class _AiListModelsWorker(QObject):
 
 
 class _LoadProgressDialog(QWidget):
-    """Borderless progress dialog that paints reliably on macOS.
+    """Headless load-progress controller (shell redesign: no modal card).
 
-    QProgressDialog on macOS respects setMinimumDuration(0) but still defers
-    its first paint until after the event loop has had at least one idle
-    cycle.  When files are opened at startup the window manager hasn't
-    settled yet, so the dialog can appear blank or not at all.
-
-    This replacement widget uses a plain QWidget with Qt.WindowType.Tool window flag,
-    which bypasses the macOS sheet mechanism entirely and paints immediately.
+    Was a borderless modal dialog; now it never shows itself — it stays a
+    hidden signal hub so all existing wiring (``cancel_requested``,
+    ``update_progress`` from the parser thread, the finalize handoff) keeps
+    working, while ``progressed`` drives the inline status-bar progress +
+    timeline skeleton that replaced the card (web App.vue parity).
     """
 
     cancel_requested = Signal()
+    progressed = Signal(int, str)   # (pct, formatted message)
 
     def __init__(self, title: str, parent=None):
         # The frameless Qt.WindowType.Tool variant is primarily needed on macOS to avoid
@@ -336,7 +335,7 @@ class _LoadProgressDialog(QWidget):
         else:
             flags = Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint | Qt.WindowType.CustomizeWindowHint
         super().__init__(parent, flags)
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         if sys.platform != "darwin":
             self.setWindowTitle("Loading")
         self.setMinimumWidth(420)
@@ -405,8 +404,10 @@ class _LoadProgressDialog(QWidget):
         self._msg_lbl.setText(msg)
 
     def update_progress(self, pct: int, msg: str) -> None:
+        formatted = format_loading_message(msg)
         self._bar.setValue(pct)
-        self._msg_lbl.setText(format_loading_message(msg))
+        self._msg_lbl.setText(formatted)
+        self.progressed.emit(int(pct), formatted)
         _process_ui_events_safely()
 
     def _centre_on_parent(self) -> None:
@@ -432,17 +433,9 @@ class _LoadProgressDialog(QWidget):
         super().closeEvent(event)
 
     def show_centered(self, parent_geom) -> None:
-        self.adjustSize()
-        # Track parent-window moves so the dialog follows.
-        p = self.parent()
-        if p is not None:
-            p.installEventFilter(self)
-        # Centre over the parent window.
-        _c = parent_geom.center()
-        self.move(_c.x() - self.width() // 2,
-                  _c.y() - self.height() // 2)
-        self.show()
-        self.raise_()
+        # No-op: the modal card was replaced by the inline status-bar progress
+        # + timeline skeleton (shell redesign).  Kept for call-site compat.
+        return
         self.activateWindow()
         # Force an immediate paint so the bar is visible before the thread starts.
         self.repaint()

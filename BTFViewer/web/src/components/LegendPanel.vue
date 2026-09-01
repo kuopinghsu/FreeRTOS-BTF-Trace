@@ -187,12 +187,12 @@ const showCoreFilter = computed(() => (props.trace?.coreNames?.length ?? 0) > 1)
   margin-bottom: var(--sp-2, 8px);
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: var(--rp-r-1, 6px);
-  background: var(--rp-surface-2, var(--tb-bg));
+  border-radius: var(--app-r-1, 6px);
+  background: var(--app-surface-2, var(--tb-bg));
 }
 .legend-search-wrap:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--rp-sel-bg, rgba(79, 139, 255, 0.15));
+  box-shadow: 0 0 0 3px var(--app-sel-bg, rgba(79, 139, 255, 0.15));
 }
 .legend-search-icon {
   width: 13px;
@@ -233,8 +233,8 @@ const showCoreFilter = computed(() => (props.trace?.coreNames?.length ?? 0) > 1)
   margin-bottom: var(--sp-2, 8px);
   padding: 4px 6px 4px 9px;
   border-radius: 999px;
-  background: var(--rp-sel-bg, rgba(79, 139, 255, 0.12));
-  border: 1px solid var(--rp-accent-line, rgba(79, 139, 255, 0.35));
+  background: var(--app-sel-bg, rgba(79, 139, 255, 0.12));
+  border: 1px solid var(--app-accent-line, rgba(79, 139, 255, 0.35));
   font-family: var(--font-mono, monospace);
   font-size: 10px;
   color: var(--accent);
@@ -245,7 +245,7 @@ const showCoreFilter = computed(() => (props.trace?.coreNames?.length ?? 0) > 1)
   border: 1px solid var(--border);
   background: transparent;
   color: var(--fg-dim);
-  border-radius: var(--rp-r-1, 6px);
+  border-radius: var(--app-r-1, 6px);
   padding: 2px 8px;
   font-family: var(--font-ui, inherit);
   font-size: 10px;
@@ -253,7 +253,7 @@ const showCoreFilter = computed(() => (props.trace?.coreNames?.length ?? 0) > 1)
 }
 .heatmap-filter-clear:hover {
   color: var(--fg);
-  border-color: var(--rp-accent-line, var(--accent));
+  border-color: var(--app-accent-line, var(--accent));
 }
 
 .legend-list {
@@ -272,7 +272,7 @@ const showCoreFilter = computed(() => (props.trace?.coreNames?.length ?? 0) > 1)
   flex-shrink: 0;
   margin-top: var(--sp-3, 12px);
   padding-top: var(--sp-2, 8px);
-  border-top: 1px solid var(--rp-border-soft, var(--border));
+  border-top: 1px solid var(--app-border-soft, var(--border));
 }
 
 .legend-cores-header {
@@ -292,7 +292,7 @@ const showCoreFilter = computed(() => (props.trace?.coreNames?.length ?? 0) > 1)
   font-variant-numeric: tabular-nums;
   font-size: 9px;
   color: var(--fg-dim);
-  background: var(--rp-surface-3, var(--tb-btn-hover));
+  background: var(--app-surface-3, var(--tb-btn-hover));
   padding: 1px 6px;
   border-radius: 999px;
 }
@@ -310,18 +310,18 @@ const showCoreFilter = computed(() => (props.trace?.coreNames?.length ?? 0) > 1)
   align-items: center;
   gap: 8px;
   padding: 4px 6px;
-  border-radius: var(--rp-r-1, 6px);
+  border-radius: var(--app-r-1, 6px);
   cursor: pointer;
   transition: background 0.08s;
 }
 .legend-item:hover {
-  background: var(--rp-hover-bg, var(--tb-btn-hover));
+  background: var(--app-hover-bg, var(--tb-btn-hover));
 }
 .legend-item.highlighted {
-  background: var(--rp-hover-bg, rgba(255, 255, 180, 0.12));
+  background: var(--app-hover-bg, rgba(255, 255, 180, 0.12));
 }
 .legend-item.selected {
-  background: var(--rp-sel-bg, rgba(255, 255, 180, 0.12));
+  background: var(--app-sel-bg, rgba(255, 255, 180, 0.12));
   box-shadow: inset 3px 0 0 var(--accent);
 }
 .legend-item.filtered {

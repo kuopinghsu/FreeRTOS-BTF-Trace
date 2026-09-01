@@ -1,7 +1,7 @@
 <template>
   <div
     class="app"
-    :class="{ dark: timelineOptions.darkMode, 'drag-over': dragOver }"
+    :class="{ dark: timelineOptions.darkMode, 'drag-over': dragOver, 'focus-mode': focusMode && !!trace }"
     @dragenter.prevent="onDragEnter"
     @dragover.prevent="onDragOver"
     @dragleave.prevent="onDragLeave"
@@ -12,9 +12,6 @@
       ref="toolbarRef"
       :model-value="timelineOptions"
       :trace-info="traceInfo"
-      :heatmap-enabled="heatmapEnabled"
-      :analysis-enabled="!!trace"
-      :compare-enabled="compareTabs.length >= 2"
       :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
       :range-enabled="rangeEnabled"
       :zoom-out-enabled="zoomOutEnabled"
@@ -48,17 +45,11 @@
       @expand-all="onExpandAll"
       @collapse-all="onCollapseAll"
       @add-mark="onAddMark"
-      @copy-screenshot="onCopyScreenshot"
       @export-svg="onExportSvg"
       @export-perfetto="onExportPerfetto"
       @export-slice="onExportBtfSlice"
-      @show-heatmap="onOpenHeatmap"
-      @show-analysis="analysisOpen = true"
-      @show-compare="onOpenTraceCompare"
       @clear-task-filter="clearHeatmapTaskFilter"
-      @show-help="openHelpDialog"
       @show-about="openAboutDialog"
-      @show-settings="openSettingsDialog"
     />
 
     <div
@@ -202,9 +193,15 @@
       </div>
     </div>
 
+    <!-- Unified context strip: trace-quality / evidence inspector / cursor scope
+         helper share one bordered zone instead of stacking as loose bars. -->
+    <div
+      v-if="hasContextStrip"
+      class="context-strip"
+    >
     <div
       v-if="traceQualityReportData && !traceQualityReportData.ok"
-      class="trace-quality-banner"
+      class="trace-quality-banner ctx-row ctx-row--warn"
       role="status"
     >
       <span>{{ traceQualityReportData.summary }}</span>
@@ -231,7 +228,7 @@
     </div>
     <div
       v-if="traceQualityDetailsOpen && traceQualityReportData?.groups?.length"
-      class="trace-quality-details"
+      class="trace-quality-details ctx-row ctx-row--warn"
       role="region"
       aria-label="Trace quality details"
     >
@@ -258,7 +255,7 @@
 
     <div
       v-if="evidenceInspectorText"
-      class="evidence-inspector-bar"
+      class="evidence-inspector-bar ctx-row ctx-row--info"
       role="status"
       aria-label="Timeline evidence inspector"
     >
@@ -285,7 +282,7 @@
 
     <div
       v-if="showCursorScopeBanner"
-      class="cursor-scope-banner"
+      class="cursor-scope-banner ctx-row ctx-row--info"
       role="status"
     >
       <span>{{ useAsScopePrompt }}</span>
@@ -310,6 +307,7 @@
         ×
       </button>
     </div>
+    </div><!-- /context-strip -->
 
     <!-- Trace tabs -->
     <div
@@ -341,39 +339,23 @@
 
     <!-- Main area -->
     <div class="main-area">
-      <!-- Loading overlay -->
+      <!-- Loading: a hairline progress bar under the toolbar + a timeline
+           skeleton (below) instead of a modal card, so nothing shifts when
+           the real timeline mounts. -->
       <div
         v-if="loading"
-        class="loading-overlay"
+        class="load-progressbar"
+        role="progressbar"
+        :aria-valuenow="Math.round(loadingPct)"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        :aria-label="`Loading ${loadingFileName || 'trace'}`"
       >
-        <div class="loading-card">
-          <div class="loading-filename">
-            {{ loadingFileName || 'Loading trace…' }}
-          </div>
-          <div class="loading-msg">
-            {{ loadingMsg || 'Please wait…' }}
-          </div>
-          <div class="loading-bar-track">
-            <div
-              class="loading-bar-fill"
-              :style="{ width: loadingPct + '%' }"
-            />
-          </div>
-          <div
-            v-if="loadingPctLabel"
-            class="loading-pct"
-          >
-            {{ loadingPctLabel }}%
-          </div>
-          <button
-            v-if="loadingCancellable"
-            type="button"
-            class="loading-cancel-btn"
-            @click="cancelLoading"
-          >
-            Cancel
-          </button>
-        </div>
+        <div
+          class="load-progressbar-fill"
+          :class="{ indeterminate: !loadingPctLabel }"
+          :style="{ width: (loadingPctLabel ? loadingPct : 100) + '%' }"
+        />
       </div>
       <div
         class="demo-message-overlay"
@@ -388,8 +370,104 @@
           </div>
         </Transition>
       </div>
+      <!-- Left activity rail: investigation entry points that have no panel home. -->
+      <nav
+        v-if="trace"
+        class="activity-rail"
+        aria-label="Investigation tools"
+      >
+        <button
+          v-if="heatmapEnabled"
+          type="button"
+          class="rail-btn act-btn"
+          data-demo-target="rail_heatmap"
+          title="Migration heatmap"
+          @click="onOpenHeatmap"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/></svg>
+          <span class="rail-tip act-tip">Migration heatmap</span>
+        </button>
+        <button
+          type="button"
+          class="rail-btn act-btn"
+          data-demo-target="rail_analysis"
+          title="Analysis findings"
+          @click="analysisOpen = true"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v5l-5 9.2A2 2 0 0 0 6.8 20h10.4a2 2 0 0 0 1.8-2.8L14 8V3"/></svg>
+          <span class="rail-tip act-tip">Analysis findings</span>
+        </button>
+        <button
+          v-if="compareTabs.length >= 2"
+          type="button"
+          class="rail-btn act-btn"
+          data-demo-target="rail_compare"
+          title="Compare traces"
+          @click="onOpenTraceCompare"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 15.5V9a3 3 0 0 1 3-3h4M18 8.5V15a3 3 0 0 1-3 3h-4"/><path d="m11 4 2 2-2 2M13 20l-2-2 2-2"/></svg>
+          <span class="rail-tip act-tip">Compare traces</span>
+        </button>
+        <button
+          v-if="traceInfo"
+          type="button"
+          class="rail-btn act-btn"
+          data-demo-target="rail_snapshot"
+          title="Snapshot editor"
+          @click="onCopyScreenshot"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h2.5l1.6-2h5.8L18.5 6H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.5"/></svg>
+          <span class="rail-tip act-tip">Snapshot editor</span>
+        </button>
+        <span class="act-spring" aria-hidden="true"></span>
+        <button
+          type="button"
+          class="rail-btn act-btn"
+          data-demo-target="rail_help"
+          title="Help &amp; keyboard shortcuts"
+          @click="openHelpDialog"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.4 2.4 0 0 1 4.7.6c0 1.6-2.3 2-2.3 3.4"/><path d="M12 17h.01"/></svg>
+          <span class="rail-tip act-tip">Help</span>
+        </button>
+        <button
+          type="button"
+          class="rail-btn act-btn"
+          data-demo-target="rail_settings"
+          title="Settings"
+          @click="openSettingsDialog"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.2a1.7 1.7 0 0 0-1.4 1z"/></svg>
+          <span class="rail-tip act-tip">Settings</span>
+        </button>
+      </nav>
+
       <div ref="leftPaneRef" class="left-pane">
         <div class="timeline-wrap">
+          <!-- First-load skeleton: placeholder lanes so the layout is already
+               the right shape when TimelinePanel takes over. -->
+          <div
+            v-if="loading && !trace"
+            class="timeline-skeleton"
+            aria-hidden="true"
+          >
+            <div class="tl-skel-axis" />
+            <div
+              v-for="n in 9"
+              :key="n"
+              class="tl-skel-row"
+            >
+              <div class="tl-skel-label" />
+              <div class="tl-skel-track">
+                <span
+                  v-for="seg in skeletonRow(n)"
+                  :key="seg.k"
+                  class="tl-skel-seg"
+                  :style="{ left: seg.left + '%', width: seg.width + '%' }"
+                />
+              </div>
+            </div>
+          </div>
           <TimelinePanel
             ref="timelinePanelRef"
             :trace="trace"
@@ -467,19 +545,23 @@
       <div
         v-if="trace"
         class="panel-resizer"
+        :class="{ 'is-collapsed': rightPanelCollapsed }"
         role="separator"
-        aria-label="Resize side panel"
+        aria-label="Resize side panel — double-click to collapse"
         aria-orientation="vertical"
+        title="Drag to resize · double-click to collapse"
         @mousedown.prevent="onRightPanelResizeStart"
+        @dblclick="toggleRightPanelCollapsed"
       />
 
       <!-- Right panel -->
       <div
         v-if="trace"
         class="right-panel"
-        :style="{ width: rightPanelWidth + 'px' }"
+        :class="{ collapsed: rightPanelCollapsed }"
+        :style="{ width: (rightPanelCollapsed ? 44 : rightPanelWidth) + 'px' }"
       >
-        <div class="rp-main">
+        <div v-show="!rightPanelCollapsed" class="rp-main">
           <div class="rp-page-header">
             <h2 class="rp-title">{{ rightPanelTitle }}</h2>
           </div>
@@ -741,7 +823,7 @@
             role="tab"
             :aria-selected="rightPanelTab === 'stats'"
             title="Statistics"
-            @click="rightPanelTab = 'stats'"
+            @click="selectRightPanelTab('stats')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
             <span class="rail-tip">Statistics</span>
@@ -753,7 +835,7 @@
             role="tab"
             :aria-selected="rightPanelTab === 'marks'"
             title="Marks"
-            @click="rightPanelTab = 'marks'"
+            @click="selectRightPanelTab('marks')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
             <span class="rail-tip">Marks</span>
@@ -766,7 +848,7 @@
             role="tab"
             :aria-selected="rightPanelTab === 'find'"
             title="Find"
-            @click="rightPanelTab = 'find'"
+            @click="selectRightPanelTab('find')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
             <span class="rail-tip">Find</span>
@@ -778,7 +860,7 @@
             role="tab"
             :aria-selected="rightPanelTab === 'legend'"
             title="Legend"
-            @click="rightPanelTab = 'legend'"
+            @click="selectRightPanelTab('legend')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="5" cy="6" r="1.6"/><circle cx="5" cy="12" r="1.6"/><circle cx="5" cy="18" r="1.6"/><path d="M10 6h11M10 12h11M10 18h11"/></svg>
             <span class="rail-tip">Legend</span>
@@ -792,10 +874,21 @@
             role="tab"
             :aria-selected="rightPanelTab === 'ai'"
             title="AI Assistant"
-            @click="rightPanelTab = 'ai'"
+            @click="selectRightPanelTab('ai')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l1.8 4.9L19 9.6l-4.2 2.4L14 17l-2-3.6L8 17l.2-5-4.2-2.4 5.2-1.7z"/></svg>
             <span class="rail-tip">AI</span>
+          </button>
+          <button
+            type="button"
+            class="rail-btn rail-collapse"
+            :title="rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'"
+            :aria-label="rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'"
+            @click="toggleRightPanelCollapsed"
+          >
+            <svg v-if="rightPanelCollapsed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/></svg>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m8 9 3 3-3 3"/></svg>
+            <span class="rail-tip">{{ rightPanelCollapsed ? 'Expand panel' : 'Collapse panel' }}</span>
           </button>
         </nav>
       </div>
@@ -1263,9 +1356,37 @@
       </div>
     </Transition>
 
+    <!-- Focus mode: floating way out (Esc also exits). -->
+    <button
+      v-if="focusMode && trace"
+      type="button"
+      class="focus-exit"
+      title="Exit focus mode (Esc)"
+      @click="setFocusMode(false)"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4"/></svg>
+      Exit focus
+    </button>
+
     <!-- Status bar -->
     <div class="status-bar">
-      <template v-if="trace">
+      <template v-if="loading">
+        <span class="status-loading">
+          <span class="status-loading-spin" aria-hidden="true" />
+          <span class="status-loading-text">
+            {{ loadingFileName || 'Loading trace' }} · {{ loadingMsg || 'please wait' }}<template v-if="loadingPctLabel"> · {{ loadingPctLabel }}%</template>
+          </span>
+        </span>
+        <button
+          v-if="loadingCancellable"
+          type="button"
+          class="status-loading-cancel"
+          @click="cancelLoading"
+        >
+          Cancel
+        </button>
+      </template>
+      <template v-else-if="trace">
         <span
           class="status-summary"
           :class="{ error: !!(statusBarFlash && statusBarFlashError) }"
@@ -1328,6 +1449,16 @@
           class="status-range"
           :title="statusRangeLine"
         >{{ statusRangeLine }}</span>
+
+        <button
+          v-if="findHits.length"
+          type="button"
+          class="status-find"
+          :title="`Find match ${findHitPos} of ${findHits.length} — open the Find panel`"
+          @click="focusFindPanel"
+        >
+          Find {{ findHitPos }} / {{ findHits.length }}
+        </button>
 
         <div class="status-actions">
           <button
@@ -1664,6 +1795,21 @@ const loadingFileName = ref('')
 const loadingPhase = ref('parse')
 const loadingPctLabel = computed(() => formatLoadingPct(loadingPct.value))
 const loadingCancellable = computed(() => loading.value && isLoadingCancellable(loadingPhase.value))
+
+/** Deterministic placeholder segments for one skeleton lane (row index 1..N). */
+function skeletonRow(row) {
+  let s = row * 2654435761 % 2147483647
+  const rnd = () => ((s = (s * 48271) % 2147483647) / 2147483647)
+  const out = []
+  let x = rnd() * 4
+  let k = 0
+  while (x < 97) {
+    const w = 3 + rnd() * 14
+    out.push({ k: k++, left: +x.toFixed(2), width: +Math.min(w, 98 - x).toFixed(2) })
+    x += w + 2 + rnd() * 10
+  }
+  return out
+}
 const helpOpen   = ref(false)
 const aboutOpen  = ref(false)
 const aboutIconSvg = appIconSvgMarkup(72)
@@ -1810,6 +1956,8 @@ const findMode = computed({
 })
 const findHits = computed(() => activeTab.value?.findHits ?? [])
 const findHitIdx = computed(() => activeTab.value?.findHitIdx ?? -1)
+// Mirror FindPanel.vue counterText: unnavigated (idx < 0) shows position 1.
+const findHitPos = computed(() => (findHitIdx.value >= 0 ? findHitIdx.value + 1 : 1))
 const findMarkerNs = computed(() => activeTab.value?.findMarkerNs ?? null)
 const findError = ref('')
 
@@ -1822,6 +1970,40 @@ const snapshotDownloadFilename = ref('annotated-snapshot.png')
 
 const rightPanelWidth = ref(RIGHT_PANEL_WIDTH)
 let _rightPanelResize = null
+
+/** Collapse the right panel to just its icon rail (double-click the seam). */
+const RP_COLLAPSED_KEY = 'btf-rp-collapsed'
+function loadRpCollapsed() {
+  try { return localStorage.getItem(RP_COLLAPSED_KEY) === '1' } catch { return false }
+}
+const rightPanelCollapsed = ref(loadRpCollapsed())
+function setRightPanelCollapsed(next) {
+  rightPanelCollapsed.value = next
+  try { localStorage.setItem(RP_COLLAPSED_KEY, next ? '1' : '0') } catch { /* private mode */ }
+  scheduleRender()
+}
+function toggleRightPanelCollapsed() {
+  setRightPanelCollapsed(!rightPanelCollapsed.value)
+}
+/** Rail click: switch to the tab and, if collapsed, pop the panel back open. */
+function selectRightPanelTab(tab) {
+  rightPanelTab.value = tab
+  if (rightPanelCollapsed.value) setRightPanelCollapsed(false)
+}
+
+/** Focus mode: hide every chrome pane but the timeline (+ toolbar / status bar).
+ *  Reached from the command palette; Esc or the floating chip leaves it. */
+const FOCUS_MODE_KEY = 'btf-focus-mode'
+function loadFocusMode() {
+  try { return localStorage.getItem(FOCUS_MODE_KEY) === '1' } catch { return false }
+}
+const focusMode = ref(loadFocusMode())
+function setFocusMode(next) {
+  focusMode.value = !!next
+  try { localStorage.setItem(FOCUS_MODE_KEY, next ? '1' : '0') } catch { /* private mode */ }
+  nextTick(scheduleRender)   // right pane appeared/vanished — re-fit the timeline
+}
+function toggleFocusMode() { setFocusMode(!focusMode.value) }
 
 const appSettings = reactive(applySettingsToRuntime(loadSettings()))
 
@@ -1973,6 +2155,16 @@ const showCursorScopeBanner = computed(() => {
 
 const multiCursorWarning = computed(() =>
   multiCursorSpanWarning(placedCursorTimes.value))
+
+/**
+ * True when any contextual banner (trace-quality, evidence inspector, cursor
+ * scope helper) wants to show. Drives the single unified `.context-strip`
+ * wrapper so the three read as one zone instead of a stack of loose bars.
+ */
+const hasContextStrip = computed(() =>
+  (!!traceQualityReportData.value && !traceQualityReportData.value.ok) ||
+  !!evidenceInspectorText.value ||
+  showCursorScopeBanner.value)
 
 watch(
   () => placedCursorTimes.value.length,
@@ -3455,6 +3647,7 @@ function runPaletteAction(id) {
   else if (aid === 'ai') rightPanelTab.value = 'ai'
   else if (aid === 'compare') compareOpen.value = true
   else if (aid === 'heatmap') onOpenHeatmap()
+  else if (aid === 'focus') toggleFocusMode()
   else if (aid === 'settings') openSettingsDialog()
   else if (aid === 'limit-scope') onStatsScopeChange(true)
   else if (aid === 'fit') onFit()
@@ -5802,6 +5995,11 @@ function onGlobalKeydown(e) {
       e.preventDefault()
       return
     }
+    if (focusMode.value && !demoRunning.value) {
+      setFocusMode(false)
+      e.preventDefault()
+      return
+    }
     if (demoRunning.value) {
       const now = Date.now()
       if (now - _demoEscAt < 2500) {
@@ -6504,30 +6702,43 @@ watch(
   --badge-filtered-bg: #3A3420;
   --badge-filtered-border: #8A7040;
 
-  /* ---- Right-panel redesign: spacing / radius / surface scale ---- */
+  /* ---- App-wide layout scale: spacing / radius / type faces / surfaces ----
+     (introduced with the right-panel redesign, now used by the activity rail,
+     context strip, cards and panels alike — hence the --app-* name.) */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 24px;
-  --rp-r-1: 6px;
-  --rp-r-2: 9px;
+  --app-r-1: 6px;
+  --app-r-2: 9px;
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  /* Surfaces derived from the existing panel tokens, biased toward the accent. */
-  --rp-surface:   var(--panel-bg);
-  --rp-surface-2: color-mix(in srgb, var(--panel-bg) 78%, var(--bg));
-  --rp-surface-3: color-mix(in srgb, var(--accent) 9%, var(--panel-bg));
-  --rp-border-soft: color-mix(in srgb, var(--border) 55%, transparent);
-  --rp-sel-bg:    color-mix(in srgb, var(--accent) 12%, transparent);
-  --rp-hover-bg:  color-mix(in srgb, var(--accent) 7%, transparent);
-  --rp-accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
+  /* Surfaces derived from the panel tokens, biased toward the accent.
+     Redeclared verbatim in the light block below so the color-mix()s
+     re-resolve against the light --panel-bg / --bg / --accent. */
+  --app-surface:   var(--panel-bg);
+  --app-surface-2: color-mix(in srgb, var(--panel-bg) 78%, var(--bg));
+  --app-surface-3: color-mix(in srgb, var(--accent) 9%, var(--panel-bg));
+  --app-border-soft: color-mix(in srgb, var(--border) 55%, transparent);
+  --app-sel-bg:    color-mix(in srgb, var(--accent) 12%, transparent);
+  --app-hover-bg:  color-mix(in srgb, var(--accent) 7%, transparent);
+  --app-accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .app:not(.dark),
 body:has(.app:not(.dark)) {
   --bg:            #FFFFFF;
   --panel-bg:      #F5F5F5;
+  /* Re-resolve the accent/panel-derived surfaces against the light palette
+     (a bare :root color-mix(var(--panel-bg)…) stays stuck on its dark value). */
+  --app-surface:   var(--panel-bg);
+  --app-surface-2: color-mix(in srgb, var(--panel-bg) 78%, var(--bg));
+  --app-surface-3: color-mix(in srgb, var(--accent) 9%, var(--panel-bg));
+  --app-border-soft: color-mix(in srgb, var(--border) 55%, transparent);
+  --app-sel-bg:    color-mix(in srgb, var(--accent) 12%, transparent);
+  --app-hover-bg:  color-mix(in srgb, var(--accent) 7%, transparent);
+  --app-accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
   --ruler-bg:      #EEEEEE;
   --tb-bg:         #F0F0F0;
   --tb-btn-hover:  rgba(0,0,0,0.06);
@@ -6745,6 +6956,48 @@ body {
   opacity: 0.9;
 }
 
+/* ---- Unified context strip ----
+   The trace-quality, evidence-inspector and cursor-scope bars share one
+   bordered zone with a neutral surface; each keeps its semantic colour as a
+   left accent stripe instead of a full-width tint. */
+.context-strip {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  /* Reads as an extension of the toolbar zone above it; theme-aware (unlike
+     --app-surface-2, which is frozen to its dark value in light mode). */
+  background: var(--tb-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.context-strip .ctx-row {
+  background: transparent;
+  border-bottom: 0;
+  border-left: 3px solid transparent;
+  color: var(--fg);
+}
+
+.context-strip .ctx-row + .ctx-row {
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.context-strip .ctx-row--warn {
+  border-left-color: #d8a13a;
+}
+
+.context-strip .ctx-row--info {
+  border-left-color: var(--accent);
+}
+
+.context-strip .trace-quality-details {
+  background: transparent;
+}
+
+.context-strip .cursor-scope-close,
+.context-strip .evidence-inspector-text {
+  color: var(--fg-dim);
+}
+
 .demo-status-banner {
   flex: 0 0 auto;
   display: flex;
@@ -6903,6 +7156,47 @@ body {
   outline-offset: -4px;
 }
 
+/* Focus mode — everything but the timeline (+ toolbar / status bar) folds away. */
+.app.focus-mode .activity-rail,
+.app.focus-mode .trace-tabs,
+.app.focus-mode .panel-resizer,
+.app.focus-mode .right-panel {
+  display: none;
+}
+
+.focus-exit {
+  position: fixed;
+  right: 14px;
+  bottom: 34px;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.focus-exit:hover,
+.focus-exit:focus-visible {
+  opacity: 1;
+  color: var(--fg);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.focus-exit svg {
+  width: 14px;
+  height: 14px;
+}
+
 .trace-tabs {
   display: flex;
   align-items: stretch;
@@ -7022,15 +7316,108 @@ body.row-resizing * {
   user-select: none;
 }
 
-.loading-overlay {
+/* ---- Inline loading: hairline top bar + timeline skeleton ---- */
+.load-progressbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 200;
+  background: var(--app-hover-bg);
+  overflow: hidden;
+}
+
+.load-progressbar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.load-progressbar-fill.indeterminate {
+  width: 40% !important;
+  transition: none;
+  animation: load-indeterminate 1.1s ease-in-out infinite;
+}
+
+@keyframes load-indeterminate {
+  0%   { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+
+.timeline-skeleton {
   position: absolute;
   inset: 0;
-  z-index: 200;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 8px 8px 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.tl-skel-axis {
+  height: 16px;
+  margin: 0 8px 6px 76px;
+  border-radius: 3px;
+  background: var(--app-surface-2);
+}
+
+.tl-skel-row {
+  flex: 1;
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
+  gap: 10px;
+  min-height: 0;
+  padding: 3px 8px 3px 12px;
+}
+
+.tl-skel-label {
+  width: 64px;
+  height: 12px;
+  flex: none;
+  border-radius: 3px;
+  background: var(--app-surface-2);
+}
+
+.tl-skel-track {
+  position: relative;
+  flex: 1;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--app-surface-2);
+  overflow: hidden;
+}
+
+.tl-skel-seg {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 2px;
+  background: var(--app-surface-3);
+}
+
+.timeline-skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--fg) 6%, transparent) 50%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: tl-skel-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes tl-skel-shimmer {
+  100% { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .load-progressbar-fill.indeterminate,
+  .timeline-skeleton::after { animation: none; }
 }
 
 .demo-message-overlay {
@@ -7077,19 +7464,6 @@ body.row-resizing * {
   background: rgba(245, 245, 245, 0.94);
   color: #1e1e1e;
   border-color: #bbb;
-}
-
-.loading-card {
-  background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 24px 32px;
-  min-width: 320px;
-  max-width: 480px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
 }
 
 .dialog-overlay {
@@ -7319,35 +7693,57 @@ body.row-resizing * {
   }
 }
 
-.loading-filename {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg);
+.status-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--fg-dim);
+}
+
+.status-loading-spin {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--app-accent-line);
+  border-top-color: var(--accent);
+  animation: status-loading-spin 0.7s linear infinite;
+}
+
+@keyframes status-loading-spin {
+  100% { transform: rotate(360deg); }
+}
+
+.status-loading-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.loading-msg {
+.status-loading-cancel {
+  appearance: none;
+  margin-left: 8px;
+  flex: none;
+  font: inherit;
   font-size: var(--type-meta);
-  color: var(--fg-dim);
-  min-height: 1.4em;
-}
-
-.loading-cancel-btn {
-  align-self: flex-end;
-  margin-top: 4px;
-  font-size: var(--type-meta);
-  padding: 4px 12px;
-  border-radius: 4px;
+  padding: 1px 10px;
+  border-radius: 999px;
   border: 1px solid var(--border);
-  background: var(--panel-btn-bg);
-  color: var(--fg);
+  background: transparent;
+  color: var(--fg-dim);
   cursor: pointer;
 }
 
-.loading-cancel-btn:hover {
+.status-loading-cancel:hover,
+.status-loading-cancel:focus-visible {
   background: var(--tb-btn-hover);
+  color: var(--fg);
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-loading-spin { animation-duration: 0s; }
 }
 
 .first-run-btn {
@@ -7375,27 +7771,6 @@ body.row-resizing * {
   font-size: var(--type-meta);
 }
 
-.loading-bar-track {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--border);
-  overflow: hidden;
-}
-
-.loading-bar-fill {
-  height: 100%;
-  border-radius: 3px;
-  background: var(--accent);
-  transition: width 0.15s ease;
-}
-
-.loading-pct {
-  font-size: 11px;
-  font-family: monospace;
-  color: var(--accent);
-  text-align: right;
-}
-
 .right-panel {
   display: flex;
   flex-direction: row;
@@ -7421,8 +7796,8 @@ body.row-resizing * {
   gap: var(--sp-2);
   min-height: 34px;
   padding: 0 var(--sp-3);
-  border-bottom: 1px solid var(--rp-border-soft);
-  background: var(--rp-surface-2);
+  border-bottom: 1px solid var(--app-border-soft);
+  background: var(--app-surface-2);
   flex-shrink: 0;
 }
 
@@ -7448,8 +7823,8 @@ body.row-resizing * {
   width: 44px;
   flex-shrink: 0;
   padding: var(--sp-2) 0;
-  border-left: 1px solid var(--rp-border-soft);
-  background: var(--rp-surface-2);
+  border-left: 1px solid var(--app-border-soft);
+  background: var(--app-surface-2);
 }
 
 .rail-btn {
@@ -7459,7 +7834,7 @@ body.row-resizing * {
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: var(--rp-r-1);
+  border-radius: var(--app-r-1);
   background: transparent;
   color: var(--fg-dim);
   cursor: pointer;
@@ -7471,12 +7846,12 @@ body.row-resizing * {
 }
 
 .rail-btn:hover {
-  background: var(--rp-surface-3);
+  background: var(--app-surface-3);
   color: var(--fg);
 }
 
 .rail-btn.active {
-  background: var(--rp-sel-bg);
+  background: var(--app-sel-bg);
   color: var(--accent);
 }
 
@@ -7523,8 +7898,52 @@ body.row-resizing * {
   margin: var(--sp-2) 0;
 }
 
+/* Collapse / expand the right panel — pinned to the rail foot with a hairline. */
+.rail-collapse {
+  margin-top: auto;
+}
+
+.rail-collapse::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 6px;
+  right: 6px;
+  height: 1px;
+  background: var(--app-border-soft);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rail-btn .rail-tip { transition: none; }
+}
+
+/* Left activity rail — investigation entry points, mirror of the right icon rail. */
+.activity-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 44px;
+  flex-shrink: 0;
+  padding: var(--sp-2) 0;
+  border-right: 1px solid var(--border);
+  background: var(--app-surface-2);
+}
+
+.activity-rail .act-spring {
+  flex: 1 1 auto;
+}
+
+/* Tip flips to the right edge (the right rail's tip sits on its left). */
+.act-btn .act-tip {
+  right: auto;
+  left: calc(100% + 8px);
+  transform: translateY(-50%) translateX(-4px);
+}
+
+.act-btn:hover .act-tip,
+.act-btn:focus-visible .act-tip {
+  transform: translateY(-50%) translateX(0);
 }
 
 .panel-page-wrap {
@@ -7552,9 +7971,9 @@ body.row-resizing * {
 
 /* ---- Right-panel collapsible section card ---- */
 .rp-card {
-  border: 1px solid var(--rp-border-soft);
-  border-radius: var(--rp-r-2);
-  background: var(--rp-surface-2);
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-r-2);
+  background: var(--app-surface-2);
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -7576,7 +7995,7 @@ body.row-resizing * {
   text-align: left;
 }
 
-.rp-card-head:hover { background: var(--rp-hover-bg); }
+.rp-card-head:hover { background: var(--app-hover-bg); }
 
 .rp-chevron {
   width: 13px;
@@ -7596,13 +8015,13 @@ body.row-resizing * {
   font-size: 10px;
   font-weight: 500;
   color: var(--fg-dim);
-  background: var(--rp-surface-3);
+  background: var(--app-surface-3);
   padding: 1px 6px;
   border-radius: 999px;
 }
 
 .rp-card-body {
-  border-top: 1px solid var(--rp-border-soft);
+  border-top: 1px solid var(--app-border-soft);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -7632,6 +8051,26 @@ body.row-resizing * {
   background: color-mix(in srgb, var(--accent) 50%, var(--border));
 }
 
+/* Collapsed: keep the seam accent faintly visible so it reads as re-openable. */
+.panel-resizer.is-collapsed::before {
+  background: color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+.panel-resizer.is-collapsed:hover::before {
+  background: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+
+/* Collapsed right panel is just the rail — drop the now-redundant inner border.
+   The width/min-width also override the responsive `.right-panel { min-width }`
+   media rules, which would otherwise pin the collapsed panel open. */
+.right-panel.collapsed {
+  width: 44px;
+  min-width: 44px;
+}
+
+.right-panel.collapsed .icon-rail {
+  border-left: 0;
+}
+
 body.col-resizing,
 body.col-resizing * {
   cursor: col-resize !important;
@@ -7655,7 +8094,7 @@ body.col-resizing * {
   letter-spacing: 0.01em;
   color: var(--fg);
   padding: var(--sp-2) var(--sp-3) var(--sp-1);
-  border-bottom: 1px solid var(--rp-border-soft);
+  border-bottom: 1px solid var(--app-border-soft);
   flex-shrink: 0;
 }
 
@@ -7852,6 +8291,28 @@ body.col-resizing * {
   padding: 0 10px;
   font: inherit;
   cursor: pointer;
+}
+
+.status-find {
+  appearance: none;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-dim);
+  border-radius: 999px;
+  height: 22px;
+  padding: 0 10px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.status-find:hover,
+.status-find:focus-visible {
+  background: var(--tb-btn-hover);
+  color: var(--fg);
+  outline: none;
 }
 
 .status-toggle:hover,

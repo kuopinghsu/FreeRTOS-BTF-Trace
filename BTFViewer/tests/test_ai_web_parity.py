@@ -1068,15 +1068,39 @@ class AiWebParityTests(unittest.TestCase):
             BTF_ROOT / "web/src/utils/findAnalysis.js").read_text(encoding="utf-8"))
         # FindPanel.vue's browser-style bar (redesign) shows an inline
         # "<pos> / <hitCount>" counter via `counterText`; desktop mirrors it
-        # with the same "<idx+1> / <n>" format in _find_status.
+        # with the same "<idx+1> / <n>" format, routed through _set_find_counter.
         find_vue = (
             BTF_ROOT / "web/src/components/FindPanel.vue").read_text(encoding="utf-8")
         self.assertIn("counterText", find_vue)
         self.assertIn("${pos} / ${props.hitCount}", find_vue)
         self.assertIn(
-            'self._find_status.setText(f"{idx + 1} / {n}")',
+            'self._set_find_counter(f"{idx + 1} / {n}")',
             mw,
         )
+        # Shell redesign: the same position also shows in the bottom status bar
+        # (web App.vue `.status-find`, desktop `_status_find_btn`), fed by the
+        # one counter sink on each side.
+        self.assertIn("status-find", app)
+        self.assertIn("findHitPos", app)
+        self.assertIn("_status_find_btn", mw)
+        self.assertIn("def _set_find_counter", mw)
+        # Shell redesign: Focus mode folds every chrome pane but the timeline —
+        # web via the command palette (`focusMode`), desktop via View ▸ Focus Mode.
+        self.assertIn("focusMode", app)
+        self.assertIn("'focus', 'Focus mode'", (
+            BTF_ROOT / "web/src/config.js").read_text(encoding="utf-8"))
+        self.assertIn("def _set_focus_mode", mw)
+        self.assertIn('"&Focus Mode"', mw)
+        # Shell redesign: loading is an inline skeleton + status-bar progress,
+        # not a modal card — web `.timeline-skeleton` / `.status-loading`,
+        # desktop `_LoadSkeleton` + `_status_load_lbl` (the old `_LoadProgressDialog`
+        # stays only as a hidden signal hub whose show_centered() is a no-op).
+        self.assertIn("timeline-skeleton", app)
+        self.assertIn("status-loading", app)
+        self.assertNotIn("loading-overlay", app)
+        self.assertIn("class _LoadSkeleton", mw)
+        self.assertIn("_status_load_lbl", mw)
+        self.assertIn("def _begin_inline_load", mw)
         self.assertIn("migration matches", (
             BTF_ROOT / "btf_viewer_pkg/mvvm/find_logic.py").read_text(encoding="utf-8"))
         self.assertIn("archive.zip::", (

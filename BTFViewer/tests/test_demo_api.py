@@ -106,14 +106,14 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         self.assertNotIn("<analysis", body)
         self.assertIn('target="toolbar_task"', body)
         self.assertIn('target="toolbar_core"', body)
-        self.assertIn('target="toolbar_analysis"', body)
+        self.assertIn('target="rail_analysis"', body)
         self.assertLess(
             body.index('target="toolbar_task"'),
             body.index('target="toolbar_core"'),
         )
         self.assertLess(
             body.index('target="toolbar_core"'),
-            body.index('target="toolbar_analysis"'),
+            body.index('target="rail_analysis"'),
         )
         self.assertIn("<cpu_load", body)
         self.assertLess(body.index('target="toolbar_load"'), body.index("<cpu_load"))
@@ -160,7 +160,7 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         step8 = re.search(r'<step id="8".*?</step>', xml, re.S)
         self.assertIsNotNone(step8)
         body = step8.group(0)
-        self.assertLess(body.index('target="toolbar_analysis"'), body.index("<analysis/>"))
+        self.assertLess(body.index('target="rail_analysis"'), body.index("<analysis/>"))
 
     def test_health_step_opens_tick_distribution(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
@@ -371,9 +371,6 @@ class DemoApiUiTests(unittest.TestCase):
         open_pt = win._tb.mapToGlobal(open_geo.center())
         self.assertEqual(open_hit.get("x"), int(open_pt.x()))
         self.assertEqual(open_hit.get("y"), int(open_pt.y()))
-        snap_geo = win._tb.actionGeometry(win._tb_snap_btn)
-        snap_pt = win._tb.mapToGlobal(snap_geo.center())
-        self.assertLess(int(open_hit.get("x")), int(snap_pt.x()))
         core = win._demo_handle({"op": "target", "name": "toolbar_core"})
         core_geo = win._tb.actionGeometry(win._tb_core_btn)
         core_pt = win._tb.mapToGlobal(core_geo.center())
@@ -728,6 +725,11 @@ class DemoApiUiTests(unittest.TestCase):
         view = win._view
         scene = view._scene
         view.zoom_fit()
+        self._app.processEvents()
+
+        # Deterministic width (sibling tests do the same); the left activity
+        # rail also claims 44px off the timeline.
+        win.resize(1280, 800)
         self._app.processEvents()
 
         c1_ns, c2_ns = 3085000, 3310000

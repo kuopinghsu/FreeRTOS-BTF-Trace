@@ -167,12 +167,12 @@ defineExpose({ focusInput })
   gap: 4px;
   padding: 4px 4px 4px 8px;
   border: 1px solid var(--border);
-  border-radius: var(--rp-r-1, 6px);
-  background: var(--rp-surface-2, var(--bg));
+  border-radius: var(--app-r-1, 6px);
+  background: var(--app-surface-2, var(--bg));
 }
 .findbar:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--rp-sel-bg, rgba(79,139,255,0.15));
+  box-shadow: 0 0 0 3px var(--app-sel-bg, rgba(79,139,255,0.15));
 }
 .findbar.error {
   border-color: var(--analysis-err, #e07070);
@@ -231,7 +231,7 @@ defineExpose({ focusInput })
 }
 .findbar-step svg { width: 12px; height: 12px; }
 .findbar-step:hover:not(:disabled) {
-  background: var(--rp-surface-3, var(--tb-btn-hover));
+  background: var(--app-surface-3, var(--tb-btn-hover));
   color: var(--fg);
 }
 .findbar-step:disabled { opacity: 0.35; cursor: default; }
@@ -250,8 +250,8 @@ defineExpose({ focusInput })
   flex: 1;
   padding: 4px 6px;
   border: 1px solid var(--border);
-  border-radius: var(--rp-r-1, 6px);
-  background: var(--rp-surface-2, var(--bg));
+  border-radius: var(--app-r-1, 6px);
+  background: var(--app-surface-2, var(--bg));
   color: var(--fg);
   font-size: var(--type-body, 12px);
 }
@@ -289,7 +289,7 @@ defineExpose({ focusInput })
 }
 .find-examples button {
   border: 1px solid var(--border);
-  background: var(--rp-surface-2, transparent);
+  background: var(--app-surface-2, transparent);
   color: var(--fg-dim);
   font-family: var(--font-mono, monospace);
   font-size: 10px;
@@ -298,7 +298,7 @@ defineExpose({ focusInput })
   cursor: pointer;
 }
 .find-examples button:hover {
-  border-color: var(--rp-accent-line, var(--accent));
+  border-color: var(--app-accent-line, var(--accent));
   color: var(--accent);
 }
 </style>

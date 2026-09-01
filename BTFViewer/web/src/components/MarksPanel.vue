@@ -317,7 +317,7 @@ defineExpose({ focusAnnotation })
   align-items: center;
   gap: 8px;
   padding: 5px 6px;
-  border-radius: var(--rp-r-1, 6px);
+  border-radius: var(--app-r-1, 6px);
   cursor: pointer;
   transition: background 0.08s;
 }
@@ -343,10 +343,10 @@ defineExpose({ focusAnnotation })
   background: #FF8C00;
 }
 .mark-item:hover {
-  background: var(--rp-hover-bg, var(--tb-btn-hover));
+  background: var(--app-hover-bg, var(--tb-btn-hover));
 }
 .mark-item.selected {
-  background: var(--rp-sel-bg, var(--tb-btn-active));
+  background: var(--app-sel-bg, var(--tb-btn-active));
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
@@ -370,7 +370,7 @@ defineExpose({ focusAnnotation })
   min-width: 0;
 }
 .mark-label:hover {
-  border-color: var(--rp-border-soft, var(--border));
+  border-color: var(--app-border-soft, var(--border));
 }
 .mark-label:focus {
   border-color: var(--accent);
@@ -424,7 +424,7 @@ defineExpose({ focusAnnotation })
   flex-wrap: wrap;
   gap: var(--sp-1, 4px);
   padding: var(--sp-2, 8px);
-  border-top: 1px solid var(--rp-border-soft, var(--border));
+  border-top: 1px solid var(--app-border-soft, var(--border));
   flex-shrink: 0;
 }
 
@@ -434,7 +434,7 @@ defineExpose({ focusAnnotation })
   padding: 4px 8px;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: var(--rp-r-1, 6px);
+  border-radius: var(--app-r-1, 6px);
   color: var(--fg-dim);
   cursor: pointer;
   font-family: var(--font-ui, inherit);
@@ -443,7 +443,7 @@ defineExpose({ focusAnnotation })
 .action-btn:hover:not(:disabled) {
   background: var(--tb-btn-hover);
   color: var(--fg);
-  border-color: var(--rp-accent-line, var(--accent));
+  border-color: var(--app-accent-line, var(--accent));
 }
 .action-btn:disabled {
   opacity: 0.4;

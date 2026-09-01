@@ -70,7 +70,8 @@
       </svg>
     </button>
 
-    <!-- g1: File extras — Snapshot · SVG · Perfetto · Slice -->
+    <!-- g1: Export — SVG · Perfetto · Slice.  (Snapshot, Heatmap, Analysis and
+         Compare moved to the left activity rail in the shell redesign.) -->
     <Teleport
       :to="overflowPanelEl ?? 'body'"
       :disabled="!overflow.g1"
@@ -79,26 +80,6 @@
         :ref="el => setGroupRef('g1', el)"
         class="tb-group"
       >
-        <button
-          v-if="traceInfo"
-          class="tb-btn"
-          title="Open snapshot editor (Ctrl+S)"
-          aria-label="Open snapshot editor (Ctrl+S)"
-          @click="emit('copyScreenshot')"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fill-rule="evenodd"
-              :d="IC.shot"
-            />
-          </svg>
-        </button>
         <button
           v-if="traceInfo"
           class="tb-btn"
@@ -440,7 +421,8 @@
       </div>
     </Teleport>
 
-    <!-- g4b: Investigation entry points — Find · Heatmap · All · Analysis · Compare -->
+    <!-- g4b: Find + the Migration-filter clear affordance.  (Heatmap, Analysis
+         and Compare moved to the left activity rail in the shell redesign.) -->
     <Teleport
       :to="overflowPanelEl ?? 'body'"
       :disabled="!overflow.g4b"
@@ -465,30 +447,6 @@
             <path
               fill-rule="evenodd"
               :d="IC.find"
-            />
-          </svg>
-        </button>
-
-        <button
-          class="tb-btn"
-          data-demo-target="toolbar_heatmap"
-          :class="{ disabled: !heatmapEnabled }"
-          :disabled="!heatmapEnabled"
-          :title="heatmapEnabled
-            ? 'Migration & Corridor Inspector — topology + timeline (multi-core traces only)'
-            : 'Open a multi-core trace first'"
-          @click="heatmapEnabled && emit('showHeatmap')"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fill-rule="evenodd"
-              :d="IC.heatmap"
             />
           </svg>
         </button>
@@ -530,55 +488,6 @@
             />
           </svg>
           <span class="tb-label">All tasks</span>
-        </button>
-
-        <button
-          class="tb-btn tb-btn-labeled"
-          data-demo-target="toolbar_analysis"
-          :class="{ disabled: !analysisEnabled }"
-          :disabled="!analysisEnabled"
-          :title="analysisEnabled
-            ? 'Analysis Findings — heuristic load balance, WCET, blocking, thrashing, deadlines, tick, sync'
-            : 'Open a trace first'"
-          @click="analysisEnabled && emit('showAnalysis')"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fill-rule="evenodd"
-              :d="IC.analysis"
-            />
-          </svg>
-          <span class="tb-label">Analysis</span>
-        </button>
-
-        <button
-          class="tb-btn tb-btn-labeled"
-          :class="{ disabled: !compareEnabled }"
-          :disabled="!compareEnabled"
-          :title="compareEnabled
-            ? 'Trace Compare — summary, top tasks, and core migrations between two open trace tabs'
-            : 'Open at least two traces to compare'"
-          @click="compareEnabled && emit('showCompare')"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fill-rule="evenodd"
-              :d="IC.compare"
-            />
-          </svg>
-          <span class="tb-label">Compare</span>
         </button>
         <div class="tb-sep" />
       </div>
@@ -760,43 +669,7 @@
       </svg>
     </button>
 
-    <button
-      class="tb-btn"
-      title="Open Settings (Ctrl+,)"
-      @click="emit('showSettings')"
-    >
-      <svg
-        viewBox="0 0 16 16"
-        width="16"
-        height="16"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path
-          fill-rule="evenodd"
-          :d="IC.settings"
-        />
-      </svg>
-    </button>
-
-    <button
-      class="tb-btn"
-      title="Help & keyboard shortcuts (?)"
-      @click="emit('showHelp')"
-    >
-      <svg
-        viewBox="0 0 16 16"
-        width="16"
-        height="16"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path
-          fill-rule="evenodd"
-          :d="IC.help"
-        />
-      </svg>
-    </button>
+    <!-- Settings and Help moved to the left activity rail (shell redesign). -->
   </div>
 </template>
 
@@ -815,9 +688,6 @@ const appIconSvg = appIconSvgMarkup(16)
 const props = defineProps({
   modelValue:  { type: Object,  required: true },
   traceInfo:   { type: String,  default: '' },
-  heatmapEnabled: { type: Boolean, default: false },
-  analysisEnabled: { type: Boolean, default: false },
-  compareEnabled: { type: Boolean, default: false },
   taskFilterActive: { type: Boolean, default: false },
   rangeEnabled: { type: Boolean, default: false },
   zoomOutEnabled: { type: Boolean, default: false },
@@ -838,10 +708,9 @@ const emit = defineEmits([
   'demoFolder',
   'toggleRecord', 'zoom', 'fit', 'zoomPreset',
   'zoom1to1', 'zoomRange', 'showFind',
-  'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'exportPerfetto',
+  'expandAll', 'collapseAll', 'addMark', 'exportSvg', 'exportPerfetto',
   'exportSlice',
-  'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showAnalysis',
-  'showCompare',
+  'showAbout',
   'clearTaskFilter', 'clearFilters', 'file-error', 'toggleLimit',
 ])
 

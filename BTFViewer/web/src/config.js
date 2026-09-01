@@ -101,6 +101,7 @@ export const COMMAND_PALETTE_ACTIONS = [
   ['ai', 'AI Assistant'],
   ['compare', 'Trace Compare'],
   ['heatmap', 'Migration heatmap'],
+  ['focus', 'Focus mode'],
   ['settings', 'Settings'],
   ['limit-scope', 'Limit to C1–Cn'],
   ['fit', 'Fit Trace'],
@@ -152,6 +153,12 @@ export const COMMAND_PALETTE_META = Object.freeze({
   heatmap: {
     shortcut: '',
     synonyms: ['migration', 'corridor'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  focus: {
+    shortcut: '',
+    synonyms: ['zen', 'distraction-free', 'fullscreen', 'hide panels'],
     requires: 'trace',
     disabled: 'Open a trace first',
   },

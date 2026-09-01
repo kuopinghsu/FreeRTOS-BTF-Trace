@@ -88,7 +88,7 @@ function toggle(name) {
   justify-content: center;
   border: 1px solid var(--border);
   border-radius: 5px;
-  background: var(--rp-surface-2, transparent);
+  background: var(--app-surface-2, transparent);
   color: var(--accent);
   font-family: var(--font-mono, monospace);
   font-variant-numeric: tabular-nums;
@@ -96,7 +96,7 @@ function toggle(name) {
   font-weight: 600;
   cursor: pointer;
 }
-.core-chip:hover { border-color: var(--rp-accent-line, var(--accent)); }
+.core-chip:hover { border-color: var(--app-accent-line, var(--accent)); }
 .core-chip.off {
   color: var(--fg-dim);
   background: transparent;

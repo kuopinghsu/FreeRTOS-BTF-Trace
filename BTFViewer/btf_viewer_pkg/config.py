@@ -1478,6 +1478,75 @@ def _svg_icon_markup(inner: str, size: int = 16) -> "QIcon":
     pm, _ = rasterize_svg_pixmap(svg, dest_w=size, dest_h=size)
     return QIcon(pm)
 
+
+def _screen_raster_ratio() -> float:
+    """Device-pixel-ratio to rasterise icons at so they stay crisp on HiDPI
+    (a plain size×size bitmap is upscaled by the compositor and blurs)."""
+    try:
+        scr = QApplication.primaryScreen()
+        r = float(scr.devicePixelRatio()) if scr is not None else 1.0
+    except Exception:
+        r = 1.0
+    # Bitmap headroom even on 1x displays; cap so 3x screens don't over-allocate.
+    return max(2.0, min(3.0, r if r > 0 else 1.0))
+
+
+def _rail_glyph_icon(inner: str, color: str = "#9E9E9E", size: int = 18) -> "QIcon":
+    """QIcon from a 24-viewBox stroke glyph — 1:1 with the web App.vue sidebar
+    SVGs (``fill:none; stroke:currentColor; stroke-width:1.8``; round caps).
+    Rasterised at the screen DPR so the thin strokes stay sharp."""
+    ratio = _screen_raster_ratio()
+    px = max(1, int(round(size * ratio)))
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{px}" height="{px}" '
+        f'viewBox="0 0 24 24"><g fill="none" stroke="{color}" stroke-width="1.8" '
+        f'stroke-linecap="round" stroke-linejoin="round">{inner}</g></svg>'
+    )
+    pm, _ = rasterize_svg_pixmap(svg, dest_w=px, dest_h=px)
+    if not pm.isNull():
+        pm.setDevicePixelRatio(ratio)
+    return QIcon(pm)
+
+
+# Sidebar rail glyphs — copied verbatim from web/src/App.vue (.icon-rail /
+# .activity-rail <svg> contents) so both apps show the exact same icons.
+_RG_STATS    = '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'
+_RG_MARKS    = '<path d="M6 3h12v18l-6-4-6 4z"/>'
+_RG_FIND     = '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>'
+_RG_LEGEND   = ('<circle cx="5" cy="6" r="1.6"/><circle cx="5" cy="12" r="1.6"/>'
+                '<circle cx="5" cy="18" r="1.6"/><path d="M10 6h11M10 12h11M10 18h11"/>')
+_RG_AI       = ('<path d="M12 3l1.8 4.9L19 9.6l-4.2 2.4L14 17l-2-3.6L8 17l.2-5'
+                '-4.2-2.4 5.2-1.7z"/>')
+_RG_HEATMAP  = ('<rect x="3.5" y="3.5" width="7" height="7" rx="1"/>'
+                '<rect x="13.5" y="3.5" width="7" height="7" rx="1"/>'
+                '<rect x="3.5" y="13.5" width="7" height="7" rx="1"/>'
+                '<rect x="13.5" y="13.5" width="7" height="7" rx="1"/>')
+_RG_ANALYSIS = ('<path d="M9 3h6M10 3v5l-5 9.2A2 2 0 0 0 6.8 20h10.4a2 2 0 0 0 '
+                '1.8-2.8L14 8V3"/>')
+_RG_COMPARE  = ('<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/>'
+                '<path d="M6 15.5V9a3 3 0 0 1 3-3h4M18 8.5V15a3 3 0 0 1-3 3h-4"/>'
+                '<path d="m11 4 2 2-2 2M13 20l-2-2 2-2"/>')
+_RG_SNAPSHOT = ('<path d="M3 8a2 2 0 0 1 2-2h2.5l1.6-2h5.8L18.5 6H19a2 2 0 0 1 2 2v9'
+                'a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.5"/>')
+_RG_HELP     = ('<circle cx="12" cy="12" r="9"/>'
+                '<path d="M9.6 9.2a2.4 2.4 0 0 1 4.7.6c0 1.6-2.3 2-2.3 3.4"/>'
+                '<path d="M12 17h.01"/>')
+_RG_SETTINGS = ('<circle cx="12" cy="12" r="3"/>'
+                '<path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1'
+                'a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.2'
+                'a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1'
+                'a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.2'
+                'a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1'
+                'a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.2'
+                'a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1'
+                'a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.2'
+                'a1.7 1.7 0 0 0-1.4 1z"/>')
+# Lucide panel-right-close / panel-right-open — the modern "hide side panel" glyph.
+_RG_COLLAPSE = ('<rect x="3" y="3" width="18" height="18" rx="2"/>'
+                '<path d="M15 3v18"/><path d="m8 9 3 3-3 3"/>')
+_RG_EXPAND   = ('<rect x="3" y="3" width="18" height="18" rx="2"/>'
+                '<path d="M15 3v18"/><path d="m10 15-3-3 3-3"/>')
+
 def _stats_chevron_icon(collapsed: bool, is_dark: bool = True) -> QIcon:
     """Chevron for statistics section headers (matches web StatisticsPanel)."""
     color = "#9E9E9E" if is_dark else "#666666"

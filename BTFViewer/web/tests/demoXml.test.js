@@ -1022,7 +1022,7 @@ describe('demo_8cores.xml', () => {
     })
     const taskHover = toolbarKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_task')
     const coreHover = toolbarKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_core')
-    const analysisHover = toolbarKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_analysis')
+    const analysisHover = toolbarKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'rail_analysis')
     assert.ok(taskHover >= 0 && coreHover > taskHover && analysisHover > coreHover)
     const views = demo.steps.find(s => s.id === '5')
     const viewsKids = views.children
@@ -1052,7 +1052,7 @@ describe('demo_8cores.xml', () => {
     assert.ok(summaryMove > statsPanel)
     const analysis = demo.steps.find(s => s.id === '8')
     const analysisKids = analysis.children
-    const moveIdx = analysisKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'toolbar_analysis')
+    const moveIdx = analysisKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'rail_analysis')
     const openIdx = analysisKids.findIndex(c => c.tag === 'analysis' && c.attrib.close !== 'true')
     assert.ok(moveIdx >= 0 && openIdx > moveIdx)
     const health = demo.steps.find(s => s.id === '9')
