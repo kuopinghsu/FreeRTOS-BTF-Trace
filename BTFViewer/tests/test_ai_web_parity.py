@@ -1090,7 +1090,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("'focus', 'Focus mode'", (
             BTF_ROOT / "web/src/config.js").read_text(encoding="utf-8"))
         self.assertIn("def _set_focus_mode", mw)
-        self.assertIn('"&Focus Mode"', mw)
+        self.assertIn('"Focus &Mode"', mw)
         # Shell redesign: loading is an inline skeleton + status-bar progress,
         # not a modal card — web `.timeline-skeleton` / `.status-loading`,
         # desktop `_LoadSkeleton` + `_status_load_lbl` (the old `_LoadProgressDialog`

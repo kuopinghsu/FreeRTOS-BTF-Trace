@@ -120,7 +120,7 @@ import xml.etree.ElementTree as ET
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
     QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl,
-    QPropertyAnimation, QVariantAnimation, Signal, Slot,
+    QPropertyAnimation, QVariantAnimation, Property, Signal, Slot,
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QHoverEvent, QIcon, QImage, QKeySequence, QLinearGradient, QMouseEvent, QPainter, QRawFont,
@@ -135,12 +135,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
     QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSpinBox, QStackedWidget,
+    QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
     QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
     QPlainTextEdit, QTextBrowser, QTextEdit,
     QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QSplitterHandle, QLayout,
+    QVBoxLayout, QWidget, QWidgetAction, QSizePolicy, QSplitter, QSplitterHandle, QLayout,
 )
 
 # ---------------------------------------------------------------------------
@@ -1846,6 +1846,13 @@ _SNAP_TOOL_ICONS = {
     'circle':   _IC_SNAP_CIRCLE,
     'text':     _IC_SNAP_TEXT,
 }
+# Swatch grid for the Snapshot Editor colour popup — byte-identical to the web
+# editor's PRESET_COLORS (SnapshotEditor.vue) so both offer the same palette.
+_SNAP_PRESET_COLORS = (
+    '#ff4444', '#ff8800', '#ffdd00', '#44cc44', '#00bbff', '#4466ff', '#9944ff', '#ff44aa',
+    '#ffffff', '#cccccc', '#888888', '#444444', '#000000',
+    '#cc0000', '#cc5500', '#aa9900', '#007700', '#005588', '#002299', '#550099',
+)
 _IC_LEGEND = "M1 2a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2zm5-1h8v1H6V1zm0 3h8v1H6V4zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V7zm5-1h8v1H6V6zm0 3h8v1H6V9zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-2zm5-1h8v1H6v-1zm0 3h8v1H6v-1z"
 _IC_TASK   = "M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zM4 5.5h8v1H4v-1zm0 3h8v1H4v-1zm0 3h5v1H4v-1z"
 _IC_CORE   = "M5 1v2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2v2h1v-2h4v2h1v-2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V1h-1v2H6V1H5zm-2 4h10v6H3V5zm2 1v4h6V6H5z"
@@ -73403,6 +73410,106 @@ class _SettingsHelpLabel(QLabel):
         self.updateGeometry()
 
 
+class _ToggleSwitch(QCheckBox):
+    """A QCheckBox painted as an iOS-style sliding switch.
+
+    Visual parity with the web ``.settings-check`` toggle: a 36x20 rounded
+    track that fills with the accent colour when on, and a white knob that
+    slides across. Still a QCheckBox in every other respect (``isChecked``,
+    ``toggled``, keyboard, click-anywhere-on-the-label).
+    """
+
+    _TRACK_W = 36
+    _TRACK_H = 20
+    _KNOB = 14
+    _GAP = 9
+
+    def __init__(self, text: str = "", parent: Optional[QWidget] = None,
+                 *, is_dark: bool = True) -> None:
+        super().__init__(text, parent)
+        self._is_dark = bool(is_dark)
+        self._accent = QColor("#0E4D80" if is_dark else "#005A9E")
+        self._off_bg = QColor("#555555" if is_dark else "#B8B8B8")
+        self._pos = 1.0 if self.isChecked() else 0.0
+        self._anim = QPropertyAnimation(self, b"knobPos", self)
+        self._anim.setDuration(140)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.toggled.connect(self._animate_to_state)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
+    def _get_knob_pos(self) -> float:
+        return self._pos
+
+    def _set_knob_pos(self, value: float) -> None:
+        self._pos = float(value)
+        self.update()
+
+    knobPos = Property(float, _get_knob_pos, _set_knob_pos)
+
+    def _animate_to_state(self, on: bool) -> None:
+        self._anim.stop()
+        self._anim.setStartValue(self._pos)
+        self._anim.setEndValue(1.0 if on else 0.0)
+        self._anim.start()
+
+    def setChecked(self, on: bool) -> None:  # noqa: N802
+        super().setChecked(on)
+        # Initial / programmatic set: snap, don't animate from the flip above.
+        self._anim.stop()
+        self._pos = 1.0 if self.isChecked() else 0.0
+        self.update()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        fm = self.fontMetrics()
+        tw = fm.horizontalAdvance(self.text()) if self.text() else 0
+        h = max(self._TRACK_H + 2, fm.height())
+        w = self._TRACK_W + (self._GAP + tw if tw else 0)
+        return QSize(w, h)
+
+    def hitButton(self, pos) -> bool:  # noqa: N802
+        return self.rect().contains(pos)
+
+    def paintEvent(self, _ev) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        h = self.height()
+        top = (h - self._TRACK_H) / 2.0
+        track = QRectF(1.0, top, self._TRACK_W, self._TRACK_H)
+        t = max(0.0, min(1.0, self._pos))
+        cur = QColor(
+            round(self._off_bg.red() + (self._accent.red() - self._off_bg.red()) * t),
+            round(self._off_bg.green() + (self._accent.green() - self._off_bg.green()) * t),
+            round(self._off_bg.blue() + (self._accent.blue() - self._off_bg.blue()) * t),
+        )
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(cur)
+        p.drawRoundedRect(track, self._TRACK_H / 2.0, self._TRACK_H / 2.0)
+        margin = (self._TRACK_H - self._KNOB) / 2.0
+        travel = self._TRACK_W - self._KNOB - 2 * margin
+        knob = QRectF(track.left() + margin + t * travel,
+                      track.top() + margin, self._KNOB, self._KNOB)
+        if self.hasFocus():
+            p.setBrush(QColor(self._accent.red(), self._accent.green(),
+                              self._accent.blue(), 70))
+            p.drawRoundedRect(track.adjusted(-3, -3, 3, 3),
+                              self._TRACK_H, self._TRACK_H)
+            p.setBrush(cur)
+            p.drawRoundedRect(track, self._TRACK_H / 2.0, self._TRACK_H / 2.0)
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawEllipse(knob)
+        if self.text():
+            p.setPen(self.palette().color(
+                QPalette.ColorRole.WindowText if self.isEnabled()
+                else QPalette.ColorRole.PlaceholderText))
+            p.drawText(
+                QRectF(self._TRACK_W + self._GAP, 0.0,
+                       self.width() - self._TRACK_W - self._GAP, float(h)),
+                int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                self.text())
+        p.end()
+
+
 class _SettingsDialog(QDialog):
     """Modal settings dialog - sidebar navigation: Appearance | Display | Layout."""
 
@@ -73418,20 +73525,30 @@ class _SettingsDialog(QDialog):
         self._preview_timer.start()
 
     @staticmethod
-    def _hline() -> QFrame:
-        f = QFrame()
-        f.setFrameShape(QFrame.HLine)
-        f.setFrameShadow(QFrame.Plain)
-        f.setObjectName("sep")
-        return f
+    def _section(text: str) -> QWidget:
+        """Web-style section header: ``UPPERCASE`` + a trailing hair-line rule.
 
-    @staticmethod
-    def _section(text: str) -> QLabel:
-        """Muted all-caps section header."""
+        Mirrors ``.settings-section`` (letter-spaced small caps, inline rule
+        filling the row) instead of a plain bold label above a full-width
+        divider.
+        """
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 14, 0, 6)
+        h.setSpacing(10)
         lbl = QLabel(text.upper())
         lbl.setObjectName("section_header")
-        lbl.setContentsMargins(0, 6, 0, 2)
-        return lbl
+        _f = lbl.font()
+        _f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 108)
+        _f.setBold(True)
+        lbl.setFont(_f)
+        h.addWidget(lbl)
+        rule = QFrame()
+        rule.setFrameShape(QFrame.HLine)
+        rule.setFrameShadow(QFrame.Plain)
+        rule.setObjectName("sep")
+        h.addWidget(rule, 1)
+        return w
 
     @staticmethod
     def _indented(widget: QWidget, left: int = 16) -> QWidget:
@@ -73491,12 +73608,12 @@ class _SettingsDialog(QDialog):
                 QCheckBox                         {{ font-size:{ui_fs}; spacing:8px; }}
                 QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{
                     background:#3C3C3C; color:#D4D4D4;
-                    border:1.5px solid #555555; border-radius:6px;
+                    border:1px solid #555555; border-radius:7px;
                     padding:3px 8px; min-height:1.3em; font-size:{ui_fs}; }}
                 QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QComboBox:on, QLineEdit:focus
-                                                  {{ border-color:#4A9EFF; }}
+                                                  {{ border:2px solid #4A9EFF; padding:2px 7px; }}
                 QComboBox QAbstractItemView       {{ background:#3C3C3C; color:#D4D4D4;
-                                                     border:1px solid #555555; border-radius:6px;
+                                                     border:1px solid #555555; border-radius:7px;
                                                      padding:4px; outline:0;
                                                      selection-background-color:#0E4D80;
                                                      font-size:{ui_fs}; }}
@@ -73508,7 +73625,7 @@ class _SettingsDialog(QDialog):
                 QCheckBox::indicator:checked      {{ background:#0E4D80;
                                                      border-color:#0E4D80; }}
                 QPushButton#btn_ok                {{ background:#0E4D80; color:#FFFFFF;
-                                                     border:none; border-radius:7px;
+                                                     border:none; border-radius:8px;
                                                      padding:0px 22px;
                                                      font-weight:600;
                                                      font-size:{ui_fs}; }}
@@ -73516,14 +73633,14 @@ class _SettingsDialog(QDialog):
                 QPushButton#btn_ok:focus          {{ background:#1565C0; }}
                 QPushButton#btn_cancel            {{ background:transparent;
                                                      color:#AAAAAA;
-                                                     border:1.5px solid #555555;
-                                                     border-radius:7px;
+                                                     border:1px solid #555555;
+                                                     border-radius:8px;
                                                      padding:0px 22px;
                                                      font-size:{ui_fs}; }}
                 QPushButton#btn_cancel:hover      {{ background:#2A2D2E;
                                                      border-color:#888888;
                                                      color:#CCCCCC; }}
-                QPushButton#btn_cancel:focus      {{ border-color:#4A9EFF; }}
+                QPushButton#btn_cancel:focus      {{ border:2px solid #4A9EFF; }}
             """
         else:
             return f"""
@@ -73546,12 +73663,12 @@ class _SettingsDialog(QDialog):
                 QCheckBox                         {{ font-size:{ui_fs}; spacing:8px; }}
                 QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{
                     background:#FFFFFF; color:#1E1E1E;
-                    border:1.5px solid #AAAAAA; border-radius:6px;
+                    border:1px solid #AAAAAA; border-radius:7px;
                     padding:3px 8px; min-height:1.3em; font-size:{ui_fs}; }}
                 QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QComboBox:on, QLineEdit:focus
-                                                  {{ border-color:#005A9E; }}
+                                                  {{ border:2px solid #005A9E; padding:2px 7px; }}
                 QComboBox QAbstractItemView       {{ background:#FFFFFF; color:#1E1E1E;
-                                                     border:1px solid #CCCCCC; border-radius:6px;
+                                                     border:1px solid #CCCCCC; border-radius:7px;
                                                      padding:4px; outline:0;
                                                      selection-background-color:#005A9E;
                                                      selection-color:#FFFFFF;
@@ -73564,7 +73681,7 @@ class _SettingsDialog(QDialog):
                 QCheckBox::indicator:checked      {{ background:#005A9E;
                                                      border-color:#005A9E; }}
                 QPushButton#btn_ok                {{ background:#005A9E; color:#FFFFFF;
-                                                     border:none; border-radius:7px;
+                                                     border:none; border-radius:8px;
                                                      padding:0px 22px;
                                                      font-weight:600;
                                                      font-size:{ui_fs}; }}
@@ -73572,14 +73689,14 @@ class _SettingsDialog(QDialog):
                 QPushButton#btn_ok:focus          {{ background:#1472B5; }}
                 QPushButton#btn_cancel            {{ background:transparent;
                                                      color:#555555;
-                                                     border:1.5px solid #AAAAAA;
-                                                     border-radius:7px;
+                                                     border:1px solid #AAAAAA;
+                                                     border-radius:8px;
                                                      padding:0px 22px;
                                                      font-size:{ui_fs}; }}
                 QPushButton#btn_cancel:hover      {{ background:#E5E5E5;
                                                      border-color:#888888;
                                                      color:#1E1E1E; }}
-                QPushButton#btn_cancel:focus      {{ border-color:#005A9E; }}
+                QPushButton#btn_cancel:focus      {{ border:2px solid #005A9E; }}
             """
 
     def __init__(self, parent, *,
@@ -73711,6 +73828,10 @@ class _SettingsDialog(QDialog):
             f.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
             return f
 
+        def _switch(text: str) -> _ToggleSwitch:
+            """Checkbox drawn as the web's sliding toggle (see _ToggleSwitch)."""
+            return _ToggleSwitch(text, is_dark=is_dark)
+
         # -- Page 1: Appearance -----------------------------------------------
         p1 = QWidget()
         f1 = _form(p1)
@@ -73722,7 +73843,7 @@ class _SettingsDialog(QDialog):
         self._tip(self._theme_combo, "Application colour theme")
         f1.addRow("Theme:", _inp(self._theme_combo))
 
-        self._colorblind_cb = QCheckBox("Colorblind-safe colors (Okabe-Ito palette)")
+        self._colorblind_cb = _switch("Colorblind-safe colors (Okabe-Ito palette)")
         self._colorblind_cb.setChecked(colorblind_safe)
         self._tip(
             self._colorblind_cb,
@@ -73730,8 +73851,7 @@ class _SettingsDialog(QDialog):
             "designed to be distinguishable for deuteranopia and protanopia.")
         f1.addRow("", self._colorblind_cb)
 
-        f1.addRow(self._hline())
-        f1.addRow("", self._section("Font sizes"))
+        f1.addRow(self._section("Font sizes"))
 
         self._font_spin = QSpinBox()
         self._font_spin.setRange(6, 24)
@@ -73763,35 +73883,31 @@ class _SettingsDialog(QDialog):
         v2.setSpacing(7)
 
         v2.addWidget(self._section("Panels"))
-        self._legend_cb = QCheckBox("Legend panel")
+        self._legend_cb = _switch("Legend panel")
         self._legend_cb.setChecked(show_legend)
-        self._stats_cb = QCheckBox("Statistics panel")
+        self._stats_cb = _switch("Statistics panel")
         self._stats_cb.setChecked(show_stats)
-        self._marks_cb = QCheckBox("Marks panel")
+        self._marks_cb = _switch("Marks panel")
         self._marks_cb.setChecked(show_marks)
-        self._find_cb = QCheckBox("Find panel")
+        self._find_cb = _switch("Find panel")
         self._find_cb.setChecked(show_find)
-        self._ai_cb = QCheckBox("AI Assistant panel")
+        self._ai_cb = _switch("AI Assistant panel")
         self._ai_cb.setChecked(show_ai)
         v2.addWidget(self._indented(self._legend_cb))
         v2.addWidget(self._indented(self._stats_cb))
         v2.addWidget(self._indented(self._marks_cb))
         v2.addWidget(self._indented(self._find_cb))
         v2.addWidget(self._indented(self._ai_cb))
-        self._cpu_load_cb = QCheckBox("CPU load graph")
+        self._cpu_load_cb = _switch("CPU load graph")
         self._cpu_load_cb.setChecked(cpu_load)
         v2.addWidget(self._indented(self._cpu_load_cb))
 
-        v2.addSpacing(6)
-        v2.addWidget(self._hline())
-        v2.addSpacing(2)
-
         v2.addWidget(self._section("Timeline overlays"))
-        self._sti_cb = QCheckBox("STI events")
+        self._sti_cb = _switch("STI events")
         self._sti_cb.setChecked(show_sti)
-        self._grid_cb = QCheckBox("Grid lines")
+        self._grid_cb = _switch("Grid lines")
         self._grid_cb.setChecked(show_grid)
-        self._hover_hl_cb = QCheckBox("Highlight segments on label hover")
+        self._hover_hl_cb = _switch("Highlight segments on label hover")
         self._hover_hl_cb.setChecked(show_hover_highlight)
         self._tip(
             self._hover_hl_cb,
@@ -73800,10 +73916,6 @@ class _SettingsDialog(QDialog):
         v2.addWidget(self._indented(self._sti_cb))
         v2.addWidget(self._indented(self._grid_cb))
         v2.addWidget(self._indented(self._hover_hl_cb))
-
-        v2.addSpacing(6)
-        v2.addWidget(self._hline())
-        v2.addSpacing(2)
 
         v2.addWidget(self._section("Analysis thresholds"))
 
@@ -73871,8 +73983,7 @@ class _SettingsDialog(QDialog):
         self._tip(self._row_gap_spin, "Vertical gap between rows (0\u201320 px)")
         f3.addRow("Row gap:", _inp(self._row_gap_spin))
 
-        f3.addRow(self._hline())
-        f3.addRow("", self._section("STI rows"))
+        f3.addRow(self._section("STI rows"))
 
         self._sti_row_h_spin = QSpinBox()
         self._sti_row_h_spin.setRange(12, 60)
@@ -73900,8 +74011,7 @@ class _SettingsDialog(QDialog):
             "\u2022 Linear: connect events with a straight diagonal line")
         f3.addRow("STI line style:", _inp(self._sti_line_style_combo))
 
-        f3.addRow(self._hline())
-        f3.addRow("", self._section("Zoom & cursors"))
+        f3.addRow(self._section("Zoom & cursors"))
 
         self._timescale_per_px_spin = QDoubleSpinBox()
         self._timescale_per_px_spin.setRange(0.5, 200.0)
@@ -73933,8 +74043,7 @@ class _SettingsDialog(QDialog):
             "(tooltips, cursors, bookmarks, status bar, etc.) (0\u20139)")
         f3.addRow("Time display precision:", _inp(self._time_decimals_spin))
 
-        f3.addRow(self._hline())
-        f3.addRow("", self._section("CPU Load Graph"))
+        f3.addRow(self._section("CPU Load Graph"))
 
         self._cpu_row_h_spin = QSpinBox()
         self._cpu_row_h_spin.setRange(16, 120)
@@ -73966,7 +74075,7 @@ class _SettingsDialog(QDialog):
         f4.setFormAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         f4.setVerticalSpacing(8)
-        self._ai_enabled_cb = QCheckBox("Enable AI Assistant")
+        self._ai_enabled_cb = _switch("Enable AI Assistant")
         self._ai_enabled_cb.setChecked(ai_enabled)
         self._tip(
             self._ai_enabled_cb,
@@ -73982,7 +74091,7 @@ class _SettingsDialog(QDialog):
             self._ai_enabled_help,
             spacing=4,
         ))
-        self._ai_auto_apply_cb = QCheckBox("Auto-apply GUI actions")
+        self._ai_auto_apply_cb = _switch("Auto-apply GUI actions")
         self._ai_auto_apply_cb.setChecked(bool(ai_auto_apply))
         self._tip(
             self._ai_auto_apply_cb,
@@ -74008,20 +74117,20 @@ class _SettingsDialog(QDialog):
             self._ai_context_combo,
             self._ai_context_help,
         ))
-        self._ai_redact_cb = QCheckBox("Anonymize task names for cloud")
+        self._ai_redact_cb = _switch("Anonymize task names for cloud")
         self._ai_redact_cb.setChecked(bool(ai_redact_task_names))
         self._tip(
             self._ai_redact_cb,
             "When the endpoint is not local, replace task names with Task-N "
             "aliases before Findings leave the machine.")
         f4.addRow("", self._ai_redact_cb)
-        self._ai_sensitive_cb = QCheckBox("Treat this trace as sensitive")
+        self._ai_sensitive_cb = _switch("Treat this trace as sensitive")
         self._ai_sensitive_cb.setChecked(bool(ai_trace_sensitive))
         self._tip(
             self._ai_sensitive_cb,
             "Disables cloud AI for this machine. Local endpoints still work.")
         f4.addRow("", self._ai_sensitive_cb)
-        self._ai_mcp_log_cb = QCheckBox("Log MCP messages to file")
+        self._ai_mcp_log_cb = _switch("Log MCP messages to file")
         self._ai_mcp_log_cb.setChecked(bool(ai_mcp_log))
         self._tip(
             self._ai_mcp_log_cb,
@@ -74155,7 +74264,7 @@ class _SettingsDialog(QDialog):
         f4.addRow(self._ai_cred_label, self._ai_cred_wrap)
         self._ai_auth_combo.currentIndexChanged.connect(self._on_ai_auth_mode_changed)
 
-        self._ai_insecure_tls_cb = QCheckBox("Allow self-signed TLS")
+        self._ai_insecure_tls_cb = _switch("Allow self-signed TLS")
         self._tip(
             self._ai_insecure_tls_cb,
             "Skip HTTPS certificate checks for this preset (self-signed or "
@@ -75325,15 +75434,19 @@ class SnapshotEditorDialog(QDialog):
         tb = QHBoxLayout()
         tb.setSpacing(2)
         self._tool_btns: dict = {}
+        _dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        _acc = "#0E4D80" if _dark else "#005A9E"
+        _acc_edge = "#1565C0" if _dark else "#1472B5"
+        _hover_bg = "#3a3a3a" if _dark else "#E4E4E4"
         _tool_btn_ss = (
             "QPushButton {"
-            "  border: 1px solid #888; border-radius: 3px; padding: 2px 4px;"
+            "  border: 1px solid #888; border-radius: 6px; padding: 2px 4px;"
             "}"
             "QPushButton:checked {"
-            "  background-color: #1976D2; color: #ffffff;"
-            "  border: 1px solid #0D47A1;"
+            f"  background-color: {_acc}; color: #ffffff;"
+            f"  border: 1px solid {_acc_edge};"
             "}"
-            "QPushButton:hover:!checked { background-color: #3a3a3a; }"
+            f"QPushButton:hover:!checked {{ background-color: {_hover_bg}; }}"
         )
         _ICON_H = 28          # uniform height for every toolbar widget
         for tid in self._TOOLS:
@@ -75353,21 +75466,25 @@ class SnapshotEditorDialog(QDialog):
         tb.addWidget(QLabel("Color:"))
         self._color_btn = QPushButton()
         self._color_btn.setFixedSize(_ICON_H, _ICON_H)
-        self._color_btn.setToolTip("Pick colour")
-        self._color_btn.clicked.connect(self._pick_color)
+        self._color_btn.setToolTip("Stroke / text colour")
+        self._color_menu = self._build_color_menu()
+        self._color_btn.clicked.connect(self._show_color_menu)
         self._refresh_color_btn()
         tb.addWidget(self._color_btn)
 
         tb.addSpacing(8)
-        tb.addWidget(QLabel("Size:"))
-        self._width_spin = QSpinBox()
-        self._width_spin.setRange(1, 20)
-        self._width_spin.setValue(self._line_width)
-        self._width_spin.setSuffix(" px")
-        self._width_spin.setFixedHeight(_ICON_H)
-        self._width_spin.setToolTip("Stroke width")
-        self._width_spin.valueChanged.connect(lambda v: setattr(self, '_line_width', v))
-        tb.addWidget(self._width_spin)
+        # Stroke width — slider + inline value, matching the web `se-range`.
+        self._width_lbl = QLabel(f"Size {self._line_width}")
+        self._width_lbl.setMinimumWidth(46)
+        tb.addWidget(self._width_lbl)
+        self._width_slider = QSlider(Qt.Orientation.Horizontal)
+        self._width_slider.setRange(1, 20)
+        self._width_slider.setValue(self._line_width)
+        self._width_slider.setFixedWidth(96)
+        self._width_slider.setFixedHeight(_ICON_H)
+        self._width_slider.setToolTip("Stroke width")
+        self._width_slider.valueChanged.connect(self._on_width_slider)
+        tb.addWidget(self._width_slider)
 
         self._dash_cb = QCheckBox("Dash")
         self._dash_cb.setChecked(self._dashed)
@@ -75377,15 +75494,21 @@ class SnapshotEditorDialog(QDialog):
         tb.addWidget(self._dash_cb)
 
         tb.addSpacing(8)
-        tb.addWidget(QLabel("Font:"))
-        self._font_spin = QSpinBox()
-        self._font_spin.setRange(8, 72)
-        self._font_spin.setValue(self._font_size)
-        self._font_spin.setSuffix(" pt")
-        self._font_spin.setFixedHeight(_ICON_H)
-        self._font_spin.setToolTip("Text font size")
-        self._font_spin.valueChanged.connect(lambda v: setattr(self, '_font_size', v))
-        tb.addWidget(self._font_spin)
+        # Font size — slider + inline value; only shown for the text tool (web parity).
+        self._font_lbl = QLabel(f"Font {self._font_size}")
+        self._font_lbl.setMinimumWidth(52)
+        tb.addWidget(self._font_lbl)
+        self._font_slider = QSlider(Qt.Orientation.Horizontal)
+        self._font_slider.setRange(10, 72)
+        self._font_slider.setSingleStep(2)
+        self._font_slider.setPageStep(6)
+        self._font_slider.setValue(self._font_size)
+        self._font_slider.setFixedWidth(120)
+        self._font_slider.setFixedHeight(_ICON_H)
+        self._font_slider.setToolTip("Text font size")
+        self._font_slider.valueChanged.connect(self._on_font_slider)
+        tb.addWidget(self._font_slider)
+        self._sync_text_controls_visible()
         tb.addSpacing(8)
         undo_btn = QPushButton()
         undo_btn.setIcon(_svg_icon(_IC_SNAP_UNDO, '#b0b0cc'))
@@ -75450,6 +75573,59 @@ class SnapshotEditorDialog(QDialog):
         self._hover_handle = ''
         for tid, btn in self._tool_btns.items():
             btn.setChecked(tid == tool)
+        self._sync_text_controls_visible()
+
+    def _sync_text_controls_visible(self) -> None:
+        """Web parity: Dash only for line/box tools, Font only for text."""
+        is_text = self._tool == 'text'
+        for w in (getattr(self, '_font_lbl', None), getattr(self, '_font_slider', None)):
+            if w is not None:
+                w.setVisible(is_text)
+        if getattr(self, '_dash_cb', None) is not None:
+            self._dash_cb.setVisible(not is_text)
+
+    def _on_width_slider(self, value: int) -> None:
+        self._line_width = int(value)
+        self._width_lbl.setText(f"Size {self._line_width}")
+
+    def _on_font_slider(self, value: int) -> None:
+        self._font_size = int(value)
+        self._font_lbl.setText(f"Font {self._font_size}")
+
+    def _show_color_menu(self) -> None:
+        self._color_menu.exec(
+            self._color_btn.mapToGlobal(QPoint(0, self._color_btn.height())))
+
+    def _build_color_menu(self) -> QMenu:
+        """Preset-swatch popup mirroring the web editor's colour panel."""
+        menu = QMenu(self)
+        grid_w = QWidget()
+        grid = QGridLayout(grid_w)
+        grid.setContentsMargins(8, 8, 8, 8)
+        grid.setSpacing(4)
+        per_row = 8
+        for i, hexs in enumerate(_SNAP_PRESET_COLORS):
+            sw = QPushButton()
+            sw.setFixedSize(20, 20)
+            sw.setCursor(Qt.CursorShape.PointingHandCursor)
+            sw.setToolTip(hexs)
+            sw.setStyleSheet(
+                f"QPushButton {{ background:{hexs}; border:1px solid #888;"
+                f" border-radius:4px; }}"
+                f"QPushButton:hover {{ border:2px solid #4A9EFF; }}")
+            sw.clicked.connect(lambda _c=False, h=hexs: self._pick_preset_color(h))
+            grid.addWidget(sw, i // per_row, i % per_row)
+        wa = QWidgetAction(menu)
+        wa.setDefaultWidget(grid_w)
+        menu.addAction(wa)
+        menu.addSeparator()
+        menu.addAction("Custom…", self._pick_color)
+        return menu
+
+    def _pick_preset_color(self, hexs: str) -> None:
+        self._color = QColor(hexs)
+        self._refresh_color_btn()
+        self._color_menu.close()
 
     def _on_dash_toggled(self, checked: bool) -> None:
         self._dashed = checked
@@ -75480,7 +75656,8 @@ class SnapshotEditorDialog(QDialog):
 
     def _refresh_color_btn(self) -> None:
         self._color_btn.setStyleSheet(
-            f"background-color: {self._color.name()}; border: 1px solid #888;")
+            f"QPushButton {{ background-color: {self._color.name()};"
+            f" border: 1px solid #888; border-radius: 6px; }}")
 
     def _to_img(self, cx: float, cy: float) -> tuple:
         """Convert canvas display coordinates to image pixel coordinates."""
@@ -85825,10 +86002,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "STI waveform y-axis: toggle between linear and log\u2082 scale\n"
             "(only active when an STI row is expanded)")
         vm.addSeparator()
-        self._act_focus_mode = vm.addAction("&Focus Mode", self._toggle_focus_mode)
+        # "Focus &Mode" (not "&Focus"): 'F' is already the View-menu mnemonic
+        # for "Show &Find Panel", and bare 'F' is the "Fit Trace" shortcut —
+        # binding it here too raised "Ambiguous shortcut overload: F".
+        self._act_focus_mode = vm.addAction("Focus &Mode", self._toggle_focus_mode)
         self._act_focus_mode.setCheckable(True)
         self._act_focus_mode.setChecked(self._focus_mode)
-        self._act_focus_mode.setShortcut(QKeySequence("F"))
+        self._act_focus_mode.setShortcut(QKeySequence("Shift+F"))
         self._act_focus_mode.setToolTip(
             "Hide the side panel, activity rail and trace tabs — timeline only")
         vm.addSeparator()

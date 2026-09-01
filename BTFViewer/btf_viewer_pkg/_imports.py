@@ -45,7 +45,7 @@ import xml.etree.ElementTree as ET
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
     QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl,
-    QPropertyAnimation, QVariantAnimation, Signal, Slot,
+    QPropertyAnimation, QVariantAnimation, Property, Signal, Slot,
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QHoverEvent, QIcon, QImage, QKeySequence, QLinearGradient, QMouseEvent, QPainter, QRawFont,
@@ -60,12 +60,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
     QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSpinBox, QStackedWidget,
+    QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
     QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
     QPlainTextEdit, QTextBrowser, QTextEdit,
     QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QSplitterHandle, QLayout,
+    QVBoxLayout, QWidget, QWidgetAction, QSizePolicy, QSplitter, QSplitterHandle, QLayout,
 )
 
 __all__ = [k for k in globals().keys() if not k.startswith("__")]

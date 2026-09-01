@@ -1601,6 +1601,7 @@ async function onTestAi() {
   line-height: 1.3;
   color: var(--fg-dim);
   font-size: 12px;
+  text-align: left;
 }
 .settings-row.col .settings-input.wide,
 .settings-row.col .settings-model-wrap,
@@ -1630,6 +1631,9 @@ async function onTestAi() {
 }
 .settings-label {
   color: var(--fg);
+  /* Right-align like the AI page's .settings-form-label and the desktop
+     QFormLayout, so the label hugs its control on every page. */
+  text-align: right;
 }
 .settings-input {
   width: 110px;

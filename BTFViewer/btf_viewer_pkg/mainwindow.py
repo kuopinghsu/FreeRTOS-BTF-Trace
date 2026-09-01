@@ -6194,10 +6194,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "STI waveform y-axis: toggle between linear and log\u2082 scale\n"
             "(only active when an STI row is expanded)")
         vm.addSeparator()
-        self._act_focus_mode = vm.addAction("&Focus Mode", self._toggle_focus_mode)
+        # "Focus &Mode" (not "&Focus"): 'F' is already the View-menu mnemonic
+        # for "Show &Find Panel", and bare 'F' is the "Fit Trace" shortcut —
+        # binding it here too raised "Ambiguous shortcut overload: F".
+        self._act_focus_mode = vm.addAction("Focus &Mode", self._toggle_focus_mode)
         self._act_focus_mode.setCheckable(True)
         self._act_focus_mode.setChecked(self._focus_mode)
-        self._act_focus_mode.setShortcut(QKeySequence("F"))
+        self._act_focus_mode.setShortcut(QKeySequence("Shift+F"))
         self._act_focus_mode.setToolTip(
             "Hide the side panel, activity rail and trace tabs — timeline only")
         vm.addSeparator()
