@@ -1,7 +1,7 @@
-The core-migration view shows how tasks move between cores. Open Migration Heatmap from the activity rail. Click Fit first, because this view analyzes the visible time range, and the scope banner tells you whether you are looking at the viewport or the full trace.
+核心遷移圖顯示任務如何在核心之間移動。從活動列開啟「核心遷移熱圖」。先按「符合視窗」，因為這個圖只分析目前可見的時間範圍，範圍橫幅會告訴你目前看到的是可見範圍還是完整追蹤。
 
-The window has three parts. On the left is the corridor list: every from-core to-core path, with its migration count, bounce count, and average gap. The center is the heatmap grid, one cell per core pair per time bin; brighter cells are busier. Expand a corridor to see the tasks that use it, then click a cell to move the timeline to that moment.
+視窗分成三個部分。左邊是通道清單：每一條「來源核心到目的核心」的路徑，附上遷移次數、彈跳次數與平均間隔。中間是熱圖格線，每個核心對在每個時間分箱各占一格，愈亮代表愈忙碌。展開一條通道可以看到使用它的任務，點一格就能讓時間軸跳到那個時刻。
 
-Switch the mode selector from Heatmap to Chord to see the same data as a ring. The outer ring is departures, the inner ring is arrivals, and each ribbon is one core-to-core flow, tapered from source to destination.
+把模式選單從「熱圖」切換到「弦圖」，可以用環形檢視相同的資料。外環是離開，內環是抵達，每一條緞帶是一條核心到核心的流向，從來源往目的逐漸變細。
 
-Use the direction and scope controls to focus the view. Turn on Lock Bounces Only to keep just the migrations that happened while a task still held a lock; that is the difference between harmless thrashing and a real lock bounce. In this trace the mutex at address ending b80 accounts for the cross-core lock movement. From the footer you can jump to the timeline or send the selected path to AI with Investigate with AI.
+用方向與範圍控制項聚焦檢視。開啟「僅鎖彈跳」，只保留任務仍持有鎖時發生的遷移；這正是無害抖動和真正鎖彈跳的差別。在這份追蹤中，位址結尾為 b80 的互斥鎖造成了跨核心的鎖移動。從底部可以跳到時間軸，或用「以 AI 調查」把選取的路徑送給 AI。
