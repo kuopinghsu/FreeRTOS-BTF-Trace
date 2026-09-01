@@ -338,10 +338,14 @@
       <clear_highlight/>
       <move target="rail_heatmap"/>
       <wait seconds="0.5"/>
-      <confirm prompt="Open Migration Heatmap from the rail; show the corridor list and the core-pair grid, expand a corridor, click a cell to jump the timeline, switch to Chord, toggle Lock Bounces Only — then continue"/>
+      <heatmap open="true"/>
+      <wait seconds="1.0"/>
+      <confirm prompt="Migration Heatmap is open: show the corridor list and the core-pair grid, expand a corridor, click a cell to jump the timeline, toggle Lock Bounces Only — then continue"/>
+      <heatmap mode="chord"/>
+      <wait seconds="1.0"/>
       <audio file="${XML_DIR}/voice/15_migration_view.mp3"/>
       <wait_audio/>
-      <confirm prompt="Close the Migration and Corridor Inspector — then continue"/>
+      <heatmap close="true"/>
     </step>
 
     <step id="16" title="Affinity and lifecycle" tags="ladder">

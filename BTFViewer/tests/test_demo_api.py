@@ -428,6 +428,35 @@ class DemoApiUiTests(unittest.TestCase):
         self._app.processEvents()
         self.assertEqual(scene._view_mode, "task")
 
+    def test_heatmap_op_opens_switches_and_closes_inspector(self) -> None:
+        if not DEMO_BTF.is_file():
+            self.skipTest(f"missing demo BTF: {DEMO_BTF}")
+        win = MainWindow()
+        self.addCleanup(destroy_main_window, win)
+        win.show()
+        self._app.processEvents()
+        self._wait_trace_loaded(win)
+
+        opened = win._demo_handle({"op": "heatmap", "open": True})
+        self.assertEqual(opened.get("heatmap"), "opening")
+        self.assertEqual(opened.get("mode"), "heatmap")
+        self._app.processEvents()
+        self.assertIsNotNone(win._heatmap_dlg)
+        self.assertTrue(win._heatmap_dlg.isVisible())
+
+        # Chord entry point reuses the same inspector instance.
+        chord = win._demo_handle({"op": "chord"})
+        self.assertEqual(chord.get("mode"), "chord")
+        self._app.processEvents()
+        self.assertIsNotNone(win._chord_dlg)
+
+        closed = win._demo_handle({"op": "heatmap", "close": True})
+        self.assertEqual(closed.get("heatmap"), "closed")
+        self.assertTrue(closed.get("found"))
+        self._app.processEvents()
+        self.assertIsNone(win._heatmap_dlg)
+        self.assertIsNone(win._chord_dlg)
+
     def test_stats_section_scrolls_late_section_to_top(self) -> None:
         if not DEMO_BTF.is_file():
             self.skipTest(f"missing demo BTF: {DEMO_BTF}")

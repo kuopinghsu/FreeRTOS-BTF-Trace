@@ -92,6 +92,9 @@ headless control (no extra packages).
 <zoom_out/>
 <cpu_load on="true"/>
 <analysis/>
+<heatmap open="true"/>
+<heatmap mode="chord"/>
+<heatmap close="true"/>
 <tick_dist/>
 <tick_dist close="true"/>
 <find query="CS[27]"/>

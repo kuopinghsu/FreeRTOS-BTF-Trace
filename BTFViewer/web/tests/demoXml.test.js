@@ -389,6 +389,40 @@ describe('demoRunner', () => {
     assert.deepEqual(calls, ['zoomView', 'fit'])
   })
 
+  it('maps heatmap/chord tags to host.openHeatmap with mode + close', async () => {
+    const parsed = {
+      vars: {},
+      defaults: { pause: 0, after_voice: 0, ai_wait: 0, move_duration: 0, audio_block: false },
+      macros: {},
+      targets: {},
+      steps: [
+        {
+          id: '1', title: 'Migration view', optional: false, tags: new Set(),
+          children: [
+            { tag: 'heatmap', attrib: { open: 'true' }, children: [], text: '', tail: '' },
+            { tag: 'heatmap', attrib: { mode: 'chord' }, children: [], text: '', tail: '' },
+            { tag: 'chord', attrib: {}, children: [], text: '', tail: '' },
+            { tag: 'heatmap', attrib: { close: 'true' }, children: [], text: '', tail: '' },
+          ],
+        },
+      ],
+    }
+    const calls = []
+    const host = {
+      openHeatmap: async (p) => { calls.push(p) },
+      setStatus: () => {},
+      setDemoNav: () => {},
+    }
+    const runner = createDemoRunner(host, { parsed, traceFile: null, resolve: () => null })
+    await runner.run()
+    assert.deepEqual(calls, [
+      { close: false, mode: 'heatmap' },
+      { close: false, mode: 'chord' },
+      { close: false, mode: 'chord' },
+      { close: true, mode: 'heatmap' },
+    ])
+  })
+
   it('maps move_view to host.moveView with time and task', async () => {
     const parsed = {
       vars: {},

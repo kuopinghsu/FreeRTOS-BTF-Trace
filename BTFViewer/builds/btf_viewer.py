@@ -79721,6 +79721,13 @@ class InAppDemoRunner:
                     payload[key] = self._attr(el, key)
             self._api(payload, settle=0.45 if "close" in el.attrib else 0.7)
             return
+        if tag in ("heatmap", "chord", "corridor"):
+            payload = {"op": "chord" if tag == "chord" else "heatmap"}
+            for key in ("mode", "open", "close", "action"):
+                if key in el.attrib:
+                    payload[key] = self._attr(el, key)
+            self._api(payload, settle=0.45 if "close" in el.attrib else 0.7)
+            return
         if tag in ("tick_dist", "tick_distribution"):
             payload = {"op": "tick_dist"}
             if "close" in el.attrib:
@@ -87566,6 +87573,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return self._demo_cpu_load(on)
         if op == "analysis":
             return self._demo_analysis(payload)
+        if op in ("heatmap", "chord", "corridor", "migration_heatmap"):
+            return self._demo_heatmap(
+                payload, default_mode="chord" if op == "chord" else "heatmap")
         if op in ("tick_dist", "tick_distribution"):
             return self._demo_tick_dist(payload)
         if op == "find":
@@ -87859,6 +87869,28 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
             return {"analysis": "closed", "found": True}
         return {"analysis": "closed", "found": False}
+
+    def _demo_heatmap(self, payload: dict, *, default_mode: str = "heatmap") -> dict:
+        """Open/close the shared Migration Heatmap / Chord inspector (demo step)."""
+        action = str(payload.get("action") or "").strip().lower()
+        mode = str(payload.get("mode") or default_mode).strip().lower()
+        if mode not in ("heatmap", "chord"):
+            mode = default_mode
+        if "open" in payload:
+            want_open = self._demo_truthy(payload.get("open"), default=True)
+        elif "close" in payload:
+            want_open = not self._demo_truthy(payload.get("close"), default=True)
+        elif action in ("close", "hide", "dismiss"):
+            want_open = False
+        else:
+            want_open = True
+        if want_open:
+            QTimer.singleShot(0, lambda: self._open_corridor_inspector(mode))
+            return {"heatmap": "opening", "mode": mode}
+        dlg = self._heatmap_dlg or self._chord_dlg
+        self._close_heatmap_dialog()
+        self._on_inspector_dlg_closed()
+        return {"heatmap": "closed", "found": dlg is not None}
 
     def _demo_settings(self, payload: dict) -> dict:
         action = str(payload.get("action") or "").strip().lower()

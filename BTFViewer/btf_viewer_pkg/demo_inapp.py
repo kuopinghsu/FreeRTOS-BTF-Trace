@@ -1629,6 +1629,13 @@ class InAppDemoRunner:
                     payload[key] = self._attr(el, key)
             self._api(payload, settle=0.45 if "close" in el.attrib else 0.7)
             return
+        if tag in ("heatmap", "chord", "corridor"):
+            payload = {"op": "chord" if tag == "chord" else "heatmap"}
+            for key in ("mode", "open", "close", "action"):
+                if key in el.attrib:
+                    payload[key] = self._attr(el, key)
+            self._api(payload, settle=0.45 if "close" in el.attrib else 0.7)
+            return
         if tag in ("tick_dist", "tick_distribution"):
             payload = {"op": "tick_dist"}
             if "close" in el.attrib:

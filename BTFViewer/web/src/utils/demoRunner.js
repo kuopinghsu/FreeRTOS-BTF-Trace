@@ -628,6 +628,15 @@ export function createDemoRunner(host, pack, options = {}) {
       await host.openAnalysis({ close })
       return
     }
+    if (tag === 'heatmap' || tag === 'chord' || tag === 'corridor') {
+      let close = false
+      if ('close' in (el.attrib || {})) close = truthy(el.attrib.close, true)
+      else if ('open' in (el.attrib || {})) close = !truthy(el.attrib.open, true)
+      else if (String(el.attrib.action || '').toLowerCase() === 'close') close = true
+      const mode = attr(el, 'mode', vars, tag === 'chord' ? 'chord' : 'heatmap')
+      await host.openHeatmap?.({ close, mode })
+      return
+    }
     if (tag === 'tick_dist' || tag === 'tick_distribution') {
       let close = false
       if ('close' in (el.attrib || {})) close = truthy(el.attrib.close, true)

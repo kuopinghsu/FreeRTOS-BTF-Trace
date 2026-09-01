@@ -2577,6 +2577,17 @@ function demoHost() {
       analysisOpen.value = !close
       await nextTick()
     },
+    openHeatmap: async ({ close, mode } = {}) => {
+      if (close) {
+        inspectorOpen.value = false
+        await nextTick()
+        return
+      }
+      inspectorMode.value = mode === 'chord' ? 'chord' : 'heatmap'
+      inspectorFocusPair.value = null
+      inspectorOpen.value = true
+      await nextTick()
+    },
     find: async ({ query, next }) => {
       await demoSetPanel('find')
       findQuery.value = query || ''
