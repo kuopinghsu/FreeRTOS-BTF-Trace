@@ -5655,6 +5655,14 @@ def _sync_in_scope(time_ns: int, lo: Optional[int], hi: Optional[int]) -> bool:
         return True
     return lo <= time_ns <= hi
 
+# A cross-core hold ratio this high on a meaningful sample is a warning even
+# with no explicit issue record (e.g. a queue whose holds almost always move
+# across cores). Below the sample floor, one stray issue on 3 holds is noise —
+# do not grade it as more than the issue itself already says.
+_SYNC_MIN_SAMPLE = 20
+_SYNC_HIGH_BOUNCE_PCT = 25.0
+
+
 def _sync_object_status(obj: dict, lo: Optional[int], hi: Optional[int]) -> str:
     issues = [i for i in obj.get("issues", []) if _sync_in_scope(i["time_ns"], lo, hi)]
     if not issues:
@@ -5683,25 +5691,31 @@ def _sync_object_stats_rows(
             if obj.get("create_ns") is None or not _sync_in_scope(obj["create_ns"], lo, hi):
                 continue
         status = _sync_object_status(obj, lo, hi)
-        status_label = {"ok": "OK", "error": "Error", "warning": "Warning"}[status]
-        avg_ns = (sum(h["duration_ns"] for h in holds) // len(holds)) if holds else 0
+        n_holds = len(holds)
+        avg_ns = (sum(h["duration_ns"] for h in holds) // n_holds) if holds else 0
         bounces = sum(
             1 for h in holds
             if h.get("take_core") and h.get("give_core")
             and h["take_core"] != h["give_core"]
         )
+        bounce_pct = round(100.0 * bounces / n_holds, 1) if n_holds else 0.0
+        if (status == "ok" and n_holds >= _SYNC_MIN_SAMPLE
+                and bounce_pct >= _SYNC_HIGH_BOUNCE_PCT):
+            status = "warning"
+        status_label = {"ok": "OK", "error": "Error", "warning": "Warning"}[status]
         rows.append((
             obj["key"],
             obj["kind"],
             obj["ptr"],
             f"{obj['kind']} {obj['ptr']}",
-            len(holds),
+            n_holds,
             len(issues),
             _format_time(avg_ns, scale) if holds else "—",
             status_label,
             status,
             avg_ns,
             bounces,
+            bounce_pct,
         ))
     rows.sort(key=lambda r: (
         0 if r[8] == "error" else 1 if r[8] == "warning" else 2,
@@ -62982,6 +62996,19 @@ _WF_WCET_MAX_AVG_RATIO = 5.0
 _WF_MIG_BURST_RATE = 10.0
 
 
+def _sync_bounce_pct_cell(r: tuple) -> str:
+    """<td> for the Mutex/Semaphore & Queue "Bounce %" column.
+
+    ``r`` is a ``_sync_object_stats_rows`` tuple: index 4 = Holds, 11 = bounce %.
+    """
+    holds = r[4] if len(r) > 4 else 0
+    if not holds or len(r) <= 11:
+        return '<td class="empty">—</td>'
+    pct = float(r[11] or 0.0)
+    cls = "sev-warning" if pct >= _WF_PAIR_BOUNCE_PCT else ""
+    return f'<td class="{cls}">{pct:.1f}%</td>'
+
+
 def _finding(
     severity: str,
     title: str,
@@ -68756,10 +68783,11 @@ class _StatsPanel(QWidget):
             sync_body = "".join(
                 f"<tr><td>{_esc(r[3])}</td><td>{_esc(r[1])}</td><td>{r[4]}</td><td>{r[5]}</td>"
                 f"<td class=\"{'sev-warning' if len(r) > 10 and r[10] > 0 else ''}\">{r[10] if len(r) > 10 else 0}</td>"
+                f"{_sync_bounce_pct_cell(r)}"
                 f"<td>{_esc(r[6])}</td><td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
                 f"{_esc(r[7])}</td></tr>"
                 for r in sync_rows
-            ) or '<tr><td colspan="7" class="empty">No mutex/sem activity in scope</td></tr>'
+            ) or '<tr><td colspan="8" class="empty">No mutex/sem activity in scope</td></tr>'
             issue_body = "".join(
                 f"<tr><td>{_esc(i.get('obj_key') or '—')}</td>"
                 f"<td>{_esc(_format_time(i['time_ns'], trace.time_scale))}</td>"
@@ -68780,7 +68808,7 @@ class _StatsPanel(QWidget):
                          if len(sync_holds) >= 150 else "")
             sync_html = f"""
     <section class=\"report-card\"><h2>Mutex / Semaphore{_esc(scope_title)}</h2>
-    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>
+    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>Status</th></tr></thead>
     <tbody>{sync_body}</tbody></table>
     <h3 class=\"sub\">Pairing issues</h3>
     <table><thead><tr><th>Object</th><th>Time</th><th>Detail</th><th>Issue</th><th>Task</th><th>Core</th></tr></thead>
@@ -68794,6 +68822,7 @@ class _StatsPanel(QWidget):
                 q_body = "".join(
                     f"<tr><td>{_esc(r[3])}</td><td>{_esc(r[1])}</td><td>{r[4]}</td><td>{r[5]}</td>"
                     f"<td class=\"{'sev-warning' if len(r) > 10 and r[10] > 0 else ''}\">{r[10] if len(r) > 10 else 0}</td>"
+                    f"{_sync_bounce_pct_cell(r)}"
                     f"<td>{_esc(r[6])}</td><td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
                     f"{_esc(r[7])}</td></tr>"
                     for r in _queue_html_rows
@@ -68801,7 +68830,7 @@ class _StatsPanel(QWidget):
                 queue_html = (
                     f'<section class="report-card"><h2>Queue{_esc(scope_title)}</h2>'
                     '<table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th>'
-                    '<th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>'
+                    '<th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>Status</th></tr></thead>'
                     f'<tbody>{q_body}</tbody></table></section>'
                 )
 
@@ -70115,13 +70144,14 @@ class _StatsPanel(QWidget):
 
             writer.writerow([])
             writer.writerow([f"Mutex / Semaphore{scope_suffix}"])
-            writer.writerow(["Object", "Kind", "Holds", "Issues", "Bounces", "Avg hold", "Status"])
+            writer.writerow(["Object", "Kind", "Holds", "Issues", "Bounces", "Bounce %", "Avg hold", "Status"])
             if sync_rows_csv:
                 for row_csv in sync_rows_csv:
                     _key, kind, _ptr, label = row_csv[:4]
                     holds, issues, avg, status_label = row_csv[4], row_csv[5], row_csv[6], row_csv[7]
                     bounces = row_csv[10] if len(row_csv) > 10 else 0
-                    writer.writerow([label, kind, holds, issues, bounces, _us(avg), status_label])
+                    bpct = f"{row_csv[11]:.1f}%" if len(row_csv) > 11 and holds else "—"
+                    writer.writerow([label, kind, holds, issues, bounces, bpct, _us(avg), status_label])
                 # Core affinity violations summary
                 total_bounces = sum(r[10] for r in sync_rows_csv if len(r) > 10)
                 if total_bounces > 0:
@@ -70133,7 +70163,7 @@ class _StatsPanel(QWidget):
                             writer.writerow([row_csv[3], row_csv[10],
                                              f"{row_csv[10]} hold(s) crossed core boundaries"])
             elif trace.has_sync_object_instrumentation:
-                writer.writerow(["No mutex/sem activity in scope", "", "", "", "", "", ""])
+                writer.writerow(["No mutex/sem activity in scope", "", "", "", "", "", "", ""])
 
             if trace.has_sync_object_instrumentation:
                 writer.writerow([])
@@ -70197,15 +70227,16 @@ class _StatsPanel(QWidget):
             queue_rows_csv = _sync_object_stats_rows(trace, lo, hi, kind_filter="queue")
             writer.writerow([])
             writer.writerow([f"Queue{scope_suffix}"])
-            writer.writerow(["Object", "Kind", "Holds", "Issues", "Bounces", "Avg hold", "Status"])
+            writer.writerow(["Object", "Kind", "Holds", "Issues", "Bounces", "Bounce %", "Avg hold", "Status"])
             if queue_rows_csv:
                 for row_csv in queue_rows_csv:
                     _key, kind, _ptr, label = row_csv[:4]
                     holds, issues, avg, status_label = row_csv[4], row_csv[5], row_csv[6], row_csv[7]
                     bounces = row_csv[10] if len(row_csv) > 10 else 0
-                    writer.writerow([label, kind, holds, issues, bounces, _us(avg), status_label])
+                    bpct = f"{row_csv[11]:.1f}%" if len(row_csv) > 11 and holds else "—"
+                    writer.writerow([label, kind, holds, issues, bounces, bpct, _us(avg), status_label])
             else:
-                writer.writerow(["No queue activity in scope", "", "", "", "", "", ""])
+                writer.writerow(["No queue activity in scope", "", "", "", "", "", "", ""])
 
             writer.writerow([])
             writer.writerow([f"Interval Analysis{scope_suffix}"])
@@ -71671,7 +71702,7 @@ class _StatsPanel(QWidget):
                 if not _sync_rows:
                     play.addWidget(self._lbl(empty_sync, color="#888888", ui_fs=_fs))
                 else:
-                    headers = ["Object", "Kind", "Holds", "Issues", "Bounces", "Avg hold", "Status"]
+                    headers = ["Object", "Kind", "Holds", "Issues", "Bounces", "Bounce %", "Avg hold", "Status"]
                     table = QTableWidget(len(_sync_rows), len(headers))
                     table.setHorizontalHeaderLabels(headers)
                     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -71693,13 +71724,17 @@ class _StatsPanel(QWidget):
                         Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignLeft,
                         Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
                         Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
-                        Qt.AlignmentFlag.AlignLeft,
+                        Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignLeft,
                     ]
                     for ri, row in enumerate(_sync_rows):
-                        _key, kind, ptr, label, holds, issues, avg, status_label, status, avg_ns, bounces = row[:11]
-                        vals = [label, kind, str(holds), str(issues), str(bounces), avg, status_label]
+                        (_key, kind, ptr, label, holds, issues, avg, status_label,
+                         status, avg_ns, bounces) = row[:11]
+                        bpct = row[11] if len(row) > 11 else 0.0
+                        bpct_s = f"{bpct:.1f}%" if holds else "—"
+                        vals = [label, kind, str(holds), str(issues), str(bounces),
+                                bpct_s, avg, status_label]
                         sort_keys = [
-                            label.lower(), kind.lower(), holds, issues, bounces,
+                            label.lower(), kind.lower(), holds, issues, bounces, bpct,
                             avg_ns if avg_ns is not None else -1,
                             _status_rank.get(status, 3),
                         ]
@@ -71712,7 +71747,9 @@ class _StatsPanel(QWidget):
                                 item.setData(Qt.ItemDataRole.UserRole, _key)
                             if ci == 4 and bounces > 0:
                                 item.setForeground(QBrush(QColor("#F39C12")))
-                            if ci == 6 and status != "ok":
+                            if ci == 5 and holds and bpct >= _WF_PAIR_BOUNCE_PCT:
+                                item.setForeground(QBrush(QColor("#F39C12")))
+                            if ci == 7 and status != "ok":
                                 color = "#E74C3C" if status == "error" else "#F39C12"
                                 item.setForeground(QBrush(QColor(color)))
                             table.setItem(ri, ci, item)
@@ -71821,7 +71858,7 @@ class _StatsPanel(QWidget):
                 if not _queue_rows:
                     blay.addWidget(self._lbl(empty_queue, color="#888888", ui_fs=_fs))
                     return
-                headers = ["Object", "Kind", "Holds", "Issues", "Bounces", "Avg hold", "Status"]
+                headers = ["Object", "Kind", "Holds", "Issues", "Bounces", "Bounce %", "Avg hold", "Status"]
                 table = QTableWidget(len(_queue_rows), len(headers))
                 table.setHorizontalHeaderLabels(headers)
                 table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -71843,13 +71880,17 @@ class _StatsPanel(QWidget):
                     Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignLeft,
                     Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
                     Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
-                    Qt.AlignmentFlag.AlignLeft,
+                    Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignLeft,
                 ]
                 for ri, row in enumerate(_queue_rows):
-                    _key, kind, ptr, label, holds, issues, avg, status_label, status, avg_ns, bounces = row[:11]
-                    vals = [label, kind, str(holds), str(issues), str(bounces), avg, status_label]
+                    (_key, kind, ptr, label, holds, issues, avg, status_label,
+                     status, avg_ns, bounces) = row[:11]
+                    bpct = row[11] if len(row) > 11 else 0.0
+                    bpct_s = f"{bpct:.1f}%" if holds else "—"
+                    vals = [label, kind, str(holds), str(issues), str(bounces),
+                            bpct_s, avg, status_label]
                     sort_keys = [
-                        label.lower(), kind.lower(), holds, issues, bounces,
+                        label.lower(), kind.lower(), holds, issues, bounces, bpct,
                         avg_ns if avg_ns is not None else -1,
                         _status_rank.get(status, 3),
                     ]
@@ -71860,7 +71901,9 @@ class _StatsPanel(QWidget):
                         item.setTextAlignment(_queue_align[ci] | Qt.AlignmentFlag.AlignVCenter)
                         if ci == 4 and bounces > 0:
                             item.setForeground(QBrush(QColor("#F39C12")))
-                        if ci == 6 and status != "ok":
+                        if ci == 5 and holds and bpct >= _WF_PAIR_BOUNCE_PCT:
+                            item.setForeground(QBrush(QColor("#F39C12")))
+                        if ci == 7 and status != "ok":
                             color = "#E74C3C" if status == "error" else "#F39C12"
                             item.setForeground(QBrush(QColor(color)))
                         table.setItem(ri, ci, item)

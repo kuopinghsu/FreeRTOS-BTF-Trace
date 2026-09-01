@@ -2015,6 +2015,14 @@ def _sync_in_scope(time_ns: int, lo: Optional[int], hi: Optional[int]) -> bool:
         return True
     return lo <= time_ns <= hi
 
+# A cross-core hold ratio this high on a meaningful sample is a warning even
+# with no explicit issue record (e.g. a queue whose holds almost always move
+# across cores). Below the sample floor, one stray issue on 3 holds is noise —
+# do not grade it as more than the issue itself already says.
+_SYNC_MIN_SAMPLE = 20
+_SYNC_HIGH_BOUNCE_PCT = 25.0
+
+
 def _sync_object_status(obj: dict, lo: Optional[int], hi: Optional[int]) -> str:
     issues = [i for i in obj.get("issues", []) if _sync_in_scope(i["time_ns"], lo, hi)]
     if not issues:
@@ -2043,25 +2051,31 @@ def _sync_object_stats_rows(
             if obj.get("create_ns") is None or not _sync_in_scope(obj["create_ns"], lo, hi):
                 continue
         status = _sync_object_status(obj, lo, hi)
-        status_label = {"ok": "OK", "error": "Error", "warning": "Warning"}[status]
-        avg_ns = (sum(h["duration_ns"] for h in holds) // len(holds)) if holds else 0
+        n_holds = len(holds)
+        avg_ns = (sum(h["duration_ns"] for h in holds) // n_holds) if holds else 0
         bounces = sum(
             1 for h in holds
             if h.get("take_core") and h.get("give_core")
             and h["take_core"] != h["give_core"]
         )
+        bounce_pct = round(100.0 * bounces / n_holds, 1) if n_holds else 0.0
+        if (status == "ok" and n_holds >= _SYNC_MIN_SAMPLE
+                and bounce_pct >= _SYNC_HIGH_BOUNCE_PCT):
+            status = "warning"
+        status_label = {"ok": "OK", "error": "Error", "warning": "Warning"}[status]
         rows.append((
             obj["key"],
             obj["kind"],
             obj["ptr"],
             f"{obj['kind']} {obj['ptr']}",
-            len(holds),
+            n_holds,
             len(issues),
             _format_time(avg_ns, scale) if holds else "—",
             status_label,
             status,
             avg_ns,
             bounces,
+            bounce_pct,
         ))
     rows.sort(key=lambda r: (
         0 if r[8] == "error" else 1 if r[8] == "warning" else 2,

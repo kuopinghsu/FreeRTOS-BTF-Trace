@@ -288,6 +288,12 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax, core
   }
 }
 
+// A cross-core hold ratio this high on a meaningful sample is a warning even
+// with no explicit issue record; below the sample floor one stray issue is
+// noise. Keep in lockstep with parser.py::_SYNC_MIN_SAMPLE / _SYNC_HIGH_BOUNCE_PCT.
+const SYNC_MIN_SAMPLE = 20
+const SYNC_HIGH_BOUNCE_PCT = 25.0
+
 function objectStatus(obj, lo, hi) {
   const issues = obj.issues.filter(i => inScope(i.timeNs, lo, hi))
   if (!issues.length) return 'ok'
@@ -310,10 +316,17 @@ export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
         && !(obj.createNs != null && inScope(obj.createNs, lo, hi))) {
       continue
     }
-    const status = objectStatus(obj, lo, hi)
+    let status = objectStatus(obj, lo, hi)
     const bounceCount = holds.filter(
       h => h.takeCore && h.giveCore && h.takeCore !== h.giveCore,
     ).length
+    const bouncePct = holds.length
+      ? Math.round((1000 * bounceCount) / holds.length) / 10
+      : 0
+    if (status === 'ok' && holds.length >= SYNC_MIN_SAMPLE
+        && bouncePct >= SYNC_HIGH_BOUNCE_PCT) {
+      status = 'warning'
+    }
     rows.push({
       key: obj.key,
       kind: obj.kind,
@@ -322,6 +335,7 @@ export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
       holdCount: holds.length,
       issueCount: issues.length,
       bounceCount,
+      bouncePct,
       status,
       statusLabel: status === 'ok' ? 'OK' : status === 'error' ? 'Error' : 'Warning',
       issues,

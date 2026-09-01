@@ -161,6 +161,7 @@ export const SYNC_OBJECT_SORT_ACCESSORS = {
   holds: r => r.holdCount,
   issues: r => r.issueCount,
   bounces: r => r.bounceCount,
+  bouncePct: r => r.bouncePct ?? 0,
   avg: r => r.avgHoldNs,
   status: r => r.statusLabel,
 }

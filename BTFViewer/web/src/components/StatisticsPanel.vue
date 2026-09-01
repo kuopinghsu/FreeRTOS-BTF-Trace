@@ -2643,6 +2643,13 @@
                     Bounces
                   </th>
                   <th
+                    :class="thSortClass('sync', 'bouncePct')"
+                    @click="toggleTableSort('sync', 'bouncePct')"
+                    title="Share of holds that crossed a core boundary"
+                  >
+                    Bounce %
+                  </th>
+                  <th
                     :class="thSortClass('sync', 'avg')"
                     @click="toggleTableSort('sync', 'avg')"
                   >
@@ -2668,6 +2675,9 @@
                   <td>{{ row.issueCount }}</td>
                   <td :class="row.bounceCount > 0 ? 'sev-warning' : ''">
                     {{ row.bounceCount }}
+                  </td>
+                  <td :class="row.holdCount && row.bouncePct >= 25 ? 'sev-warning' : ''">
+                    {{ row.holdCount ? row.bouncePct.toFixed(1) + '%' : '—' }}
                   </td>
                   <td>{{ row.avgHold }}</td>
                   <td :class="syncStatusClass(row.status)">
@@ -2983,6 +2993,7 @@
                   <th :class="thSortClass('queue', 'holds')" @click="toggleTableSort('queue', 'holds')">Holds</th>
                   <th :class="thSortClass('queue', 'issues')" @click="toggleTableSort('queue', 'issues')">Issues</th>
                   <th :class="thSortClass('queue', 'bounces')" @click="toggleTableSort('queue', 'bounces')">Bounces</th>
+                  <th :class="thSortClass('queue', 'bouncePct')" @click="toggleTableSort('queue', 'bouncePct')" title="Share of holds that crossed a core boundary">Bounce %</th>
                   <th :class="thSortClass('queue', 'avg')" @click="toggleTableSort('queue', 'avg')">Avg hold</th>
                   <th :class="thSortClass('queue', 'status')" @click="toggleTableSort('queue', 'status')">Status</th>
                 </tr>
@@ -2994,6 +3005,7 @@
                   <td>{{ row.holdCount }}</td>
                   <td>{{ row.issueCount }}</td>
                   <td :class="row.bounceCount > 0 ? 'sev-warning' : ''">{{ row.bounceCount ?? 0 }}</td>
+                  <td :class="row.holdCount && row.bouncePct >= 25 ? 'sev-warning' : ''">{{ row.holdCount ? row.bouncePct.toFixed(1) + '%' : '—' }}</td>
                   <td>{{ row.avgHold }}</td>
                   <td :class="syncStatusClass(row.status)">{{ row.statusLabel }}</td>
                 </tr>
@@ -6079,6 +6091,15 @@ function syncStatusClass(status) {
   return 'sync-status-ok'
 }
 
+// <td> for the Mutex/Semaphore & Queue "Bounce %" column (export HTML).
+const SYNC_HIGH_BOUNCE_PCT = 25.0
+function syncBouncePctCell(row) {
+  if (!row.holdCount) return '<td class="empty">—</td>'
+  const pct = Number(row.bouncePct || 0)
+  const cls = pct >= SYNC_HIGH_BOUNCE_PCT ? 'sev-warning' : ''
+  return `<td class="${cls}">${pct.toFixed(1)}%</td>`
+}
+
 function syncIssueSeverityClass(severity) {
   if (severity === 'error') return 'sync-status-error'
   if (severity === 'warning') return 'sync-status-warning'
@@ -7422,9 +7443,10 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
     ? syncHtmlRows.map(row =>
         `<tr><td>${_htmlCell(row.label)}</td><td>${_htmlCell(row.kind)}</td><td>${row.holdCount}</td><td>${row.issueCount}</td>`
         + `<td class="${row.bounceCount > 0 ? 'sev-warning' : ''}">${row.bounceCount ?? 0}</td>`
+        + syncBouncePctCell(row)
         + `<td>${_htmlCell(row.avgHold)}</td><td class="${syncStatusClass(row.status)}">${_htmlCell(row.statusLabel)}</td></tr>`,
       ).join('')
-    : '<tr><td colspan="7" class="empty">No mutex/sem activity in scope</td></tr>'
+    : '<tr><td colspan="8" class="empty">No mutex/sem activity in scope</td></tr>'
   const issueBody = issues.length
     ? issues.map(iss =>
         `<tr><td>${_htmlCell(iss.objKey || '—')}</td><td>${_htmlCell(formatTime(iss.timeNs, tr.timeScale))}</td><td>${_htmlCell(iss.detail)}</td><td class="${_issueSeverityClass(iss.severity)}">${_htmlCell(iss.kind)}</td><td>${_htmlCell(iss.taskLabel || '—')}</td><td>${_htmlCell(iss.core || '')}</td></tr>`,
@@ -7439,7 +7461,7 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
     ? '<p class="detail-note">Showing longest 150 hold episodes in scope.</p>'
     : ''
   return `<section class="report-card"><h2>Mutex / Semaphore${_htmlCell(suffix)}</h2>
-    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>
+    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>Status</th></tr></thead>
     <tbody>${summaryBody}</tbody></table>
     <h3 class="sub">Pairing issues</h3>
     <table><thead><tr><th>Object</th><th>Time</th><th>Detail</th><th>Issue</th><th>Task</th><th>Core</th></tr></thead>
@@ -8078,12 +8100,13 @@ function exportHtml() {
         `<tr><td>${_htmlCell(r.label)}</td><td>${_htmlCell(r.kind)}</td>` +
         `<td>${r.holdCount}</td><td>${r.issueCount}</td>` +
         `<td class="${r.bounceCount > 0 ? 'sev-warning' : ''}">${r.bounceCount ?? 0}</td>` +
+        syncBouncePctCell(r) +
         `<td>${_htmlCell(r.avgHold)}</td>` +
         `<td class="${r.status !== 'ok' ? (r.status === 'error' ? 'sev-error' : 'sev-warning') : ''}">${_htmlCell(r.statusLabel)}</td></tr>`
       ).join('')
       return `<section class="report-card"><h2>Queue${_htmlCell(suffix)}</h2>` +
         '<table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th>' +
-        '<th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>' +
+        '<th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>Status</th></tr></thead>' +
         `<tbody>${qBody}</tbody></table></section>`
     })() : ''}
     ${_renderIntervalReportHtml(tr, lo, hi, suffix)}

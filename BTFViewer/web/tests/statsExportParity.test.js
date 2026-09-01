@@ -12,10 +12,11 @@ describe('mutex/queue export parity with desktop', () => {
     assert.doesNotMatch(stats, /function exportCsv\b/)
   })
 
-  it('HTML mutex and queue summaries include a Bounces column', () => {
-    assert.match(stats, /<th>Bounces<\/th><th>Avg hold<\/th><th>Status<\/th>/)
-    assert.match(stats, /<th>Issues<\/th><th>Bounces<\/th><th>Avg hold<\/th><th>Status<\/th>/)
+  it('HTML mutex and queue summaries include Bounces + Bounce % columns', () => {
+    assert.match(stats, /<th>Bounces<\/th><th>Bounce %<\/th><th>Avg hold<\/th><th>Status<\/th>/)
+    assert.match(stats, /<th>Issues<\/th><th>Bounces<\/th><th>Bounce %<\/th><th>Avg hold<\/th><th>Status<\/th>/)
     assert.match(stats, /row\.bounceCount/)
+    assert.match(stats, /syncBouncePctCell/)
   })
 
   it('scroll tail stays 0 at rest unless pin-scroll (desktop lockstep)', () => {
