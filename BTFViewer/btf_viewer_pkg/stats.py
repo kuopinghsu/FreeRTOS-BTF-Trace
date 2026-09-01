@@ -15809,7 +15809,15 @@ class _StatsPanel(QWidget):
                            else (trace.time_max - trace.time_min))
 
         def _us(v: object) -> str:
-            return str(v).replace("µs", "us").replace("μs", "us")
+            # Normalise the unit and drop the fixed-decimal padding
+            # (`945.000 us` -> `945 us`, `0.000 ns` -> `0 ns`) so the CSV
+            # is not a wall of trailing zeros. Non-zero fractions are kept.
+            s = str(v).replace("µs", "us").replace("μs", "us")
+            m = re.fullmatch(r"(-?\d+)\.(\d+)\s+(us|ns|ms|s)", s)
+            if not m:
+                return s
+            frac = m.group(2).rstrip("0")
+            return f"{m.group(1)}.{frac} {m.group(3)}" if frac else f"{m.group(1)} {m.group(3)}"
 
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
             writer = _SafeCsvWriter(fh, quoting=csv.QUOTE_MINIMAL)
