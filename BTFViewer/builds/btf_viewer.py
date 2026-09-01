@@ -9558,12 +9558,17 @@ def _csv_sanitize_cell(v: object) -> object:
 
 
 class _SafeCsvWriter:
-    """csv.writer wrapper that sanitizes every cell against formula injection (CWE-1236)."""
-    def __init__(self, fh, **kwargs):
+    """csv.writer wrapper that sanitizes every cell against formula injection (CWE-1236).
+
+    ``cell_transform`` (optional) is applied to every cell before sanitising —
+    used by ``report --anonymize`` to alias task names.
+    """
+    def __init__(self, fh, *, cell_transform=None, **kwargs):
         self._writer = csv.writer(fh, **kwargs)
+        self._xf = cell_transform or (lambda v: v)
 
     def writerow(self, row):
-        self._writer.writerow(_csv_sanitize_cell(c) for c in row)
+        self._writer.writerow(_csv_sanitize_cell(self._xf(c)) for c in row)
 
     def writerows(self, rows):
         for row in rows:
@@ -68673,6 +68678,31 @@ class _StatsPanel(QWidget):
         findings = self._append_exec_anomaly_findings(findings, trace, lo, hi)
         return findings, scope_title
 
+    def _make_export_anonymizer(self):
+        """Return ``(fn, active)`` — ``fn`` maps task names to stable Task-N
+        aliases when ``report --anonymize`` is set, else identity."""
+        trace = self._trace
+        if not getattr(self, "_export_anonymize", False) or trace is None:
+            return (lambda v: v), False
+        names = set()
+        for raw in getattr(trace, "task_repr", {}).values():
+            nm = _task_display_name(str(raw))
+            if nm and not _is_idle_task_name(nm) and nm != "TICK":
+                names.add(nm)
+        amap = {nm: f"Task-{i}" for i, nm in enumerate(sorted(names), 1)}
+        ordered = sorted(names, key=len, reverse=True)
+
+        def _anon(v):
+            if not isinstance(v, str) or not v:
+                return v
+            out = v
+            for nm in ordered:
+                if nm in out:
+                    out = out.replace(nm, amap[nm])
+            return out
+
+        return _anon, True
+
     def _resolve_export_trace_name(self) -> str:
         """Best-effort trace filename for report headers.
 
@@ -68742,9 +68772,10 @@ class _StatsPanel(QWidget):
         tag_samples = _tag_sample_detail_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
+        _anon, _ = self._make_export_anonymizer()
 
         def _esc(v: object) -> str:
-            return html.escape(_trim_time_pad(v), quote=True)
+            return html.escape(_anon(_trim_time_pad(v)), quote=True)
 
         sched_kpi = ""
         if ctx_count > 0 or core_gaps:
@@ -69761,7 +69792,9 @@ class _StatsPanel(QWidget):
             return f"{m.group(1)}.{frac} {m.group(3)}" if frac else f"{m.group(1)} {m.group(3)}"
 
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-            writer = _SafeCsvWriter(fh, quoting=csv.QUOTE_MINIMAL)
+            _anon, _ = self._make_export_anonymizer()
+            writer = _SafeCsvWriter(
+                fh, quoting=csv.QUOTE_MINIMAL, cell_transform=_anon)
 
             writer.writerow(["Summary"])
             writer.writerow(["Metric", "Value"])
@@ -70460,6 +70493,7 @@ class _StatsPanel(QWidget):
             findings, _ = self.build_analysis_findings()
         except Exception:
             findings = []
+        _anon, _ = self._make_export_anonymizer()
 
         _u2ns = {"ns": 1.0, "us": 1e3, "µs": 1e3, "μs": 1e3, "ms": 1e6, "s": 1e9}
 
@@ -70501,8 +70535,8 @@ class _StatsPanel(QWidget):
                 {
                     "severity": f.get("severity", "info"),
                     "id": f.get("id") or "",
-                    "title": f.get("title", ""),
-                    "text": f.get("text", ""),
+                    "title": _anon(f.get("title", "")),
+                    "text": _anon(f.get("text", "")),
                 }
                 for f in findings
             ],
@@ -70510,18 +70544,19 @@ class _StatsPanel(QWidget):
                 {"core": c, "pct": round(p, 2)} for c, p in core_rows
             ],
             "top_tasks_cpu": [
-                {"task": r[1], "pct": round(float(r[2]), 2)} for r in task_rows[:10]
+                {"task": _anon(r[1]), "pct": round(float(r[2]), 2)} for r in task_rows[:10]
             ],
             "exec_slice_max": [
-                {"task": r[1], "runs": r[2], "max": r[7]}
+                {"task": _anon(r[1]), "runs": r[2], "max": r[7]}
                 for r in _top_by(list(exec_rows), 7)
             ],
             "blocking_max": [
-                {"task": r[1], "gaps": r[2], "max": r[6]}
+                {"task": _anon(r[1]), "gaps": r[2], "max": r[6]}
                 for r in _top_by(list(block_rows), 6)
             ],
             "migrations_top": [
-                {"task": r[1], "migrations": r[2], "dwell": r[4] if len(r) > 4 else None}
+                {"task": _anon(r[1]), "migrations": r[2],
+                 "dwell": r[4] if len(r) > 4 else None}
                 for r in mig_rows[:10]
             ],
             "sync_objects": [
@@ -93716,6 +93751,10 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         ),
     )
     report.add_argument(
+        "--anonymize", action="store_true",
+        help="replace task names with stable Task-N aliases (shareable report)",
+    )
+    report.add_argument(
         "--format", choices=("html", "csv", "json", "both"), default=None,
         metavar="FMT",
         help=(
@@ -94206,6 +94245,7 @@ def _cli_report_run(args: argparse.Namespace) -> int:
     panel = _StatsPanel.__new__(_StatsPanel)
     panel._trace = trace
     panel._export_trace_path = trace_path
+    panel._export_anonymize = bool(getattr(args, "anonymize", False))
     panel._export_scope_override = None
     panel._scope_to_cursors = False
     panel._cursor_times = []

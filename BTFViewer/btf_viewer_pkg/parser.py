@@ -5861,12 +5861,17 @@ def _csv_sanitize_cell(v: object) -> object:
 
 
 class _SafeCsvWriter:
-    """csv.writer wrapper that sanitizes every cell against formula injection (CWE-1236)."""
-    def __init__(self, fh, **kwargs):
+    """csv.writer wrapper that sanitizes every cell against formula injection (CWE-1236).
+
+    ``cell_transform`` (optional) is applied to every cell before sanitising —
+    used by ``report --anonymize`` to alias task names.
+    """
+    def __init__(self, fh, *, cell_transform=None, **kwargs):
         self._writer = csv.writer(fh, **kwargs)
+        self._xf = cell_transform or (lambda v: v)
 
     def writerow(self, row):
-        self._writer.writerow(_csv_sanitize_cell(c) for c in row)
+        self._writer.writerow(_csv_sanitize_cell(self._xf(c)) for c in row)
 
     def writerows(self, rows):
         for row in rows:

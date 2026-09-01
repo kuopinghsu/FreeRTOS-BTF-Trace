@@ -40,8 +40,9 @@ _MINI_TRACE = """\
 """
 
 
-def _args(trace: str, output: str, fmt: str) -> types.SimpleNamespace:
-    return types.SimpleNamespace(trace=trace, output=output, format=fmt, lo=None, hi=None)
+def _args(trace: str, output: str, fmt: str, *, anonymize: bool = False) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        trace=trace, output=output, format=fmt, lo=None, hi=None, anonymize=anonymize)
 
 
 class CliReportTests(unittest.TestCase):
@@ -99,6 +100,18 @@ class CliReportTests(unittest.TestCase):
         rc = _cli_report_run(_args(str(self.trace), str(out), None))
         self.assertEqual(rc, 0)
         self.assertTrue(out.is_file())
+
+    def test_anonymize_aliases_task_names(self) -> None:
+        plain = self.tmp / "p.csv"
+        anon = self.tmp / "a.csv"
+        self.assertEqual(_cli_report_run(_args(str(self.trace), str(plain), "csv")), 0)
+        self.assertEqual(
+            _cli_report_run(_args(str(self.trace), str(anon), "csv", anonymize=True)), 0)
+        p = plain.read_text(encoding="utf-8-sig")
+        a = anon.read_text(encoding="utf-8-sig")
+        self.assertIn("Worker", p)
+        self.assertNotIn("Worker", a)
+        self.assertIn("Task-", a)
 
     def test_scoped_report_labels_cursor_range(self) -> None:
         out = self.tmp / "s.csv"

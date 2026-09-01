@@ -487,6 +487,10 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         ),
     )
     report.add_argument(
+        "--anonymize", action="store_true",
+        help="replace task names with stable Task-N aliases (shareable report)",
+    )
+    report.add_argument(
         "--format", choices=("html", "csv", "json", "both"), default=None,
         metavar="FMT",
         help=(
@@ -977,6 +981,7 @@ def _cli_report_run(args: argparse.Namespace) -> int:
     panel = _StatsPanel.__new__(_StatsPanel)
     panel._trace = trace
     panel._export_trace_path = trace_path
+    panel._export_anonymize = bool(getattr(args, "anonymize", False))
     panel._export_scope_override = None
     panel._scope_to_cursors = False
     panel._cursor_times = []
