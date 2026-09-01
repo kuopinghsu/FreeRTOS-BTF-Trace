@@ -43,7 +43,12 @@
             :aria-selected="activeTab === tab.id"
             @click="activeTab = tab.id"
           >
-            {{ tab.label }}
+            <span
+              class="settings-nav-ico"
+              aria-hidden="true"
+              v-html="NAV_ICONS[tab.id]"
+            />
+            <span class="settings-nav-lbl">{{ tab.label }}</span>
           </button>
         </nav>
 
@@ -829,6 +834,16 @@ const tabs = [
   { id: 'layout', label: 'Layout' },
   { id: 'ai', label: 'AI' },
 ]
+
+// Bootstrap-icon glyphs (16×16, currentColor) — matches the app toolbar set.
+const svgIco = (d) =>
+  `<svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">${d}</svg>`
+const NAV_ICONS = {
+  appearance: svgIco('<path d="M8 15A7 7 0 1 0 8 1v14zm0 1A8 8 0 1 1 8 0a8 8 0 0 1 0 16z"/>'),
+  display: svgIco('<path d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3zm6 1H2v9h4V4zm1 0v9h7V4H7z"/>'),
+  layout: svgIco('<path d="M0 11.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h13a.5.5 0 0 1 0 1H.5a.5.5 0 0 1-.5-.5zm12 8a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-6-4a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm7-4a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/>'),
+  ai: svgIco('<path d="M6 .278a.768.768 0 0 1 .08.858 7.2 7.2 0 0 0-.878 3.46c0 4.021 3.278 7.277 7.318 7.277.527 0 1.04-.055 1.533-.16a.79.79 0 0 1 .81.316.733.733 0 0 1-.031.893A8.35 8.35 0 0 1 8.344 16C3.734 16 0 12.286 0 7.71 0 4.266 2.114 1.312 5.124.06A.752.752 0 0 1 6 .278z"/>'),
+}
 const aiContextModes = AI_CONTEXT_MODES.map((id) => ({
   id,
   label: AI_CONTEXT_MODE_LABELS[id] || id,
@@ -1292,7 +1307,9 @@ async function onTestAi() {
   position: fixed;
   inset: 0;
   z-index: 2500;
-  background: rgba(0, 0, 0, 0.45);
+  background: color-mix(in srgb, #000 48%, transparent);
+  backdrop-filter: blur(5px) saturate(1.1);
+  -webkit-backdrop-filter: blur(5px) saturate(1.1);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1304,23 +1321,31 @@ async function onTestAi() {
 }
 .settings-dialog {
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  border: 1px solid var(--app-border-soft, var(--border));
+  border-radius: 14px;
   /* Fixed size for every settings group — tab switches must not resize.
      Wide enough for AI controls at 2× the desktop 240px field width. */
   width: min(780px, 94vw);
   height: min(520px, 85vh);
   display: flex;
   flex-direction: column;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  box-shadow:
+    0 32px 80px -16px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--fg) 6%, transparent);
   overflow: hidden;
+  animation: settings-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes settings-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
 }
 .settings-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 13px 14px 13px 18px;
+  border-bottom: 1px solid var(--app-border-soft, var(--border));
+  background: color-mix(in srgb, var(--panel-bg) 60%, var(--bg));
   cursor: grab;
   user-select: none;
 }
@@ -1328,8 +1353,9 @@ async function onTestAi() {
   cursor: grabbing;
 }
 .settings-title {
-  font-weight: 600;
+  font-weight: 650;
   font-size: 15px;
+  letter-spacing: 0.01em;
 }
 .settings-body {
   display: flex;
@@ -1338,38 +1364,67 @@ async function onTestAi() {
   overflow: hidden;
 }
 .settings-nav {
-  flex: 0 0 132px;
+  flex: 0 0 148px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 10px 0;
-  border-right: 1px solid var(--border);
+  gap: 3px;
+  padding: 12px 10px;
+  border-right: 1px solid var(--app-border-soft, var(--border));
   background: color-mix(in srgb, var(--panel-bg) 80%, var(--bg));
 }
 .settings-nav-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
   border: none;
   background: transparent;
   color: var(--fg-dim);
   text-align: left;
-  padding: 9px 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
   font-size: var(--ui-font-size);
   cursor: pointer;
-  border-left: 3px solid transparent;
+  transition: background 0.14s ease, color 0.14s ease;
 }
+.settings-nav-ico {
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+.settings-nav-lbl { line-height: 1; }
 .settings-nav-btn:hover {
   background: var(--tb-btn-hover);
   color: var(--fg);
 }
+.settings-nav-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
 .settings-nav-btn.active {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--fg);
-  border-left-color: var(--accent);
   font-weight: 600;
+}
+.settings-nav-btn.active .settings-nav-ico {
+  opacity: 1;
+  color: var(--accent);
+}
+.settings-nav-btn.active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
 }
 .settings-content {
   flex: 1;
   overflow: auto;
-  padding: 14px 18px 16px;
+  padding: 18px 22px 20px;
 }
 .settings-page {
   display: flex;
@@ -1447,12 +1502,21 @@ async function onTestAi() {
   text-overflow: ellipsis;
 }
 .settings-section {
-  margin: 10px 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 8px;
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--fg-dim);
+}
+.settings-section::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--app-border-soft, var(--border));
 }
 .settings-section:first-child {
   margin-top: 0;
@@ -1549,26 +1613,39 @@ async function onTestAi() {
 .settings-textarea {
   width: 100%;
   min-height: 72px;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 7px;
   background: var(--bg);
   color: var(--fg);
   font-size: 12px;
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   resize: vertical;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.settings-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 .settings-label {
   color: var(--fg);
 }
 .settings-input {
   width: 110px;
-  padding: 4px 8px;
+  padding: 5px 10px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 7px;
   background: var(--tb-bg);
   color: var(--fg);
   font-size: var(--ui-font-size);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.settings-input:focus,
+.settings-input:focus-within {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 .settings-input.wide {
   width: 100%;
@@ -1609,11 +1686,14 @@ async function onTestAi() {
   flex: 1;
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 7px;
   background: var(--tb-bg);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
 }
+.settings-combobox:focus-within,
 .settings-combobox.open {
   border-color: var(--accent, #0e639c);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 .settings-combo-input {
   flex: 1;
@@ -1644,18 +1724,20 @@ async function onTestAi() {
 }
 .settings-combo-list {
   margin: 0;
-  padding: 4px 0;
+  padding: 5px;
   list-style: none;
   overflow: auto;
   background: var(--tb-bg);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--app-border-soft, var(--border));
+  border-radius: 9px;
+  box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.4),
+              0 0 0 1px color-mix(in srgb, var(--fg) 5%, transparent);
   font-size: var(--ui-font-size);
 }
 .settings-combo-list li {
-  padding: 5px 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
   cursor: pointer;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -1677,11 +1759,12 @@ async function onTestAi() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: 7px;
   border: 1px solid var(--border);
   background: var(--tb-bg);
   color: var(--fg);
   cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
 }
 .settings-icon-btn:hover:not(:disabled) {
   background: var(--tb-btn-hover);
@@ -1698,7 +1781,7 @@ async function onTestAi() {
 .settings-check {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: var(--ui-font-size);
   color: var(--fg);
   cursor: pointer;
@@ -1706,22 +1789,72 @@ async function onTestAi() {
 .settings-check.indent {
   padding-left: 12px;
 }
+/* Checkbox → toggle switch */
+.settings-check input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg-dim) 45%, transparent);
+  border: 1px solid var(--app-border-soft, var(--border));
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.settings-check input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateY(-50%);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.16s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.settings-check input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.settings-check input[type="checkbox"]:checked::after {
+  transform: translate(14px, -50%);
+}
+.settings-check input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+}
 .settings-footer {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 16px 14px;
-  border-top: 1px solid var(--border);
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--app-border-soft, var(--border));
+  background: color-mix(in srgb, var(--panel-bg) 60%, var(--bg));
 }
 .settings-footer-spacer {
   flex: 1;
 }
 .settings-btn {
-  border-radius: 5px;
-  padding: 6px 18px;
+  border-radius: 8px;
+  padding: 7px 18px;
   font-size: var(--ui-font-size);
+  font-weight: 550;
   cursor: pointer;
   border: 1px solid var(--border);
+  transition: background 0.14s ease, border-color 0.14s ease,
+              color 0.14s ease, filter 0.14s ease, transform 0.06s ease;
+}
+.settings-btn:active {
+  transform: translateY(1px);
+}
+.settings-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 .settings-btn.secondary {
   background: transparent;
@@ -1734,8 +1867,9 @@ async function onTestAi() {
 .settings-btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #000;
-  font-weight: 600;
+  color: #fff;
+  font-weight: 650;
+  box-shadow: 0 2px 12px -3px color-mix(in srgb, var(--accent) 65%, transparent);
 }
 .settings-btn.primary:hover {
   filter: brightness(1.08);

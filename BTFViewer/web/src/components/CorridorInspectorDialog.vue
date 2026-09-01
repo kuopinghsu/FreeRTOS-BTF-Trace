@@ -474,6 +474,13 @@
             Compare with another trace
           </button>
         </div>
+        <button
+          type="button"
+          class="ci-close-btn"
+          @click="emit('close')"
+        >
+          Close
+        </button>
       </div>
     </div>
   </div>
@@ -1530,8 +1537,8 @@ onBeforeUnmount(() => {
 .ci-dialog {
   pointer-events: auto;
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--app-border-soft, var(--border));
+  border-radius: 14px;
   width: clamp(960px, 96vw, 1440px);
   height: min(840px, 92vh);
   max-height: 92vh;
@@ -1540,6 +1547,14 @@ onBeforeUnmount(() => {
   flex-direction: column;
   padding: 10px 12px;
   container-type: inline-size;
+  box-shadow:
+    0 32px 80px -16px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--fg) 6%, transparent);
+  animation: ci-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes ci-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
 }
 .ci-header {
   display: flex;
@@ -2306,18 +2321,37 @@ onBeforeUnmount(() => {
 .ci-ai-btn {
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #000;
-  font-weight: 600;
-  border-radius: 6px;
-  padding: 6px 14px;
+  color: #fff;
+  font-weight: 650;
+  border-radius: 8px;
+  padding: 6px 16px;
   font-size: 12px;
   cursor: pointer;
+  box-shadow: 0 2px 12px -3px color-mix(in srgb, var(--accent) 65%, transparent);
+  transition: filter 0.14s ease, transform 0.06s ease;
 }
 .ci-ai-btn:hover {
-  background: #1a5a9a;
-  border-color: #1a5a9a;
-  color: #fff;
-  filter: none;
+  filter: brightness(1.08);
+}
+.ci-ai-btn:active {
+  transform: translateY(1px);
+}
+/* Bottom-right Close — mirrors desktop _CorridorInspectorDialog's
+   foot.addStretch(1) + QPushButton("Close"). */
+.ci-close-btn {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: var(--tb-bg);
+  color: var(--fg);
+  border-radius: 8px;
+  padding: 6px 16px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+.ci-close-btn:hover {
+  background: var(--tb-btn-hover);
+  border-color: var(--accent);
 }
 .ci-group-row {
   font-weight: 600;

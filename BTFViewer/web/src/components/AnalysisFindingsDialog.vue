@@ -870,11 +870,18 @@ function moreAction(kind) {
   display: flex;
   flex-direction: column;
   background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--app-border-soft, var(--border));
+  border-radius: 14px;
+  box-shadow:
+    0 32px 80px -16px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--fg) 6%, transparent);
   overflow: hidden;
   color: var(--fg);
+  animation: af-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes af-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
 }
 
 .analysis-header {

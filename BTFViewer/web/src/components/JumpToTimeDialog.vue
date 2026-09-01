@@ -131,7 +131,9 @@ onMounted(() => inputRef.value?.focus())
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.45);
+  background: color-mix(in srgb, #000 52%, transparent);
+  backdrop-filter: blur(5px) saturate(1.1);
+  -webkit-backdrop-filter: blur(5px) saturate(1.1);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -139,20 +141,29 @@ onMounted(() => inputRef.value?.focus())
 }
 .jump-dialog {
   background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--app-border-soft, var(--border));
+  border-radius: 14px;
   min-width: 320px;
   max-width: 420px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+  overflow: hidden;
+  box-shadow:
+    0 32px 80px -16px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--fg) 6%, transparent);
+  animation: jump-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes jump-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
 }
 .jump-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--app-border-soft, var(--border));
+  background: color-mix(in srgb, var(--panel-bg) 55%, var(--bg));
 }
-.jump-title { font-weight: 600; font-size: 14px; }
+.jump-title { font-weight: 650; font-size: 14px; }
 .jump-close {
   background: none;
   border: none;
@@ -163,35 +174,49 @@ onMounted(() => inputRef.value?.focus())
 .jump-body { padding: 14px; display: flex; flex-direction: column; gap: 8px; }
 .jump-label { font-size: 12px; color: var(--fg-dim); }
 .jump-input {
-  padding: 6px 8px;
+  padding: 7px 10px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 7px;
   background: var(--bg);
   color: var(--fg);
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-size: 13px;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
 }
-.jump-error { font-size: 12px; color: #e07070; }
+.jump-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.jump-error { font-size: 12px; color: var(--semantic-error, #e07070); }
 .jump-quick { display: flex; gap: 8px; }
 .jump-footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--border);
+  padding: 12px 14px;
+  border-top: 1px solid var(--app-border-soft, var(--border));
+  background: color-mix(in srgb, var(--panel-bg) 55%, var(--bg));
 }
 .jump-btn {
-  padding: 5px 12px;
+  padding: 6px 14px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 8px;
   background: var(--panel-bg);
   color: var(--fg);
   font-size: 12px;
+  font-weight: 550;
   cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease, filter 0.14s ease, transform 0.06s ease;
 }
+.jump-btn:hover { background: var(--tb-btn-hover); }
+.jump-btn:active { transform: translateY(1px); }
 .jump-btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #000;
+  color: #fff;
+  font-weight: 650;
+  box-shadow: 0 2px 12px -3px color-mix(in srgb, var(--accent) 65%, transparent);
 }
+.jump-btn.primary:hover { filter: brightness(1.08); background: var(--accent); }
 </style>

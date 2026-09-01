@@ -73043,34 +73043,39 @@ class _SettingsDialog(QDialog):
                 QCheckBox                         {{ font-size:{ui_fs}; spacing:8px; }}
                 QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{
                     background:#3C3C3C; color:#D4D4D4;
-                    border:1.5px solid #555555; border-radius:4px;
-                    padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
-                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QLineEdit:focus
-                                                  {{ border-color:#0E4D80; }}
+                    border:1.5px solid #555555; border-radius:6px;
+                    padding:3px 8px; min-height:1.3em; font-size:{ui_fs}; }}
+                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QComboBox:on, QLineEdit:focus
+                                                  {{ border-color:#4A9EFF; }}
                 QComboBox QAbstractItemView       {{ background:#3C3C3C; color:#D4D4D4;
+                                                     border:1px solid #555555; border-radius:6px;
+                                                     padding:4px; outline:0;
                                                      selection-background-color:#0E4D80;
                                                      font-size:{ui_fs}; }}
+                QComboBox QAbstractItemView::item {{ padding:5px 8px; min-height:1.5em; }}
                 QCheckBox::indicator              {{ width:15px; height:15px;
-                                                     border-radius:3px;
+                                                     border-radius:4px;
                                                      border:1.5px solid #555555;
                                                      background:#2D2D2D; }}
                 QCheckBox::indicator:checked      {{ background:#0E4D80;
                                                      border-color:#0E4D80; }}
                 QPushButton#btn_ok                {{ background:#0E4D80; color:#FFFFFF;
-                                                     border:none; border-radius:5px;
+                                                     border:none; border-radius:7px;
                                                      padding:0px 22px;
                                                      font-weight:600;
                                                      font-size:{ui_fs}; }}
                 QPushButton#btn_ok:hover          {{ background:#1565C0; }}
+                QPushButton#btn_ok:focus          {{ background:#1565C0; }}
                 QPushButton#btn_cancel            {{ background:transparent;
                                                      color:#AAAAAA;
                                                      border:1.5px solid #555555;
-                                                     border-radius:5px;
+                                                     border-radius:7px;
                                                      padding:0px 22px;
                                                      font-size:{ui_fs}; }}
                 QPushButton#btn_cancel:hover      {{ background:#2A2D2E;
                                                      border-color:#888888;
                                                      color:#CCCCCC; }}
+                QPushButton#btn_cancel:focus      {{ border-color:#4A9EFF; }}
             """
         else:
             return f"""
@@ -73093,35 +73098,40 @@ class _SettingsDialog(QDialog):
                 QCheckBox                         {{ font-size:{ui_fs}; spacing:8px; }}
                 QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{
                     background:#FFFFFF; color:#1E1E1E;
-                    border:1.5px solid #AAAAAA; border-radius:4px;
-                    padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
-                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QLineEdit:focus
+                    border:1.5px solid #AAAAAA; border-radius:6px;
+                    padding:3px 8px; min-height:1.3em; font-size:{ui_fs}; }}
+                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QComboBox:on, QLineEdit:focus
                                                   {{ border-color:#005A9E; }}
                 QComboBox QAbstractItemView       {{ background:#FFFFFF; color:#1E1E1E;
+                                                     border:1px solid #CCCCCC; border-radius:6px;
+                                                     padding:4px; outline:0;
                                                      selection-background-color:#005A9E;
                                                      selection-color:#FFFFFF;
                                                      font-size:{ui_fs}; }}
+                QComboBox QAbstractItemView::item {{ padding:5px 8px; min-height:1.5em; }}
                 QCheckBox::indicator              {{ width:15px; height:15px;
-                                                     border-radius:3px;
+                                                     border-radius:4px;
                                                      border:1.5px solid #AAAAAA;
                                                      background:#FFFFFF; }}
                 QCheckBox::indicator:checked      {{ background:#005A9E;
                                                      border-color:#005A9E; }}
                 QPushButton#btn_ok                {{ background:#005A9E; color:#FFFFFF;
-                                                     border:none; border-radius:5px;
+                                                     border:none; border-radius:7px;
                                                      padding:0px 22px;
                                                      font-weight:600;
                                                      font-size:{ui_fs}; }}
                 QPushButton#btn_ok:hover          {{ background:#1472B5; }}
+                QPushButton#btn_ok:focus          {{ background:#1472B5; }}
                 QPushButton#btn_cancel            {{ background:transparent;
                                                      color:#555555;
                                                      border:1.5px solid #AAAAAA;
-                                                     border-radius:5px;
+                                                     border-radius:7px;
                                                      padding:0px 22px;
                                                      font-size:{ui_fs}; }}
                 QPushButton#btn_cancel:hover      {{ background:#E5E5E5;
                                                      border-color:#888888;
                                                      color:#1E1E1E; }}
+                QPushButton#btn_cancel:focus      {{ border-color:#005A9E; }}
             """
 
     def __init__(self, parent, *,
@@ -81328,17 +81338,31 @@ class _CommandPaletteDialog(QDialog):
             except (TypeError, ValueError):
                 continue
         self._is_available = is_available
+        _is_dark = bool(getattr(parent, "_is_dark", True))
+        _sel_bg = "#2A3A4D" if _is_dark else "#E8ECF3"
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 12, 12, 10)
+        lay.setSpacing(8)
         self._edit = QLineEdit()
         self._edit.setPlaceholderText("Jump to Analysis, Statistics, AI…")
+        self._edit.setClearButtonEnabled(True)
         self._list = QListWidget()
         self._list.setUniformItemSizes(True)
+        self._list.setFrameShape(QFrame.Shape.NoFrame)
         lay.addWidget(self._edit)
         lay.addWidget(self._list)
         hint = QLabel("Ctrl/Cmd+K · Enter to run · Esc to close")
-        hint.setStyleSheet("color:#8a96a8;font-size:11px;")
+        hint.setObjectName("palette_hint")
         lay.addWidget(hint)
-        self.resize(440, 380)
+        self.setStyleSheet(f"""
+            QDialog {{ border-radius:12px; }}
+            QLineEdit {{ padding:7px 10px; border-radius:9px; }}
+            QListWidget {{ background:transparent; border:none; }}
+            QListWidget::item {{ border-radius:7px; margin:1px 0; }}
+            QListWidget::item:selected {{ background:{_sel_bg}; color:palette(text); }}
+            QLabel#palette_hint {{ color:#8a96a8; font-size:11px; }}
+        """)
+        self.resize(460, 392)
         self._edit.textChanged.connect(self._filter)
         self._list.itemActivated.connect(self._accept_item)
         self._list.itemClicked.connect(self._accept_item)
@@ -83865,12 +83889,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             # --- App-wide QSS -------------------------------------------------
             app.setStyleSheet(f"""
             QToolTip  {{ background:{c['tooltip_bg']}; color:{c['text']}; border:1px solid {c['tooltip_border']};
-                         padding:4px; font-size:{_ui_fs}; }}
+                         padding:5px 7px; border-radius:6px; font-size:{_ui_fs}; }}
             QMenuBar  {{ background:{c['mid']}; color:{c['text']}; font-size:{_ui_fs}; }}
             QMenuBar::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
-            QMenu     {{ background:{c['menu_bg']}; color:{c['text']}; font-size:{_ui_fs}; }}
+            QMenu     {{ background:{c['menu_bg']}; color:{c['text']}; font-size:{_ui_fs};
+                         border:1px solid {c['sep']}; border-radius:8px; padding:5px; }}
+            QMenu::item {{ padding:5px 12px; border-radius:5px; }}
             QMenu::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
-            QMenu::separator {{ height:1px; background:{c['sep']}; margin:4px 8px; }}
+            QMenu::separator {{ height:1px; background:{c['sep']}; margin:5px 8px; }}
             QToolBar  {{ background:{c['mid']}; color:{c['text']}; border:none; spacing:4px;
                          font-size:{_ui_fs}; }}
             QToolBar::separator {{ width:1px; background:{c['sep']}; margin:3px 2px; }}
@@ -83982,40 +84008,48 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 color:#cdefff; font-size:12px;
             }}
             QCheckBox   {{ font-size:{_ui_fs}; }}
-            QCheckBox::indicator              {{ width:13px; height:13px; border-radius:2px;
+            QCheckBox::indicator              {{ width:14px; height:14px; border-radius:4px;
                          border:1.5px solid {c['cb_border']}; background:{c['cb_bg']}; }}
             QCheckBox::indicator:checked     {{ background:{c['accent']}; border-color:{c['accent']}; }}
             QSpinBox, QDoubleSpinBox {{ background:{c['input_bg']}; color:{c['input_fg']};
-                         border:1px solid {c['input_border']}; font-size:{_ui_fs};
-                         padding:2px 6px; min-height:1.6em; }}
+                         border:1px solid {c['input_border']}; border-radius:6px; font-size:{_ui_fs};
+                         padding:3px 8px; min-height:1.6em; }}
+            QSpinBox:focus, QDoubleSpinBox:focus {{ border-color:{c['accent']}; }}
             QLineEdit   {{ background:{c['input_bg']}; color:{c['input_fg']};
-                         border:1px solid {c['input_border']}; }}
+                         border:1px solid {c['input_border']}; border-radius:6px;
+                         padding:3px 8px; }}
+            QLineEdit:focus {{ border-color:{c['accent']}; }}
             QPlainTextEdit, QTextEdit, QTextBrowser {{
                          background:{c['input_bg']}; color:{c['input_fg']};
-                         border:1px solid {c['input_border']}; }}
+                         border:1px solid {c['input_border']}; border-radius:6px; }}
+            QPlainTextEdit:focus, QTextEdit:focus {{ border-color:{c['accent']}; }}
             QComboBox   {{ background:{c['combo_bg']}; color:{c['text']};
-                         border:1px solid {c['input_border']}; font-size:{_ui_fs};
-                         padding:2px 6px; min-height:1.6em; }}
+                         border:1px solid {c['input_border']}; border-radius:6px; font-size:{_ui_fs};
+                         padding:3px 8px; min-height:1.6em; }}
+            QComboBox:focus, QComboBox:on {{ border-color:{c['accent']}; }}
             QComboBox QAbstractItemView {{ background:{c['combo_view_bg']}; color:{c['text']};
+                         border:1px solid {c['sep']}; border-radius:6px; padding:4px; outline:0;
                          selection-background-color:{c['accent']}; selection-color:#FFFFFF;
                          font-size:{_ui_fs}; }}
+            QComboBox QAbstractItemView::item {{ padding:5px 8px; min-height:1.5em; }}
             QDockWidget {{ border:1px solid {c['sep']}; }}
             QDockWidget::title {{ background:{c['dock_title_bg']}; color:{c['dock_title_fg']};
                                   padding:4px; font-size:{_ui_fs}; }}
             QMainWindow::separator {{ background:{c['sep']}; width:1px; height:1px; }}
             QPushButton {{ background:{c['mid']}; color:{c['text']};
-                         border:1px solid {c['input_border']}; border-radius:3px;
-                         padding:3px 10px; font-size:{_ui_fs}; }}
+                         border:1px solid {c['input_border']}; border-radius:6px;
+                         padding:5px 14px; font-size:{_ui_fs}; }}
             QPushButton:hover   {{ background:{c['tb_hover']}; }}
             QPushButton:pressed {{ background:{c['tb_pressed']}; color:#FFFFFF; }}
+            QPushButton:focus   {{ border-color:{c['accent']}; }}
             QPushButton:disabled {{ color:{c['tb_disabled']}; background:{c['mid']}; }}
             QListWidget {{ background:{c['win_base']}; color:{c['text']};
-                         border:1px solid {c['input_border']}; font-size:{_ui_fs}; }}
+                         border:1px solid {c['input_border']}; border-radius:6px; font-size:{_ui_fs}; }}
             QListWidget::item {{ font-size:{_ui_fs}; }}
             QListWidget::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QListWidget::item:hover:!selected {{ background:{c['list_hover']}; }}
             QTableWidget {{ background:{c['win_base']}; color:{c['text']};
-                         border:1px solid {c['input_border']}; font-size:{_ui_fs};
+                         border:1px solid {c['input_border']}; border-radius:6px; font-size:{_ui_fs};
                          gridline-color:{c['sep']}; }}
             QTableWidget#stats_table {{ background:{c['win_base']}; color:{c['text']};
                          border:none; gridline-color:transparent; }}

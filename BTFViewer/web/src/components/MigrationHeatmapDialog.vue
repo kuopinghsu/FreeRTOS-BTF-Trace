@@ -117,6 +117,15 @@
           Show all tasks
         </button>
       </div>
+      <div class="heatmap-footer">
+        <button
+          type="button"
+          class="heatmap-export-btn heatmap-footer-close"
+          @click="emit('close')"
+        >
+          Close
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -1008,16 +1017,23 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   z-index: 2000;
-  background: rgba(0, 0, 0, 0.45);
+  background: color-mix(in srgb, #000 52%, transparent);
+  backdrop-filter: blur(5px) saturate(1.1);
+  -webkit-backdrop-filter: blur(5px) saturate(1.1);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
 }
+@keyframes heatmap-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
 .heatmap-dialog {
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--app-border-soft, var(--border));
+  border-radius: 14px;
+  animation: heatmap-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
   min-width: 420px;
   max-width: min(92vw, 720px);
   height: 85vh;
@@ -1027,7 +1043,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   padding: 12px 14px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 32px 80px -16px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--fg) 6%, transparent);
 }
 .heatmap-header {
   display: flex;
@@ -1040,11 +1058,16 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   background: var(--tb-bg);
   color: var(--fg);
-  border-radius: 4px;
-  padding: 4px 8px;
+  border-radius: 7px;
+  padding: 5px 10px;
   cursor: pointer;
   font-size: 12px;
   flex-shrink: 0;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+.heatmap-back:hover {
+  background: var(--tb-btn-hover);
+  border-color: var(--accent);
 }
 .heatmap-title {
   font-weight: 600;
@@ -1131,17 +1154,27 @@ onBeforeUnmount(() => {
   margin-top: 8px;
   flex-shrink: 0;
 }
+/* Persistent bottom row — mirrors desktop _MigrationHeatmapDialog's
+   QDialogButtonBox(Close). */
+.heatmap-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  flex-shrink: 0;
+}
 .heatmap-export-btn {
   border: 1px solid var(--border);
   background: var(--tb-bg);
   color: var(--fg);
-  border-radius: 4px;
-  padding: 4px 10px;
+  border-radius: 7px;
+  padding: 5px 12px;
   cursor: pointer;
   font-size: 12px;
+  transition: background 0.14s ease, border-color 0.14s ease;
 }
 .heatmap-export-btn:hover {
   border-color: var(--accent);
+  background: var(--tb-btn-hover);
 }
 .heatmap-filter-bar {
   display: flex;
@@ -1151,6 +1184,8 @@ onBeforeUnmount(() => {
   margin-top: 10px;
   padding: 8px 10px;
   border-radius: 4px;
+  /* Kept literal for visual parity with CorridorInspectorDialog's sibling
+     banner and its stats.py lockstep (rgba(91,155,213,*)). */
   background: rgba(91, 155, 213, 0.12);
   border: 1px solid rgba(91, 155, 213, 0.35);
   font-size: 12px;
@@ -1160,12 +1195,13 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #000;
-  border-radius: 4px;
-  padding: 4px 10px;
+  color: #fff;
+  border-radius: 7px;
+  padding: 5px 12px;
   cursor: pointer;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 650;
+  box-shadow: 0 2px 12px -3px color-mix(in srgb, var(--accent) 65%, transparent);
 }
 .heatmap-show-all:hover {
   filter: brightness(1.08);

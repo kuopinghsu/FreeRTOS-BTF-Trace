@@ -1848,8 +1848,13 @@ function onScoreBaseline() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(2px);
+  background: color-mix(in srgb, #000 52%, transparent);
+  backdrop-filter: blur(5px) saturate(1.1);
+  -webkit-backdrop-filter: blur(5px) saturate(1.1);
+}
+@keyframes compare-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
 }
 .compare-dialog-overlay-free {
   display: block;
@@ -1865,14 +1870,17 @@ function onScoreBaseline() {
   max-height: 94vh;
   background: var(--panel-bg);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--app-border-soft, var(--border));
+  border-radius: 14px;
+  box-shadow:
+    0 32px 80px -16px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--fg) 6%, transparent);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   resize: both;
   font-size: 13px;
+  animation: compare-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .compare-dialog-header {

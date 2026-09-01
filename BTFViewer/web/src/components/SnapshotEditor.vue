@@ -1426,12 +1426,27 @@ function triggerDownload(blob) {
 .se-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.78);
+  background: color-mix(in srgb, #000 62%, transparent);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10000;
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(6px) saturate(1.1);
+  -webkit-backdrop-filter: blur(6px) saturate(1.1);
+
+  /* Component-scoped tokens — resolve against the app theme, with a
+     self-contained dark fallback so the editor also stands alone. */
+  --se-surface:     var(--panel-bg, #1a1a2e);
+  --se-surface-2:   var(--bg, #13132a);
+  --se-border:      var(--border, #3a3a60);
+  --se-border-soft: color-mix(in srgb, var(--border, #3a3a60) 55%, transparent);
+  --se-fg:          var(--fg, #e6e6f2);
+  --se-fg-dim:      var(--fg-dim, #8a8ab0);
+  --se-accent:      var(--accent, #4f8bff);
+  --se-radius:      16px;
+  --se-radius-sm:   9px;
+  --se-radius-xs:   6px;
+  --se-ring:        0 0 0 3px color-mix(in srgb, var(--accent, #4f8bff) 30%, transparent);
 }
 
 /* ── Window ────────────────────────────────────────────────────────────────── */
@@ -1439,14 +1454,23 @@ function triggerDownload(blob) {
   position: relative;
   display: flex;
   flex-direction: column;
-  background: #1a1a2e;
-  border: 1px solid #3a3a60;
-  border-radius: 10px;
-  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255,255,255,0.04);
+  background: var(--se-surface);
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius);
+  box-shadow:
+    0 32px 80px -12px rgba(0, 0, 0, 0.6),
+    0 0 0 1px color-mix(in srgb, #fff 5%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
   max-width: 97vw;
   max-height: 95vh;
   overflow: hidden;
   user-select: none;
+  animation: se-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes se-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
 }
 
 /* ── Toolbar ───────────────────────────────────────────────────────────────── */
@@ -1454,77 +1478,104 @@ function triggerDownload(blob) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 3px;
-  padding: 5px 8px;
-  background: #13132a;
-  border-bottom: 1px solid #3a3a60;
+  gap: 4px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, var(--se-surface), var(--se-surface-2));
+  border-bottom: 1px solid var(--se-border-soft);
   flex-shrink: 0;
 }
 
+/* Tool picker — segmented control */
 .se-tools {
   display: flex;
   gap: 2px;
+  padding: 3px;
+  background: var(--se-surface-2);
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-sm);
 }
 
 /* ── Toolbar button ────────────────────────────────────────────────────────── */
 .se-tbtn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 30px;
-  padding: 0 8px;
+  justify-content: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 10px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 5px;
-  color: #b0b0cc;
+  border-radius: var(--se-radius-xs);
+  color: var(--se-fg-dim);
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
   line-height: 1;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition: background 0.14s ease, border-color 0.14s ease,
+              color 0.14s ease, transform 0.06s ease, box-shadow 0.14s ease;
   box-sizing: border-box;
 }
 
+.se-tools .se-tbtn { height: 28px; }
+
 .se-tbtn.icon-btn {
-  padding: 0 5px;
+  padding: 0 7px;
+}
+
+.se-tbtn :deep(svg) {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 .se-tbtn:hover:not(:disabled) {
-  background: #262644;
-  border-color: #4a4a80;
-  color: #e0e0ff;
+  background: color-mix(in srgb, var(--se-fg) 10%, transparent);
+  color: var(--se-fg);
+}
+
+.se-tbtn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .se-tbtn.active {
-  background: #1565c0;
-  border-color: #42a5f5;
-  color: #e3f2fd;
-  box-shadow: 0 0 0 1px #1976d2 inset;
+  background: var(--se-accent);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 2px 10px -3px color-mix(in srgb, var(--se-accent) 75%, transparent);
 }
 
 .se-tbtn.action-btn {
-  background: #162040;
-  border-color: #254880;
-  color: #80baff;
+  height: 32px;
+  padding: 0 14px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--se-accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--se-accent) 32%, transparent);
+  color: color-mix(in srgb, var(--se-accent) 80%, var(--se-fg));
 }
 
 .se-tbtn.action-btn:hover {
-  background: #1e3060;
-  border-color: #3a6aaa;
-  color: #aad4ff;
+  background: color-mix(in srgb, var(--se-accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--se-accent) 46%, transparent);
+  color: var(--se-fg);
+}
+
+.se-tbtn:focus-visible {
+  outline: none;
+  box-shadow: var(--se-ring);
 }
 
 .se-tbtn:disabled {
-  opacity: 0.3;
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
 /* ── Separator / Spacer ────────────────────────────────────────────────────── */
 .se-sep {
   width: 1px;
-  height: 30px;
-  background: #3a3a60;
-  margin: 0 3px;
+  height: 22px;
+  background: var(--se-border-soft);
+  margin: 0 4px;
   flex-shrink: 0;
 }
 
@@ -1537,18 +1588,22 @@ function triggerDownload(blob) {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 7px;
-  border: 1px solid #3a3a60;
-  border-radius: 5px;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--se-surface-2);
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-sm);
   cursor: default;
   box-sizing: border-box;
 }
 
 .se-ctl-lbl {
   font-size: 10px;
-  color: #6a6a99;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--se-fg-dim);
   white-space: nowrap;
   line-height: 1;
 }
@@ -1567,34 +1622,37 @@ function triggerDownload(blob) {
 }
 
 .se-color-swatch {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  border: 2px solid #666;
-  border-radius: 3px;
+  border: 2px solid color-mix(in srgb, #fff 30%, transparent);
+  border-radius: var(--se-radius-xs);
   cursor: pointer;
   flex-shrink: 0;
-  transition: border-color 0.1s;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 25%, transparent);
+  transition: transform 0.1s ease, box-shadow 0.14s ease;
 }
 
 .se-color-swatch:hover {
-  border-color: #aaa;
+  transform: scale(1.08);
 }
 
 .se-color-panel {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 8px);
   left: 0;
   z-index: 200;
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
-  padding: 8px;
-  background: #1a1a36;
-  border: 1px solid #3a3a60;
-  border-radius: 6px;
-  width: 163px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+  gap: 6px;
+  padding: 10px;
+  background: var(--se-surface);
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-sm);
+  width: 178px;
+  box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.55),
+              0 0 0 1px color-mix(in srgb, #fff 5%, transparent);
+  animation: se-pop 0.14s ease;
 }
 
 .se-color-dot {
@@ -1615,8 +1673,9 @@ function triggerDownload(blob) {
 
 .se-color-dot.active {
   border-color: #fff;
-  outline: 1px solid rgba(255, 255, 255, 0.4);
+  outline: 2px solid var(--se-accent);
   outline-offset: 1px;
+  transform: scale(1.1);
 }
 
 .se-color-custom {
@@ -1645,35 +1704,34 @@ function triggerDownload(blob) {
 }
 
 .se-range {
-  width: 80px;
+  width: 92px;
   height: 4px;
   cursor: pointer;
-  accent-color: #4a8acc;
+  accent-color: var(--se-accent);
   margin: 0;
 }
 
 /* ── Close button ──────────────────────────────────────────────────────────── */
 .se-close {
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 5px;
-  color: #7a7aaa;
-  font-size: 14px;
+  border-radius: var(--se-radius-xs);
+  color: var(--se-fg-dim);
+  font-size: 15px;
   cursor: pointer;
   line-height: 1;
   padding: 0;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition: background 0.14s ease, color 0.14s ease;
 }
 
 .se-close:hover {
-  background: #5a1020;
-  border-color: #902030;
-  color: #ff8888;
+  background: color-mix(in srgb, #e5484d 18%, transparent);
+  color: #ff8a8a;
 }
 
 /* ── Canvas body ───────────────────────────────────────────────────────────── */
@@ -1683,28 +1741,31 @@ function triggerDownload(blob) {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 28px;
   min-height: 0;
-  background: #0e0e1e;
+  background: color-mix(in srgb, var(--se-surface-2) 82%, #000);
   /* Checkerboard so transparency is visible */
+  --se-check: color-mix(in srgb, var(--se-fg) 6%, transparent);
   background-image:
-    linear-gradient(45deg, #1a1a2a 25%, transparent 25%),
-    linear-gradient(-45deg, #1a1a2a 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #1a1a2a 75%),
-    linear-gradient(-45deg, transparent 75%, #1a1a2a 75%);
-  background-size: 20px 20px;
-  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+    linear-gradient(45deg, var(--se-check) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--se-check) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--se-check) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--se-check) 75%);
+  background-size: 22px 22px;
+  background-position: 0 0, 0 11px, 11px -11px, -11px 0;
 }
 
 /* ── Canvas wrap ───────────────────────────────────────────────────────────── */
 .se-canvas-wrap {
-  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255,255,255,0.06);
-  border-radius: 1px;
+  border-radius: 4px;
+  box-shadow:
+    0 18px 48px -12px rgba(0, 0, 0, 0.62),
+    0 0 0 1px color-mix(in srgb, #fff 10%, transparent);
 }
 
 .se-canvas-wrap canvas {
   display: block;
-  border-radius: 1px;
+  border-radius: 4px;
 }
 
 /* ── Floating text input ───────────────────────────────────────────────────── */
@@ -1728,29 +1789,32 @@ function triggerDownload(blob) {
 /* ── Status toast ───────────────────────────────────────────────────────────── */
 .se-status {
   position: absolute;
-  bottom: 22px;
+  bottom: 26px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(14, 20, 40, 0.96);
-  border: 1px solid #3a6aaa;
-  border-radius: 6px;
-  color: #80baff;
+  background: color-mix(in srgb, var(--se-surface) 88%, transparent);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  border: 1px solid color-mix(in srgb, var(--se-accent) 45%, transparent);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--se-accent) 85%, var(--se-fg));
   font-size: 13px;
-  padding: 7px 20px;
+  font-weight: 500;
+  padding: 8px 20px;
   pointer-events: none;
   white-space: nowrap;
   z-index: 200;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.5);
 }
 
 .se-status.success {
-  border-color: #2a8a50;
-  color: #6adf9a;
+  border-color: color-mix(in srgb, #3fb950 55%, transparent);
+  color: #5ddc8f;
 }
 
 .se-status.error {
-  border-color: #8a2a2a;
-  color: #ff8888;
+  border-color: color-mix(in srgb, #e5484d 55%, transparent);
+  color: #ff8a8a;
 }
 
 .se-toast-enter-active,
@@ -1768,14 +1832,18 @@ function triggerDownload(blob) {
 .se-ctx-menu {
   position: fixed;
   z-index: 10100;
-  background: #1a1a2e;
-  border: 1px solid #3a3a60;
-  border-radius: 7px;
-  box-shadow: 0 8px 28px rgba(0,0,0,0.7);
-  padding: 4px 0;
-  min-width: 160px;
+  background: color-mix(in srgb, var(--se-surface) 92%, transparent);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-sm);
+  box-shadow: 0 20px 48px -12px rgba(0, 0, 0, 0.6),
+              0 0 0 1px color-mix(in srgb, #fff 5%, transparent);
+  padding: 5px;
+  min-width: 168px;
   user-select: none;
   font-size: 12px;
+  animation: se-pop 0.13s ease;
 }
 
 .se-ctx-item {
@@ -1783,30 +1851,29 @@ function triggerDownload(blob) {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 5px 12px;
-  color: #c0c0e0;
+  padding: 6px 10px;
+  border-radius: var(--se-radius-xs);
+  color: var(--se-fg);
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background 0.1s ease;
 }
 
 .se-ctx-item:hover {
-  background: #262644;
-  color: #e0e0ff;
+  background: color-mix(in srgb, var(--se-accent) 16%, transparent);
 }
 
 .se-ctx-delete {
-  color: #ff7070;
+  color: #ff8a8a;
 }
 
 .se-ctx-delete:hover {
-  background: #3a1020;
-  color: #ff9999;
+  background: color-mix(in srgb, #e5484d 18%, transparent);
 }
 
 .se-ctx-sep {
   height: 1px;
-  background: #3a3a60;
-  margin: 3px 0;
+  background: var(--se-border-soft);
+  margin: 5px 4px;
 }
 
 .se-ctx-lbl {
@@ -1815,32 +1882,34 @@ function triggerDownload(blob) {
 }
 
 .se-ctx-color {
-  width: 32px;
-  height: 20px;
+  width: 34px;
+  height: 22px;
   padding: 1px 2px;
-  border: 1px solid #3a3a60;
-  border-radius: 3px;
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-xs);
   background: transparent;
   cursor: pointer;
 }
 
-.se-ctx-num {
-  width: 48px;
-  background: #0e0e1e;
-  border: 1px solid #3a3a60;
-  border-radius: 3px;
-  color: #c0c0e0;
-  padding: 2px 4px;
+.se-ctx-num,
+.se-ctx-text {
+  background: var(--se-surface-2);
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-xs);
+  color: var(--se-fg);
+  padding: 4px 6px;
   font-size: 12px;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
 }
 
-.se-ctx-text {
-  width: 110px;
-  background: #0e0e1e;
-  border: 1px solid #3a3a60;
-  border-radius: 3px;
-  color: #c0c0e0;
-  padding: 2px 4px;
-  font-size: 12px;
+.se-ctx-num { width: 52px; }
+.se-ctx-text { width: 118px; }
+
+.se-ctx-num:focus,
+.se-ctx-text:focus,
+.se-ctx-color:focus-visible {
+  outline: none;
+  border-color: var(--se-accent);
+  box-shadow: var(--se-ring);
 }
 </style>

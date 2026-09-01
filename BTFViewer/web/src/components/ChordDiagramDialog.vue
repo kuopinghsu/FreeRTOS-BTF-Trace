@@ -14,10 +14,10 @@
         <button
           type="button"
           class="chord-close"
+          title="Close"
+          aria-label="Close"
           @click="emit('close')"
-        >
-          Close
-        </button>
+        >×</button>
       </div>
       <p class="chord-sub">
         {{ subtitle }}
@@ -81,6 +81,15 @@
           @click="exportChordSvg"
         >
           Export SVG
+        </button>
+      </div>
+      <div class="chord-footer">
+        <button
+          type="button"
+          class="chord-export-btn chord-footer-close"
+          @click="emit('close')"
+        >
+          Close
         </button>
       </div>
     </div>
@@ -536,16 +545,23 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   z-index: 2000;
-  background: rgba(0, 0, 0, 0.45);
+  background: color-mix(in srgb, #000 52%, transparent);
+  backdrop-filter: blur(5px) saturate(1.1);
+  -webkit-backdrop-filter: blur(5px) saturate(1.1);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
 }
+@keyframes chord-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
 .chord-dialog {
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--app-border-soft, var(--border));
+  border-radius: 14px;
+  animation: chord-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
   /* Fixed (not shrink-to-fit) width: .chord-cell-tip is white-space:nowrap,
      so an auto/max-width-only box would grow to fit its longest hover text
      and visibly resize/flash the diagram whenever the hover title changes. */
@@ -557,7 +573,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   padding: 12px 14px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 32px 80px -16px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--fg) 6%, transparent);
 }
 .chord-header {
   display: flex;
@@ -572,14 +590,28 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 .chord-close {
-  border: 1px solid var(--border);
-  background: var(--tb-bg);
+  /* Match .app-close-x / .heatmap-close */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  appearance: none;
+  border: none;
+  background: transparent;
   color: var(--fg);
-  border-radius: 4px;
-  padding: 4px 10px;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
   cursor: pointer;
-  font-size: 12px;
-  flex-shrink: 0;
+  opacity: 0.65;
+  flex: 0 0 auto;
+  transition: background 0.14s ease, opacity 0.14s ease;
+}
+.chord-close:hover {
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.2);
 }
 .chord-sub {
   margin: 8px 0 6px;
@@ -629,17 +661,27 @@ onBeforeUnmount(() => {
   margin-top: 8px;
   flex-shrink: 0;
 }
+/* Persistent bottom row — mirrors desktop _ChordDiagramDialog's
+   QDialogButtonBox(Close). */
+.chord-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  flex-shrink: 0;
+}
 .chord-export-btn {
   border: 1px solid var(--border);
   background: var(--tb-bg);
   color: var(--fg);
-  border-radius: 4px;
-  padding: 4px 10px;
+  border-radius: 7px;
+  padding: 5px 12px;
   cursor: pointer;
   font-size: 12px;
+  transition: background 0.14s ease, border-color 0.14s ease;
 }
 .chord-export-btn:hover {
   border-color: var(--accent);
+  background: var(--tb-btn-hover);
 }
 .chord-bounce-bar {
   display: flex;

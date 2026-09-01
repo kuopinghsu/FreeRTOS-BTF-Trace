@@ -19308,34 +19308,39 @@ class _SettingsDialog(QDialog):
                 QCheckBox                         {{ font-size:{ui_fs}; spacing:8px; }}
                 QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{
                     background:#3C3C3C; color:#D4D4D4;
-                    border:1.5px solid #555555; border-radius:4px;
-                    padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
-                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QLineEdit:focus
-                                                  {{ border-color:#0E4D80; }}
+                    border:1.5px solid #555555; border-radius:6px;
+                    padding:3px 8px; min-height:1.3em; font-size:{ui_fs}; }}
+                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QComboBox:on, QLineEdit:focus
+                                                  {{ border-color:#4A9EFF; }}
                 QComboBox QAbstractItemView       {{ background:#3C3C3C; color:#D4D4D4;
+                                                     border:1px solid #555555; border-radius:6px;
+                                                     padding:4px; outline:0;
                                                      selection-background-color:#0E4D80;
                                                      font-size:{ui_fs}; }}
+                QComboBox QAbstractItemView::item {{ padding:5px 8px; min-height:1.5em; }}
                 QCheckBox::indicator              {{ width:15px; height:15px;
-                                                     border-radius:3px;
+                                                     border-radius:4px;
                                                      border:1.5px solid #555555;
                                                      background:#2D2D2D; }}
                 QCheckBox::indicator:checked      {{ background:#0E4D80;
                                                      border-color:#0E4D80; }}
                 QPushButton#btn_ok                {{ background:#0E4D80; color:#FFFFFF;
-                                                     border:none; border-radius:5px;
+                                                     border:none; border-radius:7px;
                                                      padding:0px 22px;
                                                      font-weight:600;
                                                      font-size:{ui_fs}; }}
                 QPushButton#btn_ok:hover          {{ background:#1565C0; }}
+                QPushButton#btn_ok:focus          {{ background:#1565C0; }}
                 QPushButton#btn_cancel            {{ background:transparent;
                                                      color:#AAAAAA;
                                                      border:1.5px solid #555555;
-                                                     border-radius:5px;
+                                                     border-radius:7px;
                                                      padding:0px 22px;
                                                      font-size:{ui_fs}; }}
                 QPushButton#btn_cancel:hover      {{ background:#2A2D2E;
                                                      border-color:#888888;
                                                      color:#CCCCCC; }}
+                QPushButton#btn_cancel:focus      {{ border-color:#4A9EFF; }}
             """
         else:
             return f"""
@@ -19358,35 +19363,40 @@ class _SettingsDialog(QDialog):
                 QCheckBox                         {{ font-size:{ui_fs}; spacing:8px; }}
                 QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{
                     background:#FFFFFF; color:#1E1E1E;
-                    border:1.5px solid #AAAAAA; border-radius:4px;
-                    padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
-                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QLineEdit:focus
+                    border:1.5px solid #AAAAAA; border-radius:6px;
+                    padding:3px 8px; min-height:1.3em; font-size:{ui_fs}; }}
+                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QComboBox:on, QLineEdit:focus
                                                   {{ border-color:#005A9E; }}
                 QComboBox QAbstractItemView       {{ background:#FFFFFF; color:#1E1E1E;
+                                                     border:1px solid #CCCCCC; border-radius:6px;
+                                                     padding:4px; outline:0;
                                                      selection-background-color:#005A9E;
                                                      selection-color:#FFFFFF;
                                                      font-size:{ui_fs}; }}
+                QComboBox QAbstractItemView::item {{ padding:5px 8px; min-height:1.5em; }}
                 QCheckBox::indicator              {{ width:15px; height:15px;
-                                                     border-radius:3px;
+                                                     border-radius:4px;
                                                      border:1.5px solid #AAAAAA;
                                                      background:#FFFFFF; }}
                 QCheckBox::indicator:checked      {{ background:#005A9E;
                                                      border-color:#005A9E; }}
                 QPushButton#btn_ok                {{ background:#005A9E; color:#FFFFFF;
-                                                     border:none; border-radius:5px;
+                                                     border:none; border-radius:7px;
                                                      padding:0px 22px;
                                                      font-weight:600;
                                                      font-size:{ui_fs}; }}
                 QPushButton#btn_ok:hover          {{ background:#1472B5; }}
+                QPushButton#btn_ok:focus          {{ background:#1472B5; }}
                 QPushButton#btn_cancel            {{ background:transparent;
                                                      color:#555555;
                                                      border:1.5px solid #AAAAAA;
-                                                     border-radius:5px;
+                                                     border-radius:7px;
                                                      padding:0px 22px;
                                                      font-size:{ui_fs}; }}
                 QPushButton#btn_cancel:hover      {{ background:#E5E5E5;
                                                      border-color:#888888;
                                                      color:#1E1E1E; }}
+                QPushButton#btn_cancel:focus      {{ border-color:#005A9E; }}
             """
 
     def __init__(self, parent, *,
