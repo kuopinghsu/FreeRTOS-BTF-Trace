@@ -9223,6 +9223,21 @@ _WF_WCET_MAX_AVG_RATIO = 5.0
 _WF_MIG_BURST_RATE = 10.0
 
 
+def _switch_overhead_aggregate(rows: list) -> dict:
+    """Trace-wide totals for the Kernel Switch Overhead table.
+
+    ``rows`` are ``_switch_overhead_rows`` tuples
+    ``(core, switches, min, avg, max, total_ns, pct_of_core)``.
+    """
+    n = len(rows)
+    return {
+        "cores": n,
+        "switches": sum(int(r[1]) for r in rows),
+        "overhead_ns": sum(int(r[5]) for r in rows),
+        "mean_pct": (sum(float(r[6]) for r in rows) / n) if n else 0.0,
+    }
+
+
 def _sync_bounce_pct_cell(r: tuple) -> str:
     """<td> for the Mutex/Semaphore & Queue "Bounce %" column.
 
@@ -15179,8 +15194,17 @@ class _StatsPanel(QWidget):
             f"<td>{pct:.2f}%</td></tr>"
             for core, n_sw, mn, avg, mx, total, pct in sw_rows_html
         ) or '<tr><td colspan="7" class="empty">No data</td></tr>'
+        sw_agg = _switch_overhead_aggregate(sw_rows_html)
+        sw_note = (
+            f'<p class="detail-note">Total: {sw_agg["switches"]:,} switches · '
+            f'{_esc(_format_time(sw_agg["overhead_ns"], ts))} scheduler overhead '
+            f'across {sw_agg["cores"]} core(s) · {sw_agg["mean_pct"]:.2f}% of core '
+            f'time on average.</p>'
+            if sw_agg["cores"] else ""
+        )
         switch_overhead_html = (
             f'<section class="report-card"><h2>Kernel Switch Overhead{_esc(scope_title)}</h2>'
+            f'{sw_note}'
             '<table><thead><tr><th>Core</th><th>Switches</th><th>Min</th><th>Avg</th>'
             '<th>Max</th><th>Total Overhead</th><th>% of Core</th></tr></thead>'
             f'<tbody>{sw_body}</tbody></table></section>'
@@ -15609,6 +15633,40 @@ class _StatsPanel(QWidget):
             {"label": "Deadline misses", "value": f"{dl_n:,}",
              "kind": "error" if dl_n else "ok"},
         ]
+
+        # One-sentence verdict above the KPI grid, for skimming.
+        _v_bits = []
+        if tick.get("tick_count"):
+            _v_cv = tick.get("tick_cv") or 0.0
+            _v_bits.append(
+                f"TICK health {tick_label} "
+                f"({'tickless' if tick.get('is_tickless') else 'tick'}, "
+                f"CV {_v_cv * 100.0:.1f}%)")
+        _v_bits.append(f"load balance {lb_txt}, cores {util_lo:.0f}–{util_hi:.0f}%")
+        if mig_total:
+            _v_bits.append(f"{mig_total:,} migrations")
+        if err_n or warn_n:
+            _v_bits.append(
+                f"{err_n} error(s), {warn_n} warning(s)" if err_n
+                else f"{warn_n} heuristic warning(s)")
+        else:
+            _v_bits.append("no heuristic warnings")
+        _v_tail = (
+            " — see Analysis Findings." if (err_n or warn_n)
+            else " — no triage flags."
+        )
+        _v_kind = "error" if err_n else ("warn" if (warn_n or tick_kind == "warn") else "ok")
+        _v_col = {"error": "#c0392b", "warn": "#9a4d00", "ok": "#166534"}[_v_kind]
+        _v_bg = {"error": "#fdecec", "warn": "#fdf3e3", "ok": "#eaf6ee"}[_v_kind]
+        verdict_html = (
+            f'<p class="report-verdict {_v_kind}" '
+            f'style="margin:0 0 14px;padding:10px 14px;border-radius:10px;'
+            f'border-left:4px solid {_v_col};background:{_v_bg};color:#182230;'
+            f'font-size:14px;">'
+            f'<strong style="color:{_v_col};">Verdict:</strong> '
+            f'{_esc(" · ".join(_v_bits))}{_v_tail}</p>'
+        )
+
         start_s = _format_time(lo if lo is not None else trace.time_min, trace.time_scale)
         end_s = _format_time(hi if hi is not None else trace.time_max, trace.time_scale)
         sample_note = ""
@@ -15662,6 +15720,7 @@ class _StatsPanel(QWidget):
         ).strip()
 
         body = f"""
+        {verdict_html}
         {html_diagnostic_kpi_grid(kpis)}
         <!--TOC-->
         {scope_html}
@@ -15954,6 +16013,12 @@ class _StatsPanel(QWidget):
                         _us(_format_time(total, trace.time_scale)),
                         f"{pct:.2f}%",
                     ])
+                _sw_agg = _switch_overhead_aggregate(_sw_csv)
+                writer.writerow([
+                    "All cores", _sw_agg["switches"], "", "", "",
+                    _us(_format_time(_sw_agg["overhead_ns"], trace.time_scale)),
+                    f"{_sw_agg['mean_pct']:.2f}%",
+                ])
             else:
                 writer.writerow(["No data"] + [""] * 6)
 

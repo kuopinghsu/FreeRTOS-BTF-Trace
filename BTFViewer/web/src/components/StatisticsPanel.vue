@@ -7705,7 +7705,31 @@ function exportHtml() {
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
   const statsExtraCss = `${STATS_HTML_EXTRA_CSS}\n${HTML_REPORT_TOC_CSS}\n${_HTML_EXPORT_UTIL_CSS}`.trim()
 
+  // One-sentence verdict above the KPI grid, for skimming.
+  const vBits = []
+  if (tick.tickCount) {
+    vBits.push(`TICK health ${tickLabel} (${tick.isTickless ? 'tickless' : 'tick'}, `
+      + `CV ${((tick.tickCv || 0) * 100).toFixed(1)}%)`)
+  }
+  vBits.push(`load balance ${lbKpi ? lbKpi.score.toFixed(0) + '%' : '—'}, `
+    + `cores ${utilLo.toFixed(0)}–${utilHi.toFixed(0)}%`)
+  if (migTotal) vBits.push(`${migTotal.toLocaleString('en-US')} migrations`)
+  if (errN || warnN) {
+    vBits.push(errN ? `${errN} error(s), ${warnN} warning(s)` : `${warnN} heuristic warning(s)`)
+  } else {
+    vBits.push('no heuristic warnings')
+  }
+  const vTail = (errN || warnN) ? ' — see Analysis Findings.' : ' — no triage flags.'
+  const vKind = errN ? 'error' : ((warnN || tickHealthKind === 'warn') ? 'warn' : 'ok')
+  const vCol = { error: '#c0392b', warn: '#9a4d00', ok: '#166534' }[vKind]
+  const vBg = { error: '#fdecec', warn: '#fdf3e3', ok: '#eaf6ee' }[vKind]
+  const verdictHtml = `<p class="report-verdict ${vKind}" `
+    + `style="margin:0 0 14px;padding:10px 14px;border-radius:10px;`
+    + `border-left:4px solid ${vCol};background:${vBg};color:#182230;font-size:14px;">`
+    + `<strong style="color:${vCol};">Verdict:</strong> ${_htmlCell(vBits.join(' · '))}${vTail}</p>`
+
   const body = `
+    ${verdictHtml}
     ${htmlDiagnosticKpiGrid(kpis)}
     <!--TOC-->
     ${scopeHtml}
@@ -7752,7 +7776,17 @@ function exportHtml() {
             `<td>${_htmlCell(r.total)}</td><td>${r.pctOfCore.toFixed(2)}%</td></tr>`
           ).join('')
         : '<tr><td colspan="7" class="empty">No data</td></tr>'
+      let swNote = ''
+      if (swRows.length) {
+        const totSw = swRows.reduce((s, r) => s + r.switches, 0)
+        const totNs = swRows.reduce((s, r) => s + r.totalNs, 0)
+        const meanPct = swRows.reduce((s, r) => s + r.pctOfCore, 0) / swRows.length
+        swNote = `<p class="detail-note">Total: ${totSw.toLocaleString()} switches · `
+          + `${_htmlCell(formatTime(totNs, tr.timeScale))} scheduler overhead across `
+          + `${swRows.length} core(s) · ${meanPct.toFixed(2)}% of core time on average.</p>`
+      }
       return `<section class="report-card"><h2>Kernel Switch Overhead${_htmlCell(suffix)}</h2>` +
+        swNote +
         '<table><thead><tr><th>Core</th><th>Switches</th><th>Min</th><th>Avg</th>' +
         '<th>Max</th><th>Total Overhead</th><th>% of Core</th></tr></thead>' +
         `<tbody>${body}</tbody></table></section>`
