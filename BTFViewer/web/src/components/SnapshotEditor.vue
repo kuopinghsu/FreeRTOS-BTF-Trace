@@ -1443,7 +1443,8 @@ function triggerDownload(blob) {
   --se-fg:          var(--fg, #e6e6f2);
   --se-fg-dim:      var(--fg-dim, #8a8ab0);
   --se-accent:      var(--accent, #4f8bff);
-  --se-radius:      16px;
+  /* Radii track the shared modern-dialog family (SettingsDialog = 14). */
+  --se-radius:      14px;
   --se-radius-sm:   9px;
   --se-radius-xs:   6px;
   --se-ring:        0 0 0 3px color-mix(in srgb, var(--accent, #4f8bff) 30%, transparent);
@@ -1772,7 +1773,8 @@ function triggerDownload(blob) {
 .se-text-input {
   position: absolute;
   background: transparent;
-  border: 1px dashed rgba(255, 255, 255, 0.55);
+  /* Accent dashes read on both light and dark screenshots. */
+  border: 1px dashed var(--se-accent);
   border-radius: 2px;
   outline: none;
   resize: none;

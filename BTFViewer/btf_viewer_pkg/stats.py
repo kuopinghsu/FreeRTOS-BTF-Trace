@@ -21533,30 +21533,97 @@ class SnapshotEditorDialog(QDialog):
     # UI construction
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _editor_ss(dark: bool) -> str:
+        """Dialog-scoped stylesheet mirroring the web editor's `.se-*` look."""
+        if dark:
+            surf, surf2, border = "#252526", "#1E1E1E", "#3A3A3A"
+            fg, fgdim = "#D4D4D4", "#8A8A9E"
+            acc, acc_hi = "#0E4D80", "#1565C0"
+            hover, mat = "rgba(255,255,255,0.08)", "#161619"
+        else:
+            surf, surf2, border = "#FAFAFA", "#F0F0F0", "#CCCCCC"
+            fg, fgdim = "#1E1E1E", "#6A6A78"
+            acc, acc_hi = "#005A9E", "#1472B5"
+            hover, mat = "rgba(0,0,0,0.06)", "#E8E8EC"
+        return f"""
+        QDialog {{ background:{surf}; }}
+        QFrame#se_toolbar {{ background:{surf}; border:none;
+                             border-bottom:1px solid {border}; }}
+        QFrame#se_botbar  {{ background:{surf}; border:none;
+                             border-top:1px solid {border}; }}
+        QFrame#se_tools, QFrame#se_chip {{ background:{surf2};
+            border:1px solid {border}; border-radius:9px; }}
+        QFrame#se_tools QPushButton {{ border:1px solid transparent;
+            border-radius:6px; }}
+        QFrame#se_tools QPushButton:hover:!checked {{ background:{hover}; }}
+        QFrame#se_tools QPushButton:checked {{ background:{acc};
+            border-color:{acc}; }}
+        QPushButton#se_icon {{ border:1px solid {border}; border-radius:7px;
+            background:{surf2}; }}
+        QPushButton#se_icon:hover {{ background:{hover}; }}
+        QLabel#se_micro {{ color:{fgdim}; font-size:9px; font-weight:700; }}
+        QCheckBox#se_dash {{ color:{fgdim}; font-size:9px; font-weight:700;
+            spacing:6px; }}
+        QSlider {{ background:transparent; }}
+        QSlider::groove:horizontal {{ height:4px; border-radius:2px;
+            background:{border}; }}
+        QSlider::sub-page:horizontal {{ background:{acc}; border-radius:2px; }}
+        QSlider::handle:horizontal {{ width:13px; margin:-6px 0;
+            border-radius:7px; background:#FFFFFF; border:1px solid {acc}; }}
+        QScrollArea#se_scroll {{ border:none; background:{mat}; }}
+        QWidget#se_mat {{ background:{mat}; }}
+        QPushButton#btn_primary {{ background:{acc}; color:#FFFFFF; border:none;
+            border-radius:8px; padding:7px 18px; font-weight:600; }}
+        QPushButton#btn_primary:hover {{ background:{acc_hi}; }}
+        QPushButton#btn_secondary {{ background:transparent; color:{fgdim};
+            border:1px solid {border}; border-radius:8px; padding:7px 16px; }}
+        QPushButton#btn_secondary:hover {{ background:{hover}; color:{fg}; }}
+        QLabel#se_toast {{ background:{surf}; color:{fg};
+            border:1px solid {acc}; border-radius:14px;
+            padding:7px 18px; font-size:12px; font-weight:600; }}
+        """
+
+    def _chip(self, *widgets: QWidget) -> QFrame:
+        """A bordered, rounded control group (web `.se-ctl`)."""
+        f = QFrame()
+        f.setObjectName("se_chip")
+        h = QHBoxLayout(f)
+        h.setContentsMargins(9, 3, 9, 3)
+        h.setSpacing(7)
+        for w in widgets:
+            h.addWidget(w)
+        return f
+
+    @staticmethod
+    def _micro(text: str) -> QLabel:
+        lbl = QLabel(text.upper())
+        lbl.setObjectName("se_micro")
+        return lbl
+
     def _build_ui(self) -> None:
+        self._dark = self.palette().color(
+            QPalette.ColorRole.Window).lightness() < 128
+        self.setStyleSheet(self._editor_ss(self._dark))
+
         main = QVBoxLayout(self)
-        main.setContentsMargins(6, 6, 6, 6)
-        main.setSpacing(4)
+        main.setContentsMargins(0, 0, 0, 0)
+        main.setSpacing(0)
 
         # ---- Tool bar ----
-        tb = QHBoxLayout()
-        tb.setSpacing(2)
+        bar = QFrame()
+        bar.setObjectName("se_toolbar")
+        tb = QHBoxLayout(bar)
+        tb.setContentsMargins(10, 8, 10, 8)
+        tb.setSpacing(6)
         self._tool_btns: dict = {}
-        _dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
-        _acc = "#0E4D80" if _dark else "#005A9E"
-        _acc_edge = "#1565C0" if _dark else "#1472B5"
-        _hover_bg = "#3a3a3a" if _dark else "#E4E4E4"
-        _tool_btn_ss = (
-            "QPushButton {"
-            "  border: 1px solid #888; border-radius: 6px; padding: 2px 4px;"
-            "}"
-            "QPushButton:checked {"
-            f"  background-color: {_acc}; color: #ffffff;"
-            f"  border: 1px solid {_acc_edge};"
-            "}"
-            f"QPushButton:hover:!checked {{ background-color: {_hover_bg}; }}"
-        )
         _ICON_H = 28          # uniform height for every toolbar widget
+
+        tools_frame = QFrame()
+        tools_frame.setObjectName("se_tools")
+        _tf = QHBoxLayout(tools_frame)
+        _tf.setContentsMargins(3, 3, 3, 3)
+        _tf.setSpacing(2)
         for tid in self._TOOLS:
             btn = QPushButton()
             btn.setIcon(_svg_icon_checked(_SNAP_TOOL_ICONS[tid]))
@@ -21565,60 +21632,60 @@ class SnapshotEditorDialog(QDialog):
             btn.setChecked(tid == self._tool)
             btn.setFixedSize(_ICON_H, _ICON_H)
             btn.setToolTip(self._TOOL_LABELS[tid])
-            btn.setStyleSheet(_tool_btn_ss)
             btn.clicked.connect(lambda _checked, t=tid: self._select_tool(t))
-            tb.addWidget(btn)
+            _tf.addWidget(btn)
             self._tool_btns[tid] = btn
+        tb.addWidget(tools_frame)
 
-        tb.addSpacing(8)
-        tb.addWidget(QLabel("Color:"))
         self._color_btn = QPushButton()
-        self._color_btn.setFixedSize(_ICON_H, _ICON_H)
+        self._color_btn.setFixedSize(22, 22)
         self._color_btn.setToolTip("Stroke / text colour")
         self._color_menu = self._build_color_menu()
         self._color_btn.clicked.connect(self._show_color_menu)
         self._refresh_color_btn()
-        tb.addWidget(self._color_btn)
+        tb.addWidget(self._chip(self._micro("Color"), self._color_btn))
 
-        tb.addSpacing(8)
-        # Stroke width — slider + inline value, matching the web `se-range`.
+        # Stroke width — slider + inline value (web `se-range`).
         self._width_lbl = QLabel(f"Size {self._line_width}")
+        self._width_lbl.setObjectName("se_micro")
         self._width_lbl.setMinimumWidth(46)
-        tb.addWidget(self._width_lbl)
         self._width_slider = QSlider(Qt.Orientation.Horizontal)
         self._width_slider.setRange(1, 20)
         self._width_slider.setValue(self._line_width)
-        self._width_slider.setFixedWidth(96)
-        self._width_slider.setFixedHeight(_ICON_H)
+        self._width_slider.setFixedWidth(92)
         self._width_slider.setToolTip("Stroke width")
         self._width_slider.valueChanged.connect(self._on_width_slider)
-        tb.addWidget(self._width_slider)
+        tb.addWidget(self._chip(self._width_lbl, self._width_slider))
 
         self._dash_cb = QCheckBox("Dash")
+        self._dash_cb.setObjectName("se_dash")
         self._dash_cb.setChecked(self._dashed)
-        self._dash_cb.setToolTip("Dashed stroke for lines, arrows, rectangles, and circles")
-        self._dash_cb.setFixedHeight(_ICON_H)
+        self._dash_cb.setToolTip(
+            "Dashed stroke for lines, arrows, rectangles, and circles")
         self._dash_cb.toggled.connect(self._on_dash_toggled)
-        tb.addWidget(self._dash_cb)
+        self._dash_chip = self._chip(self._dash_cb)
+        tb.addWidget(self._dash_chip)
 
-        tb.addSpacing(8)
-        # Font size — slider + inline value; only shown for the text tool (web parity).
+        # Font size — slider + value; only for the text tool (web parity).
         self._font_lbl = QLabel(f"Font {self._font_size}")
+        self._font_lbl.setObjectName("se_micro")
         self._font_lbl.setMinimumWidth(52)
-        tb.addWidget(self._font_lbl)
         self._font_slider = QSlider(Qt.Orientation.Horizontal)
         self._font_slider.setRange(10, 72)
         self._font_slider.setSingleStep(2)
         self._font_slider.setPageStep(6)
         self._font_slider.setValue(self._font_size)
-        self._font_slider.setFixedWidth(120)
-        self._font_slider.setFixedHeight(_ICON_H)
+        self._font_slider.setFixedWidth(116)
         self._font_slider.setToolTip("Text font size")
         self._font_slider.valueChanged.connect(self._on_font_slider)
-        tb.addWidget(self._font_slider)
+        self._font_chip = self._chip(self._font_lbl, self._font_slider)
+        tb.addWidget(self._font_chip)
         self._sync_text_controls_visible()
-        tb.addSpacing(8)
+
+        tb.addStretch()
+
         undo_btn = QPushButton()
+        undo_btn.setObjectName("se_icon")
         undo_btn.setIcon(_svg_icon(_IC_SNAP_UNDO, '#b0b0cc'))
         undo_btn.setIconSize(QSize(16, 16))
         undo_btn.setFixedSize(_ICON_H, _ICON_H)
@@ -21627,6 +21694,7 @@ class SnapshotEditorDialog(QDialog):
         tb.addWidget(undo_btn)
 
         clear_btn = QPushButton()
+        clear_btn.setObjectName("se_icon")
         clear_btn.setIcon(_svg_icon(_IC_CLEAR, '#b0b0cc'))
         clear_btn.setIconSize(QSize(16, 16))
         clear_btn.setFixedSize(_ICON_H, _ICON_H)
@@ -21634,15 +21702,20 @@ class SnapshotEditorDialog(QDialog):
         clear_btn.clicked.connect(self._clear_all)
         tb.addWidget(clear_btn)
 
-        tb.addStretch()
-        main.addLayout(tb)
+        main.addWidget(bar)
 
-        # ---- Canvas in a scroll area ----
+        # ---- Canvas on a dark mat, in a scroll area ----
         self._canvas = _AnnotationCanvas(self, self._disp_w, self._disp_h)
         self._canvas.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        mat = QWidget()
+        mat.setObjectName("se_mat")
+        _ml = QVBoxLayout(mat)
+        _ml.setContentsMargins(24, 24, 24, 24)
+        _ml.addWidget(self._canvas, 0, Qt.AlignmentFlag.AlignCenter)
         scroll = QScrollArea()
-        scroll.setWidget(self._canvas)
-        scroll.setWidgetResizable(False)
+        scroll.setObjectName("se_scroll")
+        scroll.setWidget(mat)
+        scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         main.addWidget(scroll, stretch=1)
 
@@ -21652,25 +21725,37 @@ class SnapshotEditorDialog(QDialog):
         self._text_input.installEventFilter(self)
 
         # ---- Bottom bar ----
-        bot = QHBoxLayout()
-        bot.setSpacing(6)
+        botbar = QFrame()
+        botbar.setObjectName("se_botbar")
+        bot = QHBoxLayout(botbar)
+        bot.setContentsMargins(12, 10, 12, 12)
+        bot.setSpacing(8)
         copy_btn = QPushButton("Copy to Clipboard")
-        copy_btn.setIcon(_svg_icon(_IC_COPY, '#b0b0cc'))
+        copy_btn.setObjectName("btn_primary")
+        copy_btn.setIcon(_svg_icon(_IC_COPY, '#ffffff'))
         copy_btn.clicked.connect(self._on_copy)
-        save_btn = QPushButton("Save PNG...")
+        save_btn = QPushButton("Save PNG…")
+        save_btn.setObjectName("btn_secondary")
         save_btn.setIcon(_svg_icon(_IC_SAVE, '#b0b0cc'))
         save_btn.clicked.connect(self._on_save)
         close_btn = QPushButton("Close")
+        close_btn.setObjectName("btn_secondary")
         close_btn.clicked.connect(self.close)
-        self._status_lbl = QLabel("")
         bot.addWidget(copy_btn)
         bot.addWidget(save_btn)
         bot.addStretch()
-        bot.addWidget(self._status_lbl)
         bot.addWidget(close_btn)
-        main.addLayout(bot)
+        main.addWidget(botbar)
 
-        self.resize(self._disp_w + 40, self._disp_h + 130)
+        # Floating status toast over the canvas (web `.se-status`).
+        self._status_lbl = QLabel("", self)
+        self._status_lbl.setObjectName("se_toast")
+        self._status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._toast_fx = QGraphicsOpacityEffect(self._status_lbl)
+        self._status_lbl.setGraphicsEffect(self._toast_fx)
+        self._status_lbl.hide()
+
+        self.resize(self._disp_w + 48, self._disp_h + 140)
 
     # ------------------------------------------------------------------
     # Tool / colour helpers
@@ -21686,11 +21771,10 @@ class SnapshotEditorDialog(QDialog):
     def _sync_text_controls_visible(self) -> None:
         """Web parity: Dash only for line/box tools, Font only for text."""
         is_text = self._tool == 'text'
-        for w in (getattr(self, '_font_lbl', None), getattr(self, '_font_slider', None)):
-            if w is not None:
-                w.setVisible(is_text)
-        if getattr(self, '_dash_cb', None) is not None:
-            self._dash_cb.setVisible(not is_text)
+        if getattr(self, '_font_chip', None) is not None:
+            self._font_chip.setVisible(is_text)
+        if getattr(self, '_dash_chip', None) is not None:
+            self._dash_chip.setVisible(not is_text)
 
     def _on_width_slider(self, value: int) -> None:
         self._line_width = int(value)
@@ -22456,8 +22540,32 @@ class SnapshotEditorDialog(QDialog):
         self._show_status(f"Saved: {os.path.basename(path)}")
 
     def _show_status(self, msg: str) -> None:
-        self._status_lbl.setText(msg)
-        QTimer.singleShot(3000, lambda: self._status_lbl.setText(""))
+        lbl = self._status_lbl
+        lbl.setText(msg)
+        lbl.adjustSize()
+        lbl.move(max(8, (self.width() - lbl.width()) // 2),
+                 max(8, self.height() - lbl.height() - 88))
+        lbl.raise_()
+        lbl.show()
+        self._toast_anim = QPropertyAnimation(self._toast_fx, b"opacity", self)
+        self._toast_anim.setDuration(240)
+        self._toast_anim.setStartValue(0.0)
+        self._toast_anim.setEndValue(1.0)
+        self._toast_anim.start()
+        self._toast_seq = getattr(self, "_toast_seq", 0) + 1
+        _seq = self._toast_seq
+        QTimer.singleShot(
+            3000, lambda: self._hide_status(_seq))
+
+    def _hide_status(self, seq: int) -> None:
+        if getattr(self, "_toast_seq", 0) != seq:
+            return
+        self._toast_anim = QPropertyAnimation(self._toast_fx, b"opacity", self)
+        self._toast_anim.setDuration(240)
+        self._toast_anim.setStartValue(1.0)
+        self._toast_anim.setEndValue(0.0)
+        self._toast_anim.finished.connect(self._status_lbl.hide)
+        self._toast_anim.start()
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
