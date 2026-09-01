@@ -133,6 +133,24 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; 
 .pct-bar .lab { flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pct-bar .track { flex: 1; height: 10px; background: #eef2f7; border-radius: 6px; overflow: hidden; }
 .pct-bar .fill { height: 100%; border-radius: 6px; }
+@media (prefers-color-scheme: dark) {
+  :root { --line-strong: #3a4048; --stripe: #191d23; }
+  .kpi { background: var(--paper); }
+  .kpi .v { color: #dbe6f2; }
+  thead th { background: #232830; color: #b6c2cf; }
+  .finding-card, .finding-card.sev-error, .finding-card.sev-warning { background: var(--paper); }
+  .finding-card h3 { color: #cfe1f7; }
+  h3.sub { color: #b6c2cf; }
+  .sev-warning { color: #e0a44a; }
+  .sev-error { color: #e5776a; }
+  .finding-ok { color: #57c191; }
+  .table-search { background: var(--paper); color: var(--ink); }
+  .table-scroll td:first-child, .table-scroll th:first-child { background: var(--paper); }
+  .table-scroll tbody tr:nth-child(even) td:first-child { background: var(--stripe); }
+  .report-tabs .tab-btn { background: #232830; }
+  .pct-bar .track { background: #232830; }
+  .heat-cell { fill: var(--ink); }
+}
 """.strip()
 
 

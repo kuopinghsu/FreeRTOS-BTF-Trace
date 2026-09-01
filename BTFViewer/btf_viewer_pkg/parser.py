@@ -6147,6 +6147,17 @@ tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
 .table-scroll table {{ min-width: 100%; }}
 .sortable {{ cursor: pointer; }}
 .sortable:hover {{ color: var(--accent); }}
+@media (prefers-color-scheme: dark) {{
+  .compare-card {{ background: var(--paper); }}
+  .compare-card.tone-regressed .compare-card-v {{ color: #e5776a; }}
+  .compare-card.tone-improved .compare-card-v {{ color: #57c191; }}
+  .compare-card.tone-warn .compare-card-v {{ color: #e0a44a; }}
+  .compare-next {{ color: #cfe1f7; }}
+  .compare-comparability-warn {{
+    background: #2a2114; border-left-color: #c87a12; color: #e6cfa6;
+  }}
+  .table-search {{ background: var(--paper); color: var(--ink); }}
+}}
 {HTML_REPORT_TOC_CSS}
 """.strip()
 
