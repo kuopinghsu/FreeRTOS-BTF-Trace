@@ -4454,17 +4454,35 @@ def _interval_stats_rows(
     lo: Optional[int] = None,
     hi: Optional[int] = None,
 ) -> List[tuple]:
-    """Per-interval-id stats: (id, label, count, min, avg, max, p95) as formatted strings."""
+    """Per-interval-id stats: (id, label, count, min, avg, max, p95) as formatted strings.
+
+    ``label`` is ``Interval <id>``, suffixed with the owning task
+    (``Interval 5 · PS[228]``) when every instance in scope names the same one.
+    """
     scale = trace.time_scale
+    _tid_to_name: Dict[str, str] = {}
+    for _raw in getattr(trace, "task_repr", {}).values():
+        _c, _tid, _name = _parse_task_name(str(_raw))
+        if _tid is not None:
+            _tid_to_name.setdefault(str(_tid), _name)
     rows = []
     for iid in trace.interval_ids:
-        samples = [
-            inst.stop_ns - inst.start_ns
-            for inst in trace.interval_instances_by_id.get(iid, [])
+        _insts = [
+            inst for inst in trace.interval_instances_by_id.get(iid, [])
             if _interval_overlaps_range(inst, lo, hi)
         ]
+        samples = [inst.stop_ns - inst.start_ns for inst in _insts]
         if not samples:
             continue
+        _tids = {str(inst.task_id) for inst in _insts if inst.task_id is not None}
+        if len(_tids) == 1:
+            _t = next(iter(_tids))
+            _owner = _tid_to_name.get(_t) or f"task {_t}"
+        elif len(_tids) > 1:
+            _owner = "(mixed)"
+        else:
+            _owner = ""
+        _label = f"Interval {iid}" + (f" · {_owner}" if _owner else "")
         samples.sort()
         total = sum(samples)
         count = len(samples)
@@ -4475,7 +4493,7 @@ def _interval_stats_rows(
         p95 = samples[p95_idx]
         rows.append((
             iid,
-            f"Interval {iid}",
+            _label,
             count,
             _format_time(mn, scale),
             _format_time(avg, scale),

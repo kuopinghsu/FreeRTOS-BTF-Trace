@@ -2,7 +2,7 @@
  * Pair interval_start / interval_stop STI events into measurable spans.
  */
 import { formatTime } from './timeFormat.js'
-import { lighterColor } from './colors.js'
+import { lighterColor, parseTaskName } from './colors.js'
 import { bisectLeft } from './bisect.js'
 
 export const INTERVAL_START_CHANNELS = new Set(['interval_start'])
@@ -200,12 +200,29 @@ export function intervalStatsRows(trace, lo, hi) {
   const byId = trace?.intervalInstancesById
   if (!byId?.size) return []
 
+  // task-id -> display name, so `Interval 5` can read `Interval 5 · PS[228]`.
+  const tidToName = new Map()
+  for (const raw of (trace?.taskRepr?.values?.() || [])) {
+    const p = parseTaskName(String(raw))
+    if (p.taskId != null && !tidToName.has(String(p.taskId))) {
+      tidToName.set(String(p.taskId), p.name)
+    }
+  }
+
   const rows = []
   for (const id of trace.intervalIds || []) {
-    const samples = (byId.get(id) || [])
-      .filter(inst => intervalOverlapsRange(inst, lo, hi))
-      .map(inst => inst.durationNs)
+    const insts = (byId.get(id) || []).filter(inst => intervalOverlapsRange(inst, lo, hi))
+    const samples = insts.map(inst => inst.durationNs)
     if (!samples.length) continue
+    const tids = new Set(insts.map(inst => inst.taskId).filter(t => t != null && t !== ''))
+    let owner = ''
+    if (tids.size === 1) {
+      const t = String([...tids][0])
+      owner = tidToName.get(t) || `task ${t}`
+    } else if (tids.size > 1) {
+      owner = '(mixed)'
+    }
+    const label = `Interval ${id}` + (owner ? ` · ${owner}` : '')
     const sorted = [...samples].sort((a, b) => a - b)
     const total = samples.reduce((a, b) => a + b, 0)
     const count = samples.length
@@ -215,7 +232,7 @@ export function intervalStatsRows(trace, lo, hi) {
     const p95 = percentile(sorted, 0.95)
     rows.push({
       id,
-      label: `Interval ${id}`,
+      label,
       count,
       minNs: min,
       avgNs: avg,
