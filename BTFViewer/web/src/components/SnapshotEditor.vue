@@ -59,7 +59,7 @@
           <input class="se-range" type="range" min="10" max="72" step="2" v-model.number="fontSize" />
         </label>
 
-        <div class="se-sep" />
+        <div class="se-spacer" />
 
         <!-- Undo -->
         <button
@@ -78,25 +78,6 @@
           @click="clearAll"
           v-html="ICON_CLEAR"
         />
-
-        <div class="se-sep" />
-
-        <!-- Copy to clipboard -->
-        <button class="se-tbtn action-btn" title="Copy annotated image to clipboard" @click="copyToClipboard">
-          <span v-html="ICON_COPY" />
-          Copy
-        </button>
-
-        <!-- Save PNG -->
-        <button class="se-tbtn action-btn" title="Save annotated image as PNG" @click="saveAsPng">
-          <span v-html="ICON_SAVE" />
-          Save PNG
-        </button>
-
-        <div class="se-spacer" />
-
-        <!-- Close -->
-        <button class="se-close" title="Close editor" @click="handleClose">✕</button>
       </div>
 
       <!-- ── Status toast ────────────────────────────────────────────── -->
@@ -133,6 +114,30 @@
             @blur="commitText"
           />
         </div>
+      </div>
+
+      <!-- ── Footer actions ─────────────────────────────────────────────── -->
+      <div class="se-footer">
+        <button
+          class="se-btn primary"
+          title="Copy annotated image to clipboard"
+          @click="copyToClipboard"
+        >
+          <span v-html="ICON_COPY" />
+          Copy to Clipboard
+        </button>
+        <button
+          class="se-btn secondary"
+          title="Save annotated image as PNG"
+          @click="saveAsPng"
+        >
+          <span v-html="ICON_SAVE" />
+          Save PNG…
+        </button>
+        <div class="se-spacer" />
+        <button class="se-btn secondary" title="Close editor" @click="handleClose">
+          Close
+        </button>
       </div>
     </div>
 
@@ -1546,21 +1551,6 @@ function triggerDownload(blob) {
   box-shadow: 0 2px 10px -3px color-mix(in srgb, var(--se-accent) 75%, transparent);
 }
 
-.se-tbtn.action-btn {
-  height: 32px;
-  padding: 0 14px;
-  font-weight: 600;
-  background: color-mix(in srgb, var(--se-accent) 14%, transparent);
-  border-color: color-mix(in srgb, var(--se-accent) 32%, transparent);
-  color: color-mix(in srgb, var(--se-accent) 80%, var(--se-fg));
-}
-
-.se-tbtn.action-btn:hover {
-  background: color-mix(in srgb, var(--se-accent) 22%, transparent);
-  border-color: color-mix(in srgb, var(--se-accent) 46%, transparent);
-  color: var(--se-fg);
-}
-
 .se-tbtn:focus-visible {
   outline: none;
   box-shadow: var(--se-ring);
@@ -1569,6 +1559,63 @@ function triggerDownload(blob) {
 .se-tbtn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+/* ── Footer action bar ─────────────────────────────────────────────────────── */
+.se-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  background: linear-gradient(0deg, var(--se-surface), var(--se-surface-2));
+  border-top: 1px solid var(--se-border-soft);
+  flex-shrink: 0;
+}
+
+.se-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 18px;
+  border-radius: var(--se-radius-xs);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1;
+  border: 1px solid transparent;
+  transition: background 0.14s ease, border-color 0.14s ease,
+              color 0.14s ease, filter 0.14s ease, transform 0.06s ease;
+  box-sizing: border-box;
+}
+
+.se-btn :deep(svg) { width: 15px; height: 15px; display: block; }
+
+.se-btn:active { transform: translateY(1px); }
+
+.se-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--se-ring);
+}
+
+.se-btn.primary {
+  background: var(--se-accent);
+  color: #fff;
+  box-shadow: 0 2px 12px -3px color-mix(in srgb, var(--se-accent) 65%, transparent);
+}
+
+.se-btn.primary:hover { filter: brightness(1.08); }
+
+.se-btn.secondary {
+  background: transparent;
+  color: var(--se-fg-dim);
+  border-color: var(--se-border);
+}
+
+.se-btn.secondary:hover {
+  background: color-mix(in srgb, var(--se-fg) 10%, transparent);
+  color: var(--se-fg);
 }
 
 /* ── Separator / Spacer ────────────────────────────────────────────────────── */
@@ -1712,29 +1759,6 @@ function triggerDownload(blob) {
   margin: 0;
 }
 
-/* ── Close button ──────────────────────────────────────────────────────────── */
-.se-close {
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--se-radius-xs);
-  color: var(--se-fg-dim);
-  font-size: 15px;
-  cursor: pointer;
-  line-height: 1;
-  padding: 0;
-  transition: background 0.14s ease, color 0.14s ease;
-}
-
-.se-close:hover {
-  background: color-mix(in srgb, #e5484d 18%, transparent);
-  color: #ff8a8a;
-}
-
 /* ── Canvas body ───────────────────────────────────────────────────────────── */
 .se-body {
   flex: 1;
@@ -1791,7 +1815,8 @@ function triggerDownload(blob) {
 /* ── Status toast ───────────────────────────────────────────────────────────── */
 .se-status {
   position: absolute;
-  bottom: 26px;
+  /* Sit above the footer action bar. */
+  bottom: 74px;
   left: 50%;
   transform: translateX(-50%);
   background: color-mix(in srgb, var(--se-surface) 88%, transparent);
