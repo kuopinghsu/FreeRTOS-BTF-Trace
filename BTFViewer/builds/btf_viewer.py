@@ -42658,7 +42658,7 @@ def _ai_ev_panel_action_html(
     return (
         f'<a class="ai-ev-panel-toggle" href="{_btf_fold_href(action, EVIDENCE_SUBFOLDS_ALL)}" '
         f'title="{text}" '
-        f'style="color:{color};text-decoration:none;font-size:14px;font-weight:700;'
+        f'style="color:{color};text-decoration:none;font-size:medium;font-weight:700;'
         f'line-height:1;border:1px solid {border};background:{bg};'
         f'padding:2px 7px;white-space:nowrap;">{icon}</a>'
     )
@@ -43012,29 +43012,34 @@ def _ai_log_style(is_dark: bool = True) -> str:
         fam = str(_get_sans_font_family() or "Arial").replace("'", "")
     except Exception:
         fam = "Arial"
+    # Font sizes use CSS keyword scales (xx-small … large), NOT px. QTextBrowser
+    # resolves keywords against the widget's current base font, so Ctrl+Wheel
+    # zoom and the Settings UI-font size scale the whole reply — inline `code`
+    # (task-name / phrase highlights), headings and fold labels included. An
+    # explicit px size here freezes that run against the zoom.
     return (
         f"body,p,li,td,th,h1,h2,h3,h4,.ai-role{{font-family:'{fam}';}}"
-        "h1,h2,h3,h4{margin:8px 0 4px;font-size:13px;}"
-        "h1{font-size:15px;}h2{font-size:14px;}"
+        "h1,h2,h3,h4{margin:8px 0 4px;font-size:medium;}"
+        "h1{font-size:large;}h2{font-size:large;}"
         "p{margin:4px 0;}"
         "ul,ol{margin:4px 0 4px 18px;padding:0;}"
         "li{margin:2px 0;}"
         f"pre{{background:{pre_bg};border:1px solid {pre_bd};border-radius:4px;"
         "padding:8px;margin:6px 0;white-space:pre-wrap;}"
-        "code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:11px;}"
+        "code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:small;}"
         "p code,li code{background:rgba(127,127,127,0.18);padding:1px 4px;border-radius:3px;}"
         f"blockquote{{margin:6px 0;padding:4px 10px;border-left:3px solid {link};"
         f"color:{quote};}}"
         f"hr{{border:none;border-top:1px solid {hr};margin:8px 0;}}"
         f"a{{color:{link};}}"
         "a.ai-fold-toggle{text-decoration:none;font-weight:600;}"
-        "a.ai-fold-toggle-l1{font-size:12px;}"
-        "a.ai-fold-toggle-l2{font-size:11px;}"
+        "a.ai-fold-toggle-l1{font-size:small;}"
+        "a.ai-fold-toggle-l2{font-size:x-small;}"
         "table.ai-md-table{margin:8px 0;table-layout:fixed;}"
         "table.ai-turn{table-layout:fixed;}"
         "table.ai-ev-fold-box{table-layout:fixed;}"
-        ".ai-role{font-size:11px;font-weight:600;}"
-        f".ai-role-evidence{{font-size:12px;font-weight:700;color:{evidence};}}"
+        ".ai-role{font-size:small;font-weight:600;}"
+        f".ai-role-evidence{{font-size:small;font-weight:700;color:{evidence};}}"
         f".ai-role-user{{color:{user};}}"
         f".ai-role-assistant{{color:{asst};}}"
         f".ai-tool-card{{color:{tool};}}"
@@ -43134,7 +43139,7 @@ def _tool_cards_html(
         if detail:
             rows.append(
                 f"<p style=\"margin:2px 0 6px 1.2em;color:{st_color};"
-                f"font-size:11px;\">{html.escape(detail)}</p>"
+                f"font-size:x-small;\">{html.escape(detail)}</p>"
             )
     actions = ""
     if status == "pending" and batch_id:
@@ -43281,7 +43286,7 @@ def _format_ai_log_html(
         # Leave room on the right for the viewport-fixed Expand/Collapse button.
         pad_right = "40px" if not embed_ev_toggle else "0"
         title_html = (
-            f'<span style="font-weight:700;font-size:12px;color:{ev_color};">'
+            f'<span style="font-weight:700;font-size:small;color:{ev_color};">'
             f"{html.escape(role_label)}</span>"
         )
         if embed_ev_toggle:
@@ -43290,7 +43295,7 @@ def _format_ai_log_html(
             label = (
                 f'<table width="100%" cellspacing="0" cellpadding="0" '
                 f'style="table-layout:fixed;"><tr>'
-                f'<td style="font-weight:700;font-size:12px;color:{ev_color};">'
+                f'<td style="font-weight:700;font-size:small;color:{ev_color};">'
                 f"{html.escape(role_label)}</td>"
                 f'<td align="right" valign="middle" width="36" style="width:36px;">'
                 f"{_ai_ev_panel_action_html(subfolds_open, ev_labels, is_dark=is_dark)}"
