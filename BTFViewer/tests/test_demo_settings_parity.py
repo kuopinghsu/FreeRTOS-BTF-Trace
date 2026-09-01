@@ -142,9 +142,22 @@ class DemoSettingsRuntimeParityTests(unittest.TestCase):
 
         from tests import destroy_main_window
 
+        # `_demo_close_settings` sweeps every top-level widget titled "Settings",
+        # so a stray dialog left visible by a sibling test would be closed
+        # instead of ours. Neutralise any leftovers before we start.
+        for w in list(self._app.topLevelWidgets()):
+            try:
+                if w.windowTitle() == "Settings":
+                    w.hide()
+                    w.deleteLater()
+            except RuntimeError:
+                pass
+        self._app.processEvents()
+
         win = MainWindow()
         self.addCleanup(destroy_main_window, win)
         dlg = QDialog()
+        self.addCleanup(dlg.deleteLater)
         self.addCleanup(dlg.close)
         dlg.setWindowTitle("Settings")
         dlg.setModal(False)
