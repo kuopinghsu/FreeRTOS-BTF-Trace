@@ -82158,15 +82158,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _tab_bwd.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         _tab_bwd.activated.connect(lambda: self._cycle_trace_tab(False))
 
-        _sc_find = QShortcut(QKeySequence.StandardKey.Find, self)
-        _sc_find.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        _sc_find.activated.connect(self._focus_find)
-        _sc_find_next = QShortcut(QKeySequence.StandardKey.FindNext, self)
-        _sc_find_next.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        _sc_find_next.activated.connect(self._find_next)
-        _sc_find_prev = QShortcut(QKeySequence.StandardKey.FindPrevious, self)
-        _sc_find_prev.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        _sc_find_prev.activated.connect(self._find_prev)
+        # Find / Find Next / Find Previous keys live on the Navigate-menu
+        # actions (see _build_menus). Standalone QShortcuts here duplicated
+        # those bindings and raised "Ambiguous shortcut overload: Ctrl+F".
 
         _sc_palette = QShortcut(QKeySequence("Ctrl+K"), self)
         _sc_palette.setContext(Qt.ShortcutContext.ApplicationShortcut)
@@ -86173,7 +86167,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _ia("Find", self._focus_find, _IC_FIND,
             "Find task, annotation, or migration  (Ctrl+F)")
         self._tb_find_btn = self._tb_icon_actions[-1][0]
-        self._tb_find_btn.setShortcut(QKeySequence.StandardKey.Find)
+        # Ctrl+F is bound once, on the Navigate ▸ Find menu action — adding it
+        # here as well triggered "Ambiguous shortcut overload: Ctrl+F".
         self._tb_show_all_tasks_btn = tb.addAction(
             "All tasks", self._clear_heatmap_task_filter)
         self._tb_show_all_tasks_btn.setCheckable(True)
