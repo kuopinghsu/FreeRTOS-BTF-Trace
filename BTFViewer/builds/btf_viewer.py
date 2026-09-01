@@ -69497,6 +69497,19 @@ class _StatsPanel(QWidget):
         )
         analysis_findings = self._append_exec_anomaly_findings(
             analysis_findings, trace, lo, hi)
+        if getattr(self, "_export_anonymize", False):
+            analysis_findings = [
+                {
+                    **f,
+                    "title": _anon(f.get("title", "")),
+                    "text": _anon(f.get("text", "")),
+                    "evidence": [
+                        _anon(e) if isinstance(e, str) else e
+                        for e in (f.get("evidence") or [])
+                    ],
+                }
+                for f in analysis_findings
+            ]
         analysis_html = _render_workflow_analysis_html(analysis_findings, scope_title)
 
         warn_n = sum(1 for f in analysis_findings if f.get("severity") == "warning")

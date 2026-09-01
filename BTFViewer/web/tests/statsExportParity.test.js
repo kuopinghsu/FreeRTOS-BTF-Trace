@@ -19,6 +19,15 @@ describe('mutex/queue export parity with desktop', () => {
     assert.match(stats, /syncBouncePctCell/)
   })
 
+  it('Export HTML offers an Anonymize toggle (desktop `report --anonymize` parity)', () => {
+    assert.match(stats, /const exportAnon = ref\(/)
+    assert.match(stats, /aiRedactTaskNames/)
+    assert.match(stats, /function buildExportAnonymizer\(/)
+    assert.match(stats, /Task-\$\{i \+ 1\}/)
+    assert.match(stats, /_exportAnonFn = buildExportAnonymizer\(tr, exportAnon\.value\)/)
+    assert.match(stats, /class="stats-export-anon"/)
+  })
+
   it('scroll tail stays 0 at rest unless pin-scroll (desktop lockstep)', () => {
     assert.match(stats, /let scrollTailPinActive = false/)
     assert.match(stats, /function updateScrollTailHeight\(forPin = false\)/)

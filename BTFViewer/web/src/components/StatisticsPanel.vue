@@ -3726,6 +3726,18 @@
 
     <!-- Export (pinned footer, matches desktop stats panel) -->
     <div class="stats-export-row">
+      <label
+        class="stats-export-anon"
+        title="Replace task names with stable Task-N aliases in the exported report"
+      >
+        <input
+          type="checkbox"
+          :checked="exportAnon"
+          :disabled="!trace"
+          @change="exportAnon = $event.target.checked"
+        >
+        Anonymize
+      </label>
       <button
         class="action-btn"
         data-demo-target="stats_export_html"
@@ -5734,6 +5746,10 @@ const loadBalanceScore = computed(() => {
 })
 
 // ---- Analysis Findings (Export HTML) -----------------------------------
+// Per-export "anonymize task names" toggle; seeded from the AI "anonymize
+// for cloud" setting so a privacy-minded user gets it by default.
+const exportAnon = ref(!!(props.analysisSettings && props.analysisSettings.aiRedactTaskNames))
+
 const analysisFindings = computed(() => {
   const tr = props.trace
   if (!tr) return []
@@ -7157,8 +7173,31 @@ function _trimTimePad(v) {
   return frac ? `${m[1]}.${frac}${m[3]}` : `${m[1]}${m[3]}`
 }
 
+// Set by exportHtml() for the duration of a report build; identity otherwise.
+// Aliases task names to Task-N for a shareable export (mirrors desktop
+// `report --anonymize`).
+let _exportAnonFn = v => v
+
+function buildExportAnonymizer(tr, on) {
+  if (!on || !tr) return v => v
+  const names = new Set()
+  for (const raw of (tr.taskRepr?.values?.() || [])) {
+    const p = parseTaskName(String(raw))
+    if (p.name && p.name !== 'TICK' && !isIdleTaskName(p.name)) names.add(p.name)
+  }
+  const sorted = [...names].sort()
+  const amap = new Map(sorted.map((n, i) => [n, `Task-${i + 1}`]))
+  const ordered = [...names].sort((a, b) => b.length - a.length)
+  return v => {
+    let s = String(v ?? '')
+    if (!s) return s
+    for (const n of ordered) if (s.includes(n)) s = s.split(n).join(amap.get(n))
+    return s
+  }
+}
+
 function _htmlCell(v) {
-  return _trimTimePad(v)
+  return _trimTimePad(_exportAnonFn(String(v ?? '')))
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -7573,6 +7612,7 @@ function _renderDeadlineReportHtml(suffix) {
 
 function exportHtml() {
   const tr = props.trace
+  _exportAnonFn = buildExportAnonymizer(tr, exportAnon.value)
   const r = statsRange.value
   const suffix = scopeSuffixStr.value
   const execReportRows = _execSliceRowsForReport(tr, r)
@@ -7623,7 +7663,11 @@ function exportHtml() {
     : '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'
   }</tbody></table></section>`
 
-  const findings = analysisFindings.value || []
+  const findings = (analysisFindings.value || []).map(f => (
+    exportAnon.value
+      ? { ...f, title: _exportAnonFn(f.title || ''), text: _exportAnonFn(f.text || '') }
+      : f
+  ))
   const analysisHtml = renderWorkflowAnalysisHtml(findings, suffix)
   const warnN = findings.filter(f => f.severity === 'warning').length
   const errN = findings.filter(f => f.severity === 'error').length
@@ -8168,6 +8212,7 @@ function exportHtml() {
   })
 
   const finalHtml = htmlApplyCollapsibleToc(html, STATS_DEFAULT_EXPANDED, STATS_TOC_GROUPS)
+  _exportAnonFn = v => v
   _downloadText(`statistics-${_stamp()}.html`, finalHtml, 'text/html;charset=utf-8')
 }
 
@@ -8946,6 +8991,21 @@ defineExpose({
   padding: 6px 10px 8px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.stats-export-anon {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.stats-export-anon input {
+  margin: 0;
+  cursor: pointer;
 }
 
 .action-btn {
