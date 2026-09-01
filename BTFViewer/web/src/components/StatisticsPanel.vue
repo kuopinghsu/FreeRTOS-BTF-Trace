@@ -7147,8 +7147,18 @@ async function exportPlotSvg() {
   _downloadDataUrl(`${_safeFileName(plotData.value.title)}.svg`, dataUrl)
 }
 
+// Drop fixed-decimal padding from a formatted time (`945.000 µs` -> `945 µs`);
+// leaves `3.292 ms` and non-time strings alone. Mirrors desktop stats._esc.
+const _TIME_PAD_RE = /^(-?\d+)\.(\d+)( (?:ns|us|µs|μs|ms|s))$/
+function _trimTimePad(v) {
+  const m = String(v ?? '').match(_TIME_PAD_RE)
+  if (!m) return String(v ?? '')
+  const frac = m[2].replace(/0+$/, '')
+  return frac ? `${m[1]}.${frac}${m[3]}` : `${m[1]}${m[3]}`
+}
+
 function _htmlCell(v) {
-  return String(v ?? '')
+  return _trimTimePad(v)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

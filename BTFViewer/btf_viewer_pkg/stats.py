@@ -103,6 +103,7 @@ from .ux_explore import (
 )
 from .parser import *  # noqa: F403,F401
 from .parser import (  # private symbols are not pulled in by import *
+    _trim_time_pad,
     _gini_coefficient,
     _core_util_stddev,
     _concurrency_level_plot_points,
@@ -160,8 +161,8 @@ from .parser import (  # private symbols are not pulled in by import *
 )
 from .timeline_util import *  # noqa: F403,F401
 from .timeline_util import (  # noqa: F401 — star-import skips leading _
-    _format_time, _get_fixed_font_family, _get_sans_font_family, _monospace_font,
-    _time_label_sort_key,
+    _format_time, _format_time_trim, _get_fixed_font_family,
+    _get_sans_font_family, _monospace_font, _time_label_sort_key,
 )
 from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
@@ -14821,12 +14822,12 @@ class _StatsPanel(QWidget):
         if rng is not None:
             lo, hi, n_cur = rng
             total_ns = hi - lo
-            span_str = _format_time(total_ns, trace.time_scale)
+            span_str = _format_time_trim(total_ns, trace.time_scale)
             scope_title = f" (C1–C{n_cur})"
             scope_type = f"C1–C{n_cur} · {span_str}"
         else:
             total_ns = trace.time_max - trace.time_min
-            span_str = _format_time(total_ns, trace.time_scale)
+            span_str = _format_time_trim(total_ns, trace.time_scale)
             scope_title = ""
             scope_type = "Full Trace"
             n_cur = 0
@@ -14862,7 +14863,7 @@ class _StatsPanel(QWidget):
         tick = _tick_health_report(trace, lo, hi)
 
         def _esc(v: object) -> str:
-            return html.escape(str(v), quote=True)
+            return html.escape(_trim_time_pad(v), quote=True)
 
         sched_kpi = ""
         if ctx_count > 0 or core_gaps:
@@ -14875,9 +14876,9 @@ class _StatsPanel(QWidget):
             if core_gaps:
                 sched_kpi += (
                     f"<article class=\"kpi\"><div class=\"k\">Core gap avg{_esc(scope_title)}</div>"
-                    f"<div class=\"v\">{_esc(_format_time(gap_avg, trace.time_scale))}</div></article>"
+                    f"<div class=\"v\">{_esc(_format_time_trim(gap_avg, trace.time_scale))}</div></article>"
                     f"<article class=\"kpi\"><div class=\"k\">Core gap max{_esc(scope_title)}</div>"
-                    f"<div class=\"v\">{_esc(_format_time(gap_max, trace.time_scale))}</div></article>"
+                    f"<div class=\"v\">{_esc(_format_time_trim(gap_max, trace.time_scale))}</div></article>"
                 )
 
         def _render_stats_table(title: str,
@@ -14935,9 +14936,9 @@ class _StatsPanel(QWidget):
 
         if tick["tick_count"]:
             tick_gap_body = "".join(
-                f"<tr><td>{_esc(_format_time(s, trace.time_scale))}</td>"
-                f"<td>{_esc(_format_time(e, trace.time_scale))}</td>"
-                f"<td>{_esc(_format_time(d, trace.time_scale))}</td><td>{missed}</td></tr>"
+                f"<tr><td>{_esc(_format_time_trim(s, trace.time_scale))}</td>"
+                f"<td>{_esc(_format_time_trim(e, trace.time_scale))}</td>"
+                f"<td>{_esc(_format_time_trim(d, trace.time_scale))}</td><td>{missed}</td></tr>"
                 for s, e, d, missed in tick["large_gaps"]
             ) or '<tr><td colspan="4" class="empty">No large gaps</td></tr>'
             tick_health_html = f"""
@@ -14949,8 +14950,8 @@ class _StatsPanel(QWidget):
         <tr><td>Mode</td><td>{'TICKLESS' if tick['is_tickless'] else 'TICK'}</td></tr>
         <tr><td>Interval CV</td><td>{tick['tick_cv'] * 100.0:.2f}%</td></tr>
         <tr><td>Ticks</td><td>{tick['tick_count']:,}</td></tr>
-        <tr><td>Avg period</td><td>{_esc(_format_time(tick['avg_period'], trace.time_scale))}</td></tr>
-        <tr><td>Max gap</td><td>{_esc(_format_time(tick['max_gap'], trace.time_scale))}</td></tr>
+        <tr><td>Avg period</td><td>{_esc(_format_time_trim(tick['avg_period'], trace.time_scale))}</td></tr>
+        <tr><td>Max gap</td><td>{_esc(_format_time_trim(tick['max_gap'], trace.time_scale))}</td></tr>
         <tr><td>Missed ticks (est.)</td><td>{tick['missed_estimate']}</td></tr>
       </tbody>
     </table>
@@ -14974,8 +14975,8 @@ class _StatsPanel(QWidget):
             seg_count = sum(1 for s in trace.segments if _seg_overlaps_range(s, lo, hi))
             range_note = (
                 f"<li><strong>Cursor range:</strong> C1–C{n_cur}, "
-                f"{_esc(_format_time(lo, trace.time_scale))} … "
-                f"{_esc(_format_time(hi, trace.time_scale))}. "
+                f"{_esc(_format_time_trim(lo, trace.time_scale))} … "
+                f"{_esc(_format_time_trim(hi, trace.time_scale))}. "
                 f"CPU% uses overlapping active time; slice metrics use segments fully inside the range.</li>"
             )
         else:
@@ -15026,7 +15027,7 @@ class _StatsPanel(QWidget):
             ) or '<tr><td colspan="8" class="empty">No mutex/sem activity in scope</td></tr>'
             issue_body = "".join(
                 f"<tr><td>{_esc(i.get('obj_key') or '—')}</td>"
-                f"<td>{_esc(_format_time(i['time_ns'], trace.time_scale))}</td>"
+                f"<td>{_esc(_format_time_trim(i['time_ns'], trace.time_scale))}</td>"
                 f"<td>{_esc(i.get('detail', ''))}</td>"
                 f"<td class=\"{_sev_class(i.get('severity', ''))}\">{_esc(i.get('kind', ''))}</td>"
                 f"<td>{_esc(i.get('task_label') or '—')}</td>"
@@ -15115,10 +15116,10 @@ class _StatsPanel(QWidget):
         lc_rows_html = _task_lifecycle_rows(trace, lo, hi)
         lc_body = "".join(
             f"<tr><td>{_esc(label)}</td>"
-            f"<td>{_esc(_format_time(cns, ts)) if cns is not None else '—'}</td>"
-            f"<td>{_esc(_format_time(dns, ts)) if dns is not None else '—'}</td>"
+            f"<td>{_esc(_format_time_trim(cns, ts)) if cns is not None else '—'}</td>"
+            f"<td>{_esc(_format_time_trim(dns, ts)) if dns is not None else '—'}</td>"
             f"<td>{nsus}/{nres}</td>"
-            f"<td>{_esc(_format_time(alive, ts)) if alive else '—'}</td>"
+            f"<td>{_esc(_format_time_trim(alive, ts)) if alive else '—'}</td>"
             f"<td>{nev}</td><td>{nruns}</td></tr>"
             for mk, label, cns, dns, nsus, nres, alive, nev, nruns in lc_rows_html
         ) or '<tr><td colspan="7" class="empty">No lifecycle events</td></tr>'
@@ -15132,7 +15133,7 @@ class _StatsPanel(QWidget):
         pair_rows_html = _core_pair_rows(trace, lo, hi)
         pair_body = "".join(
             f"<tr><td>{_esc(fc)}</td><td>{_esc(tc)}</td><td>{cnt}</td><td>{bnc}</td>"
-            f"<td>{100.0*bnc/cnt:.1f}%</td><td>{_esc(_format_time(avg_gap, ts))}</td></tr>"
+            f"<td>{100.0*bnc/cnt:.1f}%</td><td>{_esc(_format_time_trim(avg_gap, ts))}</td></tr>"
             for fc, tc, cnt, bnc, avg_gap in pair_rows_html
         ) or '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
         _pair_cores = []
@@ -15175,7 +15176,7 @@ class _StatsPanel(QWidget):
 
         cc_rows_html = _concurrent_core_active_rows(trace, lo, hi)
         cc_body = "".join(
-            f"<tr><td>{n}</td><td>{_esc(_format_time(dur, ts))}</td>"
+            f"<tr><td>{n}</td><td>{_esc(_format_time_trim(dur, ts))}</td>"
             f"<td>{pct:.1f}%</td></tr>"
             for n, dur, pct in cc_rows_html
         ) or '<tr><td colspan="3" class="empty">No data</td></tr>'
@@ -15189,15 +15190,15 @@ class _StatsPanel(QWidget):
         sw_rows_html = _switch_overhead_rows(trace, lo, hi)
         sw_body = "".join(
             f"<tr><td>{_esc(core)}</td><td>{n_sw}</td>"
-            f"<td>{_esc(_format_time(mn, ts))}</td><td>{_esc(_format_time(avg, ts))}</td>"
-            f"<td>{_esc(_format_time(mx, ts))}</td><td>{_esc(_format_time(total, ts))}</td>"
+            f"<td>{_esc(_format_time_trim(mn, ts))}</td><td>{_esc(_format_time_trim(avg, ts))}</td>"
+            f"<td>{_esc(_format_time_trim(mx, ts))}</td><td>{_esc(_format_time_trim(total, ts))}</td>"
             f"<td>{pct:.2f}%</td></tr>"
             for core, n_sw, mn, avg, mx, total, pct in sw_rows_html
         ) or '<tr><td colspan="7" class="empty">No data</td></tr>'
         sw_agg = _switch_overhead_aggregate(sw_rows_html)
         sw_note = (
             f'<p class="detail-note">Total: {sw_agg["switches"]:,} switches · '
-            f'{_esc(_format_time(sw_agg["overhead_ns"], ts))} scheduler overhead '
+            f'{_esc(_format_time_trim(sw_agg["overhead_ns"], ts))} scheduler overhead '
             f'across {sw_agg["cores"]} core(s) · {sw_agg["mean_pct"]:.2f}% of core '
             f'time on average.</p>'
             if sw_agg["cores"] else ""
@@ -15332,13 +15333,13 @@ class _StatsPanel(QWidget):
         _per_rows = analyze_task_periods(_ux_evs, 3)
         _per_body = "".join(
             f"<tr><td>{_esc(r.get('task') or '')}</td><td>{r.get('n') or 0}</td>"
-            f"<td>{_esc(_format_time(int(r.get('expected_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('min_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('avg_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('p95_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('p99_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('rms_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('expected_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('min_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('avg_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('p95_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('p99_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('rms_ns') or 0), trace.time_scale))}</td>"
             f"<td>{float(r.get('cv') or 0) * 100:.1f}%</td>"
             f"<td>{r.get('missed') or 0}</td><td>{r.get('extra') or 0}</td>"
             f"<td>{r.get('burst') or 0}</td>"
@@ -15358,10 +15359,10 @@ class _StatsPanel(QWidget):
             self._task_deadlines_ns,
         )
         _an_body = "".join(
-            f"<tr><td>{_esc(_format_time(int(r.get('start') or 0), trace.time_scale))}</td>"
+            f"<tr><td>{_esc(_format_time_trim(int(r.get('start') or 0), trace.time_scale))}</td>"
             f"<td>{_esc(KIND_LABEL.get(str(r.get('kind') or ''), str(r.get('kind') or '')))}</td>"
             f"<td>{_esc(r.get('task') or '')}</td>"
-            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('duration') or 0), trace.time_scale))}</td>"
             f"<td>{_esc(r.get('reason') or '')}</td></tr>"
             for r in _an_rows
         ) or '<tr><td colspan="5" class="empty">No timeline anomalies in this scope</td></tr>'
@@ -15372,10 +15373,10 @@ class _StatsPanel(QWidget):
         )
         _woe_rows = collect_worst_events(_ux_evs, 12)
         _woe_body = "".join(
-            f"<tr><td>{_esc(_format_time(int(r.get('start') or 0), trace.time_scale))}</td>"
+            f"<tr><td>{_esc(_format_time_trim(int(r.get('start') or 0), trace.time_scale))}</td>"
             f"<td>{_esc(KIND_LABEL.get(str(r.get('kind') or ''), str(r.get('kind') or '')))}</td>"
             f"<td>{_esc(r.get('task') or '')}</td>"
-            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('duration') or 0), trace.time_scale))}</td>"
             f"<td>{_esc(r.get('reason') or KIND_LABEL.get(str(r.get('kind') or ''), ''))}</td></tr>"
             for r in _woe_rows
         ) or '<tr><td colspan="5" class="empty">No episodes in this scope</td></tr>'
@@ -15400,7 +15401,7 @@ class _StatsPanel(QWidget):
                     cell = _wo_cells.get(f"{w.get('mk')}|{o.get('mk')}") or {}
                     ns = int(cell.get("ns") or 0)
                     cells_html.append(
-                        f"<td>{_esc(_format_time(ns, trace.time_scale))}</td>" if ns
+                        f"<td>{_esc(_format_time_trim(ns, trace.time_scale))}</td>" if ns
                         else "<td>—</td>"
                     )
                 _wo_lines.append(
@@ -15421,15 +15422,15 @@ class _StatsPanel(QWidget):
         _rt_rows = analyze_response_times(_ux_evs).get("rows") or []
         _rt_body = "".join(
             f"<tr><td>{_esc(r.get('task') or '')}</td><td>{r.get('n') or 0}</td>"
-            f"<td>{_esc(_format_time(int(r.get('min_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('avg_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('p50_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('p90_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('p95_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('p99_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('p999_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('min_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('avg_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('p50_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('p90_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('p95_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('p99_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('p999_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('jitter_ns') or 0), trace.time_scale))}</td>"
             f"<td>{float(r.get('cv') or 0) * 100:.1f}%</td></tr>"
             for r in _rt_rows
         ) or '<tr><td colspan="12" class="empty">Need at least one on-CPU slice</td></tr>'
@@ -15446,12 +15447,12 @@ class _StatsPanel(QWidget):
         _cp_rows = critical_path_rows(_ux_evs, 8)
         _cp_body = "".join(
             f"<tr><td>{_esc(r.get('task') or '')}</td>"
-            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('exec_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(max(0, int(r.get('duration') or 0) - int(r.get('exec_ns') or 0)), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('preempt_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('wait_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('migration_ns') or 0), trace.time_scale))}</td></tr>"
+            f"<td>{_esc(_format_time_trim(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('exec_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(max(0, int(r.get('duration') or 0) - int(r.get('exec_ns') or 0)), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('preempt_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('wait_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('migration_ns') or 0), trace.time_scale))}</td></tr>"
             for r in _cp_rows
         ) or '<tr><td colspan="7" class="empty">Need at least one on-CPU slice</td></tr>'
         crit_note = (
@@ -15471,7 +15472,7 @@ class _StatsPanel(QWidget):
             f"<tr><td>{_esc(r.get('task') or '')}</td>"
             f"<td>{_esc(KIND_LABEL.get(str(r.get('kind') or ''), str(r.get('kind') or '')))}</td>"
             f"<td>{r.get('count') or 0}</td>"
-            f"<td>{_esc(_format_time(int(r.get('duration') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('duration') or 0), trace.time_scale))}</td>"
             f"<td>{_esc(r.get('reason') or '')}</td></tr>"
             for r in _pat_rows
         ) or '<tr><td colspan="5" class="empty">No repeating anomaly kinds in this scope</td></tr>'
@@ -15491,17 +15492,17 @@ class _StatsPanel(QWidget):
         _jit_rows = unified_jitter(_ux_evs, self._dispatch_sample_map(trace, lo, hi))
         _jit_body = "".join(
             f"<tr><td>{_esc(r.get('task') or '')}</td>"
-            f"<td>{_esc(_format_time(int(r.get('exec_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('exec_jitter_ns') or 0), trace.time_scale))}</td>"
             f"<td>{float(r.get('exec_cv') or 0) * 100:.1f}%</td>"
-            f"<td>{_esc(_format_time(int(r.get('block_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('block_jitter_ns') or 0), trace.time_scale))}</td>"
             f"<td>{float(r.get('block_cv') or 0) * 100:.1f}%</td>"
-            f"<td>{_esc(_format_time(int(r.get('inter_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('inter_jitter_ns') or 0), trace.time_scale))}</td>"
             f"<td>{float(r.get('inter_cv') or 0) * 100:.1f}%</td>"
-            f"<td>{_esc(_format_time(int(r.get('response_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('response_jitter_ns') or 0), trace.time_scale))}</td>"
             f"<td>{float(r.get('response_cv') or 0) * 100:.1f}%</td>"
-            f"<td>{_esc(_format_time(int(r.get('dispatch_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('dispatch_jitter_ns') or 0), trace.time_scale))}</td>"
             f"<td>{float(r.get('dispatch_cv') or 0) * 100:.1f}%</td>"
-            f"<td>{_esc(_format_time(int(r.get('wakeup_jitter_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('wakeup_jitter_ns') or 0), trace.time_scale))}</td>"
             f"<td>{float(r.get('wakeup_cv') or 0) * 100:.1f}%</td></tr>"
             for r in _jit_rows
         ) or '<tr><td colspan="13" class="empty">No timing samples in this scope</td></tr>'
@@ -15516,8 +15517,8 @@ class _StatsPanel(QWidget):
         _pm_rows = preemptor_ranking(preemption_pairs(_ux_evs), 16)
         _pm_body = "".join(
             f"<tr><td>{_esc(r.get('task') or '')}</td><td>{r.get('count') or 0}</td>"
-            f"<td>{_esc(_format_time(int(r.get('total_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('total_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('max_ns') or 0), trace.time_scale))}</td>"
             f"<td>{_esc(r.get('top_label') or '')}</td></tr>"
             for r in _pm_rows
         ) or '<tr><td colspan="5" class="empty">No preemption overlaps in this scope</td></tr>'
@@ -15531,8 +15532,8 @@ class _StatsPanel(QWidget):
         _mb_body = "".join(
             f"<tr><td>{_esc(r.get('task') or '')}</td><td>{_esc(r.get('object') or '')}</td>"
             f"<td>{_esc(r.get('owner') or '')}</td><td>{r.get('count') or 0}</td>"
-            f"<td>{_esc(_format_time(int(r.get('total_ns') or 0), trace.time_scale))}</td>"
-            f"<td>{_esc(_format_time(int(r.get('max_ns') or 0), trace.time_scale))}</td></tr>"
+            f"<td>{_esc(_format_time_trim(int(r.get('total_ns') or 0), trace.time_scale))}</td>"
+            f"<td>{_esc(_format_time_trim(int(r.get('max_ns') or 0), trace.time_scale))}</td></tr>"
             for r in _mb_rows
         ) or '<tr><td colspan="6" class="empty">No mutex waits in this scope</td></tr>'
         mutex_block_html = (
@@ -15545,7 +15546,7 @@ class _StatsPanel(QWidget):
         _ct_cores = _ct.get("cores") or []
         _ct_head = "<th>Time</th>" + "".join(f"<th>{_esc(c)}</th>" for c in _ct_cores)
         _ct_body = "".join(
-            "<tr><td>" + _esc(_format_time(int(r.get("start") or 0), trace.time_scale)) + "</td>"
+            "<tr><td>" + _esc(_format_time_trim(int(r.get("start") or 0), trace.time_scale)) + "</td>"
             + "".join(
                 f"<td>{float(((r.get('cells') or {}).get(c) or {}).get('pct') or 0):.1f}%</td>"
                 for c in _ct_cores
@@ -15553,7 +15554,7 @@ class _StatsPanel(QWidget):
             for r in (_ct.get("bins") or [])
         ) or f'<tr><td colspan="{len(_ct_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
         _ct_heat = html_matrix_heatmap(
-            [_format_time(int(r.get("start") or 0), trace.time_scale) for r in (_ct.get("bins") or [])],
+            [_format_time_trim(int(r.get("start") or 0), trace.time_scale) for r in (_ct.get("bins") or [])],
             _ct_cores,
             [
                 [float(((r.get("cells") or {}).get(c) or {}).get("pct") or 0) for c in _ct_cores]
@@ -15622,7 +15623,7 @@ class _StatsPanel(QWidget):
              "value": f"{util_lo:.1f}–{util_hi:.1f}%",
              "hint": "Wall-clock span, one-core = 100%"},
             {"label": "Worst response P99",
-             "value": (_format_time(int(worst_rt.get("p99_ns") or 0), trace.time_scale)
+             "value": (_format_time_trim(int(worst_rt.get("p99_ns") or 0), trace.time_scale)
                        if worst_rt else "—"),
              "hint": str(worst_rt.get("task") or "") if worst_rt else ""},
             {"label": "Migration activity", "value": f"{mig_total:,}",
@@ -15667,8 +15668,8 @@ class _StatsPanel(QWidget):
             f'{_esc(" · ".join(_v_bits))}{_v_tail}</p>'
         )
 
-        start_s = _format_time(lo if lo is not None else trace.time_min, trace.time_scale)
-        end_s = _format_time(hi if hi is not None else trace.time_max, trace.time_scale)
+        start_s = _format_time_trim(lo if lo is not None else trace.time_min, trace.time_scale)
+        end_s = _format_time_trim(hi if hi is not None else trace.time_max, trace.time_scale)
         sample_note = ""
         if exec_rows and all(int(r[2]) < 8 for r in exec_rows):
             sample_note = (
@@ -15698,7 +15699,7 @@ class _StatsPanel(QWidget):
         )
         evidence_refs = evidence_refs_from_findings(
             analysis_findings,
-            format_ns=lambda ns: _format_time(int(ns), trace.time_scale),
+            format_ns=lambda ns: _format_time_trim(int(ns), trace.time_scale),
         )
         evidence_refs_html = html_evidence_refs_card(evidence_refs)
         meta_html = html_trace_metadata_card(
@@ -15707,8 +15708,8 @@ class _StatsPanel(QWidget):
             segments=seg_count,
             sti_events=sti_count,
             context_switches=ctx_count,
-            core_gap_avg=_format_time(int(round(sum(core_gaps) / len(core_gaps))), trace.time_scale) if core_gaps else "",
-            core_gap_max=_format_time(max(core_gaps), trace.time_scale) if core_gaps else "",
+            core_gap_avg=_format_time_trim(int(round(sum(core_gaps) / len(core_gaps))), trace.time_scale) if core_gaps else "",
+            core_gap_max=_format_time_trim(max(core_gaps), trace.time_scale) if core_gaps else "",
             scope_title=scope_title,
         )
         glossary_html = html_glossary(range_note=range_note)

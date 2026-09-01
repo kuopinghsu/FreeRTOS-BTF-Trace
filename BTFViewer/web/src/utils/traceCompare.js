@@ -863,14 +863,24 @@ export function buildSyncCompareRows(traceA, traceB, tabA = null, tabB = null, s
   ]
 }
 
+// Drop fixed-decimal padding from a formatted time (`945.000 µs` -> `945 µs`);
+// leaves `3.292 ms` and non-time strings alone. Mirrors parser.py::_trim_time_pad.
+const _TIME_PAD_RE = /^(-?\d+)\.(\d+)( (?:ns|us|µs|μs|ms|s))$/
+function trimTimePad(v) {
+  const m = String(v ?? '').match(_TIME_PAD_RE)
+  if (!m) return String(v ?? '')
+  const frac = m[2].replace(/0+$/, '')
+  return frac ? `${m[1]}.${frac}${m[3]}` : `${m[1]}${m[3]}`
+}
+
 function csvCell(v) {
-  const s = String(v ?? '')
+  const s = trimTimePad(v)
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
   return s
 }
 
 function htmlCell(v) {
-  return String(v ?? '')
+  return trimTimePad(v)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

@@ -5855,8 +5855,25 @@ class _SafeCsvWriter:
             self.writerow(row)
 
 
+_TIME_PAD_RE = re.compile(r"(-?\d+)\.(\d+)( (?:ns|us|µs|μs|ms|s))")
+
+
+def _trim_time_pad(v: object) -> str:
+    """Drop fixed-decimal padding from an already-formatted time string.
+
+    ``945.000 µs`` -> ``945 µs``; ``3.292 ms`` and any non ``<number> <unit>``
+    string are returned unchanged. Safe to run on every report/table cell.
+    """
+    s = str(v)
+    m = _TIME_PAD_RE.fullmatch(s)
+    if not m:
+        return s
+    frac = m.group(2).rstrip("0")
+    return f"{m.group(1)}.{frac}{m.group(3)}" if frac else f"{m.group(1)}{m.group(3)}"
+
+
 def _compare_csv_cell(v: object) -> str:
-    s = str(_csv_sanitize_cell(v))
+    s = _trim_time_pad(_csv_sanitize_cell(v))
     if any(c in s for c in '",\n\r'):
         return '"' + s.replace('"', '""') + '"'
     return s
@@ -6172,7 +6189,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         )
 
     def _esc(v: object) -> str:
-        return html.escape(str(v), quote=True)
+        return html.escape(_trim_time_pad(v), quote=True)
 
     def _rows_html(rows: List[List], cols: int, empty: str) -> str:
         if not rows:
