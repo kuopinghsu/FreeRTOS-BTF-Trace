@@ -1,7 +1,0 @@
-Step 7: check whether execution follows the firmware settings.
-
-Open Core Affinity. Mask lists the cores allowed for a task. Observed Cores lists the cores where the task actually ran. Violations lists any core outside the mask. In this trace, all affinity tasks stay within their masks, so Violations is empty.
-
-Next, open Task Lifecycle. Tasks SR0 through SR3 each have four suspends and four resumes. Select SR0 and confirm that it does not run between a suspend and the matching resume. Runs counts scheduler dispatches, so it can be much higher than four. This is normal.
-
-You can set deadline thresholds under Settings, Display, Analysis thresholds. The values use nanoseconds.

@@ -71,10 +71,10 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         self.assertLess(body1.index("<clear_annotations/>"), body1.index("<audio"))
         self.assertIn('target="stats_summary"', body1)
         # Find step must not hop to Statistics after the query.
-        step16 = re.search(
-            r'<step id="16".*?</step>', xml, re.S)
-        self.assertIsNotNone(step16)
-        body = step16.group(0)
+        step_find = re.search(
+            r'<step id="17".*?</step>', xml, re.S)
+        self.assertIsNotNone(step_find)
+        body = step_find.group(0)
         self.assertIn("<find", body)
         self.assertNotIn("<click", body)
         self.assertNotIn("stats_tab", body)
@@ -157,16 +157,16 @@ class DemoXmlUsesApiTests(unittest.TestCase):
 
     def test_analysis_step_moves_to_toolbar_icon(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
-        step8 = re.search(r'<step id="8".*?</step>', xml, re.S)
-        self.assertIsNotNone(step8)
-        body = step8.group(0)
+        step_analysis = re.search(r'<step id="9".*?</step>', xml, re.S)
+        self.assertIsNotNone(step_analysis)
+        body = step_analysis.group(0)
         self.assertLess(body.index('target="rail_analysis"'), body.index("<analysis/>"))
 
     def test_health_step_opens_tick_distribution(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
-        step9 = re.search(r'<step id="9".*?</step>', xml, re.S)
-        self.assertIsNotNone(step9)
-        body = step9.group(0)
+        step_health = re.search(r'<step id="8".*?</step>', xml, re.S)
+        self.assertIsNotNone(step_health)
+        body = step_health.group(0)
         self.assertLess(body.index('target="stats_health"'), body.index('id="health"'))
         self.assertLess(body.index('id="health"'), body.index('target="stats_tick_dist"'))
         self.assertLess(body.index('target="stats_tick_dist"'), body.index("<tick_dist/>"))
@@ -174,16 +174,16 @@ class DemoXmlUsesApiTests(unittest.TestCase):
 
     def test_find_step_moves_to_find_tab(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
-        step16 = re.search(r'<step id="16".*?</step>', xml, re.S)
-        self.assertIsNotNone(step16)
-        body = step16.group(0)
+        step_find = re.search(r'<step id="17".*?</step>', xml, re.S)
+        self.assertIsNotNone(step_find)
+        body = step_find.group(0)
         self.assertLess(body.index('target="find_tab"'), body.index("<find "))
 
     def test_export_step_moves_to_html_button(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
-        step17 = re.search(r'<step id="17".*?</step>', xml, re.S)
-        self.assertIsNotNone(step17)
-        body = step17.group(0)
+        step_export = re.search(r'<step id="18".*?</step>', xml, re.S)
+        self.assertIsNotNone(step_export)
+        body = step_export.group(0)
         self.assertIn('<panel name="stats"/>', body)
         self.assertLess(
             body.index('<panel name="stats"/>'),
@@ -192,9 +192,9 @@ class DemoXmlUsesApiTests(unittest.TestCase):
 
     def test_ai_setup_step_moves_to_ai_tab(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
-        step18 = re.search(r'<step id="18".*?</step>', xml, re.S)
-        self.assertIsNotNone(step18)
-        body = step18.group(0)
+        step_ai_setup = re.search(r'<step id="19".*?</step>', xml, re.S)
+        self.assertIsNotNone(step_ai_setup)
+        body = step_ai_setup.group(0)
         self.assertLess(body.index('target="ai_tab"'), body.index('<panel name="ai"/>'))
 
     def test_cursors_step_fits_then_zooms_out_clears_highlight_then_tab_navs(self) -> None:

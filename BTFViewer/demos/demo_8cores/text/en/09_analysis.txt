@@ -1,0 +1,5 @@
+Open Analysis from the activity rail.
+
+This card lists findings for the current Statistics scope. Each finding has a severity. Findings can cover load, long execution slices, blocking, migrations, tick health, or synchronization-object bounces. When two or more cores are active it also shows the Load Balance Score.
+
+Findings are not a separate Statistics section. Each one names the section to check next. Read every finding, not only the first. Open the section it points to, then click a Max value, a chart point, or a heatmap cell to move the timeline to the evidence. Confirm the evidence before you ask AI to explain it.

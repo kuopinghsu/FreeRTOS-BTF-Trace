@@ -1,7 +1,0 @@
-Step 11: explain one test phase instead of the full trace.
-
-Place two cursors around the priority-inversion window, from about 3.085 to 3.310 seconds. Enable Limit to C1–Cn, then select Explain region. BTFViewer includes the cursor bounds in the prompt, so every jump:TIME link should stay inside this window.
-
-If a link points outside the cursors, it is outside the current scope. Do not use it as evidence. Confirm that Limit to C1–Cn is enabled, create new findings for this scope, and ask AI again.
-
-After the investigation, you can create a diagnostic report from the AI tab. After a firmware change, record a new trace and use Compare. The full beginner workflow is: find evidence, start an investigation, verify every jump:TIME link, and use Explain region within C1–Cn.

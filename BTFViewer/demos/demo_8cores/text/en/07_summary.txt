@@ -1,3 +1,3 @@
-Open Statistics. The sections follow a diagnostic order: trace health, scope, load balance, CPU execution, latency, and concurrency.
+Open Statistics. The sections follow a diagnostic order: trace health, scope, load balance, CPU execution, latency, concurrency, and configuration compliance.
 
-This trace contains eight cores, about 31,000 execution slices, and measurements for priorities, mutexes, queues, and intervals. It also contains several test phases. Treat warnings as investigation clues, not confirmed defects. First limit the analysis to one phase, then check each warning in order.
+This trace has eight cores and about 31,400 execution slices, with instrumentation for priorities, mutexes, queues, and intervals. It also contains several test phases. Treat every warning as an investigation clue, not a confirmed defect. First limit the analysis to one phase, then check each warning in order.

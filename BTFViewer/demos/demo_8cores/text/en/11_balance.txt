@@ -1,5 +1,5 @@
 Step 3: check whether the cores share the work evenly.
 
-Open Core Utilization. The cores are about 57% to 75% busy. The Load Balance Score is 95%, and the spread, or sigma, is about 6%. Load imbalance is therefore not the main issue.
+Open Core Utilization. Across the full trace the cores run about 57 to 75 percent busy. The Load Balance Score is 95 percent, and the spread, sigma, is about 6 percent. Load imbalance is not the main problem here.
 
-Next, check Core Time Breakdown, Concurrent Core Active, and Kernel Switch Overhead. Similar core utilization does not always mean low overhead. Frequent task migrations can keep the cores balanced while adding extra cost.
+Next read Core Time Breakdown, Concurrent Core Active, and Kernel Switch Overhead. All eight cores are active together for about 34 percent of the span, and switch overhead is about 3 percent per core. Similar utilization does not mean low cost: frequent migrations can keep the cores balanced while still adding overhead.

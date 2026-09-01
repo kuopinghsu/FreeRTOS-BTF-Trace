@@ -1,7 +1,7 @@
 Step 5: check latency inside the priority-inversion window.
 
-Blocking Time measures how long a task stays off the CPU before it runs again. In this window, task High[268] waits up to about 53 milliseconds. Low and Medium wait about 35 to 40 milliseconds. You can ignore Runner because it sleeps between test phases by design.
+Blocking Time measures how long a task stays off the CPU between runs. In this window High[268] waits up to about 53 milliseconds. Low[266] waits up to about 67 milliseconds and Medium up to about 35. Ignore Runner, which sleeps between phases by design.
 
-Blocking Time is not the same as end-to-end response time. Dispatch measures the delay from task creation or resume to its first switch-in. Preemption Chain shows which task preempted another task. Priority Inheritance shows temporary priority changes caused by a mutex. Look for the red boost bar below Low.
+Blocking Time is not end-to-end response time. Dispatch measures the delay from create or resume to the first switch-in; High dispatches in about 48 microseconds once it is ready. Preemption Chain shows which task preempted which: here High preempts Medium, and Medium preempts Low. Priority Inheritance shows the temporary boost from a mutex. Low[266] is boosted from priority 2 to 4 for about 103 milliseconds; watch for the red boost bar under Low.
 
-Task PS[228] shows the classic Low, Medium, and High priority-inversion pattern. This pattern needs further design review.
+Task PS[228], just before this window, shows the same Low, Medium, High inversion pattern with a shorter boost. This pattern needs a design review.

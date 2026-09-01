@@ -1,5 +1,0 @@
-Step 8: save the results and verify the fix.
-
-HTML and CSV exports use the current cursor scope. The HTML report places Analysis Findings near the beginning. Trace Compare is on the toolbar after Analysis. It becomes available when two traces are open in separate tabs.
-
-After changing the firmware, record a new trace. Use the same cursor scope in both traces and compare the same test phase. A What-if estimate does not validate a fix. The new trace must show the improvement.

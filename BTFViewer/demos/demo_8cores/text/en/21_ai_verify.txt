@@ -1,0 +1,7 @@
+Step 11: verify the AI reply against the measurements.
+
+Click every jump-to-time link in the reply. The value is in the trace time unit, which is microseconds in this file, and the timeline moves to that point. Check the same event and metric in Statistics. If the reply disagrees with the measured data, trust the Statistics result and the timeline.
+
+The Evidence panel lists each tool, why it was called, the evidence quality, and possible contradictions. Click a completed stage to jump to its output in the log.
+
+What-if and Optimize give heuristic estimates. They are not scheduler simulations and not measured results. To test a suggested change, edit the firmware, record a new trace, and use Compare. Do not commit to a fix until the timeline supports the cause.

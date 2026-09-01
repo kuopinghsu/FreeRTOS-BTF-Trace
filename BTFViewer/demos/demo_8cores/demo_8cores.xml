@@ -14,6 +14,15 @@
   Narration: text/{lang}/*.txt → voice/{lang}/*.mp3 (see scripts/demo_voice.py)
   TTS tip: write Free-RTOS (with hyphen) so speech engines say it correctly.
   Variables: REPO, BTF, PYTHON, MOD, XML_DIR, trace, cwd (as ${name})
+
+  Structure (follows WORKFLOWS.md — find evidence, then explain):
+    01-06 orient (open, timeline, toolbar + activity rail, views, Fit)
+    07-16 Statistics ladder: health → analysis → scope → balance → WCET →
+          latency → migrations → core-migration view → compliance
+    17-18 Find / Marks / Export / Compare
+    19-22 AI for newcomers: setup, Start Investigation, verify jumps,
+          Explain region within C1-Cn
+    23    recap
 -->
 <demo name="BTFViewer demo 8cores" version="1">
 
@@ -21,9 +30,10 @@
     <title>BTFViewer demo — 8-core sample</title>
     <description>
       Screen-capture + pre-rendered TTS. Order follows WORKFLOWS.md
-      (find evidence, then explain): UI → Analysis → Health → Scope →
-      Balance → WCET → Latency → Concurrency → Compliance → Export/Compare →
-      AI for newbies (Settings, Start Investigation, verify jumps,
+      (find evidence, then explain): orient → Statistics ladder
+      (health, analysis, scope, balance, WCET, latency, migrations,
+      core-migration view, compliance) → Find/Export/Compare →
+      AI for newcomers (Settings, Start Investigation, verify jumps,
       Explain region). Trace: demo_8cores.btf.gz (frozen demo snapshot).
     </description>
     <cwd>${BTF}</cwd>
@@ -56,7 +66,7 @@
     <point name="toolbar_task" x="0.37" y="0.055"/>
     <point name="toolbar_load" x="0.43" y="0.055"/>
     <point name="toolbar_find" x="0.52" y="0.055"/>
-    <!-- Heatmap / Analysis moved to the left activity rail (shell redesign). -->
+    <!-- Heatmap / Analysis live on the left activity rail (shell redesign). -->
     <point name="rail_heatmap" x="0.017" y="0.13"/>
     <point name="rail_analysis" x="0.017" y="0.18"/>
     <point name="limit_checkbox" x="0.82" y="0.16"/>
@@ -114,7 +124,7 @@
       <show_message text="Span: 2.421 s / Tasks: 163 / Cores: 8" seconds="10"/>
     </step>
 
-    <step id="2" title="Open example-8cores" tags="intro">
+    <step id="2" title="Open trace" tags="intro">
       <focus/>
       <audio file="${XML_DIR}/voice/02_open.mp3"/>
       <move target="toolbar_open"/>
@@ -137,7 +147,7 @@
       <wait seconds="0.6"/>
     </step>
 
-    <step id="4" title="Toolbar tour" tags="ui">
+    <step id="4" title="Toolbar and activity rail" tags="ui">
       <focus/>
       <view_mode mode="task"/>
       <audio file="${XML_DIR}/voice/04_toolbar.mp3"/>
@@ -151,13 +161,12 @@
       <wait seconds="1.0" why="voice: Core view"/>
       <move target="toolbar_load"/>
       <wait seconds="2.25"/>
-      <move target="rail_heatmap"/>
-      <wait seconds="3.00"/>
       <cpu_load on="true"/>
-      <wait seconds="5.2" why="voice: Load Heatmap Chord into Analysis"/>
+      <move target="rail_heatmap"/>
+      <wait seconds="4.0" why="voice: activity rail Heatmap Analysis Compare"/>
       <move target="rail_analysis"/>
-      <wait seconds="5" why="voice: Analysis triage card"/>
-      <wait seconds="3.25"/>
+      <wait seconds="4.0" why="voice: Analysis triage card"/>
+      <wait seconds="2.0"/>
       <move target="stats_tab"/>
       <panel name="stats"/>
       <wait seconds="2.5" why="voice: right panel tabs"/>
@@ -175,7 +184,7 @@
       <wait_audio/>
     </step>
 
-    <step id="5" title="Task Core Load" tags="ui">
+    <step id="5" title="Task and Core views" tags="ui">
       <focus/>
       <audio file="${XML_DIR}/voice/05_views.mp3"/>
       <cpu_load on="true"/>
@@ -193,7 +202,7 @@
       <wait_audio/>
     </step>
 
-    <step id="6" title="Fit" tags="ui">
+    <step id="6" title="Fit first" tags="ui">
       <focus/>
       <audio file="${XML_DIR}/voice/06_fit.mp3"/>
       <move target="toolbar_1to1"/>
@@ -206,7 +215,7 @@
       <wait seconds="1.0"/>
     </step>
 
-    <step id="7" title="Statistics Summary" tags="ladder">
+    <step id="7" title="Statistics summary" tags="ladder">
       <focus/>
       <move target="stats_tab"/>
       <wait seconds="0.25"/>
@@ -219,25 +228,13 @@
       <stats_reset/>
     </step>
 
-    <step id="8" title="Analysis Findings" tags="ladder">
-      <focus/>
-      <audio file="${XML_DIR}/voice/08_analysis.mp3"/>
-      <wait seconds="2.5" why="voice: Click Analysis on the toolbar"/>
-      <move target="rail_analysis"/>
-      <wait seconds="0.25"/>
-      <analysis/>
-      <wait_audio/>
-      <analysis close="true"/>
-      <wait seconds="0.6"/>
-    </step>
-
-    <step id="9" title="Trace Health" tags="ladder">
+    <step id="8" title="Trace Health" tags="ladder">
       <focus/>
       <panel name="stats"/>
       <move target="stats_health"/>
       <wait seconds="0.25"/>
       <stats_section id="health" expand="true" collapse_others="true"/>
-      <audio file="${XML_DIR}/voice/09_tick.mp3"/>
+      <audio file="${XML_DIR}/voice/08_health.mp3"/>
       <move target="stats_tick_dist"/>
       <wait seconds="0.25"/>
       <tick_dist/>
@@ -247,9 +244,21 @@
       <stats_reset/>
     </step>
 
-    <step id="10" title="Cursors Limit C1-Cn" tags="ladder">
+    <step id="9" title="Analysis Findings" tags="ladder">
       <focus/>
-      <audio file="${XML_DIR}/voice/10_cursors.mp3"/>
+      <audio file="${XML_DIR}/voice/09_analysis.mp3"/>
+      <wait seconds="2.5" why="voice: open Analysis on the activity rail"/>
+      <move target="rail_analysis"/>
+      <wait seconds="0.25"/>
+      <analysis/>
+      <wait_audio/>
+      <analysis close="true"/>
+      <wait seconds="0.6"/>
+    </step>
+
+    <step id="10" title="Scope with cursors" tags="ladder">
+      <focus/>
+      <audio file="${XML_DIR}/voice/10_scope.mp3"/>
       <zoom_view/>
       <clear_cursors/>
       <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
@@ -285,7 +294,7 @@
       <stats_reset/>
     </step>
 
-    <step id="13" title="Blocking Inheritance" tags="ladder">
+    <step id="13" title="Blocking and inheritance" tags="ladder">
       <focus/>
       <zoom_view/>
       <clear_cursors/>
@@ -307,7 +316,7 @@
       <clear_cursors/>
     </step>
 
-    <step id="14" title="Migrations Mutex" tags="ladder">
+    <step id="14" title="Migrations and locks" tags="ladder">
       <focus/>
       <audio file="${XML_DIR}/voice/14_migrations.mp3"/>
       <limit on="false"/>
@@ -322,20 +331,33 @@
       <stats_reset/>
     </step>
 
-    <step id="15" title="Affinity Lifecycle" tags="ladder">
+    <step id="15" title="Core-migration view" tags="ladder">
+      <focus/>
+      <macro ref="fit"/>
+      <clear_cursors/>
+      <clear_highlight/>
+      <move target="rail_heatmap"/>
+      <wait seconds="0.5"/>
+      <confirm prompt="Open Migration Heatmap from the rail; show the corridor list and the core-pair grid, expand a corridor, click a cell to jump the timeline, switch to Chord, toggle Lock Bounces Only — then continue"/>
+      <audio file="${XML_DIR}/voice/15_migration_view.mp3"/>
+      <wait_audio/>
+      <confirm prompt="Close the Migration and Corridor Inspector — then continue"/>
+    </step>
+
+    <step id="16" title="Affinity and lifecycle" tags="ladder">
       <focus/>
       <panel name="stats"/>
       <stats_section id="affinity,lifecycle" expand="true" collapse_others="true" scroll="affinity"/>
       <highlight task="SR0"/>
-      <audio file="${XML_DIR}/voice/15_compliance.mp3"/>
+      <audio file="${XML_DIR}/voice/16_compliance.mp3"/>
       <wait_audio/>
       <clear_highlight/>
       <stats_reset/>
     </step>
 
-    <step id="16" title="Find" optional="true" tags="ui,optional">
+    <step id="17" title="Find and Marks" optional="true" tags="ui,optional">
       <focus/>
-      <audio file="${XML_DIR}/voice/16_find.mp3"/>
+      <audio file="${XML_DIR}/voice/17_find.mp3"/>
       <move target="find_tab"/>
       <wait seconds="0.25"/>
       <find query="CS[27]"/>
@@ -343,7 +365,7 @@
       <find clear="true"/>
     </step>
 
-    <step id="17" title="Export" tags="ui">
+    <step id="18" title="Export and Compare" tags="ui">
       <focus/>
       <zoom_view/>
       <move_view time="0"/>
@@ -352,39 +374,41 @@
       <move target="stats_export_html"/>
       <wait seconds="0.4"/>
       <confirm prompt="Point at Export HTML — then continue"/>
-      <audio file="${XML_DIR}/voice/17_export.mp3"/>
+      <audio file="${XML_DIR}/voice/18_export.mp3"/>
+      <wait_audio/>
     </step>
 
-    <step id="18" title="AI setup" tags="ai">
+    <step id="19" title="AI setup" tags="ai">
       <focus/>
       <move target="ai_tab"/>
       <wait seconds="0.25"/>
       <panel name="ai"/>
-      <audio file="${XML_DIR}/voice/18_ai_setup.mp3"/>
+      <audio file="${XML_DIR}/voice/19_ai_setup.mp3"/>
       <wait seconds="16" why="voice: open Settings AI"/>
       <settings page="AI"/>
       <wait_audio/>
       <settings close="true"/>
     </step>
 
-    <step id="19" title="AI Start Investigation" tags="ai">
+    <step id="20" title="AI Start Investigation" tags="ai">
       <focus/>
       <panel name="ai"/>
-      <audio file="${XML_DIR}/voice/19_ai_start.mp3"/>
+      <audio file="${XML_DIR}/voice/20_ai_investigate.mp3"/>
       <confirm prompt="Empty AI log: click Start Investigation (example ~20s, 11 tools); Apply cards if shown — then continue"/>
       <wait ai="true" seconds="25" why="auto investigate (~20s flash-lite example)"/>
     </step>
 
-    <step id="20" title="AI verify jumps" tags="ai">
+    <step id="21" title="AI verify jumps" tags="ai">
       <focus/>
       <panel name="ai"/>
-      <audio file="${XML_DIR}/voice/20_ai_verify.mp3"/>
+      <audio file="${XML_DIR}/voice/21_ai_verify.mp3"/>
       <confirm prompt="Click every jump:TIME in the reply and confirm it on the timeline — then continue"/>
+      <wait_audio/>
     </step>
 
-    <step id="21" title="AI Explain region" tags="ai">
+    <step id="22" title="AI Explain region" tags="ai">
       <focus/>
-      <audio file="${XML_DIR}/voice/21_ai_explain.mp3"/>
+      <audio file="${XML_DIR}/voice/22_ai_explain.mp3"/>
       <zoom_view/>
       <clear_cursors/>
       <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
@@ -395,10 +419,10 @@
       <clear_cursors/>
     </step>
 
-    <step id="22" title="Close" tags="intro">
+    <step id="23" title="Recap" tags="intro">
       <focus/>
       <macro ref="fit"/>
-      <audio file="${XML_DIR}/voice/22_close.mp3"/>
+      <audio file="${XML_DIR}/voice/23_close.mp3"/>
       <wait seconds="3" why="end hold"/>
     </step>
 

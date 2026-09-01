@@ -1,0 +1,3 @@
+Find searches for tasks, migrations, software trace events, and intervals. Marks holds your cursors, bookmarks, and notes. Legend controls colors and filters.
+
+Right-click the timeline to add a cursor, a bookmark, or a note. When you reopen the file, the session restores the zoom range, the cursors, and the marks.

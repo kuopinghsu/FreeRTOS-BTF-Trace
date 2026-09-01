@@ -1,5 +1,0 @@
-Click Analysis on the toolbar.
-
-This dialog shows findings for the current Statistics scope. Each finding has a severity level. Findings may cover load, long execution slices, blocking, migrations, tick health, or synchronization-object bounces. When at least two cores are active, the dialog also shows the Load Balance Score.
-
-Findings are not a separate Statistics section. Each finding tells you which section to check next. Read every finding, not only the first one. Open the suggested section, then click a Max value, chart point, or heatmap cell to move the timeline to the evidence. Confirm the evidence before asking AI to explain it.

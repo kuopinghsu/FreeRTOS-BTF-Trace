@@ -1,1 +1,1 @@
-Start every analysis with two checks. Is the recorded time range useful? Are you viewing the full trace? Click Fit, or use its shortcut, to show the complete trace in the timeline.
+Start every analysis with two checks. Is the recorded time range useful? Are you viewing the whole trace? Click Fit, or press its shortcut, to show the complete trace in the timeline before you read any number.

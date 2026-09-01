@@ -1050,12 +1050,12 @@ describe('demo_8cores.xml', () => {
     const summaryMove = summaryKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_summary')
     assert.ok(statsMove >= 0 && statsPanel > statsMove)
     assert.ok(summaryMove > statsPanel)
-    const analysis = demo.steps.find(s => s.id === '8')
+    const analysis = demo.steps.find(s => s.id === '9')
     const analysisKids = analysis.children
     const moveIdx = analysisKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'rail_analysis')
     const openIdx = analysisKids.findIndex(c => c.tag === 'analysis' && c.attrib.close !== 'true')
     assert.ok(moveIdx >= 0 && openIdx > moveIdx)
-    const health = demo.steps.find(s => s.id === '9')
+    const health = demo.steps.find(s => s.id === '8')
     const healthKids = health.children
     const healthMove = healthKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_health')
     const healthOpen = healthKids.findIndex(c => c.tag === 'stats_section' && String(c.attrib.id || '').includes('health'))
@@ -1064,12 +1064,12 @@ describe('demo_8cores.xml', () => {
     const tickClose = healthKids.findIndex(c => c.tag === 'tick_dist' && c.attrib.close === 'true')
     assert.ok(healthMove >= 0 && healthOpen > healthMove)
     assert.ok(tickMove > healthOpen && tickOpen > tickMove && tickClose > tickOpen)
-    const findStep = demo.steps.find(s => s.id === '16')
+    const findStep = demo.steps.find(s => s.id === '17')
     const findKids = findStep.children
     const findMove = findKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'find_tab')
     const findOpen = findKids.findIndex(c => c.tag === 'find' && c.attrib.query)
     assert.ok(findMove >= 0 && findOpen > findMove)
-    const exportStep = demo.steps.find(s => s.id === '17')
+    const exportStep = demo.steps.find(s => s.id === '18')
     const exportKids = exportStep.children
     const statsIdx = exportKids.findIndex(c => c.tag === 'panel' && c.attrib.name === 'stats')
     const exportMove = exportKids.findIndex(c => c.tag === 'move' && c.attrib.target === 'stats_export_html')

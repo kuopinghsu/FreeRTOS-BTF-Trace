@@ -1,7 +1,5 @@
-Clear the cursors to return to the full trace. Step 6 checks concurrency: migrations, heatmaps, locks, and priority inheritance.
+Clear the cursors and return to the full trace. Step 6 checks concurrency: migrations, locks, and priority inheritance.
 
-Task CS[18] migrates about 1,560 times per second. Its average time on each core is about 0.5 milliseconds, and its ping-pong count is high. This is migration thrashing, but it does not by itself prove lock contention. Common causes include task affinity or too many similar worker tasks. A lock bounce is different: it occurs when a task moves to another core while it still owns a lock.
+The trace has about 19,000 migrations. Task CS[18] migrates about 1,560 times per second, its average dwell on a core is about half a millisecond, and its ping-pong count is high. This is migration thrashing. It does not by itself prove lock contention; common causes are task affinity or many similar worker tasks. A lock bounce is different: it is when a task moves to another core while it still holds a lock.
 
-In Task View, lock the highlight on CS[18]. With Load enabled, the chart shows the task's CPU share on each core. Heatmap and Chord use the visible time range, so adjust the range first. Use Lock Bounces Only when checking mutex movement.
-
-Next, open Mutex and Queue. One mutex has 864 holds and 9 cross-core bounces, so its status is Warning. The queue has a stronger signal: 858 of 864 holds moved across cores while still held, although its status may still be OK. Check each warning on the timeline before deciding whether it is a real defect or only cleanup activity.
+In Task View, lock the highlight on CS[18]. With Load enabled, the chart shows its CPU share on each core. Then open Mutex and Queue. One mutex has 864 holds and 9 cross-core bounces, so its status is Warning. One queue has a stronger signal: 858 of its 864 holds moved across cores while still held, though its status may still read OK. Check each warning on the timeline before you call it a defect or just cleanup activity.
