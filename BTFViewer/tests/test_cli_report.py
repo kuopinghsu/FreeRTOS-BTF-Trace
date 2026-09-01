@@ -79,6 +79,27 @@ class CliReportTests(unittest.TestCase):
         self.assertTrue((self.tmp / "r.html").is_file())
         self.assertTrue((self.tmp / "r.csv").is_file())
 
+    def test_json_report_snapshot(self) -> None:
+        import json
+        out = self.tmp / "r.json"
+        rc = _cli_report_run(_args(str(self.trace), str(out), "json"))
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.is_file())
+        d = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual(d["schema"], "btf-viewer-stats/1")
+        self.assertEqual(d["trace_file"], "mini.btf")
+        self.assertIn("summary", d)
+        self.assertIn("tasks", d["summary"])
+        self.assertIsInstance(d["findings"], list)
+        self.assertIsInstance(d["core_utilisation"], list)
+        self.assertEqual(d["scope"]["type"], "full")
+
+    def test_json_report_inferred_from_extension(self) -> None:
+        out = self.tmp / "auto.json"
+        rc = _cli_report_run(_args(str(self.trace), str(out), None))
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.is_file())
+
     def test_scoped_report_labels_cursor_range(self) -> None:
         out = self.tmp / "s.csv"
         args = _args(str(self.trace), str(out), "csv")

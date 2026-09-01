@@ -16551,6 +16551,109 @@ class _StatsPanel(QWidget):
             else:
                 writer.writerow(["No tag data", "", "", "", "", "", ""])
 
+    def write_statistics_json_report(self, path: str) -> None:
+        """Machine-readable statistics snapshot (CI diffing, dashboards).
+
+        Not the whole report — the headline metrics, the Analysis Findings,
+        and the top rows of the sections most useful to compare run-to-run.
+        """
+        trace = self._trace
+        if trace is None:
+            raise ValueError("no trace loaded")
+        rng = self._stats_range()
+        lo = hi = None
+        n_cur = 0
+        if rng is not None:
+            lo, hi, n_cur = rng
+        ts = trace.time_scale
+
+        core_rows = self._core_util_rows(trace, lo, hi)
+        exec_rows = self._exec_slice_rows_export(trace, lo, hi)
+        task_rows = self._task_cpu_rows(trace, lo=lo, hi=hi)
+        block_rows = self._blocking_time_rows_export(trace, lo, hi)
+        mig_rows = _migration_rows(trace, lo, hi)
+        sync_rows = _sync_object_stats_rows(trace, lo, hi)
+        tick = _tick_health_report(trace, lo, hi)
+        try:
+            findings, _ = self.build_analysis_findings()
+        except Exception:
+            findings = []
+
+        _u2ns = {"ns": 1.0, "us": 1e3, "µs": 1e3, "μs": 1e3, "ms": 1e6, "s": 1e9}
+
+        def _t2ns(s: object) -> float:
+            parts = str(s).split()
+            if len(parts) != 2:
+                return 0.0
+            try:
+                return float(parts[0]) * _u2ns.get(parts[1], 0.0)
+            except ValueError:
+                return 0.0
+
+        def _top_by(rows: list, max_idx: int, n: int = 10) -> list:
+            return sorted(rows, key=lambda r: _t2ns(r[max_idx]), reverse=True)[:n]
+
+        payload = {
+            "schema": "btf-viewer-stats/1",
+            "generator": f"BTFViewer {_APP_VERSION}",
+            "generated": datetime.datetime.now(datetime.timezone.utc)
+            .isoformat(timespec="seconds"),
+            "trace_file": self._resolve_export_trace_name(),
+            "time_scale": ts,
+            "scope": {
+                "type": f"C1-C{n_cur}" if rng is not None else "full",
+                "lo": lo,
+                "hi": hi,
+            },
+            "summary": _trace_summary_snapshot(trace, lo, hi),
+            "tick_health": {
+                "status": tick.get("health"),
+                "mode": "tickless" if tick.get("is_tickless") else "tick",
+                "cv": tick.get("tick_cv"),
+                "avg_period_ns": tick.get("avg_period"),
+                "max_gap_ns": tick.get("max_gap"),
+                "missed_estimate": tick.get("missed_estimate"),
+                "tick_count": tick.get("tick_count"),
+            },
+            "findings": [
+                {
+                    "severity": f.get("severity", "info"),
+                    "id": f.get("id") or "",
+                    "title": f.get("title", ""),
+                    "text": f.get("text", ""),
+                }
+                for f in findings
+            ],
+            "core_utilisation": [
+                {"core": c, "pct": round(p, 2)} for c, p in core_rows
+            ],
+            "top_tasks_cpu": [
+                {"task": r[1], "pct": round(float(r[2]), 2)} for r in task_rows[:10]
+            ],
+            "exec_slice_max": [
+                {"task": r[1], "runs": r[2], "max": r[7]}
+                for r in _top_by(list(exec_rows), 7)
+            ],
+            "blocking_max": [
+                {"task": r[1], "gaps": r[2], "max": r[6]}
+                for r in _top_by(list(block_rows), 6)
+            ],
+            "migrations_top": [
+                {"task": r[1], "migrations": r[2], "dwell": r[4] if len(r) > 4 else None}
+                for r in mig_rows[:10]
+            ],
+            "sync_objects": [
+                {"object": r[3], "kind": r[1], "holds": r[4], "issues": r[5],
+                 "bounces": r[10] if len(r) > 10 else 0,
+                 "bounce_pct": r[11] if len(r) > 11 else 0.0,
+                 "status": r[8]}
+                for r in sync_rows
+            ],
+        }
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True, default=str)
+            fh.write("\n")
+
     def clear_trace(self) -> None:
         """Empty Statistics when no trace tab is open (welcome / close-all)."""
         self.clear_plot_session()

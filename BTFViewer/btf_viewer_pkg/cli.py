@@ -482,16 +482,16 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     report.add_argument(
         "-o", "--output", required=True, metavar="PATH",
         help=(
-            "output path: .html or .csv file, or a stem when --format both "
+            "output path: .html / .csv / .json file, or a stem when --format both "
             "(writes stem.html and stem.csv)"
         ),
     )
     report.add_argument(
-        "--format", choices=("html", "csv", "both"), default=None,
+        "--format", choices=("html", "csv", "json", "both"), default=None,
         metavar="FMT",
         help=(
-            "output format: html, csv, or both (default: infer from -o extension, "
-            "else html)"
+            "output format: html, csv, json (machine-readable snapshot), or "
+            "both html+csv (default: infer from -o extension, else html)"
         ),
     )
     report.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
@@ -922,29 +922,36 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "ai-test": ai_test,
     }
 
-def _cli_export_output_paths(output: str, fmt: Optional[str]) -> Tuple[str, str, str]:
-    """Return (format, html_path, csv_path) for the report subcommand."""
+def _cli_export_output_paths(
+    output: str, fmt: Optional[str],
+) -> Tuple[str, str, str, str]:
+    """Return (format, html_path, csv_path, json_path) for the report subcommand."""
     low = output.lower()
     if fmt is None:
         if low.endswith(".csv"):
             fmt = "csv"
+        elif low.endswith(".json"):
+            fmt = "json"
         elif low.endswith(".html") or low.endswith(".htm"):
             fmt = "html"
         else:
             fmt = "html"
     if fmt == "html":
         html_path = output if low.endswith((".html", ".htm")) else f"{output}.html"
-        return fmt, html_path, ""
+        return fmt, html_path, "", ""
     if fmt == "csv":
         csv_path = output if low.endswith(".csv") else f"{output}.csv"
-        return fmt, "", csv_path
+        return fmt, "", csv_path, ""
+    if fmt == "json":
+        json_path = output if low.endswith(".json") else f"{output}.json"
+        return fmt, "", "", json_path
     # both
     root, ext = os.path.splitext(output)
-    if ext.lower() in (".html", ".htm", ".csv"):
+    if ext.lower() in (".html", ".htm", ".csv", ".json"):
         stem = root
     else:
         stem = output
-    return fmt, f"{stem}.html", f"{stem}.csv"
+    return fmt, f"{stem}.html", f"{stem}.csv", ""
 
 def _cli_report_run(args: argparse.Namespace) -> int:
     trace_path = os.path.abspath(args.trace)
@@ -958,7 +965,8 @@ def _cli_report_run(args: argparse.Namespace) -> int:
         print("error: --hi must be greater than --lo", file=sys.stderr)
         return 1
 
-    fmt, html_path, csv_path = _cli_export_output_paths(args.output, args.format)
+    fmt, html_path, csv_path, json_path = _cli_export_output_paths(
+        args.output, args.format)
 
     try:
         trace = _parse_btf(trace_path)
@@ -991,6 +999,9 @@ def _cli_report_run(args: argparse.Namespace) -> int:
         if fmt in ("csv", "both"):
             panel.write_statistics_csv_report(csv_path)
             written.append(csv_path)
+        if fmt == "json":
+            panel.write_statistics_json_report(json_path)
+            written.append(json_path)
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -1032,7 +1043,8 @@ def _cli_compare_run(args: argparse.Namespace) -> int:
         trace_a, trace_b, lo_a, hi_a, lo_b, hi_b,
         row_limit=None, top_limit=None)
 
-    fmt, html_path, csv_path = _cli_export_output_paths(args.output, args.format)
+    fmt, html_path, csv_path, _json_path = _cli_export_output_paths(
+        args.output, args.format)
     written: List[str] = []
     try:
         if fmt in ("html", "both"):
