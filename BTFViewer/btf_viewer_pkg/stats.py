@@ -15812,9 +15812,9 @@ class _StatsPanel(QWidget):
                 if raw:
                     filters_csv = raw
             writer.writerow(["Filters", filters_csv])
+            # `Scope` already carries the C1–Cn window and its span; do not
+            # repeat it as a separate "Cursor range" row.
             writer.writerow([f"Span{scope_suffix}", _us(span_str)])
-            if scope_suffix:
-                writer.writerow(["Cursor range", scope_suffix.strip(" ()")])
             writer.writerow(["Tasks", task_count])
             writer.writerow(["Segments", seg_count])
             writer.writerow(["STI Events", sti_count])
@@ -15823,6 +15823,30 @@ class _StatsPanel(QWidget):
                 gap_avg = int(round(sum(core_gaps) / len(core_gaps)))
                 writer.writerow([f"Core gap avg{scope_suffix}", _us(_format_time(gap_avg, trace.time_scale))])
                 writer.writerow([f"Core gap max{scope_suffix}", _us(_format_time(max(core_gaps), trace.time_scale))])
+
+            writer.writerow([])
+            writer.writerow([f"Analysis Findings{scope_suffix}"])
+            writer.writerow(["#", "Severity", "Finding", "Detail", "Evidence"])
+            try:
+                _csv_findings, _ = self.build_analysis_findings()
+            except Exception:
+                _csv_findings = []
+            if _csv_findings:
+                for _fi, _f in enumerate(_csv_findings, 1):
+                    _f_ev = "; ".join(
+                        f"{(e.get('label') or 'event')} @ {e.get('time')}"
+                        for e in (_f.get("evidence") or [])
+                        if isinstance(e, dict) and e.get("time") is not None
+                    )
+                    writer.writerow([
+                        _fi,
+                        str(_f.get("severity", "info")).upper(),
+                        _f.get("title", "Finding"),
+                        _us(str(_f.get("text", ""))),
+                        _f_ev,
+                    ])
+            else:
+                writer.writerow(["", "", "No findings for the current scope", "", ""])
 
             writer.writerow([])
             writer.writerow([f"Core Utilisation (excl. IDLE/TICK){scope_suffix}"])
@@ -16095,6 +16119,11 @@ class _StatsPanel(QWidget):
 
             writer.writerow([])
             writer.writerow([f"Critical Path{scope_suffix}"])
+            writer.writerow([
+                "Note",
+                "Preempt, Wait and Migration overlap (Wait includes preemption "
+                "gaps); these columns do not sum to Duration.",
+            ])
             writer.writerow(["Task", "Duration", "Exec", "Preempt", "Wait", "Mig", "Other"])
             _cp_csv = critical_path_rows(_ux_evs_csv, 8)
             if _cp_csv:

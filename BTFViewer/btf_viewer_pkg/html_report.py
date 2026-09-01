@@ -542,16 +542,6 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
 (function () {
   var PAGE = 20;
   function textOf(el) { return (el && (el.textContent || '')).replace(/\\s+/g, ' ').trim(); }
-  function csvEscape(v) { return /[",\\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
-  function downloadCsv(name, rows) {
-    var csv = rows.map(function (r) { return r.map(csvEscape).join(','); }).join('\\n');
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 500);
-  }
   function parseVal(s) {
     s = String(s || '').trim();
     if (!s || s === '—' || s === '-') return NaN;
@@ -583,13 +573,28 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
       + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
       + '<span class="table-count"></span>';
     wrap.insertBefore(bar, scroll);
+    var PGBTN = 'font:inherit;font-size:12px;padding:2px 9px;border:1px solid var(--line,#d9e0ea);'
+      + 'border-radius:6px;background:#f1f5fb;color:inherit;cursor:pointer;';
+    var pager = document.createElement('div');
+    pager.className = 'table-pager';
+    pager.style.cssText = 'display:none;gap:8px;align-items:center;margin-top:6px;'
+      + 'font-size:12px;color:var(--muted,#5f6f82);';
+    pager.innerHTML = '<button type="button" data-pg="prev" style="' + PGBTN + '">\\u2039 Prev</button>'
+      + '<span data-pg="label"></span>'
+      + '<button type="button" data-pg="next" style="' + PGBTN + '">Next \\u203a</button>';
+    wrap.appendChild(pager);
+    var pgPrev = pager.querySelector('[data-pg="prev"]');
+    var pgNext = pager.querySelector('[data-pg="next"]');
+    var pgLabel = pager.querySelector('[data-pg="label"]');
+    var headTxt = Array.prototype.map.call(
+      table.tHead.rows[0].cells, function (th) { return th.textContent; });
     var q = '', problems = false, showAll = rows.length <= PAGE, sortCol = -1, sortDir = 1, page = 0;
     Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
       th.tabIndex = 0;
       th.classList.add('sortable');
       th.addEventListener('click', function () {
         if (sortCol === i) sortDir = -sortDir; else { sortCol = i; sortDir = 1; }
-        apply();
+        page = 0; apply();
       });
     });
     function apply() {
@@ -606,6 +611,14 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
           return cmp * sortDir;
         });
       }
+      Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
+        var on = i === sortCol;
+        th.textContent = headTxt[i] + (on ? (sortDir > 0 ? ' \\u25b2' : ' \\u25bc') : '');
+        th.setAttribute('aria-sort', on ? (sortDir > 0 ? 'ascending' : 'descending') : 'none');
+      });
+      var pages = showAll ? 1 : Math.max(1, Math.ceil(filtered.length / PAGE));
+      if (page > pages - 1) page = pages - 1;
+      if (page < 0) page = 0;
       rows.forEach(function (tr) { tr.style.display = 'none'; });
       var start = showAll ? 0 : page * PAGE;
       var vis = showAll ? filtered : filtered.slice(start, start + PAGE);
@@ -614,7 +627,19 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
       count.textContent = filtered.length === rows.length
         ? (vis.length < filtered.length ? vis.length + ' of ' + filtered.length : filtered.length + ' rows')
         : vis.length + ' of ' + filtered.length + ' (filtered)';
+      if (!showAll && filtered.length > PAGE) {
+        pager.style.display = 'flex';
+        pgLabel.textContent = 'Page ' + (page + 1) + ' / ' + pages;
+        pgPrev.disabled = page <= 0;
+        pgNext.disabled = page >= pages - 1;
+        pgPrev.style.opacity = pgPrev.disabled ? '0.4' : '1';
+        pgNext.style.opacity = pgNext.disabled ? '0.4' : '1';
+      } else {
+        pager.style.display = 'none';
+      }
     }
+    pgPrev.addEventListener('click', function () { if (page > 0) { page -= 1; apply(); } });
+    pgNext.addEventListener('click', function () { page += 1; apply(); });
     bar.querySelector('.table-search').addEventListener('input', function (e) {
       q = String(e.target.value || '').toLowerCase(); page = 0; apply();
     });

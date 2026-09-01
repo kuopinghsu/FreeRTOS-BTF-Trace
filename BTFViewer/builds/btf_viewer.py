@@ -2708,16 +2708,6 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
 (function () {
   var PAGE = 20;
   function textOf(el) { return (el && (el.textContent || '')).replace(/\\s+/g, ' ').trim(); }
-  function csvEscape(v) { return /[",\\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
-  function downloadCsv(name, rows) {
-    var csv = rows.map(function (r) { return r.map(csvEscape).join(','); }).join('\\n');
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 500);
-  }
   function parseVal(s) {
     s = String(s || '').trim();
     if (!s || s === '—' || s === '-') return NaN;
@@ -2749,13 +2739,28 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
       + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
       + '<span class="table-count"></span>';
     wrap.insertBefore(bar, scroll);
+    var PGBTN = 'font:inherit;font-size:12px;padding:2px 9px;border:1px solid var(--line,#d9e0ea);'
+      + 'border-radius:6px;background:#f1f5fb;color:inherit;cursor:pointer;';
+    var pager = document.createElement('div');
+    pager.className = 'table-pager';
+    pager.style.cssText = 'display:none;gap:8px;align-items:center;margin-top:6px;'
+      + 'font-size:12px;color:var(--muted,#5f6f82);';
+    pager.innerHTML = '<button type="button" data-pg="prev" style="' + PGBTN + '">\\u2039 Prev</button>'
+      + '<span data-pg="label"></span>'
+      + '<button type="button" data-pg="next" style="' + PGBTN + '">Next \\u203a</button>';
+    wrap.appendChild(pager);
+    var pgPrev = pager.querySelector('[data-pg="prev"]');
+    var pgNext = pager.querySelector('[data-pg="next"]');
+    var pgLabel = pager.querySelector('[data-pg="label"]');
+    var headTxt = Array.prototype.map.call(
+      table.tHead.rows[0].cells, function (th) { return th.textContent; });
     var q = '', problems = false, showAll = rows.length <= PAGE, sortCol = -1, sortDir = 1, page = 0;
     Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
       th.tabIndex = 0;
       th.classList.add('sortable');
       th.addEventListener('click', function () {
         if (sortCol === i) sortDir = -sortDir; else { sortCol = i; sortDir = 1; }
-        apply();
+        page = 0; apply();
       });
     });
     function apply() {
@@ -2772,6 +2777,14 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
           return cmp * sortDir;
         });
       }
+      Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
+        var on = i === sortCol;
+        th.textContent = headTxt[i] + (on ? (sortDir > 0 ? ' \\u25b2' : ' \\u25bc') : '');
+        th.setAttribute('aria-sort', on ? (sortDir > 0 ? 'ascending' : 'descending') : 'none');
+      });
+      var pages = showAll ? 1 : Math.max(1, Math.ceil(filtered.length / PAGE));
+      if (page > pages - 1) page = pages - 1;
+      if (page < 0) page = 0;
       rows.forEach(function (tr) { tr.style.display = 'none'; });
       var start = showAll ? 0 : page * PAGE;
       var vis = showAll ? filtered : filtered.slice(start, start + PAGE);
@@ -2780,7 +2793,19 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
       count.textContent = filtered.length === rows.length
         ? (vis.length < filtered.length ? vis.length + ' of ' + filtered.length : filtered.length + ' rows')
         : vis.length + ' of ' + filtered.length + ' (filtered)';
+      if (!showAll && filtered.length > PAGE) {
+        pager.style.display = 'flex';
+        pgLabel.textContent = 'Page ' + (page + 1) + ' / ' + pages;
+        pgPrev.disabled = page <= 0;
+        pgNext.disabled = page >= pages - 1;
+        pgPrev.style.opacity = pgPrev.disabled ? '0.4' : '1';
+        pgNext.style.opacity = pgNext.disabled ? '0.4' : '1';
+      } else {
+        pager.style.display = 'none';
+      }
     }
+    pgPrev.addEventListener('click', function () { if (page > 0) { page -= 1; apply(); } });
+    pgNext.addEventListener('click', function () { page += 1; apply(); });
     bar.querySelector('.table-search').addEventListener('input', function (e) {
       q = String(e.target.value || '').toLowerCase(); page = 0; apply();
     });
@@ -69552,9 +69577,9 @@ class _StatsPanel(QWidget):
                 if raw:
                     filters_csv = raw
             writer.writerow(["Filters", filters_csv])
+            # `Scope` already carries the C1–Cn window and its span; do not
+            # repeat it as a separate "Cursor range" row.
             writer.writerow([f"Span{scope_suffix}", _us(span_str)])
-            if scope_suffix:
-                writer.writerow(["Cursor range", scope_suffix.strip(" ()")])
             writer.writerow(["Tasks", task_count])
             writer.writerow(["Segments", seg_count])
             writer.writerow(["STI Events", sti_count])
@@ -69563,6 +69588,30 @@ class _StatsPanel(QWidget):
                 gap_avg = int(round(sum(core_gaps) / len(core_gaps)))
                 writer.writerow([f"Core gap avg{scope_suffix}", _us(_format_time(gap_avg, trace.time_scale))])
                 writer.writerow([f"Core gap max{scope_suffix}", _us(_format_time(max(core_gaps), trace.time_scale))])
+
+            writer.writerow([])
+            writer.writerow([f"Analysis Findings{scope_suffix}"])
+            writer.writerow(["#", "Severity", "Finding", "Detail", "Evidence"])
+            try:
+                _csv_findings, _ = self.build_analysis_findings()
+            except Exception:
+                _csv_findings = []
+            if _csv_findings:
+                for _fi, _f in enumerate(_csv_findings, 1):
+                    _f_ev = "; ".join(
+                        f"{(e.get('label') or 'event')} @ {e.get('time')}"
+                        for e in (_f.get("evidence") or [])
+                        if isinstance(e, dict) and e.get("time") is not None
+                    )
+                    writer.writerow([
+                        _fi,
+                        str(_f.get("severity", "info")).upper(),
+                        _f.get("title", "Finding"),
+                        _us(str(_f.get("text", ""))),
+                        _f_ev,
+                    ])
+            else:
+                writer.writerow(["", "", "No findings for the current scope", "", ""])
 
             writer.writerow([])
             writer.writerow([f"Core Utilisation (excl. IDLE/TICK){scope_suffix}"])
@@ -69835,6 +69884,11 @@ class _StatsPanel(QWidget):
 
             writer.writerow([])
             writer.writerow([f"Critical Path{scope_suffix}"])
+            writer.writerow([
+                "Note",
+                "Preempt, Wait and Migration overlap (Wait includes preemption "
+                "gaps); these columns do not sum to Duration.",
+            ])
             writer.writerow(["Task", "Duration", "Exec", "Preempt", "Wait", "Mig", "Other"])
             _cp_csv = critical_path_rows(_ux_evs_csv, 8)
             if _cp_csv:
