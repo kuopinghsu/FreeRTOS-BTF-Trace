@@ -968,6 +968,7 @@ def _cli_report_run(args: argparse.Namespace) -> int:
 
     panel = _StatsPanel.__new__(_StatsPanel)
     panel._trace = trace
+    panel._export_trace_path = trace_path
     panel._export_scope_override = None
     panel._scope_to_cursors = False
     panel._cursor_times = []
@@ -981,6 +982,10 @@ def _cli_report_run(args: argparse.Namespace) -> int:
     written: List[str] = []
     try:
         if fmt in ("html", "both"):
+            # The HTML report renders SVG charts and measures text, which needs
+            # a QGuiApplication. Headless CLI commands dispatch before the GUI
+            # bootstrap, so create one here (idempotent — reuses any instance).
+            _bootstrap_qt_app()
             panel.write_statistics_html_report(html_path)
             written.append(html_path)
         if fmt in ("csv", "both"):

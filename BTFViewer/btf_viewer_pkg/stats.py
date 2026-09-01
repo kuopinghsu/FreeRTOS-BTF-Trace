@@ -14763,6 +14763,25 @@ class _StatsPanel(QWidget):
         findings = self._append_exec_anomaly_findings(findings, trace, lo, hi)
         return findings, scope_title
 
+    def _resolve_export_trace_name(self) -> str:
+        """Best-effort trace filename for report headers.
+
+        GUI: the active tab's path. Headless CLI (``report`` command): the panel
+        is built via ``__new__`` with no window, so ``self.window()`` can raise
+        under newer shiboken — fall back to ``_export_trace_path`` set by the CLI.
+        """
+        try:
+            wnd = self.window()
+        except (RuntimeError, AttributeError):
+            wnd = None
+        tab = getattr(wnd, "_active_tab", None) if wnd is not None else None
+        for cand in (getattr(tab, "path", None),
+                     getattr(self, "_export_trace_path", None)):
+            name = os.path.basename(str(cand or "")).strip()
+            if name:
+                return name
+        return "trace"
+
     def write_statistics_html_report(self, path: str) -> None:
         trace = self._trace
         if trace is None:
@@ -14784,9 +14803,7 @@ class _StatsPanel(QWidget):
             scope_type = "Full Trace"
             n_cur = 0
 
-        wnd = self.window()
-        tab = getattr(wnd, "_active_tab", None) if wnd is not None else None
-        trace_name = os.path.basename(str(getattr(tab, "path", "") or "")) or "trace"
+        trace_name = self._resolve_export_trace_name()
 
         if lo is not None and hi is not None:
             sti_count = sum(
@@ -15739,6 +15756,8 @@ class _StatsPanel(QWidget):
             total_ns = trace.time_max - trace.time_min
             span_str = _format_time(total_ns, trace.time_scale)
         span_str = span_str.replace("µs", "us").replace("μs", "us")
+        trace_name = self._resolve_export_trace_name()
+        scope_type = f"C1–C{n_cur} · {span_str}" if rng is not None else "Full Trace"
 
         if lo is not None and hi is not None:
             sti_count = sum(
