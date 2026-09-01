@@ -3770,6 +3770,31 @@
         </svg>
         Export HTML
       </button>
+      <button
+        class="action-btn"
+        data-demo-target="stats_export_json"
+        :disabled="!trace"
+        title="Export a machine-readable statistics snapshot (report --format json parity)"
+        @click="exportJson"
+      >
+        <svg
+          class="export-icon"
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.2"
+          aria-hidden="true"
+        >
+          <path
+            d="M6 2.5C4.5 2.5 4 3 4 4.5v1C4 7 3.5 7.5 2.5 8 3.5 8.5 4 9 4 10.5v1C4 13 4.5 13.5 6 13.5M10 2.5c1.5 0 2 .5 2 2v1c0 1.5.5 2 1.5 2.5-1 .5-1.5 1-1.5 2.5v1c0 1.5-.5 2-2 2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        Export JSON
+      </button>
     </div>
   </div>
 
@@ -4352,7 +4377,7 @@ import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
 import { EVIDENCE_GLYPH, EVIDENCE_TOOLTIP, resolveTimestampEvidence } from '../utils/evidenceNav.js'
 import { migrationRows, buildCorePairRows, summarizeMigrations, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints, pairGapPlotPoints, pairRatePlotPoints, pairPlotKey, pairMigrations, pairBouncePrefer, buildLockBounceNsSet } from '../utils/migrationAnalysis.js'
 import { dispatchLatencyRows, switchOverheadRows, concurrentCoreActiveRows, dispatchLatencyPlotPoints, switchOverheadPlotPoints, concurrencyLevelPlotPoints, collectDispatchLatencyByMk } from '../utils/schedulerSmpMetrics.js'
-import { coreUtilPctRows } from '../utils/traceCompare.js'
+import { coreUtilPctRows, traceSummarySnapshot } from '../utils/traceCompare.js'
 import { renderWorkflowAnalysisHtml, collectTraceAnalysisFindings } from '../utils/workflowAnalysis.js'
 import { capStatsTableRows } from '../utils/statsLoad.js'
 import {
@@ -4416,7 +4441,7 @@ import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggl
 import { buildHistogramModel, histogramBarTooltip } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
-import { btfHtmlReportDocument, htmlApplyCollapsibleToc, htmlMakeCollapsibleSections, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, HTML_REPORT_INTERACTIVE_SCRIPT } from '../utils/htmlReport.js'
+import { btfHtmlReportDocument, htmlApplyCollapsibleToc, htmlMakeCollapsibleSections, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, HTML_REPORT_INTERACTIVE_SCRIPT, APP_VERSION } from '../utils/htmlReport.js'
 import {
   STATS_DEFAULT_EXPANDED,
   STATS_HTML_EXTRA_CSS,
@@ -8214,6 +8239,125 @@ function exportHtml() {
   const finalHtml = htmlApplyCollapsibleToc(html, STATS_DEFAULT_EXPANDED, STATS_TOC_GROUPS)
   _exportAnonFn = v => v
   _downloadText(`statistics-${_stamp()}.html`, finalHtml, 'text/html;charset=utf-8')
+}
+
+// ---- Machine-readable statistics snapshot (desktop `report --format json`) ----
+// Mirrors btf_viewer_pkg/stats.py :: write_statistics_json_report — headline
+// metrics + Analysis Findings + the top rows of the run-to-run comparable
+// sections, with the same "btf-viewer-stats/1" schema and snake_case keys.
+const _JSON_U2NS = { ns: 1, us: 1e3, 'µs': 1e3, 'μs': 1e3, ms: 1e6, s: 1e9 }
+
+function _jsonT2ns(s) {
+  const parts = String(s).trim().split(/\s+/)
+  if (parts.length !== 2) return 0
+  const n = parseFloat(parts[0])
+  return Number.isFinite(n) ? n * (_JSON_U2NS[parts[1]] || 0) : 0
+}
+
+function _jsonTopByTime(rows, key, n = 10) {
+  return [...rows].sort((a, b) => _jsonT2ns(b[key]) - _jsonT2ns(a[key])).slice(0, n)
+}
+
+function _summarySnake(s) {
+  if (!s) return null
+  return {
+    span_ns: s.spanNs,
+    tasks: s.tasks,
+    segments: s.segments,
+    sti_events: s.stiEvents,
+    context_switches: s.contextSwitches,
+    gap_avg_ns: s.gapAvgNs,
+    gap_max_ns: s.gapMaxNs,
+    migrations: s.migrations,
+    migrated_tasks: s.migratedTasks,
+    time_scale: s.timeScale,
+    load_balance_score: s.loadBalanceScore,
+    load_balance_sigma: s.loadBalanceSigma,
+    tick_health: s.tickHealth,
+    tick_mode: s.tickMode,
+    tick_count: s.tickCount,
+    missed_ticks: s.missedTicks,
+  }
+}
+
+function _sortKeysDeep(value) {
+  if (Array.isArray(value)) return value.map(_sortKeysDeep)
+  if (value && typeof value === 'object') {
+    const out = {}
+    for (const k of Object.keys(value).sort()) out[k] = _sortKeysDeep(value[k])
+    return out
+  }
+  return value
+}
+
+function buildStatsJson(tr, range, anon) {
+  const anonFn = buildExportAnonymizer(tr, anon)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const coreRows = _coreUtilRows(tr, range)
+  const taskRows = _taskCpuRows(tr, range)
+  const execRows = _execSliceRowsForReport(tr, range)
+  const blockRows = _blockingRowsForReport(tr, range)
+  const migRows = migrationRows(tr, lo, hi)
+  const syncRows = syncObjectStatsRows(tr, lo, hi)
+  const tick = tickHealthReport(tr, lo, hi)
+  const findings = (analysisFindings.value || [])
+  const tab = (props.tabs || []).find(t => t.trace === tr)
+
+  const payload = {
+    schema: 'btf-viewer-stats/1',
+    generator: `BTFViewer ${APP_VERSION}`,
+    generated: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+    trace_file: tab?.name || 'trace',
+    time_scale: tr.timeScale,
+    scope: {
+      type: range ? `C1-C${range.nCursors}` : 'full',
+      lo,
+      hi,
+    },
+    summary: _summarySnake(traceSummarySnapshot(tr, lo, hi)),
+    tick_health: {
+      status: tick.health,
+      mode: tick.isTickless ? 'tickless' : 'tick',
+      cv: tick.tickCv,
+      avg_period_ns: tick.avgPeriod,
+      max_gap_ns: tick.maxGap,
+      missed_estimate: tick.missedTicksEstimate,
+      tick_count: tick.tickCount,
+    },
+    findings: findings.map(f => ({
+      severity: f.severity || 'info',
+      id: f.id || '',
+      title: anon ? anonFn(f.title || '') : (f.title || ''),
+      text: anon ? anonFn(f.text || '') : (f.text || ''),
+    })),
+    core_utilisation: coreRows.map(r => ({ core: r.core, pct: Math.round(Number(r.pct) * 100) / 100 })),
+    top_tasks_cpu: taskRows.slice(0, 10).map(r => ({
+      task: anon ? anonFn(r.name) : r.name,
+      pct: Math.round(Number(r.pct) * 100) / 100,
+    })),
+    exec_slice_max: _jsonTopByTime(execRows, 'max').map(r => ({
+      task: anon ? anonFn(r.name) : r.name, runs: r.runs, max: r.max,
+    })),
+    blocking_max: _jsonTopByTime(blockRows, 'max').map(r => ({
+      task: anon ? anonFn(r.name) : r.name, gaps: r.runs, max: r.max,
+    })),
+    migrations_top: migRows.slice(0, 10).map(r => ({
+      task: anon ? anonFn(r.name) : r.name, migrations: r.migrations, dwell: r.avgDwell ?? null,
+    })),
+    sync_objects: syncRows.map(r => ({
+      object: r.ptr, kind: r.kind, holds: r.holdCount, issues: r.issueCount,
+      bounces: r.bounceCount ?? 0, bounce_pct: r.bouncePct ?? 0, status: r.status,
+    })),
+  }
+  return JSON.stringify(_sortKeysDeep(payload), null, 2) + '\n'
+}
+
+function exportJson() {
+  const tr = props.trace
+  if (!tr) return
+  const text = buildStatsJson(tr, statsRange.value, exportAnon.value)
+  _downloadText(`statistics-${_stamp()}.json`, text, 'application/json;charset=utf-8')
 }
 
 // ---- Range statistics (from 2+ cursor positions) -----------------------

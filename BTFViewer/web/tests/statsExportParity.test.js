@@ -28,6 +28,16 @@ describe('mutex/queue export parity with desktop', () => {
     assert.match(stats, /class="stats-export-anon"/)
   })
 
+  it('offers Export JSON (desktop `report --format json` parity)', () => {
+    assert.match(stats, /Export JSON/)
+    assert.match(stats, /@click="exportJson"/)
+    assert.match(stats, /function buildStatsJson\(/)
+    assert.match(stats, /schema: 'btf-viewer-stats\/1'/)
+    assert.match(stats, /traceSummarySnapshot/)
+    assert.match(stats, /_summarySnake/)
+    assert.match(stats, /data-demo-target="stats_export_json"/)
+  })
+
   it('scroll tail stays 0 at rest unless pin-scroll (desktop lockstep)', () => {
     assert.match(stats, /let scrollTailPinActive = false/)
     assert.match(stats, /function updateScrollTailHeight\(forPin = false\)/)
