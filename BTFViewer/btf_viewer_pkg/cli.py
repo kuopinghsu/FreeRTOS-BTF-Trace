@@ -491,11 +491,12 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="replace task names with stable Task-N aliases (shareable report)",
     )
     report.add_argument(
-        "--format", choices=("html", "csv", "json", "both"), default=None,
+        "--format", choices=("html", "csv", "json", "both", "all"), default=None,
         metavar="FMT",
         help=(
-            "output format: html, csv, json (machine-readable snapshot), or "
-            "both html+csv (default: infer from -o extension, else html)"
+            "output format: html, csv, json (machine-readable snapshot), "
+            "both (html+csv), or all (html+csv+json) "
+            "(default: infer from -o extension, else html)"
         ),
     )
     report.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
@@ -949,13 +950,13 @@ def _cli_export_output_paths(
     if fmt == "json":
         json_path = output if low.endswith(".json") else f"{output}.json"
         return fmt, "", "", json_path
-    # both
+    # both (html+csv) / all (html+csv+json)
     root, ext = os.path.splitext(output)
     if ext.lower() in (".html", ".htm", ".csv", ".json"):
         stem = root
     else:
         stem = output
-    return fmt, f"{stem}.html", f"{stem}.csv", ""
+    return fmt, f"{stem}.html", f"{stem}.csv", (f"{stem}.json" if fmt == "all" else "")
 
 def _cli_report_run(args: argparse.Namespace) -> int:
     trace_path = os.path.abspath(args.trace)
@@ -994,17 +995,17 @@ def _cli_report_run(args: argparse.Namespace) -> int:
 
     written: List[str] = []
     try:
-        if fmt in ("html", "both"):
+        if fmt in ("html", "both", "all"):
             # The HTML report renders SVG charts and measures text, which needs
             # a QGuiApplication. Headless CLI commands dispatch before the GUI
             # bootstrap, so create one here (idempotent — reuses any instance).
             _bootstrap_qt_app()
             panel.write_statistics_html_report(html_path)
             written.append(html_path)
-        if fmt in ("csv", "both"):
+        if fmt in ("csv", "both", "all"):
             panel.write_statistics_csv_report(csv_path)
             written.append(csv_path)
-        if fmt == "json":
+        if fmt in ("json", "all"):
             panel.write_statistics_json_report(json_path)
             written.append(json_path)
     except (OSError, ValueError) as exc:

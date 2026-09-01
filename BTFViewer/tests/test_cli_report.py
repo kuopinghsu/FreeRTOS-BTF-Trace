@@ -80,6 +80,14 @@ class CliReportTests(unittest.TestCase):
         self.assertTrue((self.tmp / "r.html").is_file())
         self.assertTrue((self.tmp / "r.csv").is_file())
 
+    def test_all_formats(self) -> None:
+        stem = self.tmp / "everything"
+        rc = _cli_report_run(_args(str(self.trace), str(stem), "all"))
+        self.assertEqual(rc, 0)
+        self.assertTrue((self.tmp / "everything.html").is_file())
+        self.assertTrue((self.tmp / "everything.csv").is_file())
+        self.assertTrue((self.tmp / "everything.json").is_file())
+
     def test_json_report_snapshot(self) -> None:
         import json
         out = self.tmp / "r.json"
