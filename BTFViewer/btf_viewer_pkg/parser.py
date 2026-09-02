@@ -753,12 +753,110 @@ def _interval_overlaps_range(inst: "IntervalInstance",
         return True
     return inst.stop_ns > lo and inst.start_ns < hi
 
+
+def _nearest_rank_index(n: int, p: float) -> int:
+    """Nearest-rank percentile index (matches the Statistics-panel convention)."""
+    return min(n - 1, max(0, int(math.ceil(p * n)) - 1))
+
+
+def _sample_variability(sorted_samples: "List") -> "Tuple[float, float, float, float]":
+    """``(jitter, sigma, p50, p99)`` for an already-sorted numeric sample list.
+
+    ``jitter`` is ``max - min``; ``sigma`` is the population standard deviation
+    (dividing by ``n``), matching the exec/blocking Statistics tables.  Used to
+    give the Interval and Tag tables the same summary column set (review item
+    B10).  Returns zeros for an empty list.
+    """
+    n = len(sorted_samples)
+    if n == 0:
+        return 0.0, 0.0, 0.0, 0.0
+    avg = sum(sorted_samples) / n
+    sigma = math.sqrt(sum((v - avg) ** 2 for v in sorted_samples) / n)
+    jitter = sorted_samples[-1] - sorted_samples[0]
+    p50 = sorted_samples[_nearest_rank_index(n, 0.50)]
+    p99 = sorted_samples[_nearest_rank_index(n, 0.99)]
+    return jitter, sigma, p50, p99
+
+
+def _nominal_resolution(trace: "BtfTrace") -> int:
+    """Effective timestamp grid of the trace, in the trace's native time unit
+    (review item B11).
+
+    The greatest common divisor of a sample of segment boundaries — if every
+    recorded timestamp is a multiple of *g*, the capture clock (or its export)
+    quantises to *g*, so any duration distribution whose tail sits near *g* is
+    dominated by that grid rather than by task behavior.  Floored at 1.
+    """
+    g = 0
+    n = 0
+    for segs in getattr(trace, "seg_map_by_merge_key", {}).values():
+        for s in segs:
+            for v in (int(s.start), int(s.end)):
+                if v:
+                    g = math.gcd(g, v)
+            n += 1
+            if n >= 4000 or g == 1:
+                break
+        if n >= 4000 or g == 1:
+            break
+    return max(1, g)
+
+
+def _resolution_limited_pct(samples: "List[int]", res: int) -> float:
+    """Percent of ``samples`` at or below ``res`` (0.0 when no samples)."""
+    if not samples or res <= 0:
+        return 0.0
+    n_low = sum(1 for s in samples if s <= res)
+    return 100.0 * n_low / len(samples)
+
+
+def _all_timing_samples(trace: "BtfTrace", kind: str,
+                        lo: Optional[int] = None,
+                        hi: Optional[int] = None) -> "List[int]":
+    """Flat list of every sample feeding a timing table (``kind`` = ``exec`` for
+    on-CPU slice durations, ``block`` for off-CPU gaps), tasks pooled, IDLE/TICK
+    excluded.  Used for the resolution caveat (review item B11)."""
+    out: List[int] = []
+    for mk, segs in getattr(trace, "seg_map_by_merge_key", {}).items():
+        raw = trace.task_repr.get(mk, mk)
+        _c, _tid, name = _parse_task_name(str(raw))
+        if _is_idle_task_name(name) or name == "TICK":
+            continue
+        if kind == "block":
+            out.extend(_blocking_time_samples(list(segs), lo, hi))
+        else:
+            out.extend(_exec_slice_samples(list(segs), lo, hi))
+    return out
+
+
+def _resolution_note(trace: "BtfTrace", samples: "List[int]",
+                     lo: Optional[int] = None, hi: Optional[int] = None) -> str:
+    """One-line caveat for a timing table, or '' when quantisation is not a
+    concern (fewer than ~15% of samples at or below the effective grid).
+
+    ``lo``/``hi`` are accepted for call-site symmetry; the grid is trace-wide.
+    """
+    if not samples:
+        return ""
+    res = _nominal_resolution(trace)
+    if res <= 1:
+        return ""
+    pct = _resolution_limited_pct(samples, res)
+    if pct < 15.0:
+        return ""
+    return (f"{pct:.0f}% of samples are at or below the ~"
+            f"{_format_time(res, trace.time_scale)} timestamp grid; "
+            f"tail percentiles near that value may be quantisation artefacts.")
+
+
 def _interval_stats_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
     hi: Optional[int] = None,
 ) -> List[tuple]:
-    """Per-interval-id stats: (id, label, count, min, avg, max, p95) as formatted strings.
+    """Per-interval-id stats, variability shape (review item B10):
+    ``(id, label, count, min, avg, max, jitter, sigma, p50, p95, p99)`` as
+    formatted strings.
 
     ``label`` is ``Interval <id>``, suffixed with the owning task
     (``Interval 5 · PS[228]``) when every instance in scope names the same one.
@@ -793,8 +891,9 @@ def _interval_stats_rows(
         mn = samples[0]
         mx = samples[-1]
         avg = int(round(total / count))
-        p95_idx = min(len(samples) - 1, max(0, int(math.ceil(0.95 * len(samples))) - 1))
-        p95 = samples[p95_idx]
+        p95 = samples[_nearest_rank_index(count, 0.95)]
+        jitter, sigma_f, p50, p99 = _sample_variability(samples)
+        sigma = int(round(sigma_f))
         rows.append((
             iid,
             _label,
@@ -802,8 +901,11 @@ def _interval_stats_rows(
             _format_time(mn, scale),
             _format_time(avg, scale),
             _format_time(mx, scale),
+            _format_time(jitter, scale),
+            _format_time(sigma, scale),
+            _format_time(p50, scale),
             _format_time(p95, scale),
-            mn, avg, mx, p95,
+            _format_time(p99, scale),
         ))
     return rows
 
@@ -1004,7 +1106,10 @@ def _tag_stats_rows(
     lo: Optional[int] = None,
     hi: Optional[int] = None,
 ) -> List[tuple]:
-    """Per-tag-channel stats: (channel, label, count, min, avg, max, p95, raw…)."""
+    """Per-tag-channel stats, variability shape (review item B10):
+    ``(channel, label, count, min, avg, max, jitter, sigma, p50, p95, p99)`` as
+    formatted values.
+    """
     rows = []
     for ch in trace.tag_channels:
         samples = [
@@ -1020,8 +1125,8 @@ def _tag_stats_rows(
         mn = samples[0]
         mx = samples[-1]
         avg = total / count
-        p95_idx = min(count - 1, max(0, int(math.ceil(0.95 * count)) - 1))
-        p95 = samples[p95_idx]
+        p95 = samples[_nearest_rank_index(count, 0.95)]
+        jitter, sigma, p50, p99 = _sample_variability(samples)
         rows.append((
             ch,
             _tag_channel_label(ch),
@@ -1029,8 +1134,11 @@ def _tag_stats_rows(
             _format_tag_value(mn),
             _format_tag_value(avg),
             _format_tag_value(mx),
+            _format_tag_value(jitter),
+            _format_tag_value(sigma),
+            _format_tag_value(p50),
             _format_tag_value(p95),
-            mn, avg, mx, p95,
+            _format_tag_value(p99),
         ))
     return rows
 
@@ -5145,6 +5253,50 @@ def _task_metric_compare_by_name(
     return out
 
 
+def _task_samples_by_name(trace: "BtfTrace", sample_fn,
+                          lo: Optional[int] = None,
+                          hi: Optional[int] = None) -> "Dict[str, List[int]]":
+    """Raw per-task samples keyed by display name (IDLE/TICK excluded) — the raw
+    counterpart of ``_task_metric_compare_by_name``, used for the Trace Compare
+    distribution-shape (KS) column (review item B12)."""
+    out: Dict[str, List[int]] = {}
+    for mk, segs in trace.seg_map_by_merge_key.items():
+        raw = trace.task_repr.get(mk, mk)
+        _, _, tname = _parse_task_name(raw)
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        out[_task_display_name(raw)] = sample_fn(segs, lo, hi)
+    return out
+
+
+def _ks_statistic(a: "List[int]", b: "List[int]") -> float:
+    """Two-sample Kolmogorov–Smirnov D — the largest gap between the two
+    empirical CDFs (0.0 = identical shape, 1.0 = disjoint).  0.0 when either
+    list is empty.  Scale-free, so it catches a tail that widened without the
+    mean or p99 moving much (review item B12)."""
+    if not a or not b:
+        return 0.0
+    sa, sb = sorted(a), sorted(b)
+    na, nb = len(sa), len(sb)
+    ia = ib = 0
+    d = 0.0
+    while ia < na and ib < nb:
+        va, vb = sa[ia], sb[ib]
+        if va <= vb:
+            ia += 1
+        if vb <= va:
+            ib += 1
+        d = max(d, abs(ia / na - ib / nb))
+    return d
+
+
+def _fmt_ks(a: "Optional[List[int]]", b: "Optional[List[int]]") -> str:
+    """KS D for a compare row, or ``—`` when either side is too small to shape."""
+    if not a or not b or len(a) < 3 or len(b) < 3:
+        return "—"
+    return f"{_ks_statistic(a, b):.2f}"
+
+
 def _trace_summary_snapshot(trace: "BtfTrace",
                             lo: Optional[int] = None, hi: Optional[int] = None) -> dict:
     """Summary metrics for trace compare (optional cursor scope)."""
@@ -5656,6 +5808,8 @@ def _build_trace_compare_rows(
         key=lambda n: (-max(exec_a.get(n, {}).get("count", 0),
                             exec_b.get(n, {}).get("count", 0)), n.lower()),
     ), row_limit)
+    exec_samp_a = _task_samples_by_name(trace_a, _exec_slice_samples, lo_a, hi_a)
+    exec_samp_b = _task_samples_by_name(trace_b, _exec_slice_samples, lo_b, hi_b)
     exec_rows: List[List] = []
     for name in exec_names:
         ea = exec_a.get(name)
@@ -5671,6 +5825,7 @@ def _build_trace_compare_rows(
             ea["max"] if ea else "—",
             eb["max"] if eb else "—",
             _fmt_signed_time_delta(max_a - max_b, scale),
+            _fmt_ks(exec_samp_a.get(name), exec_samp_b.get(name)),
         ])
 
     block_a = _blocking_compare_by_name(trace_a, lo_a, hi_a)
@@ -5680,6 +5835,8 @@ def _build_trace_compare_rows(
         key=lambda n: (-max(block_a.get(n, {}).get("gaps", 0),
                             block_b.get(n, {}).get("gaps", 0)), n.lower()),
     ), row_limit)
+    block_samp_a = _task_samples_by_name(trace_a, _blocking_time_samples, lo_a, hi_a)
+    block_samp_b = _task_samples_by_name(trace_b, _blocking_time_samples, lo_b, hi_b)
     block_rows: List[List] = []
     for name in block_names:
         ba = block_a.get(name)
@@ -5695,6 +5852,7 @@ def _build_trace_compare_rows(
             ba["max"] if ba else "—",
             bb["max"] if bb else "—",
             _fmt_signed_time_delta(avg_a - avg_b, scale),
+            _fmt_ks(block_samp_a.get(name), block_samp_b.get(name)),
         ])
 
     ia_a = _task_metric_compare_by_name(
@@ -5706,6 +5864,8 @@ def _build_trace_compare_rows(
         key=lambda n: (-max(ia_a.get(n, {}).get("count", 0),
                             ia_b.get(n, {}).get("count", 0)), n.lower()),
     ), row_limit)
+    ia_samp_a = _task_samples_by_name(trace_a, _inter_arrival_samples, lo_a, hi_a)
+    ia_samp_b = _task_samples_by_name(trace_b, _inter_arrival_samples, lo_b, hi_b)
     inter_rows: List[List] = []
     for name in ia_names:
         xa = ia_a.get(name)
@@ -5721,6 +5881,7 @@ def _build_trace_compare_rows(
             xa["max"] if xa else "—",
             xb["max"] if xb else "—",
             _fmt_signed_time_delta(avg_a - avg_b, scale),
+            _fmt_ks(ia_samp_a.get(name), ia_samp_b.get(name)),
         ])
 
     pre_a = _preemption_totals_by_victim(trace_a, lo_a, hi_a)
@@ -6014,16 +6175,16 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         tables.get("migrations", []), 16)
     _section(
         "Execution Time",
-        "Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ max",
-        tables.get("execution", []), 8)
+        "Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ max,Shape Δ",
+        tables.get("execution", []), 9)
     _section(
         "Blocking Time",
-        "Task,Gaps A,Gaps B,Avg A,Avg B,Max A,Max B,Δ avg",
-        tables.get("blocking", []), 8)
+        "Task,Gaps A,Gaps B,Avg A,Avg B,Max A,Max B,Δ avg,Shape Δ",
+        tables.get("blocking", []), 9)
     _section(
         "Inter-Arrival Time",
-        "Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ avg",
-        tables.get("inter_arrival", []), 8)
+        "Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ avg,Shape Δ",
+        tables.get("inter_arrival", []), 9)
     _section(
         "Preemption Chains",
         "Victim,Count A,Count B,Δ,Total A,Total B",
@@ -6502,19 +6663,25 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               note="Migration count, rate, dwell, ping-pong, and primary-core "
                    "affinity for tasks that ran on more than one core. " + _note_mig),
         _card("Execution Time",
-              ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ max"],
+              ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B",
+               "Δ max", "Shape Δ"],
               tables.get("execution", []), "No execution samples in either trace",
-              note="Per-slice run durations between consecutive context switches."),
+              note="Per-slice run durations between consecutive context switches. "
+                   "Shape Δ is the two-sample KS statistic (0 = same distribution)."),
         _card("Blocking Time",
-              ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"],
+              ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Max A", "Max B",
+               "Δ avg", "Shape Δ"],
               tables.get("blocking", []), "No blocking samples in either trace",
               note="Off-CPU gaps between consecutive slices of the same task "
-                   "(preemption, wait, or scheduling delay)."),
+                   "(preemption, wait, or scheduling delay). "
+                   "Shape Δ is the two-sample KS statistic (0 = same distribution)."),
         _card("Inter-Arrival Time",
-              ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"],
+              ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B",
+               "Δ avg", "Shape Δ"],
               tables.get("inter_arrival", []), "No inter-arrival samples in either trace",
               note="Time between consecutive activations of the same task "
-                   "(slice start to next slice start)."),
+                   "(slice start to next slice start). "
+                   "Shape Δ is the two-sample KS statistic (0 = same distribution)."),
         _card("Preemption Chains",
               ["Victim", "Count A", "Count B", "Δ", "Total A", "Total B"],
               tables.get("preemption", []), "No preemption chains in either trace",

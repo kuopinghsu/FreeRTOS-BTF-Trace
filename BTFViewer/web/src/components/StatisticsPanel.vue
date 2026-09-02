@@ -1330,6 +1330,12 @@
             </tbody>
           </table>
           </div>
+          <p
+            v-if="execResolutionNote"
+            class="detail-note"
+          >
+            {{ execResolutionNote }}
+          </p>
           <div
             class="stats-section-resizer"
             role="separator"
@@ -1493,6 +1499,12 @@
             </tbody>
           </table>
           </div>
+          <p
+            v-if="blockResolutionNote"
+            class="detail-note"
+          >
+            {{ blockResolutionNote }}
+          </p>
           <div
             class="stats-section-resizer"
             role="separator"
@@ -3566,10 +3578,34 @@
                     Max
                   </th>
                   <th
+                    :class="thSortClass('intervals', 'jitter')"
+                    @click="toggleTableSort('intervals', 'jitter')"
+                  >
+                    Jitter
+                  </th>
+                  <th
+                    :class="thSortClass('intervals', 'sigma')"
+                    @click="toggleTableSort('intervals', 'sigma')"
+                  >
+                    σ
+                  </th>
+                  <th
+                    :class="thSortClass('intervals', 'p50')"
+                    @click="toggleTableSort('intervals', 'p50')"
+                  >
+                    P50
+                  </th>
+                  <th
                     :class="thSortClass('intervals', 'p95')"
                     @click="toggleTableSort('intervals', 'p95')"
                   >
                     P95
+                  </th>
+                  <th
+                    :class="thSortClass('intervals', 'p99')"
+                    @click="toggleTableSort('intervals', 'p99')"
+                  >
+                    P99
                   </th>
                 </tr>
               </thead>
@@ -3589,7 +3625,11 @@
                   <td>{{ row.min }}</td>
                   <td>{{ row.avg }}</td>
                   <td>{{ row.max }}</td>
+                  <td>{{ row.jitter }}</td>
+                  <td>{{ row.sigma }}</td>
+                  <td>{{ row.p50 }}</td>
                   <td>{{ row.p95 }}</td>
+                  <td>{{ row.p99 }}</td>
                 </tr>
               </tbody>
             </table>
@@ -3669,10 +3709,34 @@
                     Max
                   </th>
                   <th
+                    :class="thSortClass('tags', 'jitter')"
+                    @click="toggleTableSort('tags', 'jitter')"
+                  >
+                    Jitter
+                  </th>
+                  <th
+                    :class="thSortClass('tags', 'sigma')"
+                    @click="toggleTableSort('tags', 'sigma')"
+                  >
+                    σ
+                  </th>
+                  <th
+                    :class="thSortClass('tags', 'p50')"
+                    @click="toggleTableSort('tags', 'p50')"
+                  >
+                    P50
+                  </th>
+                  <th
                     :class="thSortClass('tags', 'p95')"
                     @click="toggleTableSort('tags', 'p95')"
                   >
                     P95
+                  </th>
+                  <th
+                    :class="thSortClass('tags', 'p99')"
+                    @click="toggleTableSort('tags', 'p99')"
+                  >
+                    P99
                   </th>
                 </tr>
               </thead>
@@ -3692,7 +3756,11 @@
                   <td>{{ row.min }}</td>
                   <td>{{ row.avg }}</td>
                   <td>{{ row.max }}</td>
+                  <td>{{ row.jitter }}</td>
+                  <td>{{ row.sigma }}</td>
+                  <td>{{ row.p50 }}</td>
                   <td>{{ row.p95 }}</td>
+                  <td>{{ row.p99 }}</td>
                 </tr>
               </tbody>
             </table>
@@ -4321,6 +4389,8 @@ import {
   preemptionChainRows,
   preemptionChainPlotPoints,
   PREEMPTION_CHAIN_MAX_ROWS,
+  allTimingSamples,
+  resolutionNote,
 } from '../utils/statsAnalysis.js'
 import {
   intervalStatsRows,
@@ -5834,6 +5904,20 @@ const sortedExecSliceStats = computed(() =>
 
 const sortedBlockingStats = computed(() =>
   sortStatsRows(blockingStats.value, tableSort.value.block, BLOCK_SORT_ACCESSORS))
+
+// Review item B11 — quantisation caveat under the Execution / Blocking tables.
+const execResolutionNote = computed(() => {
+  const r = statsRange.value
+  const lo = r?.lo ?? null
+  const hi = r?.hi ?? null
+  return resolutionNote(props.trace, allTimingSamples(props.trace, 'exec', lo, hi), lo, hi)
+})
+const blockResolutionNote = computed(() => {
+  const r = statsRange.value
+  const lo = r?.lo ?? null
+  const hi = r?.hi ?? null
+  return resolutionNote(props.trace, allTimingSamples(props.trace, 'block', lo, hi), lo, hi)
+})
 
 const interArrivalStats = computed(() => workerInterRows.value)
 
@@ -7429,7 +7513,7 @@ function _blockingRowsForReport(tr, range) {
   return rows.sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name))
 }
 
-function _renderHtmlTableReport(title, rows, includeCpu = false) {
+function _renderHtmlTableReport(title, rows, includeCpu = false, note = '') {
   const head = includeCpu
     ? '<tr><th>Task</th><th>Runs</th><th>CPU%</th><th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th><th>Jitter</th><th>σ</th><th>p50</th><th>p95</th></tr>'
     : '<tr><th>Task</th><th>Runs</th><th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th><th>Jitter</th><th>σ</th><th>p50</th><th>p95</th></tr>'
@@ -7439,7 +7523,8 @@ function _renderHtmlTableReport(title, rows, includeCpu = false) {
       : `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.runs)}</td><td>${_htmlCell(r.min)}</td><td>${_htmlCell(r.avg)}</td><td>${_htmlCell(r.trimMean)}</td><td>${_htmlCell(r.max)}</td><td>${_htmlCell(r.jitter)}</td><td>${_htmlCell(r.stddev)}</td><td>${_htmlCell(r.p50)}</td><td>${_htmlCell(r.p95)}</td></tr>`,
     ).join('')
     : `<tr><td colspan="${includeCpu ? 11 : 10}" class="empty">No data</td></tr>`
-  return `<section class="report-card"><h2>${_htmlCell(title)}</h2><table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
+  const noteHtml = note ? `<p class="detail-note">${_htmlCell(note)}</p>` : ''
+  return `<section class="report-card"><h2>${_htmlCell(title)}</h2><table><thead>${head}</thead><tbody>${body}</tbody></table>${noteHtml}</section>`
 }
 
 function _coreUtilRows(tr, range) {
@@ -7551,9 +7636,9 @@ function _renderIntervalReportHtml(tr, lo, hi, suffix) {
   const instances = intervalInstanceDetailRows(tr, lo, hi, 200)
   const summaryBody = intervalHtmlRows.length
     ? intervalHtmlRows.map(row =>
-        `<tr><td>${_htmlCell(row.id)}</td><td>${_htmlCell(row.label)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.p95)}</td></tr>`,
+        `<tr><td>${_htmlCell(row.id)}</td><td>${_htmlCell(row.label)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.jitter)}</td><td>${_htmlCell(row.sigma)}</td><td>${_htmlCell(row.p50)}</td><td>${_htmlCell(row.p95)}</td><td>${_htmlCell(row.p99)}</td></tr>`,
       ).join('')
-    : '<tr><td colspan="7" class="empty">No interval data</td></tr>'
+    : '<tr><td colspan="11" class="empty">No interval data</td></tr>'
   const instBody = instances.length
     ? instances.map(inst =>
         `<tr><td>${_htmlCell(inst.id)}</td><td>${_htmlCell(inst.taskId || '—')}</td><td>${_htmlCell(inst.start)}</td><td>${_htmlCell(inst.stop)}</td><td>${_htmlCell(inst.duration)}</td><td>${_htmlCell(inst.startCore)}</td><td>${_htmlCell(inst.stopCore)}</td></tr>`,
@@ -7563,7 +7648,7 @@ function _renderIntervalReportHtml(tr, lo, hi, suffix) {
     ? '<p class="detail-note">Showing longest 200 interval instances in scope.</p>'
     : ''
   return `<section class="report-card"><h2>Interval Analysis${_htmlCell(suffix)}</h2>
-    <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>
     <tbody>${summaryBody}</tbody></table>
     <h3 class="sub">Interval instances (longest first)</h3>
     ${instNote}
@@ -7576,11 +7661,11 @@ function _renderTagReportHtml(tr, lo, hi, suffix) {
   const samples = tagSampleDetailRows(tr, lo, hi, 200)
   const summaryBody = tagHtmlRows.length
     ? tagHtmlRows.map(row =>
-        `<tr><td>${_htmlCell(row.channel)}</td><td>${_htmlCell(row.label)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.p95)}</td></tr>`,
+        `<tr><td>${_htmlCell(row.channel)}</td><td>${_htmlCell(row.label)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.jitter)}</td><td>${_htmlCell(row.sigma)}</td><td>${_htmlCell(row.p50)}</td><td>${_htmlCell(row.p95)}</td><td>${_htmlCell(row.p99)}</td></tr>`,
       ).join('')
-    : '<tr><td colspan="7" class="empty">No tag data</td></tr>'
+    : '<tr><td colspan="11" class="empty">No tag data</td></tr>'
   return `<section class="report-card"><h2>Tag Analysis${_htmlCell(suffix)}</h2>
-    <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>
     <tbody>${summaryBody}</tbody></table>
     <h3 class="sub">Tag channels over time</h3>
     ${htmlTagOverview(samples, { timeOf: s => s.time })}</section>`
@@ -8030,8 +8115,10 @@ function exportHtml() {
         scopeTitle: suffix,
       })
     })()}
-    ${_renderHtmlTableReport(`Execution Time Per Slice${suffix}`, execReportRows, true)}
-    ${_renderHtmlTableReport(`Off-CPU Time (Blocking Time)${suffix}`, blockReportRows)}
+    ${_renderHtmlTableReport(`Execution Time Per Slice${suffix}`, execReportRows, true,
+      resolutionNote(tr, allTimingSamples(tr, 'exec', lo, hi), lo, hi))}
+    ${_renderHtmlTableReport(`Off-CPU Time (Blocking Time)${suffix}`, blockReportRows, false,
+      resolutionNote(tr, allTimingSamples(tr, 'block', lo, hi), lo, hi))}
     ${(() => {
       const dispRows = dispatchLatencyRows(tr, lo, hi)
       const body = dispRows.length

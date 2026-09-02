@@ -129,7 +129,11 @@ export const INTERVAL_SORT_ACCESSORS = {
   min: r => r.minNs,
   avg: r => r.avgNs,
   max: r => r.maxNs,
+  jitter: r => r.jitterNs,
+  sigma: r => r.sigmaNs,
+  p50: r => r.p50Ns,
   p95: r => r.p95Ns,
+  p99: r => r.p99Ns,
 }
 
 export const TAG_SORT_ACCESSORS = {
@@ -143,7 +147,11 @@ export const TAG_SORT_ACCESSORS = {
   min: r => r.minVal,
   avg: r => r.avgVal,
   max: r => r.maxVal,
+  jitter: r => r.jitterVal,
+  sigma: r => r.sigmaVal,
+  p50: r => r.p50Val,
   p95: r => r.p95Val,
+  p99: r => r.p99Val,
 }
 
 export const PRIORITY_SORT_ACCESSORS = {

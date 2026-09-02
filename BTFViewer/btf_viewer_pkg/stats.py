@@ -171,6 +171,8 @@ from .parser import (  # private symbols are not pulled in by import *
     _migration_summary,
     _blocking_time_samples,
     _task_runs_on_selected_core,
+    _all_timing_samples,
+    _resolution_note,
 )
 from .timeline_util import *  # noqa: F403,F401
 from .timeline_util import (  # noqa: F401 — star-import skips leading _
@@ -3620,15 +3622,18 @@ class _TraceCompareDialog(QDialog):
             ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ",
              "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B",
              "Cores A", "Cores B", "Primary A", "Primary B"])
-        self._exec_table = QTableWidget(0, 8)
+        self._exec_table = QTableWidget(0, 9)
         self._exec_table.setHorizontalHeaderLabels(
-            ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ max"])
-        self._block_table = QTableWidget(0, 8)
+            ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B",
+             "Δ max", "Shape Δ"])
+        self._block_table = QTableWidget(0, 9)
         self._block_table.setHorizontalHeaderLabels(
-            ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"])
-        self._inter_table = QTableWidget(0, 8)
+            ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Max A", "Max B",
+             "Δ avg", "Shape Δ"])
+        self._inter_table = QTableWidget(0, 9)
         self._inter_table.setHorizontalHeaderLabels(
-            ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"])
+            ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B",
+             "Δ avg", "Shape Δ"])
         self._preempt_table = QTableWidget(0, 6)
         self._preempt_table.setHorizontalHeaderLabels(
             ["Victim", "Count A", "Count B", "Δ", "Total A", "Total B"])
@@ -13940,7 +13945,8 @@ class _StatsPanel(QWidget):
                     _time_label_sort_key(mn), _time_label_sort_key(avg),
                     _time_label_sort_key(mx), _time_label_sort_key(p95),
                 ]
-            elif section_id == "tags" and len(row) >= 11:
+            elif (section_id == "tags" and not include_variability
+                  and len(row) >= 11):
                 mk_r, name, runs, mn, avg, mx, p95 = row[:7]
                 mn_raw, avg_raw, mx_raw, p95_raw = row[7:11]
                 vals = [name, runs, mn, avg, mx, p95]
@@ -14939,7 +14945,7 @@ class _StatsPanel(QWidget):
                 )
 
         def _render_stats_table(title: str,
-                                rows: List[tuple]) -> str:
+                                rows: List[tuple], note: str = "") -> str:
             body = "".join(
                 f"<tr><td>{_esc(name)}</td><td>{runs}</td><td>{_esc(mn)}</td>"
                 f"<td>{_esc(avg)}</td><td>{_esc(tmean)}</td><td>{_esc(mx)}</td>"
@@ -14948,15 +14954,16 @@ class _StatsPanel(QWidget):
                 for (mk_r, name, runs, mn, avg, tmean, mx,
                      jitter, stddev, p50, p95) in rows
             ) or '<tr><td colspan="10" class="empty">No data</td></tr>'
+            note_html = f'<p class="detail-note">{_esc(note)}</p>' if note else ""
             return (
                 f"<section class=\"report-card\"><h2>{_esc(title)}</h2>"
                 "<table><thead><tr><th>Task</th><th>Runs</th><th>Min</th>"
                 "<th>Avg</th><th>TrimMean(5%)</th><th>Max</th>"
                 "<th>Jitter</th><th>σ</th><th>p50</th><th>p95</th></tr></thead>"
-                f"<tbody>{body}</tbody></table></section>"
+                f"<tbody>{body}</tbody></table>{note_html}</section>"
             )
 
-        def _render_exec_table(rows: List[tuple]) -> str:
+        def _render_exec_table(rows: List[tuple], note: str = "") -> str:
             body = "".join(
                 f"<tr><td>{_esc(name)}</td><td>{runs}</td><td>{cpu:.1f}%</td>"
                 f"<td>{_esc(mn)}</td><td>{_esc(avg)}</td><td>{_esc(tmean)}</td>"
@@ -14965,12 +14972,13 @@ class _StatsPanel(QWidget):
                 for (mk_r, name, runs, cpu, mn, avg, tmean, mx,
                      jitter, stddev, p50, p95) in rows
             ) or '<tr><td colspan="11" class="empty">No data</td></tr>'
+            note_html = f'<p class="detail-note">{_esc(note)}</p>' if note else ""
             return (
                 f"<section class=\"report-card\"><h2>Execution Time Per Slice{_esc(scope_title)}</h2>"
                 "<table><thead><tr><th>Task</th><th>Runs</th><th>CPU%</th>"
                 "<th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th>"
                 "<th>Jitter</th><th>σ</th><th>p50</th><th>p95</th></tr></thead>"
-                f"<tbody>{body}</tbody></table></section>"
+                f"<tbody>{body}</tbody></table>{note_html}</section>"
             )
 
         _core_util_pcts = [pct for _, pct in core_rows]
@@ -15130,9 +15138,11 @@ class _StatsPanel(QWidget):
 
         interval_body = "".join(
             f"<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])}</td><td>{r[2]}</td>"
-            f"<td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
+            f"<td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td>"
+            f"<td>{_esc(r[6])}</td><td>{_esc(r[7])}</td><td>{_esc(r[8])}</td>"
+            f"<td>{_esc(r[9])}</td><td>{_esc(r[10])}</td></tr>"
             for r in interval_rows
-        ) or '<tr><td colspan="7" class="empty">No interval data</td></tr>'
+        ) or '<tr><td colspan="11" class="empty">No interval data</td></tr>'
         inst_body = "".join(
             f"<tr><td>{_esc(inst['id'])}</td><td>{_esc(inst['task_id'])}</td>"
             f"<td>{_esc(inst['start'])}</td><td>{_esc(inst['stop'])}</td>"
@@ -15144,7 +15154,7 @@ class _StatsPanel(QWidget):
                      if len(interval_inst) >= 200 else "")
         interval_html = f"""
     <section class=\"report-card\"><h2>Interval Analysis{_esc(scope_title)}</h2>
-    <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>
     <tbody>{interval_body}</tbody></table>
     <h3 class=\"sub\">Interval instances (longest first)</h3>{inst_note}
     <table><thead><tr><th>ID</th><th>Task id</th><th>Start</th><th>Stop</th><th>Duration</th><th>Start core</th><th>Stop core</th></tr></thead>
@@ -15152,9 +15162,11 @@ class _StatsPanel(QWidget):
 
         tag_body = "".join(
             f"<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])}</td><td>{r[2]}</td>"
-            f"<td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
+            f"<td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td>"
+            f"<td>{_esc(r[6])}</td><td>{_esc(r[7])}</td><td>{_esc(r[8])}</td>"
+            f"<td>{_esc(r[9])}</td><td>{_esc(r[10])}</td></tr>"
             for r in tag_rows
-        ) or '<tr><td colspan="7" class="empty">No tag data</td></tr>'
+        ) or '<tr><td colspan="11" class="empty">No tag data</td></tr>'
         tag_sample_body = "".join(
             f"<tr><td>{_esc(s['label'])}</td><td>{_esc(s['time'])}</td>"
             f"<td>{_esc(s['value'])}</td><td>{_esc(s['core'] or '—')}</td></tr>"
@@ -15164,7 +15176,7 @@ class _StatsPanel(QWidget):
                     if len(tag_samples) >= 200 else "")
         tag_html = f"""
     <section class=\"report-card\"><h2>Tag Analysis{_esc(scope_title)}</h2>
-    <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>
     <tbody>{tag_body}</tbody></table>
     <h3 class=\"sub\">Tag channels over time</h3>
     {html_tag_overview(tag_samples, time_fmt=lambda s: s.get("time") or "")}</section>"""
@@ -15819,8 +15831,8 @@ class _StatsPanel(QWidget):
     {deadline_html}
     {task_health_html}
     {investigate_html}
-    {_render_exec_table(exec_rows)}
-    {_render_stats_table(f'Off-CPU Time (Blocking Time){scope_title}', block_rows)}
+    {_render_exec_table(exec_rows, _resolution_note(trace, _all_timing_samples(trace, 'exec', lo, hi), lo, hi))}
+    {_render_stats_table(f'Off-CPU Time (Blocking Time){scope_title}', block_rows, _resolution_note(trace, _all_timing_samples(trace, 'block', lo, hi), lo, hi))}
     {dispatch_html}
     {_render_stats_table(f'Inter-Arrival Time{scope_title}', inter_rows)}
     {period_html}
@@ -16340,6 +16352,10 @@ class _StatsPanel(QWidget):
                         _us(tmean), _us(mx), _us(jitter), _us(stddev),
                         _us(p50), _us(p95),
                     ])
+                _res = _resolution_note(
+                    trace, _all_timing_samples(trace, "exec", lo, hi), lo, hi)
+                if _res:
+                    writer.writerow(["Resolution note", _res])
             else:
                 writer.writerow(["No data"] + [""] * 10)
 
@@ -16356,6 +16372,10 @@ class _StatsPanel(QWidget):
                         name, runs, _us(mn), _us(avg), _us(tmean), _us(mx),
                         _us(jitter), _us(stddev), _us(p50), _us(p95),
                     ])
+                _res = _resolution_note(
+                    trace, _all_timing_samples(trace, "block", lo, hi), lo, hi)
+                if _res:
+                    writer.writerow(["Resolution note", _res])
             else:
                 writer.writerow(["No data"] + [""] * 9)
 
@@ -16616,22 +16636,30 @@ class _StatsPanel(QWidget):
 
             writer.writerow([])
             writer.writerow([f"Interval Analysis{scope_suffix}"])
-            writer.writerow(["ID", "Label", "Count", "Min", "Avg", "Max", "p95"])
+            writer.writerow(["ID", "Label", "Count", "Min", "Avg", "Max",
+                             "Jitter", "Std Dev", "p50", "p95", "p99"])
             if interval_rows_csv:
-                for iid, label, count, mn, avg, mx, p95, *_raw in interval_rows_csv:
-                    writer.writerow([iid, label, count, _us(mn), _us(avg), _us(mx), _us(p95)])
+                for (iid, label, count, mn, avg, mx, jit, sd, p50, p95,
+                     p99) in interval_rows_csv:
+                    writer.writerow([
+                        iid, label, count, _us(mn), _us(avg), _us(mx),
+                        _us(jit), _us(sd), _us(p50), _us(p95), _us(p99),
+                    ])
             else:
-                writer.writerow(["No interval data", "", "", "", "", "", ""])
+                writer.writerow(["No interval data"] + [""] * 10)
 
             tag_rows_csv = _tag_stats_rows(trace, lo, hi)
             writer.writerow([])
             writer.writerow([f"Tag Analysis{scope_suffix}"])
-            writer.writerow(["Channel", "Label", "Count", "Min", "Avg", "Max", "p95"])
+            writer.writerow(["Channel", "Label", "Count", "Min", "Avg", "Max",
+                             "Jitter", "Std Dev", "p50", "p95", "p99"])
             if tag_rows_csv:
-                for ch, label, count, mn, avg, mx, p95, *_raw in tag_rows_csv:
-                    writer.writerow([ch, label, count, mn, avg, mx, p95])
+                for (ch, label, count, mn, avg, mx, jit, sd, p50, p95,
+                     p99) in tag_rows_csv:
+                    writer.writerow([ch, label, count, mn, avg, mx,
+                                     jit, sd, p50, p95, p99])
             else:
-                writer.writerow(["No tag data", "", "", "", "", "", ""])
+                writer.writerow(["No tag data"] + [""] * 10)
 
     def write_statistics_json_report(self, path: str) -> None:
         """Machine-readable statistics snapshot (CI diffing, dashboards).
@@ -17586,6 +17614,10 @@ class _StatsPanel(QWidget):
                 on_p99_click=lambda mk: self._on_percentile_click(
                     trace, mk, "exec", lo, hi, 0.99),
             ))
+            _res = _resolution_note(
+                trace, _all_timing_samples(trace, "exec", lo, hi), lo, hi)
+            if _res:
+                blay.addWidget(self._lbl(_res, color="#888888", ui_fs=_fs))
 
         self._add_collapsible_section(
             "exec",
@@ -17619,6 +17651,10 @@ class _StatsPanel(QWidget):
                 on_p99_click=lambda mk: self._on_percentile_click(
                     trace, mk, "block", lo, hi, 0.99),
             ))
+            _res = _resolution_note(
+                trace, _all_timing_samples(trace, "block", lo, hi), lo, hi)
+            if _res:
+                blay.addWidget(self._lbl(_res, color="#888888", ui_fs=_fs))
 
         self._add_collapsible_section(
             "block",
@@ -18856,11 +18892,12 @@ class _StatsPanel(QWidget):
         def _populate_intervals(blay: QVBoxLayout) -> None:
             _interval_rows = _interval_stats_rows(trace, lo, hi)
             blay.addWidget(self._build_stats_table(
-                [(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in _interval_rows],
+                _interval_rows,
                 _fs,
                 empty_interval,
                 count_header="Count",
                 section_id="intervals",
+                include_variability=True,
                 on_row_click=lambda iid: self._open_interval_plot(trace, iid),
             ))
 
@@ -18883,6 +18920,7 @@ class _StatsPanel(QWidget):
                 empty_tag,
                 count_header="Count",
                 section_id="tags",
+                include_variability=True,
                 on_row_click=lambda ch: self._open_tag_plot(trace, ch),
             ))
 

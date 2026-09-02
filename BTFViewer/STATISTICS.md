@@ -83,6 +83,8 @@ For samples `x_1 ... x_n`, BTFViewer uses the following concepts throughout the 
 
 Samples are sorted before percentiles are selected. For example, p95 uses the sample at `ceil(n × 0.95) − 1`, with the index limited to the valid range. Percentiles require enough samples. With 10 samples, p99 is effectively the maximum and does not describe a stable one-percent tail. Always read the sample count before treating a high percentile as representative.
 
+**Trace resolution.** Execution Time and Blocking Time show a note when a large share of samples are at or below one unit of the trace's display scale (`us` → 1 µs, `ms` → 1 ms) — the grid the exported timestamps sit on. When that share is high, percentiles near that value describe the timestamp grid rather than task behavior; use a finer capture clock or an instrumented Interval for those cases.
+
 In task tables, **CPU%** normally means `task on-CPU time ÷ Scope wall-clock duration × 100`. IDLE and TICK tasks are omitted from user-task rankings, but they are not subtracted from the denominator. On a multicore system, CPU% values across tasks can therefore add to more than 100%.
 
 ### Direct, derived, estimated, and configured results
@@ -356,7 +358,7 @@ Use an **Interval** when one task can record a clear start and stop for an opera
 | Consecutive values on one Tag channel | Timing across tasks or ISRs |
 | Tag value samples | Queue depth, free memory, sensor value, application state |
 
-Completed intervals provide Count, Min, Avg, Max, and p95. Unmatched events near the Scope boundary are excluded and may reflect partial capture. Recursive or overlapping use of the same interval ID should be avoided unless the instrumentation contract defines the nesting order.
+Completed intervals provide Count, Min, Avg, Max, Jitter, σ, p50, p95, and p99. Unmatched events near the Scope boundary are excluded and may reflect partial capture. Recursive or overlapping use of the same interval ID should be avoided unless the instrumentation contract defines the nesting order.
 
 Tag values have application-defined units. The viewer can summarize and plot the numeric payload, but it cannot infer whether `10` means bytes, messages, degrees, or a state code. Document each channel and correlate value changes with timeline events.
 
@@ -1028,6 +1030,8 @@ Use intervals for code regions with explicit boundaries, such as one loop iterat
 
 **Pairing and nesting.** The same interval ID can be used by different tasks because task ID participates in current pairing. Completed start/stop pairs become samples; unmatched starts or stops are reported or excluded. Avoid ambiguous recursive use of the same ID unless the instrumentation contract defines how nesting is paired.
 
+**Columns.** Count, Min, Avg, Max, Jitter (`Max − Min`), σ (population standard deviation), p50, p95, and p99 — the same summary set as the slice-based timing tables, so an interval and an execution distribution can be read the same way.
+
 **How to use it.** Intervals are preferable to slice-based response estimates when the application can mark the real operation boundaries. Compare interval tails with Execution and Blocking to determine whether the operation spends time on-CPU or waiting. Keep instrumentation overhead and partial-Scope pairing in mind.
 
 ![Interval duration distribution for interval id 1 in example-8cores.btf.gz](../images/stats/stats-interval-1.svg)
@@ -1042,6 +1046,8 @@ Summarizes numeric values recorded on `tag0_event` … `tag7_event` or `tag_even
 The value axis is not a duration unless the application records a duration. The **Interval** view measures time between consecutive samples on the same channel and can measure a handoff across tasks or ISRs.
 
 **Calculation.** Samples are grouped by tag channel and kept in timestamp order. Value statistics operate on the recorded numeric payload. Inter-sample timing uses consecutive timestamps on the same channel, independent of which task or ISR emitted them.
+
+**Columns.** Count, Min, Avg, Max, Jitter (`Max − Min`), σ, p50, p95, and p99 — computed on the recorded value, not on time. Read them against the channel's documented unit.
 
 **How to use it.** Document each channel's unit and meaning. Use values for state variables such as queue depth or free memory, and inter-sample time for cross-context handoff or event cadence. Correlate a value change with the timeline; the viewer cannot infer application semantics from the number alone.
 
@@ -1097,6 +1103,8 @@ The comparison uses two delta conventions:
 | Change charts | `Change = Candidate B − Baseline A` | Positive means the candidate increased |
 
 Always use the metric meaning and the **Improved / Regressed / Changed** status. A positive sign is not automatically good or bad.
+
+**Shape Δ.** The Execution Time, Blocking Time, and Inter-Arrival Time tables add a **Shape Δ** column: the two-sample Kolmogorov–Smirnov statistic between the task's Baseline A and Candidate B sample distributions (`0` = identical shape, `1` = disjoint). It is scale-free, so it catches a tail that widened or a mode that split even when Avg, Max, and the Δ column barely moved. A dash means one side had too few samples (`< 3`).
 
 ### Comparison workflow and dependencies
 

@@ -195,7 +195,7 @@ describe('new compare builders', () => {
     assert.ok(rows.every(r => 'core' in r && 'utilA' in r && 'utilB' in r && 'delta' in r))
   })
 
-  it('builds execution compare rows with Δ max', () => {
+  it('builds execution compare rows with Δ max and Shape Δ (KS)', () => {
     const rows = buildExecutionCompareRows(traceA, traceB)
     assert.ok(rows.length >= 1)
     const worker = rows.find(r => r.name.includes('Worker'))
@@ -203,6 +203,11 @@ describe('new compare builders', () => {
     assert.ok(worker.runsA >= 1)
     assert.ok(worker.maxA)
     assert.ok(worker.deltaMax != null)
+    // shapeDelta is a 2dp KS string or '—'
+    assert.ok(worker.shapeDelta === '—' || /^\d\.\d\d$/.test(worker.shapeDelta))
+    // identical traces -> KS 0.00 wherever both sides have samples
+    const same = buildExecutionCompareRows(traceA, traceA)
+    assert.ok(same.every(r => r.shapeDelta === '0.00' || r.shapeDelta === '—'))
   })
 
   it('builds inter-arrival compare rows', () => {

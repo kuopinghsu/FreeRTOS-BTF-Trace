@@ -46,6 +46,78 @@ export function blockingTimeSamples(segs, lo, hi) {
   return samples
 }
 
+/** On-CPU slice durations for one task's segment list, IDLE/TICK not filtered here. */
+export function execSliceSamples(segs, lo, hi) {
+  if (!segs) return []
+  const out = []
+  for (const s of segs) {
+    const d = s.end - s.start
+    if (d <= 0) continue
+    if (lo != null && hi != null && !segFullyInRange(s, lo, hi)) continue
+    out.push(d)
+  }
+  return out
+}
+
+function _gcd(a, b) {
+  a = Math.abs(a); b = Math.abs(b)
+  while (b) { [a, b] = [b, a % b] }
+  return a
+}
+
+/** Effective timestamp grid in the trace's native unit — parity with `_nominal_resolution` (B11). */
+export function nominalResolution(trace) {
+  const byMk = trace?.segByMergeKey
+  if (!byMk) return 1
+  let g = 0
+  let n = 0
+  for (const [, segs] of byMk) {
+    for (const s of segs) {
+      if (s.start) g = _gcd(g, s.start)
+      if (s.end) g = _gcd(g, s.end)
+      n += 1
+      if (n >= 4000 || g === 1) break
+    }
+    if (n >= 4000 || g === 1) break
+  }
+  return Math.max(1, g)
+}
+
+/** Percent of `samples` at or below `res` (0 when empty). */
+export function resolutionLimitedPct(samples, res) {
+  if (!samples?.length || res <= 0) return 0
+  let low = 0
+  for (const s of samples) if (s <= res) low += 1
+  return (100 * low) / samples.length
+}
+
+/** Flat sample list feeding a timing table (`kind` = 'exec' | 'block'), IDLE/TICK excluded. */
+export function allTimingSamples(trace, kind, lo, hi) {
+  const out = []
+  const byMk = trace?.segByMergeKey
+  if (!byMk) return out
+  for (const [mk, segs] of byMk) {
+    const { name } = parseTaskName(taskReprGet(trace, mk) || mk)
+    if (isIdleTaskName(name) || name === 'TICK') continue
+    const s = kind === 'block'
+      ? blockingTimeSamples([...segs], lo, hi)
+      : execSliceSamples([...segs], lo, hi)
+    for (const v of s) out.push(v)
+  }
+  return out
+}
+
+/** One-line quantisation caveat for a timing table, or '' — parity with `_resolution_note`. */
+export function resolutionNote(trace, samples) {
+  if (!samples?.length) return ''
+  const res = nominalResolution(trace)
+  if (res <= 1) return ''
+  const pct = resolutionLimitedPct(samples, res)
+  if (pct < 15) return ''
+  return `${pct.toFixed(0)}% of samples are at or below the ~${formatTime(res, trace.timeScale)} `
+    + 'timestamp grid; tail percentiles near that value may be quantisation artefacts.'
+}
+
 /** Plot points for blocking-time distribution (x = resume time, y = gap ns). */
 export function blockingTimePlotPoints(segs, lo, hi) {
   if (!segs || segs.length < 2) return []

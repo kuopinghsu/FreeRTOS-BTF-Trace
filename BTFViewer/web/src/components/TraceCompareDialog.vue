@@ -634,6 +634,13 @@
                 >
                   Change (A → B)
                 </th>
+                <th
+                  :class="thSortClass('execution', 'shapeDelta')"
+                  @click="toggleTableSort('execution', 'shapeDelta')"
+                  title="Two-sample Kolmogorov–Smirnov statistic (0 = same distribution)"
+                >
+                  Shape Δ
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -653,10 +660,11 @@
                 <td :class="deltaClass(row.name, row.deltaMax, 'exec max')">
                   {{ deltaText(row.name, row.deltaMax, 'exec max') }}
                 </td>
+                <td>{{ row.shapeDelta }}</td>
               </tr>
               <tr v-if="executionRows.length === 0">
                 <td
-                  colspan="8"
+                  colspan="9"
                   class="compare-empty"
                 >
                   No execution samples in either trace
@@ -719,6 +727,13 @@
                 >
                   Change (A → B)
                 </th>
+                <th
+                  :class="thSortClass('blocking', 'shapeDelta')"
+                  @click="toggleTableSort('blocking', 'shapeDelta')"
+                  title="Two-sample Kolmogorov–Smirnov statistic (0 = same distribution)"
+                >
+                  Shape Δ
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -738,10 +753,11 @@
                 <td :class="deltaClass(row.name, row.delta, 'block')">
                   {{ deltaText(row.name, row.delta, 'block') }}
                 </td>
+                <td>{{ row.shapeDelta }}</td>
               </tr>
               <tr v-if="blockingRows.length === 0">
                 <td
-                  colspan="8"
+                  colspan="9"
                   class="compare-empty"
                 >
                   No blocking samples in either trace
@@ -804,6 +820,13 @@
                 >
                   Change (A → B)
                 </th>
+                <th
+                  :class="thSortClass('interArrival', 'shapeDelta')"
+                  @click="toggleTableSort('interArrival', 'shapeDelta')"
+                  title="Two-sample Kolmogorov–Smirnov statistic (0 = same distribution)"
+                >
+                  Shape Δ
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -823,10 +846,11 @@
                 <td :class="deltaClass(row.name, row.delta, 'inter')">
                   {{ deltaText(row.name, row.delta, 'inter') }}
                 </td>
+                <td>{{ row.shapeDelta }}</td>
               </tr>
               <tr v-if="interArrivalRows.length === 0">
                 <td
-                  colspan="8"
+                  colspan="9"
                   class="compare-empty"
                 >
                   No inter-arrival samples in either trace
@@ -1582,11 +1606,11 @@ const SUMMARY_SORT_ACCESSORS = compareFieldSortAccessors(['label', 'a', 'b', 'de
 const TOP_SORT_ACCESSORS = compareFieldSortAccessors(['name', 'cpuA', 'cpuB', 'delta'])
 const CORE_UTIL_SORT_ACCESSORS = compareFieldSortAccessors(['core', 'utilA', 'utilB', 'delta'])
 const EXEC_SORT_ACCESSORS = compareFieldSortAccessors(
-  ['name', 'runsA', 'runsB', 'avgA', 'avgB', 'maxA', 'maxB', 'deltaMax'])
+  ['name', 'runsA', 'runsB', 'avgA', 'avgB', 'maxA', 'maxB', 'deltaMax', 'shapeDelta'])
 const BLOCK_SORT_ACCESSORS = compareFieldSortAccessors(
-  ['name', 'gapsA', 'gapsB', 'avgA', 'avgB', 'maxA', 'maxB', 'delta'])
+  ['name', 'gapsA', 'gapsB', 'avgA', 'avgB', 'maxA', 'maxB', 'delta', 'shapeDelta'])
 const INTER_SORT_ACCESSORS = compareFieldSortAccessors(
-  ['name', 'runsA', 'runsB', 'avgA', 'avgB', 'maxA', 'maxB', 'delta'])
+  ['name', 'runsA', 'runsB', 'avgA', 'avgB', 'maxA', 'maxB', 'delta', 'shapeDelta'])
 const PREEMPT_SORT_ACCESSORS = compareFieldSortAccessors(
   ['name', 'countA', 'countB', 'delta', 'totalA', 'totalB'])
 const SYNC_SORT_ACCESSORS = compareFieldSortAccessors(['label', 'a', 'b', 'delta'])

@@ -136,6 +136,45 @@ export function summarizeTimeSamples(samples, scale) {
   }
 }
 
+/** Raw per-task samples by display name — raw counterpart of taskMetricCompareByName (B12). */
+function taskSamplesByName(trace, sampleFn, lo, hi) {
+  const map = new Map()
+  if (!trace?.segByMergeKey) return map
+  for (const [mk, segs] of trace.segByMergeKey) {
+    const repr = taskReprGet(trace, mk) ?? mk
+    const { name: tname } = parseTaskName(repr)
+    if (isIdleTaskName(tname) || tname === 'TICK') continue
+    map.set(taskDisplayName(repr), sampleFn(segs, lo, hi))
+  }
+  return map
+}
+
+/** Two-sample Kolmogorov–Smirnov D — parity with parser.py `_ks_statistic` (B12). */
+export function ksStatistic(a, b) {
+  if (!a?.length || !b?.length) return 0
+  const sa = [...a].sort((x, y) => x - y)
+  const sb = [...b].sort((x, y) => x - y)
+  const na = sa.length
+  const nb = sb.length
+  let ia = 0
+  let ib = 0
+  let d = 0
+  while (ia < na && ib < nb) {
+    const va = sa[ia]
+    const vb = sb[ib]
+    if (va <= vb) ia += 1
+    if (vb <= va) ib += 1
+    d = Math.max(d, Math.abs(ia / na - ib / nb))
+  }
+  return d
+}
+
+/** KS D for a compare row as a 2dp string, or '—' when either side is too small. */
+export function fmtKs(a, b) {
+  if (!a?.length || !b?.length || a.length < 3 || b.length < 3) return '—'
+  return ksStatistic(a, b).toFixed(2)
+}
+
 function taskMetricCompareByName(trace, sampleFn, lo, hi, {
   includeCpu = false,
   runsFromStarts = false,
@@ -698,6 +737,8 @@ export function buildBlockingCompareRows(traceA, traceB, tabA = null, tabB = nul
   const rb = rangeForTab(tabB, scopeEnabled)
   const mapA = blockingSummaryByName(traceA, ra.lo, ra.hi)
   const mapB = blockingSummaryByName(traceB, rb.lo, rb.hi)
+  const sampA = taskSamplesByName(traceA, blockingTimeSamples, ra.lo, ra.hi)
+  const sampB = taskSamplesByName(traceB, blockingTimeSamples, rb.lo, rb.hi)
   const names = [...new Set([...mapA.keys(), ...mapB.keys()])]
     .sort((a, b) => {
       const ga = Math.max(mapA.get(a)?.gaps ?? 0, mapB.get(a)?.gaps ?? 0)
@@ -720,6 +761,7 @@ export function buildBlockingCompareRows(traceA, traceB, tabA = null, tabB = nul
       maxA: a?.max ?? '—',
       maxB: b?.max ?? '—',
       delta: fmtSignedTime(avgA - avgB, scale),
+      shapeDelta: fmtKs(sampA.get(name), sampB.get(name)),
     }
   })
 }
@@ -761,6 +803,8 @@ export function buildExecutionCompareRows(traceA, traceB, tabA = null, tabB = nu
   const rb = rangeForTab(tabB, scopeEnabled)
   const mapA = taskMetricCompareByName(traceA, execSliceSamples, ra.lo, ra.hi)
   const mapB = taskMetricCompareByName(traceB, execSliceSamples, rb.lo, rb.hi)
+  const sampA = taskSamplesByName(traceA, execSliceSamples, ra.lo, ra.hi)
+  const sampB = taskSamplesByName(traceB, execSliceSamples, rb.lo, rb.hi)
   const scale = traceA?.timeScale || traceB?.timeScale || 'ns'
   return buildNamedMetricCompareRows(mapA, mapB, scale, limit, {
     sortKey: 'runs',
@@ -775,6 +819,7 @@ export function buildExecutionCompareRows(traceA, traceB, tabA = null, tabB = nu
     maxA: row.maxA,
     maxB: row.maxB,
     deltaMax: row.deltaMax,
+    shapeDelta: fmtKs(sampA.get(row.name), sampB.get(row.name)),
   }))
 }
 
@@ -783,12 +828,14 @@ export function buildInterArrivalCompareRows(traceA, traceB, tabA = null, tabB =
   const rb = rangeForTab(tabB, scopeEnabled)
   const mapA = taskMetricCompareByName(traceA, interArrivalSamples, ra.lo, ra.hi, { runsFromStarts: true })
   const mapB = taskMetricCompareByName(traceB, interArrivalSamples, rb.lo, rb.hi, { runsFromStarts: true })
+  const sampA = taskSamplesByName(traceA, interArrivalSamples, ra.lo, ra.hi)
+  const sampB = taskSamplesByName(traceB, interArrivalSamples, rb.lo, rb.hi)
   const scale = traceA?.timeScale || traceB?.timeScale || 'ns'
   return buildNamedMetricCompareRows(mapA, mapB, scale, limit, {
     sortKey: 'runs',
     deltaField: 'avgNs',
     deltaLabel: 'delta',
-  })
+  }).map(row => ({ ...row, shapeDelta: fmtKs(sampA.get(row.name), sampB.get(row.name)) }))
 }
 
 function preemptionTotalsByVictim(trace, lo, hi) {
@@ -1116,34 +1163,34 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
 
   lines.push('')
   lines.push('Execution Time')
-  lines.push('Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ max')
+  lines.push('Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ max,Shape Δ')
   for (const row of t.execution) {
     lines.push([
       csvCell(row.name), csvCell(row.runsA), csvCell(row.runsB),
       csvCell(row.avgA), csvCell(row.avgB), csvCell(row.maxA), csvCell(row.maxB),
-      csvCell(row.deltaMax),
+      csvCell(row.deltaMax), csvCell(row.shapeDelta),
     ].join(','))
   }
 
   lines.push('')
   lines.push('Blocking Time')
-  lines.push('Task,Gaps A,Gaps B,Avg A,Avg B,Max A,Max B,Δ avg')
+  lines.push('Task,Gaps A,Gaps B,Avg A,Avg B,Max A,Max B,Δ avg,Shape Δ')
   for (const row of t.blocking) {
     lines.push([
       csvCell(row.name), csvCell(row.gapsA), csvCell(row.gapsB),
       csvCell(row.avgA), csvCell(row.avgB), csvCell(row.maxA), csvCell(row.maxB),
-      csvCell(row.delta),
+      csvCell(row.delta), csvCell(row.shapeDelta),
     ].join(','))
   }
 
   lines.push('')
   lines.push('Inter-Arrival Time')
-  lines.push('Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ avg')
+  lines.push('Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ avg,Shape Δ')
   for (const row of t.interArrival) {
     lines.push([
       csvCell(row.name), csvCell(row.runsA), csvCell(row.runsB),
       csvCell(row.avgA), csvCell(row.avgB), csvCell(row.maxA), csvCell(row.maxB),
-      csvCell(row.delta),
+      csvCell(row.delta), csvCell(row.shapeDelta),
     ].join(','))
   }
 
@@ -1476,16 +1523,16 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.migrationsA)}</td><td>${htmlCell(r.migrationsB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.rateA)}</td><td>${htmlCell(r.rateB)}</td><td>${htmlCell(r.rateDelta)}</td><td>${htmlCell(r.dwellA)}</td><td>${htmlCell(r.dwellB)}</td><td>${htmlCell(r.dwellDelta)}</td><td>${htmlCell(r.pingA)}</td><td>${htmlCell(r.pingB)}</td><td>${htmlCell(r.coresA)}</td><td>${htmlCell(r.coresB)}</td><td>${htmlCell(r.primaryA)}</td><td>${htmlCell(r.primaryB)}</td></tr>`,
     'No migrated tasks in either trace')
 
-  const execHtml = _rowsOrEmpty(t.execution, 8,
-    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.runsA)}</td><td>${htmlCell(r.runsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.maxA)}</td><td>${htmlCell(r.maxB)}</td><td>${htmlCell(r.deltaMax)}</td></tr>`,
+  const execHtml = _rowsOrEmpty(t.execution, 9,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.runsA)}</td><td>${htmlCell(r.runsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.maxA)}</td><td>${htmlCell(r.maxB)}</td><td>${htmlCell(r.deltaMax)}</td><td>${htmlCell(r.shapeDelta)}</td></tr>`,
     'No execution samples in either trace')
 
-  const blockHtml = _rowsOrEmpty(t.blocking, 8,
-    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.gapsA)}</td><td>${htmlCell(r.gapsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.maxA)}</td><td>${htmlCell(r.maxB)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+  const blockHtml = _rowsOrEmpty(t.blocking, 9,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.gapsA)}</td><td>${htmlCell(r.gapsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.maxA)}</td><td>${htmlCell(r.maxB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.shapeDelta)}</td></tr>`,
     'No blocking samples in either trace')
 
-  const interHtml = _rowsOrEmpty(t.interArrival, 8,
-    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.runsA)}</td><td>${htmlCell(r.runsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.maxA)}</td><td>${htmlCell(r.maxB)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+  const interHtml = _rowsOrEmpty(t.interArrival, 9,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.runsA)}</td><td>${htmlCell(r.runsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.maxA)}</td><td>${htmlCell(r.maxB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.shapeDelta)}</td></tr>`,
     'No inter-arrival samples in either trace')
 
   const preHtml = _rowsOrEmpty(t.preemption, 6,
@@ -1550,17 +1597,17 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       migHtml, migLead,
       `Migration count, rate, dwell, ping-pong, and primary-core affinity for tasks that ran on more than one core. ${COMPARE_NOTE_MIGRATION}`),
     _cardHtml('Execution Time',
-      '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ max</th>',
+      '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ max</th><th>Shape Δ</th>',
       execHtml, '',
-      'Per-slice run durations between consecutive context switches.'),
+      'Per-slice run durations between consecutive context switches. Shape Δ is the two-sample KS statistic (0 = same distribution).'),
     _cardHtml('Blocking Time',
-      '<th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th>',
+      '<th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th><th>Shape Δ</th>',
       blockHtml, '',
-      'Off-CPU gaps between consecutive slices of the same task (preemption, wait, or scheduling delay).'),
+      'Off-CPU gaps between consecutive slices of the same task (preemption, wait, or scheduling delay). Shape Δ is the two-sample KS statistic (0 = same distribution).'),
     _cardHtml('Inter-Arrival Time',
-      '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th>',
+      '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th><th>Shape Δ</th>',
       interHtml, '',
-      'Time between consecutive activations of the same task (slice start to next slice start).'),
+      'Time between consecutive activations of the same task (slice start to next slice start). Shape Δ is the two-sample KS statistic (0 = same distribution).'),
     _cardHtml('Preemption Chains',
       '<th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th>',
       preHtml, '',

@@ -86,6 +86,20 @@ function percentile(sorted, p) {
   return sorted[idx]
 }
 
+/** `{ jitter, sigma, p50, p99 }` for a sorted list — matches parser.py `_sample_variability`. */
+function sampleVariability(sorted) {
+  const n = sorted.length
+  if (!n) return { jitter: 0, sigma: 0, p50: 0, p99: 0 }
+  const avg = sorted.reduce((a, b) => a + b, 0) / n
+  const sigma = Math.sqrt(sorted.reduce((a, v) => a + (v - avg) * (v - avg), 0) / n)
+  return {
+    jitter: sorted[n - 1] - sorted[0],
+    sigma,
+    p50: percentile(sorted, 0.50),
+    p99: percentile(sorted, 0.99),
+  }
+}
+
 /**
  * Index tag STI events by channel.
  * @returns {{ tagChannels: string[], tagSamplesByChannel: Map<string, Array> }}
@@ -130,7 +144,8 @@ export function tagOverlapsRange(sample, lo, hi) {
 
 /**
  * Per-tag-channel statistics rows (value distribution, not time).
- * @returns {Array<{channel, label, count, minVal, avgVal, maxVal, p95Val, min, avg, max, p95}>}
+ * @returns {Array<{channel, label, count, minVal, avgVal, maxVal, jitterVal,
+ *   sigmaVal, p50Val, p95Val, p99Val, min, avg, max, jitter, sigma, p50, p95, p99}>}
  */
 export function tagStatsRows(trace, lo, hi) {
   const byCh = trace?.tagSamplesByChannel
@@ -149,6 +164,7 @@ export function tagStatsRows(trace, lo, hi) {
     const maxVal = sorted[sorted.length - 1]
     const avgVal = total / count
     const p95Val = percentile(sorted, 0.95)
+    const v = sampleVariability(sorted)
     rows.push({
       channel,
       label: tagChannelLabel(channel),
@@ -156,11 +172,19 @@ export function tagStatsRows(trace, lo, hi) {
       minVal,
       avgVal,
       maxVal,
+      jitterVal: v.jitter,
+      sigmaVal: v.sigma,
+      p50Val: v.p50,
       p95Val,
+      p99Val: v.p99,
       min: formatTagValue(minVal),
       avg: formatTagValue(avgVal),
       max: formatTagValue(maxVal),
+      jitter: formatTagValue(v.jitter),
+      sigma: formatTagValue(v.sigma),
+      p50: formatTagValue(v.p50),
       p95: formatTagValue(p95Val),
+      p99: formatTagValue(v.p99),
     })
   }
   return rows

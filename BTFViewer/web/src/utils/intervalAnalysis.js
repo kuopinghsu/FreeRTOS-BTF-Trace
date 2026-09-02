@@ -192,8 +192,27 @@ function percentile(sorted, p) {
 }
 
 /**
+ * `{ jitter, sigma, p50, p99 }` for an already-sorted numeric sample list.
+ * `sigma` is the population standard deviation (÷ n), matching the exec/blocking
+ * tables — used to give Interval and Tag the same column set (review item B10).
+ */
+export function sampleVariability(sorted) {
+  const n = sorted.length
+  if (!n) return { jitter: 0, sigma: 0, p50: 0, p99: 0 }
+  const avg = sorted.reduce((a, b) => a + b, 0) / n
+  const sigma = Math.sqrt(sorted.reduce((a, v) => a + (v - avg) * (v - avg), 0) / n)
+  return {
+    jitter: sorted[n - 1] - sorted[0],
+    sigma,
+    p50: percentile(sorted, 0.50),
+    p99: percentile(sorted, 0.99),
+  }
+}
+
+/**
  * Per-interval-id statistics rows.
- * @returns {Array<{id, label, count, minNs, avgNs, maxNs, p95Ns, min, avg, max, p95}>}
+ * @returns {Array<{id, label, count, minNs, avgNs, maxNs, jitterNs, sigmaNs,
+ *   p50Ns, p95Ns, p99Ns, min, avg, max, jitter, sigma, p50, p95, p99}>}
  */
 export function intervalStatsRows(trace, lo, hi) {
   const scale = trace?.timeScale || 'ns'
@@ -230,6 +249,8 @@ export function intervalStatsRows(trace, lo, hi) {
     const max = sorted[sorted.length - 1]
     const avg = Math.round(total / count)
     const p95 = percentile(sorted, 0.95)
+    const v = sampleVariability(sorted)
+    const sigma = Math.round(v.sigma)
     rows.push({
       id,
       label,
@@ -237,11 +258,19 @@ export function intervalStatsRows(trace, lo, hi) {
       minNs: min,
       avgNs: avg,
       maxNs: max,
+      jitterNs: v.jitter,
+      sigmaNs: sigma,
+      p50Ns: v.p50,
       p95Ns: p95,
+      p99Ns: v.p99,
       min: formatTime(min, scale),
       avg: formatTime(avg, scale),
       max: formatTime(max, scale),
+      jitter: formatTime(v.jitter, scale),
+      sigma: formatTime(sigma, scale),
+      p50: formatTime(v.p50, scale),
       p95: formatTime(p95, scale),
+      p99: formatTime(v.p99, scale),
     })
   }
   rows.sort((a, b) => {
