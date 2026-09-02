@@ -610,10 +610,16 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     bar.innerHTML = '<input type="search" class="table-search" placeholder="Search table…">'
       + (hasProblems ? '<label class="table-check"><input type="checkbox" data-problems> Problems only</label>' : '')
       + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
-      + '<span class="table-count"></span>';
+      + '<span class="table-count"></span>'
+      + '<button type="button" class="table-csv">CSV</button>';
     wrap.insertBefore(bar, scroll);
     var PGBTN = 'font:inherit;font-size:12px;padding:2px 9px;border:1px solid var(--line,#d9e0ea);'
       + 'border-radius:6px;background:#f1f5fb;color:inherit;cursor:pointer;';
+    var csvBtn = bar.querySelector('.table-csv');
+    if (csvBtn) {
+      csvBtn.style.cssText = PGBTN;
+      csvBtn.title = 'Download the filtered rows as a CSV file';
+    }
     var pager = document.createElement('div');
     pager.className = 'table-pager';
     pager.style.cssText = 'display:none;gap:8px;align-items:center;margin-top:6px;'
@@ -628,6 +634,7 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     var headTxt = Array.prototype.map.call(
       table.tHead.rows[0].cells, function (th) { return th.textContent; });
     var q = '', problems = false, showAll = rows.length <= PAGE, sortCol = -1, sortDir = 1, page = 0;
+    var lastFiltered = rows;
     Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
       th.tabIndex = 0;
       th.classList.add('sortable');
@@ -650,6 +657,7 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
           return cmp * sortDir;
         });
       }
+      lastFiltered = filtered;
       Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
         var on = i === sortCol;
         th.textContent = headTxt[i] + (on ? (sortDir > 0 ? ' \\u25b2' : ' \\u25bc') : '');
@@ -688,6 +696,29 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
       showAll = e.target.checked; page = 0; apply();
     });
     if (rows.length <= PAGE) bar.querySelector('[data-all]').checked = true;
+    if (csvBtn) csvBtn.addEventListener('click', function () {
+      function esc(v) {
+        v = String(v == null ? '' : v).replace(/\\s+/g, ' ').trim();
+        return /["\\r\\n,]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+      }
+      var lines = [headTxt.map(esc).join(',')];
+      lastFiltered.forEach(function (tr) {
+        lines.push(Array.prototype.map.call(tr.cells, function (td) {
+          return esc(textOf(td));
+        }).join(','));
+      });
+      var csv = '\\ufeff' + lines.join('\\r\\n') + '\\r\\n';
+      var card = table.closest('details.report-card');
+      var sm = card && card.querySelector('summary');
+      var name = (sm ? textOf(sm) : '').toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || ('table-' + (idx + 1));
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+      a.download = name + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+    });
     apply();
   }
   document.querySelectorAll('details.report-card table').forEach(enhanceTable);

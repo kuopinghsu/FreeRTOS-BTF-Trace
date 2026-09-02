@@ -146,6 +146,23 @@ The generated `builds/demo_8cores.xtf` contains the script, trace, and selected 
 
 The viewer uses one interface, one set of controls, and one analysis workflow. During an investigation, check the active trace, **Scope**, **Filters**, View Mode, **Selection**, and **Highlight** before interpreting a result.
 
+### The main window
+
+The Desktop and Web builds share one layout.
+
+![BTFViewer main window](../images/btfviewer-web-main.png)
+
+| # | Region | What it does |
+|---|---|---|
+| 1 | **Activity rail** | Opens the tools that work alongside the timeline — **Migration heatmap**, **Analysis Findings**, and the **Snapshot editor** — with **Help** and **Settings** at the bottom. |
+| 2 | **Toolbar** | Grouped controls — Open, layout, zoom, View Mode, **Load**, theme, demo, record. Hover an icon for its name and shortcut; a narrow window folds groups into **More (⋯)**. See [Main controls](#main-controls). |
+| 3 | **Trace tabs** | One tab per open trace. Each tab keeps its own Scope, Filters, View Mode, zoom, cursors, and marks. |
+| 4 | **Legend / task list** | Colour key for the rows. Hover an entry for **Highlight**, click it for **Selection**; in Core View the **Cores** checkboxes act as the Core Filter. |
+| 5 | **Timeline and time ruler** | The scaled event view. `Ctrl`+scroll zooms toward the pointer, drag to pan, click to place a cursor, and hover a segment for task, core, start/end, and duration. The small framed box at the lower right is a whole-capture overview. |
+| 6 | **CPU load graph** | Utilisation below the timeline; toggle it with **Load** and drag the divider to resize. With a task selected, Task View can show that task's per-core utilisation here. |
+| 7 | **Right panel** | The icon rail switches between **Statistics**, **Marks**, **Find**, **Legend**, and the **AI Assistant**. Statistics (shown) holds the **Limit to C1–Cn** toggle, the investigation-category filter, the summary, the collapsible metric sections, and **Anonymize** + **Export HTML** in its footer. |
+| 8 | **Status bar** | Active-trace summary, current **Selection**, **Scope**, **Filtered:** state, zoom (µs/px and visible span), and Find `k of N` results. |
+
 ### Investigation terminology
 
 | Term | Meaning |
@@ -306,6 +323,19 @@ Treat findings as leads, not confirmed root causes. Apply cursors when a finding
 
 For multi-core traces with measurable utilization, the core-balance finding reports a **Load Balance Score** with supporting distribution values. A high score means work is distributed more evenly. Review the timeline and migration data before deciding whether the distribution is suitable for your workload.
 
+Open the Findings window from the toolbar **Investigation** group or the activity rail's **Analysis findings** button.
+
+![Analysis Findings](../images/btfviewer-web-findings.png)
+
+| # | Region | What it does |
+|---|---|---|
+| 1 | **Context and triage state** | The active trace, current **Scope**, and sample count, plus the **Open / Done / Case / Dismissed** tabs that follow each finding through triage. |
+| 2 | **Filters and sort** | Narrow by **Severity**, **Evidence** strength, or **Category**, change the **Sort**, and toggle **Group incidents** to fold repeats of one issue together. |
+| 3 | **Findings list** | Severity-ranked and grouped by the affected object; each entry shows its category and whether the evidence is `Estimated / heuristic` or measured. |
+| 4 | **Detail pane** | The selected finding in full — observation vs interpretation, evidence strength, the exact evidence, a **Check next** pointer, and the recommended Scope. |
+| 5 | **Finding actions** | **Apply cursors** / **Show on timeline** / **Investigate…** move to the evidence; **Done** / **Dismiss…** / **Add to case** record the triage outcome. |
+| 6 | **Footer** | **Ask AI** about the selected finding, plus **More** export and case options. |
+
 ### Reading Max, p95, and p99
 
 - **Max** is the largest measured value. Use it to locate the worst observed event.
@@ -322,11 +352,38 @@ After confirming load balance, check whether a task moves between cores more oft
 
 Review Task View, per-core load, **Core Migrations**, and the **Migration & Corridor Inspector** together. The Inspector shows **Core path**, **migration heatmap**, and **Topology** side by side. Click the heatmap to open **Path info** in the right column. **Analysis Scope** defaults to **Follow zoom** (Fit is Full Trace; a zoomed-in window is Viewport). You can lock Full Trace or Viewport, or choose Cursor C1–Cn. A high migration count is significant when it coincides with poor cache behavior, greater context-switch overhead, higher latency, or unstable load distribution. Handoff correlation is a heuristic, not a measured cache-line transfer.
 
+Open the Inspector from the toolbar **Investigation** group or the activity rail's **Migration heatmap** button.
+
+![Migration & Corridor Inspector](../images/btfviewer-web-migration.png)
+
+| # | Region | What it does |
+|---|---|---|
+| 1 | **Verdict strip** | A one-line read plus the supporting facts: Scope, Most affected task, Load balance, Hottest path, total Migrations (with rate), and the Main concern. |
+| 2 | **Toolbar** | **Analysis Scope** (Follow zoom / Full Trace / Viewport / Cursor C1–Cn), **Show** path depth, a toggle between **All Migrations** and bounce (ping-pong) paths only, **Direction**, and a **Task filter**. |
+| 3 | **Scope banner** | The exact window and time unit the numbers cover, so a zoomed or cursor-limited view is never mistaken for the whole trace. |
+| 4 | **Core-path tree** | Source → destination corridors ranked by rate, with Count, Ping (bounce share), Dwell, Handoff, Net, and Share. Expand a row (▶) for its per-task breakdown. |
+| 5 | **Migration heatmap** | Migrations per time bin for each corridor — cell colour is the count, hatching marks intervals where synchronization-handoff suspects exceed the threshold, and empty bins are labelled. Click a cell to focus that corridor and interval. |
+| 6 | **Topology / Path info** | A chord view of core-to-core flow; the **Path info** tab shows the selected corridor's detail. The buttons at the top right switch the layout. |
+| 7 | **AI actions** | **Investigate with AI**, plus one-click prompts — Investigate this path, Explain this migration burst, Verify possible ping-pong, and Compare with another trace. |
+
 ### Comparing open traces
 
 **Compare** is available when two or more traces are open. It summarizes differences in utilization, migrations, execution, blocking, response time, synchronization activity, and deadline misses.
 
 The **Summary** tab identifies the **Baseline** (reference trace) and **Candidate** (new trace), counts regressions and improvements, and explains the overall result. Small changes without practical engineering significance are omitted. Click a column header to sort any compare table; click again to reverse the order.
+
+![Trace Compare](../images/btfviewer-web-compare.png)
+
+| # | Region | What it does |
+|---|---|---|
+| 1 | **Trace A / Trace B selectors** | Choose which open trace is the **Baseline (A)** and which is the **Candidate (B)**. |
+| 2 | **Scope and Δ convention** | Optionally limit the comparison to each tab's cursor range; the note states that **Δ = Baseline A − Candidate B** (`—` means unavailable, `pp` = percentage points). |
+| 3 | **Section rail** | Jump between compared areas — Summary, Top Tasks, Core Utilisation, Migrations, Execution, Blocking, Inter-Arrival, Response, Preemption, Sync, Mutex, and cross-trace Trends. |
+| 4 | **Comparability check** | Warns when the traces are not directly comparable — different core counts, or task sets that barely overlap — so per-core and load-balance deltas are read with care. |
+| 5 | **Verdict banner** | The overall call (Improved / Regressed / Mixed / Unchanged) with the regression and improvement counts behind it. |
+| 6 | **Summary cards** | Regressions, Improvements, Warnings, and the single **Biggest mover**. |
+| 7 | **Change chart and metrics table** | Engineering-significant deltas as a diverging bar chart (improved ↔ regressed), with the full **All summary metrics** table (Metric / Baseline A / Candidate B / Change) below it. |
+| 8 | **Footer** | **Export HTML**, **Save baseline** / **Score vs baseline**, **Validate experiment…**, or **Ask AI about this**. |
 
 This is an optional comparison tool. It is not required by the basic investigation workflow. When you use it, compare equivalent workload phases and measurement ranges.
 
@@ -335,6 +392,19 @@ This is an optional comparison tool. It is not required by the basic investigati
 ## AI Assistant
 
 The optional AI Assistant explains Analysis Findings and Statistics measured by BTFViewer. It does not replace timeline verification or create measurements that are missing from the trace.
+
+Open it from the right panel's icon rail (**AI Assistant**).
+
+![AI Assistant panel](../images/btfviewer-web-ai.png)
+
+| # | Region | What it does |
+|---|---|---|
+| 1 | **Header** | The panel title, the provider / privacy chip (**Local** vs **Cloud**), and the active context level. |
+| 2 | **Toolbar** | **Clear** the conversation, switch reply **Language…**, or open **Settings…** (model, endpoint, authentication, privacy). |
+| 3 | **Guided investigation** | The **Triage → Scope → Investigate → Verify → Experiment → Compare** stepper and **Start Investigation**, which walks a structured workflow. |
+| 4 | **Conversation and starter prompts** | The reply thread. Before the first message it shows the current Trace / Scope / Filters and grouped one-click prompts (Start, Investigate, SMP, Verify, Compare). |
+| 5 | **Quick-action templates** | Ready-made prompts for the current selection — **Investigate**, **Verify finding**, **Explain evidence**, and **More…**. |
+| 6 | **Composer and context meter** | Type a question (Enter sends, Shift+Enter for a new line); the meter below shows the context level used for the request. |
 
 Recommended use:
 
@@ -368,7 +438,24 @@ BTFViewer provides the following export actions.
 | Trace comparison report | Open Compare and select **Export HTML** |
 | Demonstration recording | Select **Record**, share the current tab, and stop recording to download a WebM file |
 
-Statistics and Trace Compare use a single **Export HTML** action. In the saved report, each statistics table has a **CSV** button for downloading that table's currently visible rows. To download the complete table, clear **Search** and **Problems only**, then enable **Show all** before selecting **CSV**.
+Statistics and Trace Compare use a single **Export HTML** action. In the saved report, every table has a **CSV** button that downloads all of its rows matching the current **Search** and **Problems only** filters, in the current sort order (pagination is ignored). Clear those filters first to export the complete table. The **Anonymize** check box next to **Export HTML** replaces task names with stable `Task-N` aliases throughout the exported report.
+
+### Snapshot editor
+
+Press `Ctrl+S` (or the activity-rail camera) to capture the current timeline view and open the annotation editor. It is the same design on Desktop and Web: a vertical tool rail, a properties panel that follows the selection, and a slim bar for history and zoom, so the canvas keeps the room and every control sits where the work is.
+
+![Snapshot editor](../images/btfviewer-web-snapshot.png)
+
+| # | Area | What it does |
+|---|---|---|
+| 1 | **Tool rail** | **Select** first, then the annotation tools: arrow, double-arrow, line, rectangle, ellipse, text, highlighter, numbered badge, blur / redact, crop. Icon-only, one active tool; each has a single-key shortcut shown in its tooltip. |
+| 2 | **Default style** | Colour, stroke width (`−` / `+`), and dash for the **next** shape drawn. Number keys `1`–`9`, `0` also set the width. Editing an existing shape is done in the inspector (5). |
+| 3 | **History** | Full undo / redo — draw, move, resize, restyle, delete and crop are all steps (`Ctrl+Z`, `Ctrl+Shift+Z`). |
+| 4 | **Zoom & pan** | Zoom-out and zoom-in (magnifier buttons), a percentage readout, and **Fit**. `Ctrl`+scroll zooms toward the pointer; hold `Space` and drag to pan. The view opens fitted. |
+| 5 | **Floating inspector** | Appears on the selected shape and tracks it: colour (with recent colours and an image eyedropper), stroke, dash, opacity, label / text, font, z-order, duplicate, and a trash button to delete the shape. |
+| 6 | **Footer** | **Copy to Clipboard**, **Save PNG…**, **Close**. When a crop is set, only the cropped region is exported. |
+
+`?` opens the keyboard-shortcuts panel. `Esc` peels back one step at a time — close a panel, deselect the shape, then return to the Select tool — it never closes the editor.
 
 <a id="desktop-command-line" name="desktop-command-line">&#x200B;</a>
 
@@ -438,7 +525,7 @@ Desktop stores settings in `btf_viewer.rc` next to the viewer. Web stores them i
 | `Ctrl+S` | Open the Snapshot editor |
 | `Ctrl+Shift+S` | Save SVG |
 | `Ctrl+Shift+E` | Export Perfetto JSON |
-| `?` | Show Web shortcuts |
+| `?` / `F1` | Show the keyboard and mouse shortcuts reference |
 
 ### Mouse controls
 

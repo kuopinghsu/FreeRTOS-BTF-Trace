@@ -309,6 +309,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn("_btn_export_csv", stats)
         self.assertNotIn("exportCsv", web)
         self.assertIn("write_statistics_csv_report", stats)
+        # GUI: both panels offer an "Anonymize" toggle next to Export HTML
+        # (mirrors the CLI ``report --anonymize``).
+        self.assertIn('QCheckBox("Anonymize")', stats)
+        self.assertIn("_export_anonymize", stats)
+        self.assertIn('class="stats-export-anon"', web)
         for title in titles:
             self.assertIn(f'<h2>{title}', stats.replace("{_esc(scope_title)}", ""), title)
             self.assertIn(f'<h2>{title}', web, title)

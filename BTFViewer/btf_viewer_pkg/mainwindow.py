@@ -6248,7 +6248,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         # --- Help menu ---
         hm = mb.addMenu("&Help")
-        hm.addAction("&Keyboard && Mouse Shortcuts…", self._on_keyboard_shortcuts)
+        _sc_act = hm.addAction("&Keyboard && Mouse Shortcuts…", self._on_keyboard_shortcuts)
+        # "?" opens the shortcuts reference — web parity. F1 too. As a menu-action
+        # shortcut Qt auto-suppresses it while a text field has focus. ("?" and
+        # "Shift+/" are the same sequence, so only bind one to avoid an ambiguous
+        # overload.)
+        _sc_act.setShortcuts([QKeySequence("?"), QKeySequence("F1")])
         hm.addSeparator()
         hm.addAction("&About", self._on_about)
 

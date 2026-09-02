@@ -1614,17 +1614,48 @@ _IC_SNAP_RECT = (
 )
 _IC_SNAP_CIRCLE = "M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"
 _IC_SNAP_TEXT = "M3 2h10v1.5H9.25V13h-2.5V3.5H3V2z"
+# Trash / recycle bin — the inspector "delete shape" glyph (NOT an "X", which
+# reads as "close panel"). Byte-identical to web snapshotEditorIcons.js `trash`.
+_IC_SNAP_TRASH = (
+    "M6.5 1a1 1 0 0 0-1 1v.5H2.5a.5.5 0 0 0 0 1H3V13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V3.5h.5"
+    "a.5.5 0 0 0 0-1H10.5V2a1 1 0 0 0-1-1h-3zm0 1.5V2h3v.5h-3zM6 5.5a.5.5 0 0 1 1 0v6"
+    "a.5.5 0 0 1-1 0v-6zm3 0a.5.5 0 0 1 1 0v6a.5.5 0 0 1-1 0v-6z"
+)
 _IC_SNAP_UNDO = (
     "M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"
     "M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"
 )
+_IC_SNAP_REDO = (
+    "M8 3a5 5 0 1 1-4.546 2.914.5.5 0 0 0-.908-.417A6 6 0 1 0 8 2v1z"
+    "M8 4.466V.534a.25.25 0 0 0-.41-.192L5.23 2.308a.25.25 0 0 0 0 .384l2.36 1.966A.25.25 0 0 0 8 4.466z"
+)
+# Phase 4/5 snapshot-editor tools (filled single-path, same style as the rest).
+_IC_SNAP_SELECT    = "M3 2.2l8.4 4.9-3.5.9 2.1 4.6-1.7.8-2.1-4.6-2.5 2.6z"
+_IC_SNAP_HIGHLIGHT = (
+    "M11.2 1.3a1 1 0 0 0-1.4 0L4.5 6.6 3 8.1V11h2.9l1.5-1.5 5.3-5.3a1 1 0 0 0 0-1.4l-1.5-1.5z"
+    "M3 12h6v1H3z"
+)
+_IC_SNAP_BADGE = (
+    "M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.6a6.4 6.4 0 1 1 0 12.8A6.4 6.4 0 0 1 8 1.6z"
+    "M8.9 4.2v7.3H7.6V6.1l-1.2.7-.5-1.1 2-1.5z"
+)
+_IC_SNAP_BLUR = "M2 2h4.4v4.4H2zm7.2 2.4h4.4v4.4H9.2zM4.4 9.2h4.4v4.4H4.4z"
+_IC_SNAP_CROP = (
+    "M4 1v3H1v1h3v6a1 1 0 0 0 1 1h6v3h1v-3h3v-1h-3V5a1 1 0 0 0-1-1H5V1H4z"
+    "M5 5h6v6H5V5z"
+)
 _SNAP_TOOL_ICONS = {
+    'select':   _IC_SNAP_SELECT,
     'arrow':    _IC_SNAP_ARROW,
     'dblarrow': _IC_SNAP_DBLARROW,
     'line':     _IC_SNAP_LINE,
     'rect':     _IC_SNAP_RECT,
     'circle':   _IC_SNAP_CIRCLE,
     'text':     _IC_SNAP_TEXT,
+    'highlight': _IC_SNAP_HIGHLIGHT,
+    'badge':     _IC_SNAP_BADGE,
+    'blur':      _IC_SNAP_BLUR,
+    'crop':      _IC_SNAP_CROP,
 }
 # Swatch grid for the Snapshot Editor colour popup — byte-identical to the web
 # editor's PRESET_COLORS (SnapshotEditor.vue) so both offer the same palette.

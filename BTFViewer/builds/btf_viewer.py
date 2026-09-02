@@ -1834,17 +1834,48 @@ _IC_SNAP_RECT = (
 )
 _IC_SNAP_CIRCLE = "M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"
 _IC_SNAP_TEXT = "M3 2h10v1.5H9.25V13h-2.5V3.5H3V2z"
+# Trash / recycle bin — the inspector "delete shape" glyph (NOT an "X", which
+# reads as "close panel"). Byte-identical to web snapshotEditorIcons.js `trash`.
+_IC_SNAP_TRASH = (
+    "M6.5 1a1 1 0 0 0-1 1v.5H2.5a.5.5 0 0 0 0 1H3V13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V3.5h.5"
+    "a.5.5 0 0 0 0-1H10.5V2a1 1 0 0 0-1-1h-3zm0 1.5V2h3v.5h-3zM6 5.5a.5.5 0 0 1 1 0v6"
+    "a.5.5 0 0 1-1 0v-6zm3 0a.5.5 0 0 1 1 0v6a.5.5 0 0 1-1 0v-6z"
+)
 _IC_SNAP_UNDO = (
     "M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"
     "M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"
 )
+_IC_SNAP_REDO = (
+    "M8 3a5 5 0 1 1-4.546 2.914.5.5 0 0 0-.908-.417A6 6 0 1 0 8 2v1z"
+    "M8 4.466V.534a.25.25 0 0 0-.41-.192L5.23 2.308a.25.25 0 0 0 0 .384l2.36 1.966A.25.25 0 0 0 8 4.466z"
+)
+# Phase 4/5 snapshot-editor tools (filled single-path, same style as the rest).
+_IC_SNAP_SELECT    = "M3 2.2l8.4 4.9-3.5.9 2.1 4.6-1.7.8-2.1-4.6-2.5 2.6z"
+_IC_SNAP_HIGHLIGHT = (
+    "M11.2 1.3a1 1 0 0 0-1.4 0L4.5 6.6 3 8.1V11h2.9l1.5-1.5 5.3-5.3a1 1 0 0 0 0-1.4l-1.5-1.5z"
+    "M3 12h6v1H3z"
+)
+_IC_SNAP_BADGE = (
+    "M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.6a6.4 6.4 0 1 1 0 12.8A6.4 6.4 0 0 1 8 1.6z"
+    "M8.9 4.2v7.3H7.6V6.1l-1.2.7-.5-1.1 2-1.5z"
+)
+_IC_SNAP_BLUR = "M2 2h4.4v4.4H2zm7.2 2.4h4.4v4.4H9.2zM4.4 9.2h4.4v4.4H4.4z"
+_IC_SNAP_CROP = (
+    "M4 1v3H1v1h3v6a1 1 0 0 0 1 1h6v3h1v-3h3v-1h-3V5a1 1 0 0 0-1-1H5V1H4z"
+    "M5 5h6v6H5V5z"
+)
 _SNAP_TOOL_ICONS = {
+    'select':   _IC_SNAP_SELECT,
     'arrow':    _IC_SNAP_ARROW,
     'dblarrow': _IC_SNAP_DBLARROW,
     'line':     _IC_SNAP_LINE,
     'rect':     _IC_SNAP_RECT,
     'circle':   _IC_SNAP_CIRCLE,
     'text':     _IC_SNAP_TEXT,
+    'highlight': _IC_SNAP_HIGHLIGHT,
+    'badge':     _IC_SNAP_BADGE,
+    'blur':      _IC_SNAP_BLUR,
+    'crop':      _IC_SNAP_CROP,
 }
 # Swatch grid for the Snapshot Editor colour popup — byte-identical to the web
 # editor's PRESET_COLORS (SnapshotEditor.vue) so both offer the same palette.
@@ -2783,10 +2814,16 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     bar.innerHTML = '<input type="search" class="table-search" placeholder="Search table…">'
       + (hasProblems ? '<label class="table-check"><input type="checkbox" data-problems> Problems only</label>' : '')
       + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
-      + '<span class="table-count"></span>';
+      + '<span class="table-count"></span>'
+      + '<button type="button" class="table-csv">CSV</button>';
     wrap.insertBefore(bar, scroll);
     var PGBTN = 'font:inherit;font-size:12px;padding:2px 9px;border:1px solid var(--line,#d9e0ea);'
       + 'border-radius:6px;background:#f1f5fb;color:inherit;cursor:pointer;';
+    var csvBtn = bar.querySelector('.table-csv');
+    if (csvBtn) {
+      csvBtn.style.cssText = PGBTN;
+      csvBtn.title = 'Download the filtered rows as a CSV file';
+    }
     var pager = document.createElement('div');
     pager.className = 'table-pager';
     pager.style.cssText = 'display:none;gap:8px;align-items:center;margin-top:6px;'
@@ -2801,6 +2838,7 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     var headTxt = Array.prototype.map.call(
       table.tHead.rows[0].cells, function (th) { return th.textContent; });
     var q = '', problems = false, showAll = rows.length <= PAGE, sortCol = -1, sortDir = 1, page = 0;
+    var lastFiltered = rows;
     Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
       th.tabIndex = 0;
       th.classList.add('sortable');
@@ -2823,6 +2861,7 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
           return cmp * sortDir;
         });
       }
+      lastFiltered = filtered;
       Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
         var on = i === sortCol;
         th.textContent = headTxt[i] + (on ? (sortDir > 0 ? ' \\u25b2' : ' \\u25bc') : '');
@@ -2861,6 +2900,29 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
       showAll = e.target.checked; page = 0; apply();
     });
     if (rows.length <= PAGE) bar.querySelector('[data-all]').checked = true;
+    if (csvBtn) csvBtn.addEventListener('click', function () {
+      function esc(v) {
+        v = String(v == null ? '' : v).replace(/\\s+/g, ' ').trim();
+        return /["\\r\\n,]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+      }
+      var lines = [headTxt.map(esc).join(',')];
+      lastFiltered.forEach(function (tr) {
+        lines.push(Array.prototype.map.call(tr.cells, function (td) {
+          return esc(textOf(td));
+        }).join(','));
+      });
+      var csv = '\\ufeff' + lines.join('\\r\\n') + '\\r\\n';
+      var card = table.closest('details.report-card');
+      var sm = card && card.querySelector('summary');
+      var name = (sm ? textOf(sm) : '').toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || ('table-' + (idx + 1));
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+      a.download = name + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+    });
     apply();
   }
   document.querySelectorAll('details.report-card table').forEach(enhanceTable);
@@ -64849,6 +64911,9 @@ class _StatsPanel(QWidget):
         self._last_anomaly: Optional[dict] = None
         self._trace: Optional["BtfTrace"] = None
         self._export_scope_override: Optional[Tuple[int, int]] = None
+        # Per-export "anonymize task names" toggle (mirrors the web stats panel
+        # and the CLI ``report --anonymize``); wired to the footer check box.
+        self._export_anonymize: bool = False
         self._cursor_times: List[int] = []
         self._scope_to_cursors: bool = True
         self._section_collapsed: Dict[str, bool] = default_section_collapsed()
@@ -65043,11 +65108,19 @@ class _StatsPanel(QWidget):
         exp_row = QVBoxLayout()
         exp_row.setContentsMargins(8, 6, 8, 8)
         exp_row.setSpacing(4)
+        self._export_anon_cb = QCheckBox("Anonymize")
+        self._export_anon_cb.setChecked(self._export_anonymize)
+        self._export_anon_cb.setEnabled(False)
+        self._export_anon_cb.setToolTip(
+            "Replace task names with stable Task-N aliases in the exported report")
+        self._export_anon_cb.toggled.connect(self._on_export_anonymize_toggled)
+        exp_row.addWidget(self._export_anon_cb)
         self._btn_export_html = QPushButton("Export HTML")
         self._btn_export_html.clicked.connect(self._export_html)
         self._btn_export_html.setEnabled(False)
         self._btn_export_html.setToolTip(
-            "Export statistics as HTML (tables include Search / Show all)")
+            "Export statistics as an HTML report "
+            "(each table has Search / Show all and a CSV download)")
         exp_row.addWidget(self._btn_export_html)
         self._btn_export_html.setMinimumWidth(0)
         self._btn_export_html.setSizePolicy(
@@ -65064,6 +65137,7 @@ class _StatsPanel(QWidget):
         ui_fs = self._ui_fs()
         font = _application_ui_font(self._ui_font_size)
         self._scope_cb.setFont(font)
+        self._export_anon_cb.setFont(font)
         self._scope_label.setStyleSheet(f"color:#888888; font-size:{ui_fs};")
         guide = getattr(self, "_btn_stats_guide", None)
         if guide is not None:
@@ -68685,6 +68759,10 @@ class _StatsPanel(QWidget):
         findings = self._append_exec_anomaly_findings(findings, trace, lo, hi)
         return findings, scope_title
 
+    def _on_export_anonymize_toggled(self, on: bool) -> None:
+        """Footer 'Anonymize' check box → per-export task-name redaction."""
+        self._export_anonymize = bool(on)
+
     def _make_export_anonymizer(self):
         """Return ``(fn, active)`` — ``fn`` maps task names to stable Task-N
         aliases when ``report --anonymize`` is set, else identity."""
@@ -69715,12 +69793,21 @@ class _StatsPanel(QWidget):
             report_class="report-wide",
         )
 
+        out = html_apply_collapsible_toc(
+            report,
+            default_expanded=STATS_DEFAULT_EXPANDED,
+            toc_groups=STATS_TOC_GROUPS,
+        )
+        # Blanket task-name redaction over the assembled document — mirrors the
+        # web export's per-cell anonymiser and the CSV export's cell_transform,
+        # and catches fragments built by stats_html helpers that use their own
+        # plain escaper. Alias keys always contain "[<id>]", so they never
+        # collide with markup, CSS or the static interactive script.
+        if getattr(self, "_export_anonymize", False):
+            out = _anon(out)
+
         with open(path, "w", encoding="utf-8") as f:
-            f.write(html_apply_collapsible_toc(
-                report,
-                default_expanded=STATS_DEFAULT_EXPANDED,
-                toc_groups=STATS_TOC_GROUPS,
-            ))
+            f.write(out)
 
     def _export_html(self) -> None:
         if self._trace is None:
@@ -70600,6 +70687,7 @@ class _StatsPanel(QWidget):
         self._needs_presentation_defaults = True
         self._cursor_times = []
         self._btn_export_html.setEnabled(False)
+        self._export_anon_cb.setEnabled(False)
         self._scope_cb.setEnabled(False)
         self._clear()
         self._update_scope_header()
@@ -70635,6 +70723,7 @@ class _StatsPanel(QWidget):
                 self._section_collapsed = dict(collapsed)
         defer_heavy = trace_needs_deferred_stats_load(trace)
         self._btn_export_html.setEnabled(True)
+        self._export_anon_cb.setEnabled(True)
         if self._preserve_scroll and hasattr(self, "_scroll") and self._scroll is not None:
             try:
                 self._saved_scroll_y = int(self._scroll.verticalScrollBar().value())
@@ -75094,124 +75183,183 @@ class _AnnotationCanvas(QWidget):
         self._editor = editor
         self.setFixedSize(disp_w, disp_h)
         self.setMouseTracking(True)
-        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self._pan_origin = None  # (mouse_global, hbar, vbar) while space-panning
 
+    # -- painting --------------------------------------------------------
     def paintEvent(self, event) -> None:  # noqa: N802
         ed = self._editor
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        # Background image scaled to display size
-        painter.drawPixmap(0, 0, ed._disp_w, ed._disp_h, ed._orig_pixmap)
-        # Scale painter to image coordinates
-        painter.scale(ed._scale, ed._scale)
-        # Two-pass rendering: white outline, then colour
-        visible = [
-            s for i, s in enumerate(ed._shapes)
-            if not ed._should_skip_text_shape_paint(i, s)
-        ]
-        ed._paint_shapes(painter, visible, QColor('#ffffff'), 2)
-        if ed._drawing:
-            ed._paint_shapes(painter, [ed._drawing], QColor('#ffffff'), 2)
-        ed._paint_shapes(painter, visible)
-        if ed._drawing:
-            ed._paint_shapes(painter, [ed._drawing])
-        if ed._selected_idx >= 0 and ed._selected_idx < len(ed._shapes) and ed._drawing is None:
-            ed._paint_selection(painter, ed._shapes[ed._selected_idx])
-        painter.end()
+        try:
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.drawPixmap(0, 0, ed._disp_w, ed._disp_h, ed._orig_pixmap)
+            painter.scale(ed._scale, ed._scale)
+            visible = [
+                s for i, s in enumerate(ed._shapes)
+                if not ed._should_skip_text_shape_paint(i, s)
+            ]
+            outline = [s for s in visible if s['type'] not in ed._NO_OUTLINE]
+            ed._paint_shapes(painter, outline, QColor('#ffffff'), 2)
+            if ed._drawing and ed._drawing['type'] not in ed._NO_OUTLINE:
+                ed._paint_shapes(painter, [ed._drawing], QColor('#ffffff'), 2)
+            ed._paint_shapes(painter, visible)
+            if ed._drawing:
+                ed._paint_shapes(painter, [ed._drawing])
+            if ed._crop and not ed._exporting:
+                ed._paint_crop_overlay(painter)
+            if (ed._selected_idx >= 0 and ed._selected_idx < len(ed._shapes)
+                    and ed._drawing is None and not ed._exporting):
+                ed._paint_selection(painter, ed._shapes[ed._selected_idx])
+        finally:
+            painter.end()
 
+    # -- mouse ----------------------------------------------------------
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() != Qt.MouseButton.LeftButton:
             return
         ed = self._editor
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+
+        # Space-held → pan the scroll area.
+        if ed._space_down:
+            sb_h = ed._scroll.horizontalScrollBar()
+            sb_v = ed._scroll.verticalScrollBar()
+            self._pan_origin = (event.globalPosition().toPoint(),
+                                sb_h.value(), sb_v.value())
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+
         if ed._text_edit_active() and ed._tool != 'text':
             ed._commit_text_edit()
         x, y = ed._to_img(event.position().x(), event.position().y())
+
+        # Eyedropper armed from the inspector.
+        if ed._eyedrop_cb is not None:
+            col = ed._sample_image_color(x, y)
+            cb, ed._eyedrop_cb = ed._eyedrop_cb, None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            if col is not None:
+                cb(col)
+            return
+
         if ed._tool == 'text':
             hit = ed._hit_test(x, y)
             if hit >= 0 and ed._shapes[hit]['type'] == 'text':
-                ed._selected_idx = hit
-                self.update()
+                ed._select(hit)
                 return
             ed._begin_text_edit(shape_idx=-1, img_x=x, img_y=y, angle=0.0,
                                 initial='', color=ed._color, font_size=ed._font_size)
             return
-        else:
-            handle = ed._hit_control_point(x, y)
-            if handle and ed._selected_idx >= 0:
-                ed._drag_idx = ed._selected_idx
-                ed._drag_mode = 'handle'
-                ed._drag_handle = handle
-                ed._drag_anchor = ed._get_handle_anchor(ed._shapes[ed._drag_idx], handle)
-                self.setCursor(ed._cursor_for_handle(handle))
-                return
 
-            # Try to pick up an existing shape for dragging
-            hit = ed._hit_test(x, y)
-            if hit >= 0:
-                if bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier):
-                    new_idx = ed._duplicate_shape(hit)
-                    ed._selected_idx = new_idx
-                    ed._sync_dash_from_shape(new_idx)
-                    ed._drag_idx = new_idx
-                    ed._drag_prev = (x, y)
-                    ed._drag_mode = 'move'
-                    ed._drag_handle = ''
-                    ed._drag_anchor = None
-                    self.setCursor(Qt.CursorShape.SizeAllCursor)
-                    self.update()
-                    return
-                ed._selected_idx = hit
-                ed._sync_dash_from_shape(hit)
-                ed._drag_idx = hit
+        if ed._tool == 'badge':
+            ed._shapes.append({
+                'type': 'badge', 'color': QColor(ed._color),
+                'x': x, 'y': y, 'n': ed._next_badge_number(), 'r': 15.0,
+            })
+            ed._select(len(ed._shapes) - 1)
+            ed._push_history()
+            return
+
+        if ed._tool == 'crop':
+            ed._selected_idx = -1
+            ed._drawing = {'type': 'crop', 'x1': x, 'y1': y, 'x2': x, 'y2': y,
+                           'x': x, 'y': y, 'w': 0.0, 'h': 0.0}
+            self.update()
+            return
+
+        handle = ed._hit_control_point(x, y)
+        if handle and ed._selected_idx >= 0:
+            ed._drag_idx = ed._selected_idx
+            ed._drag_mode = 'handle'
+            ed._drag_handle = handle
+            ed._drag_anchor = ed._get_handle_anchor(ed._shapes[ed._drag_idx], handle)
+            ed._gesture_dirty = False
+            self.setCursor(ed._cursor_for_handle(handle))
+            return
+
+        hit = ed._hit_test(x, y)
+        if hit >= 0:
+            if bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                new_idx = ed._duplicate_shape(hit)
+                ed._select(new_idx)
+                ed._drag_idx = new_idx
                 ed._drag_prev = (x, y)
                 ed._drag_mode = 'move'
                 ed._drag_handle = ''
                 ed._drag_anchor = None
+                ed._gesture_dirty = True
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
-                self.update()
+                return
+            ed._select(hit)
+            ed._drag_idx = hit
+            ed._drag_prev = (x, y)
+            ed._drag_mode = 'move'
+            ed._drag_handle = ''
+            ed._drag_anchor = None
+            ed._gesture_dirty = False
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            return
+
+        # Empty space.
+        ed._select(-1)
+        if ed._tool == 'select':
+            self.update()
+            return
+        ed._drawing = {
+            'type': ed._tool,
+            'color': QColor(ed._color),
+            'width': ed._line_width,
+            'dashed': ed._dashed,
+            'x1': x, 'y1': y, 'x2': x, 'y2': y,
+            'x': x, 'y': y, 'w': 0.0, 'h': 0.0,
+        }
+        if ed._tool == 'blur':
+            self._drawing_strength()
+
+    def _drawing_strength(self) -> None:
+        self._editor._drawing['strength'] = 4
+
+    def _finish_box_drag(self, d: dict, x: float, y: float, shift: bool) -> None:
+        if d['type'] in SnapshotEditorDialog._LINE_TOOLS:
+            d['x2'], d['y2'] = _snap_line_end(d['x1'], d['y1'], x, y, shift)
+        else:
+            d['x2'], d['y2'] = x, y
+            x1, y1 = d['x1'], d['y1']
+            if shift:
+                box = _constrain_box(x1, y1, x, y)
+                d['x'], d['y'], d['w'], d['h'] = box['x'], box['y'], box['w'], box['h']
             else:
-                ed._selected_idx = -1
-                ed._drawing = {
-                    'type': ed._tool,
-                    'color': QColor(ed._color),
-                    'width': ed._line_width,
-                    'dashed': ed._dashed,
-                    'x1': x, 'y1': y,
-                    'x2': x, 'y2': y,
-                    'x': x, 'y': y, 'w': 0.0, 'h': 0.0,
-                }
+                d['x'] = min(x1, x); d['y'] = min(y1, y)
+                d['w'] = abs(x - x1); d['h'] = abs(y - y1)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         ed = self._editor
+        if self._pan_origin is not None:
+            g0, h0, v0 = self._pan_origin
+            g = event.globalPosition().toPoint()
+            ed._scroll.horizontalScrollBar().setValue(h0 - (g.x() - g0.x()))
+            ed._scroll.verticalScrollBar().setValue(v0 - (g.y() - g0.y()))
+            return
         x, y = ed._to_img(event.position().x(), event.position().y())
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         if ed._drag_mode == 'handle' and ed._drag_idx >= 0 and ed._drag_handle:
-            force = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            ed._resize_shape_by_handle(ed._drag_idx, ed._drag_handle, x, y, force)
+            ed._resize_shape_by_handle(ed._drag_idx, ed._drag_handle, x, y, shift)
+            ed._gesture_dirty = True
             self.update()
         elif ed._drag_mode == 'move' and ed._drag_idx >= 0:
-            dx = x - ed._drag_prev[0]
-            dy = y - ed._drag_prev[1]
-            ed._move_shape(ed._drag_idx, dx, dy)
+            ed._move_shape(ed._drag_idx, x - ed._drag_prev[0], y - ed._drag_prev[1])
             ed._drag_prev = (x, y)
+            ed._gesture_dirty = True
             self.update()
+            ed._update_inspector()
         elif ed._drawing is not None:
-            d = ed._drawing
-            if d['type'] in SnapshotEditorDialog._LINE_TOOLS:
-                force = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-                d['x2'], d['y2'] = _snap_line_end(d['x1'], d['y1'], x, y, force)
-            else:
-                d['x2'] = x;  d['y2'] = y
-                x1 = d['x1']; y1 = d['y1']
-                if bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
-                    box = _constrain_box(x1, y1, x, y)
-                    d['x'] = box['x'];  d['y'] = box['y']
-                    d['w'] = box['w'];  d['h'] = box['h']
-                else:
-                    d['x'] = min(x1, x); d['y'] = min(y1, y)
-                    d['w'] = abs(x - x1); d['h'] = abs(y - y1)
+            self._finish_box_drag(ed._drawing, x, y, shift)
             self.update()
         else:
-            # Update cursor to hint movable shape or active control handle.
+            if ed._space_down:
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+                return
             handle = ed._hit_control_point(x, y)
             ed._hover_handle = handle or ''
             if handle:
@@ -75219,123 +75367,72 @@ class _AnnotationCanvas(QWidget):
                 return
             hit = ed._hit_test(x, y)
             ed._hover_idx = hit
-            self.setCursor(Qt.CursorShape.SizeAllCursor if hit >= 0 else Qt.CursorShape.CrossCursor)
+            if ed._tool == 'text':
+                self.setCursor(Qt.CursorShape.IBeamCursor)
+            elif hit >= 0:
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+            elif ed._tool == 'select':
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+            else:
+                self.setCursor(Qt.CursorShape.CrossCursor)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() != Qt.MouseButton.LeftButton:
             return
         ed = self._editor
+        if self._pan_origin is not None:
+            self._pan_origin = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor if ed._space_down
+                           else Qt.CursorShape.ArrowCursor)
+            return
         if ed._drag_mode in ('move', 'handle') and ed._drag_idx >= 0:
             ed._drag_idx = -1
             ed._drag_mode = 'none'
             ed._drag_handle = ''
             ed._drag_anchor = None
-            self.setCursor(Qt.CursorShape.SizeAllCursor if ed._selected_idx >= 0 else Qt.CursorShape.CrossCursor)
+            if ed._gesture_dirty:
+                ed._gesture_dirty = False
+                ed._push_history()
+            self.setCursor(Qt.CursorShape.SizeAllCursor if ed._selected_idx >= 0
+                           else Qt.CursorShape.ArrowCursor)
             self.update()
+            ed._update_inspector()
         elif ed._drawing is not None:
             x, y = ed._to_img(event.position().x(), event.position().y())
             d = ed._drawing
-            if d['type'] in SnapshotEditorDialog._LINE_TOOLS:
-                force = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-                d['x2'], d['y2'] = _snap_line_end(d['x1'], d['y1'], x, y, force)
-            else:
-                d['x2'] = x;  d['y2'] = y
-                x1 = d['x1']; y1 = d['y1']
-                if bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
-                    box = _constrain_box(x1, y1, x, y)
-                    d['x'] = box['x'];  d['y'] = box['y']
-                    d['w'] = box['w'];  d['h'] = box['h']
-                else:
-                    d['x'] = min(x1, x); d['y'] = min(y1, y)
-                    d['w'] = abs(x - x1); d['h'] = abs(y - y1)
-            # Discard zero-size shapes (accidental single click with no drag)
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self._finish_box_drag(d, x, y, shift)
             span = max(abs(d['x2'] - d['x1']), abs(d['y2'] - d['y1']),
                        abs(d['w']), abs(d['h']))
-            if span > 2:
+            if d['type'] == 'crop':
+                if span > 2:
+                    ed._set_crop(d['x'], d['y'], d['w'], d['h'])
+            elif span > 2:
                 ed._shapes.append(d)
-                ed._selected_idx = len(ed._shapes) - 1
+                ed._select(len(ed._shapes) - 1)
+                ed._push_history()
             ed._drawing = None
             self.update()
 
-    def contextMenuEvent(self, event) -> None:  # noqa: N802
-        # Guard against the spurious second context-menu event Qt fires after
-        # QMenu.exec_() returns on Linux (button-press AND button-release both
-        # generate a QContextMenuEvent).  The flag is held until the secondary
-        # dialog is fully closed, so no residual event can sneak through.
-        if getattr(self, '_ctx_busy', False):
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        ed = self._editor
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            factor = 1.15 if event.angleDelta().y() > 0 else (1.0 / 1.15)
+            ed._zoom_at(event.position().x(), event.position().y(), factor)
             event.accept()
             return
+        super().wheelEvent(event)
 
-        from PySide6.QtWidgets import QColorDialog, QMenu
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        # Right-click just selects the shape under the cursor — the floating
+        # inspector is the only property surface (web parity).
         ed = self._editor
-        # QContextMenuEvent uses .pos() - NOT .position() (QMouseEvent only)
         x, y = ed._to_img(event.pos().x(), event.pos().y())
         idx = ed._hit_test(x, y)
-        if idx < 0:
-            return
-
-        ed._selected_idx = idx
-        self.update()
-
+        if idx >= 0:
+            ed._select(idx)
+            self.update()
         event.accept()
-        self._ctx_busy = True
-
-        shape = ed._shapes[idx]
-        is_text = shape['type'] == 'text'
-
-        menu = QMenu(self)
-        act_delete    = menu.addAction("Delete")
-        menu.addSeparator()
-        act_color     = menu.addAction("Change Color...")
-        act_size      = None if is_text else menu.addAction("Change Size...")
-        act_edit_text = menu.addAction("Edit Text...") if is_text else menu.addAction("Edit Label...")
-        act_font_size = menu.addAction("Change Font Size...") if is_text else None
-
-        chosen = menu.exec(event.globalPos())
-
-        if chosen is None or chosen == act_delete:
-            if chosen == act_delete:
-                ed._shapes.pop(idx)
-                if ed._selected_idx == idx:
-                    ed._selected_idx = -1
-                elif ed._selected_idx > idx:
-                    ed._selected_idx -= 1
-                self.update()
-            # Release guard after one event-loop cycle so any residual
-            # context-menu event already in the queue gets swallowed first.
-            QTimer.singleShot(0, lambda: setattr(self, '_ctx_busy', False))
-            return
-
-        # For actions that open a secondary dialog: hold the guard inside the
-        # dialog via try/finally - it is released only after the dialog closes.
-        def _open_dialog():
-            try:
-                if chosen == act_color:
-                    color = QColorDialog.getColor(shape['color'], self, "Pick Colour")
-                    if color.isValid():
-                        shape['color'] = color
-                        self.update()
-                elif act_size and chosen == act_size:
-                    val, ok = QInputDialog.getInt(
-                        self, "Change Size", "Stroke width (px):",
-                        shape.get('width', 3), 1, 20)
-                    if ok:
-                        shape['width'] = val
-                        self.update()
-                elif act_edit_text and chosen == act_edit_text:
-                    ed._begin_edit_shape_text(idx)
-                    self.update()
-                elif act_font_size and chosen == act_font_size:
-                    val, ok = QInputDialog.getInt(
-                        self, "Change Font Size", "Font size (pt):",
-                        shape.get('font_size', 20), 8, 72)
-                    if ok:
-                        shape['font_size'] = val
-                        self.update()
-            finally:
-                self._ctx_busy = False  # released only after dialog fully closes
-
-        QTimer.singleShot(0, _open_dialog)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         if event.button() != Qt.MouseButton.LeftButton:
@@ -75345,6 +75442,10 @@ class _AnnotationCanvas(QWidget):
         idx = ed._hit_test(x, y)
         if idx < 0:
             return
+        if ed._shapes[idx]['type'] in ('badge', 'blur', 'highlight'):
+            ed._select(idx)
+            self.update()
+            return
         ed._selected_idx = idx
         ed._drag_idx = -1
         ed._drag_mode = 'none'
@@ -75352,6 +75453,18 @@ class _AnnotationCanvas(QWidget):
         ed._drag_anchor = None
         ed._begin_edit_shape_text(idx)
         self.update()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        # Forward to the dialog so all shortcuts live in one place.
+        if not self._editor._handle_key(event):
+            super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._editor._space_down = False
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().keyReleaseEvent(event)
+
 
 def _widget_available_geometry(widget: QWidget) -> QRect:
     """Qt6-safe available screen geometry (QApplication.desktop() was removed)."""
@@ -75363,71 +75476,172 @@ def _widget_available_geometry(widget: QWidget) -> QRect:
         return screen.availableGeometry()
     return QRect(0, 0, 1920, 1080)
 
+
+class _ShortcutsDialog(QDialog):
+    """Keyboard-shortcuts reference — the desktop twin of the web "?" overlay."""
+
+    def __init__(self, parent: 'SnapshotEditorDialog') -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Keyboard Shortcuts")
+        self.setModal(True)
+        self.setStyleSheet(parent.styleSheet())
+        v = QVBoxLayout(self)
+        v.setContentsMargins(18, 16, 18, 16)
+        v.setSpacing(10)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(6)
+        for i, (keys, desc) in enumerate(SnapshotEditorDialog._SHORTCUTS):
+            kb = QLabel(keys)
+            kb.setStyleSheet("font-family:monospace; font-weight:700;")
+            grid.addWidget(kb, i % 10, (i // 10) * 2)
+            grid.addWidget(QLabel(desc), i % 10, (i // 10) * 2 + 1)
+        v.addLayout(grid)
+        clr = QPushButton("Clear all annotations")
+        clr.setObjectName("btn_secondary")
+        clr.clicked.connect(lambda: (parent._clear_all(), self.close()))
+        v.addWidget(clr)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Question):
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class SnapshotEditorDialog(QDialog):
     """Annotation editor dialog opened when the user captures a viewport snapshot.
 
-    Supported tools: arrow, double-arrow, line, rectangle, circle, text.
-    Use the Dash checkbox for dashed strokes on line-based shapes and boxes.
-    All shapes are rendered with a white outline pass followed by a colour
-    pass, mirroring the web-app behaviour.
+    Tools: select, arrow, double-arrow, line, rectangle, ellipse, text,
+    highlighter, numbered badge, blur/redact and crop.  Per-shape styling is
+    done through the floating inspector; the toolbar Style group sets the
+    defaults for the next shape.  Mirrors ``web/src/components/SnapshotEditor.vue``.
     """
 
-    _TOOLS = ('arrow', 'dblarrow', 'line', 'rect', 'circle', 'text')
-    _LINE_TOOLS = ('arrow', 'dblarrow', 'line', 'dash')
+    _TOOLS = ('select', 'arrow', 'dblarrow', 'line', 'rect', 'circle', 'text',
+              'highlight', 'badge', 'blur', 'crop')
+    _RAIL_SEPS = (1,)
+    _LINE_TOOLS = ('arrow', 'dblarrow', 'line', 'dash', 'highlight')
+    _BOX_TOOLS = ('rect', 'circle', 'blur')
+    _STROKE_TYPES = ('rect', 'circle', 'line', 'arrow', 'dblarrow', 'dash', 'highlight')
+    _DASHABLE = ('rect', 'circle', 'line', 'arrow', 'dblarrow', 'dash')
+    _NO_OUTLINE = ('highlight', 'badge', 'blur', 'crop')
+    _HISTORY_LIMIT = 100
     _TOOL_LABELS = {
-        'arrow':    'Arrow',
-        'dblarrow': 'Double Arrow',
-        'line':     'Line',
-        'rect':   'Rectangle  (Shift: square)',
-        'circle': 'Circle / Ellipse  (Shift: circle)',
-        'text':   'Add Text (click to place)',
+        'select':   'Select / move  (V)',
+        'arrow':    'Arrow  (A)',
+        'dblarrow': 'Double Arrow  (D)',
+        'line':     'Line  (L)',
+        'rect':     'Rectangle — Shift: square  (R)',
+        'circle':   'Circle / Ellipse — Shift: circle  (O)',
+        'text':     'Add Text — click to place  (T)',
+        'highlight': 'Highlighter  (H)',
+        'badge':     'Numbered step badge — click to place  (S)',
+        'blur':      'Blur / redact — drag a region  (B)',
+        'crop':      'Crop — drag to trim the export  (C)',
     }
+    _TOOL_KEYS = {
+        Qt.Key.Key_V: 'select', Qt.Key.Key_A: 'arrow', Qt.Key.Key_D: 'dblarrow',
+        Qt.Key.Key_L: 'line', Qt.Key.Key_R: 'rect', Qt.Key.Key_O: 'circle',
+        Qt.Key.Key_T: 'text', Qt.Key.Key_H: 'highlight', Qt.Key.Key_S: 'badge',
+        Qt.Key.Key_B: 'blur', Qt.Key.Key_C: 'crop',
+    }
+    _SHAPE_LABELS = {
+        'arrow': 'Arrow', 'dblarrow': 'Double arrow', 'line': 'Line', 'dash': 'Line',
+        'rect': 'Rectangle', 'circle': 'Ellipse', 'text': 'Text',
+        'highlight': 'Highlighter', 'badge': 'Number', 'blur': 'Blur',
+    }
+    _SHORTCUTS = [
+        ("V", "Select / move"),
+        ("A / D", "Arrow / double arrow"),
+        ("L", "Line"),
+        ("R / O", "Rectangle / ellipse"),
+        ("T", "Text"),
+        ("H", "Highlighter"),
+        ("S", "Numbered badge"),
+        ("B", "Blur / redact"),
+        ("C", "Crop"),
+        ("1 - 9, 0", "Set stroke width"),
+        ("Ctrl+Z", "Undo"),
+        ("Ctrl+Shift+Z", "Redo"),
+        ("Ctrl+D", "Duplicate selection"),
+        ("Delete", "Delete selection / crop"),
+        ("Arrows", "Nudge selection (Shift = x10)"),
+        ("[ / ]", "Send back / bring forward"),
+        ("Ctrl+wheel", "Zoom to cursor"),
+        ("Space + drag", "Pan"),
+        ("Esc", "Deselect, back to Select"),
+        ("?", "This panel"),
+    ]
+
     def __init__(self, pixmap: QPixmap, parent: Optional[QWidget] = None,
                  capture_dpr: float = 1.0) -> None:
         super().__init__(parent)
-        # Flatten HiDPI grab() to 1:1 device pixels; annotation coords match pixels.
         self._orig_pixmap, detected_dpr = _normalize_grab_pixmap(pixmap)
         self._capture_dpr = capture_dpr if capture_dpr > 1.0 + 1e-6 else detected_dpr
+        self._orig_image = self._orig_pixmap.toImage()
         self._shapes: list = []
         self._drawing: Optional[dict] = None
         self._drag_idx: int = -1
         self._drag_prev: tuple = (0.0, 0.0)
-        self._drag_mode: str = 'none'      # none | move | handle
+        self._drag_mode: str = 'none'
         self._drag_handle: str = ''
         self._drag_anchor: Optional[tuple] = None
+        self._gesture_dirty: bool = False
         self._selected_idx: int = -1
         self._hover_idx: int = -1
         self._hover_handle: str = ''
-        self._tool: str = 'arrow'
+        self._tool: str = 'select'
         self._color: QColor = QColor('#ff4444')
         self._line_width: int = 3
         self._font_size: int = 20
         self._dashed: bool = False
+        self._recent_colors: list = []
+        self._crop: Optional[dict] = None
+        self._exporting: bool = False
+        self._space_down: bool = False
+        self._eyedrop_cb = None
+        self._shortcuts_dlg: Optional[_ShortcutsDialog] = None
+        self._nudge_timer = QTimer(self)
+        self._nudge_timer.setSingleShot(True)
+        self._nudge_timer.timeout.connect(self._push_history)
         self._text_edit_shape_idx: int = -1
         self._text_edit_img_x: float = 0.0
         self._text_edit_img_y: float = 0.0
 
-        # Compute display scale so the canvas fits the available screen area
+        # History: full snapshots (shapes + crop) so undo covers cropping too.
+        self._history: list = []
+        self._hist_idx: int = -1
+
         screen = _widget_available_geometry(parent or self)
         max_w = screen.width() - 120
         max_h = screen.height() - 220
         iw, ih = self._orig_pixmap.width(), self._orig_pixmap.height()
-        self._scale: float = max(0.01, min(1.0, max_w / max(iw, 1), max_h / max(ih, 1)))
+        self._fit_scale: float = max(0.02, min(1.0, max_w / max(iw, 1), max_h / max(ih, 1)))
+        self._zoom: float = 1.0
+        self._scale: float = self._fit_scale
         self._disp_w: int = max(1, int(iw * self._scale))
         self._disp_h: int = max(1, int(ih * self._scale))
 
         self._build_ui()
         self.setWindowTitle("Snapshot Editor")
         self.setModal(True)
-        QShortcut(QKeySequence("Ctrl+Z"), self, self._undo)
+        for seq, fn in (("Ctrl+Z", self._undo), ("Ctrl+Shift+Z", self._redo),
+                        ("Ctrl+Y", self._redo), ("Ctrl+D", self._duplicate_selected)):
+            QShortcut(QKeySequence(seq), self, fn)
+        self._push_history()          # empty baseline
+        self._refresh_undo_redo()
+        # Sync the zoom readout / button states to the real fit scale (the label
+        # is built showing "100%" but the canvas opens fitted, e.g. 40%).
+        self._apply_zoom()
 
-    # ------------------------------------------------------------------
+    # ==================================================================
     # UI construction
-    # ------------------------------------------------------------------
+    # ==================================================================
 
     @staticmethod
     def _editor_ss(dark: bool) -> str:
-        """Dialog-scoped stylesheet mirroring the web editor's `.se-*` look."""
         if dark:
             surf, surf2, border = "#252526", "#1E1E1E", "#3A3A3A"
             fg, fgdim = "#D4D4D4", "#8A8A9E"
@@ -75444,19 +75658,25 @@ class SnapshotEditorDialog(QDialog):
                              border-bottom:1px solid {border}; }}
         QFrame#se_botbar  {{ background:{surf}; border:none;
                              border-top:1px solid {border}; }}
-        QFrame#se_tools, QFrame#se_chip {{ background:{surf2};
+        QFrame#se_rail {{ background:{surf2}; border:none;
+                          border-right:1px solid {border}; }}
+        QFrame#se_group {{ background:{surf2};
             border:1px solid {border}; border-radius:9px; }}
-        QFrame#se_tools QPushButton {{ border:1px solid transparent;
-            border-radius:6px; }}
-        QFrame#se_tools QPushButton:hover:!checked {{ background:{hover}; }}
-        QFrame#se_tools QPushButton:checked {{ background:{acc};
-            border-color:{acc}; }}
+        QFrame#se_rail QPushButton, QFrame#se_group QPushButton {{
+            border:1px solid transparent; border-radius:6px; background:transparent; }}
+        QFrame#se_rail QPushButton:hover:!checked,
+        QFrame#se_group QPushButton:hover:!checked {{ background:{hover}; }}
+        QFrame#se_rail QPushButton:checked,
+        QFrame#se_group QPushButton:checked {{ background:{acc}; border-color:{acc};
+            color:#FFFFFF; }}
         QPushButton#se_icon {{ border:1px solid {border}; border-radius:7px;
             background:{surf2}; }}
         QPushButton#se_icon:hover {{ background:{hover}; }}
+        QPushButton#se_icon:disabled {{ color:{fgdim}; }}
         QLabel#se_micro {{ color:{fgdim}; font-size:9px; font-weight:700; }}
-        QCheckBox#se_dash {{ color:{fgdim}; font-size:9px; font-weight:700;
-            spacing:6px; }}
+        QLabel#se_hint {{ color:{fgdim}; border:1px solid {border};
+            border-radius:14px; padding:4px 12px; font-size:10px; }}
+        QLabel#se_hint:hover {{ color:{fg}; }}
         QSlider {{ background:transparent; }}
         QSlider::groove:horizontal {{ height:4px; border-radius:2px;
             background:{border}; }}
@@ -75465,6 +75685,25 @@ class SnapshotEditorDialog(QDialog):
             border-radius:7px; background:#FFFFFF; border:1px solid {acc}; }}
         QScrollArea#se_scroll {{ border:none; background:{mat}; }}
         QWidget#se_mat {{ background:{mat}; }}
+        QFrame#se_inspector {{ background:{surf};
+            border:1px solid {border}; border-radius:9px; }}
+        QFrame#se_inspector QLabel {{ color:{fg}; font-size:10px; }}
+        QFrame#se_inspector QLabel#lbl {{ color:{fgdim}; font-size:9px;
+            font-weight:700; }}
+        QFrame#se_inspector QPushButton {{ border:1px solid {border};
+            border-radius:5px; background:{surf2}; color:{fgdim};
+            padding:2px 6px; font-size:10px; }}
+        QFrame#se_inspector QPushButton:hover {{ color:{fg}; }}
+        QFrame#se_inspector QPushButton:checked {{ background:{acc};
+            color:#FFFFFF; border-color:{acc}; }}
+        QFrame#se_inspector QLineEdit {{ background:{surf2};
+            border:1px solid {border}; border-radius:5px; color:{fg};
+            padding:3px 6px; font-size:11px; }}
+        QFrame#se_cropchip {{ background:{surf};
+            border:1px solid {border}; border-radius:12px; }}
+        QFrame#se_cropchip QLabel {{ color:{fgdim}; font-size:10px; }}
+        QFrame#se_cropchip QPushButton {{ border:none; background:transparent;
+            color:{fgdim}; font-size:13px; font-weight:700; }}
         QPushButton#btn_primary {{ background:{acc}; color:#FFFFFF; border:none;
             border-radius:8px; padding:7px 18px; font-weight:600; }}
         QPushButton#btn_primary:hover {{ background:{acc_hi}; }}
@@ -75476,22 +75715,34 @@ class SnapshotEditorDialog(QDialog):
             padding:7px 18px; font-size:12px; font-weight:600; }}
         """
 
-    def _chip(self, *widgets: QWidget) -> QFrame:
-        """A bordered, rounded control group (web `.se-ctl`)."""
+    def _group(self, *widgets: QWidget) -> QFrame:
         f = QFrame()
-        f.setObjectName("se_chip")
+        f.setObjectName("se_group")
         h = QHBoxLayout(f)
-        h.setContentsMargins(9, 3, 9, 3)
-        h.setSpacing(7)
+        h.setContentsMargins(5, 3, 5, 3)
+        h.setSpacing(3)
         for w in widgets:
-            h.addWidget(w)
+            if isinstance(w, QLayout):
+                h.addLayout(w)
+            else:
+                h.addWidget(w)
         return f
 
     @staticmethod
     def _micro(text: str) -> QLabel:
-        lbl = QLabel(text.upper())
+        lbl = QLabel(text)
         lbl.setObjectName("se_micro")
         return lbl
+
+    def _icon_button(self, path: str, tip: str, slot, *, size: int = 28) -> QPushButton:
+        b = QPushButton()
+        b.setObjectName("se_icon")
+        b.setIcon(_svg_icon(path, '#b0b0cc'))
+        b.setIconSize(QSize(15, 15))
+        b.setFixedSize(size, size)
+        b.setToolTip(tip)
+        b.clicked.connect(slot)
+        return b
 
     def _build_ui(self) -> None:
         self._dark = self.palette().color(
@@ -75502,119 +75753,125 @@ class SnapshotEditorDialog(QDialog):
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
 
-        # ---- Tool bar ----
+        # ---- Toolbar: style defaults | undo/redo | zoom | ? ----
         bar = QFrame()
         bar.setObjectName("se_toolbar")
         tb = QHBoxLayout(bar)
         tb.setContentsMargins(10, 8, 10, 8)
         tb.setSpacing(6)
-        self._tool_btns: dict = {}
-        _ICON_H = 28          # uniform height for every toolbar widget
 
-        tools_frame = QFrame()
-        tools_frame.setObjectName("se_tools")
-        _tf = QHBoxLayout(tools_frame)
-        _tf.setContentsMargins(3, 3, 3, 3)
-        _tf.setSpacing(2)
-        for tid in self._TOOLS:
+        # Style group
+        self._color_btn = QPushButton()
+        self._color_btn.setFixedSize(22, 22)
+        self._color_btn.setToolTip("Default colour")
+        self._color_menu = self._build_color_menu()
+        self._color_btn.clicked.connect(self._show_color_menu)
+        self._refresh_color_btn()
+        self._width_val = QLabel(str(self._line_width))
+        self._width_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._width_val.setMinimumWidth(16)
+        w_minus = QPushButton("−"); w_minus.setFixedHeight(24); w_minus.setMinimumWidth(24)
+        w_plus = QPushButton("+"); w_plus.setFixedHeight(24); w_plus.setMinimumWidth(24)
+        w_minus.setToolTip("Thinner stroke"); w_plus.setToolTip("Thicker stroke")
+        w_minus.clicked.connect(lambda: self._set_default_width(self._line_width - 1))
+        w_plus.clicked.connect(lambda: self._set_default_width(self._line_width + 1))
+        self._dash_btn = QPushButton("Dash")
+        self._dash_btn.setCheckable(True)
+        self._dash_btn.setChecked(self._dashed)
+        self._dash_btn.setFixedHeight(24)
+        self._dash_btn.setMinimumWidth(46)
+        self._dash_btn.setToolTip("Dashed by default")
+        self._dash_btn.toggled.connect(self._on_dash_toggled)
+        tb.addWidget(self._group(self._micro("Color"), self._color_btn,
+                                 w_minus, self._width_val, w_plus, self._dash_btn))
+
+        # Undo / redo
+        self._undo_btn = self._icon_button(_IC_SNAP_UNDO, "Undo (Ctrl+Z)", self._undo)
+        self._redo_btn = self._icon_button(_IC_SNAP_REDO, "Redo (Ctrl+Shift+Z)", self._redo)
+        tb.addWidget(self._group(self._undo_btn, self._redo_btn))
+
+        # Zoom group
+        self._zoom_out_btn = self._icon_button(_IC_ZOUT, "Zoom out", lambda: self._zoom_by(1 / 1.25))
+        self._zoom_val = QPushButton("100%")
+        self._zoom_val.setObjectName("se_icon")
+        self._zoom_val.setFixedHeight(28)
+        self._zoom_val.setMinimumWidth(52)
+        self._zoom_val.setStyleSheet("QPushButton#se_icon { padding: 0 8px; }")
+        self._zoom_val.setToolTip("Reset to 100%")
+        self._zoom_val.clicked.connect(self._zoom_actual)
+        self._zoom_in_btn = self._icon_button(_IC_ZIN, "Zoom in", lambda: self._zoom_by(1.25))
+        self._fit_btn = QPushButton("Fit")
+        self._fit_btn.setObjectName("se_icon")
+        self._fit_btn.setFixedHeight(28)
+        self._fit_btn.setMinimumWidth(40)
+        self._fit_btn.setStyleSheet("QPushButton#se_icon { padding: 0 8px; }")
+        self._fit_btn.clicked.connect(self._zoom_fit)
+        tb.addWidget(self._group(self._zoom_out_btn, self._zoom_val,
+                                 self._zoom_in_btn, self._fit_btn))
+
+        tb.addStretch()
+        hint = QLabel("Press ?  for shortcuts")
+        hint.setObjectName("se_hint")
+        hint.setCursor(Qt.CursorShape.PointingHandCursor)
+        hint.mousePressEvent = lambda _e: self._toggle_shortcuts()
+        tb.addWidget(hint)
+        main.addWidget(bar)
+
+        # ---- Rail + canvas ----
+        mid = QHBoxLayout()
+        mid.setContentsMargins(0, 0, 0, 0)
+        mid.setSpacing(0)
+
+        rail = QFrame()
+        rail.setObjectName("se_rail")
+        rl = QVBoxLayout(rail)
+        rl.setContentsMargins(6, 8, 6, 8)
+        rl.setSpacing(3)
+        self._tool_btns: dict = {}
+        for i, tid in enumerate(self._TOOLS):
+            if i in self._RAIL_SEPS:
+                sep = QFrame()
+                sep.setFrameShape(QFrame.Shape.HLine)
+                sep.setFixedHeight(1)
+                rl.addWidget(sep)
             btn = QPushButton()
             btn.setIcon(_svg_icon_checked(_SNAP_TOOL_ICONS[tid]))
             btn.setIconSize(QSize(16, 16))
             btn.setCheckable(True)
             btn.setChecked(tid == self._tool)
-            btn.setFixedSize(_ICON_H, _ICON_H)
+            btn.setFixedSize(34, 32)
             btn.setToolTip(self._TOOL_LABELS[tid])
-            btn.clicked.connect(lambda _checked, t=tid: self._select_tool(t))
-            _tf.addWidget(btn)
+            btn.clicked.connect(lambda _c, t=tid: self._select_tool(t))
+            rl.addWidget(btn)
             self._tool_btns[tid] = btn
-        tb.addWidget(tools_frame)
+        rl.addStretch()
+        mid.addWidget(rail)
 
-        self._color_btn = QPushButton()
-        self._color_btn.setFixedSize(22, 22)
-        self._color_btn.setToolTip("Stroke / text colour")
-        self._color_menu = self._build_color_menu()
-        self._color_btn.clicked.connect(self._show_color_menu)
-        self._refresh_color_btn()
-        tb.addWidget(self._chip(self._micro("Color"), self._color_btn))
-
-        # Stroke width — slider + inline value (web `se-range`).
-        self._width_lbl = QLabel(f"Size {self._line_width}")
-        self._width_lbl.setObjectName("se_micro")
-        self._width_lbl.setMinimumWidth(46)
-        self._width_slider = QSlider(Qt.Orientation.Horizontal)
-        self._width_slider.setRange(1, 20)
-        self._width_slider.setValue(self._line_width)
-        self._width_slider.setFixedWidth(92)
-        self._width_slider.setToolTip("Stroke width")
-        self._width_slider.valueChanged.connect(self._on_width_slider)
-        tb.addWidget(self._chip(self._width_lbl, self._width_slider))
-
-        self._dash_cb = QCheckBox("Dash")
-        self._dash_cb.setObjectName("se_dash")
-        self._dash_cb.setChecked(self._dashed)
-        self._dash_cb.setToolTip(
-            "Dashed stroke for lines, arrows, rectangles, and circles")
-        self._dash_cb.toggled.connect(self._on_dash_toggled)
-        self._dash_chip = self._chip(self._dash_cb)
-        tb.addWidget(self._dash_chip)
-
-        # Font size — slider + value; only for the text tool (web parity).
-        self._font_lbl = QLabel(f"Font {self._font_size}")
-        self._font_lbl.setObjectName("se_micro")
-        self._font_lbl.setMinimumWidth(52)
-        self._font_slider = QSlider(Qt.Orientation.Horizontal)
-        self._font_slider.setRange(10, 72)
-        self._font_slider.setSingleStep(2)
-        self._font_slider.setPageStep(6)
-        self._font_slider.setValue(self._font_size)
-        self._font_slider.setFixedWidth(116)
-        self._font_slider.setToolTip("Text font size")
-        self._font_slider.valueChanged.connect(self._on_font_slider)
-        self._font_chip = self._chip(self._font_lbl, self._font_slider)
-        tb.addWidget(self._font_chip)
-        self._sync_text_controls_visible()
-
-        tb.addStretch()
-
-        undo_btn = QPushButton()
-        undo_btn.setObjectName("se_icon")
-        undo_btn.setIcon(_svg_icon(_IC_SNAP_UNDO, '#b0b0cc'))
-        undo_btn.setIconSize(QSize(16, 16))
-        undo_btn.setFixedSize(_ICON_H, _ICON_H)
-        undo_btn.setToolTip("Undo (Ctrl+Z)")
-        undo_btn.clicked.connect(self._undo)
-        tb.addWidget(undo_btn)
-
-        clear_btn = QPushButton()
-        clear_btn.setObjectName("se_icon")
-        clear_btn.setIcon(_svg_icon(_IC_CLEAR, '#b0b0cc'))
-        clear_btn.setIconSize(QSize(16, 16))
-        clear_btn.setFixedSize(_ICON_H, _ICON_H)
-        clear_btn.setToolTip("Clear all annotations")
-        clear_btn.clicked.connect(self._clear_all)
-        tb.addWidget(clear_btn)
-
-        main.addWidget(bar)
-
-        # ---- Canvas on a dark mat, in a scroll area ----
         self._canvas = _AnnotationCanvas(self, self._disp_w, self._disp_h)
-        self._canvas.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         mat = QWidget()
         mat.setObjectName("se_mat")
-        _ml = QVBoxLayout(mat)
-        _ml.setContentsMargins(24, 24, 24, 24)
-        _ml.addWidget(self._canvas, 0, Qt.AlignmentFlag.AlignCenter)
-        scroll = QScrollArea()
-        scroll.setObjectName("se_scroll")
-        scroll.setWidget(mat)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        main.addWidget(scroll, stretch=1)
+        self._mat_layout = QVBoxLayout(mat)
+        self._mat_layout.setContentsMargins(24, 24, 24, 24)
+        self._mat_layout.addWidget(self._canvas, 0, Qt.AlignmentFlag.AlignCenter)
+        self._scroll = QScrollArea()
+        self._scroll.setObjectName("se_scroll")
+        self._scroll.setWidget(mat)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        mid.addWidget(self._scroll, stretch=1)
+        main.addLayout(mid, stretch=1)
 
         self._text_input = QLineEdit(self._canvas)
         self._text_input.hide()
         self._text_input.returnPressed.connect(self._commit_text_edit)
         self._text_input.installEventFilter(self)
+
+        # Floating inspector + crop chip (children of the canvas).
+        self._inspector = self._build_inspector()
+        self._inspector.hide()
+        self._crop_chip = self._build_crop_chip()
+        self._crop_chip.hide()
 
         # ---- Bottom bar ----
         botbar = QFrame()
@@ -75639,7 +75896,6 @@ class SnapshotEditorDialog(QDialog):
         bot.addWidget(close_btn)
         main.addWidget(botbar)
 
-        # Floating status toast over the canvas (web `.se-status`).
         self._status_lbl = QLabel("", self)
         self._status_lbl.setObjectName("se_toast")
         self._status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -75647,41 +75903,244 @@ class SnapshotEditorDialog(QDialog):
         self._status_lbl.setGraphicsEffect(self._toast_fx)
         self._status_lbl.hide()
 
-        self.resize(self._disp_w + 48, self._disp_h + 140)
+        # Open at the golden aspect ratio (W:H = 1.618:1) — grow the shorter side
+        # of the natural content box up to golden, then clamp to the screen while
+        # keeping the ratio.
+        _PHI = 1.618
+        w0 = self._disp_w + 96
+        h0 = self._disp_h + 150
+        if w0 >= h0 * _PHI:
+            gw, gh = w0, w0 / _PHI
+        else:
+            gw, gh = h0 * _PHI, h0
+        scr = _widget_available_geometry(self)
+        max_w, max_h = scr.width() - 40, scr.height() - 80
+        if gw > max_w:
+            gw = max_w
+            gh = gw / _PHI
+        if gh > max_h:
+            gh = max_h
+            gw = gh * _PHI
+        self.resize(int(round(gw)), int(round(gh)))
+        QTimer.singleShot(0, self._canvas.setFocus)
 
-    # ------------------------------------------------------------------
-    # Tool / colour helpers
-    # ------------------------------------------------------------------
+    # ---- inspector -----------------------------------------------------
+    def _build_inspector(self) -> QFrame:
+        f = QFrame(self._canvas)
+        f.setObjectName("se_inspector")
+        v = QVBoxLayout(f)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(6)
+
+        head = QHBoxLayout()
+        self._insp_title = QLabel("Shape")
+        self._insp_title.setStyleSheet("font-weight:700;")
+        self._insp_dims = QLabel("")
+        self._insp_dims.setObjectName("lbl")
+        del_btn = QPushButton()
+        del_btn.setFixedSize(20, 20)
+        del_btn.setIcon(_svg_icon(_IC_SNAP_TRASH, '#8A8A9E' if self._dark else '#6A6A78', 12))
+        del_btn.setIconSize(QSize(12, 12))
+        del_btn.setToolTip("Delete shape (Del)")
+        del_btn.clicked.connect(self._delete_selected)
+        head.addWidget(self._insp_title)
+        head.addStretch()
+        head.addWidget(self._insp_dims)
+        head.addWidget(del_btn)
+        v.addLayout(head)
+
+        # colour row
+        self._insp_color_row = QWidget()
+        cr = QHBoxLayout(self._insp_color_row)
+        cr.setContentsMargins(0, 0, 0, 0)
+        cr.setSpacing(3)
+        cr.addWidget(self._micro("Color"))
+        self._insp_swatches = QWidget()
+        sw_l = QHBoxLayout(self._insp_swatches)
+        sw_l.setContentsMargins(0, 0, 0, 0)
+        sw_l.setSpacing(3)
+        for hexs in _SNAP_PRESET_COLORS[:10]:
+            b = QPushButton()
+            b.setFixedSize(15, 15)
+            b.setStyleSheet(f"QPushButton{{background:{hexs};border:1px solid #888;"
+                            f"border-radius:7px;}}")
+            b.clicked.connect(lambda _c, h=hexs: self._set_shape_prop('color', QColor(h)))
+            sw_l.addWidget(b)
+        custom = QPushButton("…")
+        custom.setFixedSize(18, 15)
+        custom.clicked.connect(self._inspector_pick_custom)
+        sw_l.addWidget(custom)
+        eyed = QPushButton()
+        eyed.setFixedSize(18, 15)
+        eyed.setToolTip("Pick a colour from the image")
+        eyed.setIcon(_svg_icon_markup(
+            '<path d="M10.5 2.5a2 2 0 0 1 3 3L7 12l-3 1 1-3z" fill="none" '
+            'stroke="#b0b0cc" stroke-width="1.6" stroke-linecap="round" '
+            'stroke-linejoin="round"/>', 13))
+        eyed.clicked.connect(self._inspector_eyedrop)
+        sw_l.addWidget(eyed)
+        cr.addWidget(self._insp_swatches)
+        cr.addStretch()
+        v.addWidget(self._insp_color_row)
+
+        self._insp_recent_row = QWidget()
+        rr = QHBoxLayout(self._insp_recent_row)
+        rr.setContentsMargins(0, 0, 0, 0)
+        rr.setSpacing(3)
+        self._insp_recent_layout = rr
+        v.addWidget(self._insp_recent_row)
+
+        # stroke
+        self._insp_stroke_row, self._insp_stroke = self._slider_row(
+            "Stroke", 1, 20, self._line_width,
+            lambda val: self._set_shape_prop('width', int(val)))
+        v.addWidget(self._insp_stroke_row)
+
+        # dash segment
+        self._insp_dash_row = QWidget()
+        dr = QHBoxLayout(self._insp_dash_row)
+        dr.setContentsMargins(0, 0, 0, 0)
+        dr.setSpacing(3)
+        dr.addWidget(self._micro("Dash"))
+        self._insp_dash_solid = QPushButton("Solid")
+        self._insp_dash_dashed = QPushButton("Dashed")
+        for b in (self._insp_dash_solid, self._insp_dash_dashed):
+            b.setCheckable(True)
+            b.setFixedHeight(20)
+        self._insp_dash_solid.clicked.connect(lambda: self._set_shape_prop('dashed', False))
+        self._insp_dash_dashed.clicked.connect(lambda: self._set_shape_prop('dashed', True))
+        dr.addWidget(self._insp_dash_solid)
+        dr.addWidget(self._insp_dash_dashed)
+        v.addWidget(self._insp_dash_row)
+
+        # blur strength
+        self._insp_strength_row, self._insp_strength = self._slider_row(
+            "Strength", 1, 10, 4,
+            lambda val: self._set_shape_prop('strength', int(val)))
+        v.addWidget(self._insp_strength_row)
+
+        # opacity
+        self._insp_opacity_row, self._insp_opacity = self._slider_row(
+            "Opacity", 10, 100, 100,
+            lambda val: self._set_shape_prop('opacity', int(val) / 100.0), suffix="%")
+        v.addWidget(self._insp_opacity_row)
+
+        # label / text edit
+        self._insp_text_row = QWidget()
+        tr = QHBoxLayout(self._insp_text_row)
+        tr.setContentsMargins(0, 0, 0, 0)
+        tr.setSpacing(3)
+        self._insp_text_lbl = self._micro("Label")
+        self._insp_text_edit = QLineEdit()
+        self._insp_text_edit.textEdited.connect(self._on_inspector_text)
+        tr.addWidget(self._insp_text_lbl)
+        tr.addWidget(self._insp_text_edit)
+        v.addWidget(self._insp_text_row)
+
+        # font
+        self._insp_font_row, self._insp_font = self._slider_row(
+            "Font", 10, 72, self._font_size, self._on_inspector_font)
+        v.addWidget(self._insp_font_row)
+
+        # arrange
+        ar = QHBoxLayout()
+        ar.setSpacing(3)
+        ar.addWidget(self._micro("Arrange"))
+        for label, tip, arg in (("⤓", "Send to back", 'back'),
+                                ("‹", "Send backward", 'backward'),
+                                ("›", "Bring forward", 'forward'),
+                                ("⤒", "Bring to front", 'front')):
+            b = QPushButton(label)
+            b.setFixedHeight(20)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _c, a=arg: self._z_selected(a))
+            ar.addWidget(b)
+        dup = QPushButton("Dup")
+        dup.setFixedHeight(20)
+        dup.setToolTip("Duplicate (Ctrl+D)")
+        dup.clicked.connect(self._duplicate_selected)
+        ar.addWidget(dup)
+        v.addLayout(ar)
+
+        f.setFixedWidth(250)
+        return f
+
+    def _slider_row(self, label: str, lo: int, hi: int, val: int, cb,
+                    suffix: str = "") -> tuple:
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(6)
+        h.addWidget(self._micro(label))
+        sl = QSlider(Qt.Orientation.Horizontal)
+        sl.setRange(lo, hi)
+        sl.setValue(val)
+        vlbl = QLabel(f"{val}{suffix}")
+        vlbl.setObjectName("lbl")
+        vlbl.setFixedWidth(30)
+        vlbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        sl.valueChanged.connect(lambda v: (vlbl.setText(f"{v}{suffix}"), cb(v)))
+        h.addWidget(sl)
+        h.addWidget(vlbl)
+        return w, sl
+
+    def _build_crop_chip(self) -> QFrame:
+        f = QFrame(self._canvas)
+        f.setObjectName("se_cropchip")
+        h = QHBoxLayout(f)
+        h.setContentsMargins(9, 4, 5, 4)
+        h.setSpacing(6)
+        ic = QLabel()
+        ic.setPixmap(_svg_pixmap(_IC_SNAP_CROP, '#8A8A9E' if self._dark else '#6A6A78', 12))
+        h.addWidget(ic)
+        self._crop_chip_lbl = QLabel("Cropped")
+        h.addWidget(self._crop_chip_lbl)
+        x = QPushButton()
+        x.setFixedSize(18, 18)
+        x.setIcon(_svg_icon(_IC_CLEAR, '#8A8A9E' if self._dark else '#6A6A78', 12))
+        x.setIconSize(QSize(10, 10))
+        x.setToolTip("Remove crop (restore full image)")
+        x.clicked.connect(self._clear_crop)
+        h.addWidget(x)
+        return f
+
+    # ==================================================================
+    # Tool / style helpers
+    # ==================================================================
 
     def _select_tool(self, tool: str) -> None:
+        if self._text_edit_active():
+            self._commit_text_edit()
         self._tool = tool
         self._hover_handle = ''
         for tid, btn in self._tool_btns.items():
             btn.setChecked(tid == tool)
-        self._sync_text_controls_visible()
+        self._canvas.setCursor(
+            Qt.CursorShape.ArrowCursor if tool == 'select'
+            else Qt.CursorShape.IBeamCursor if tool == 'text'
+            else Qt.CursorShape.CrossCursor)
 
-    def _sync_text_controls_visible(self) -> None:
-        """Web parity: Dash only for line/box tools, Font only for text."""
-        is_text = self._tool == 'text'
-        if getattr(self, '_font_chip', None) is not None:
-            self._font_chip.setVisible(is_text)
-        if getattr(self, '_dash_chip', None) is not None:
-            self._dash_chip.setVisible(not is_text)
+    def _set_default_width(self, val: int) -> None:
+        self._line_width = max(1, min(20, int(val)))
+        self._width_val.setText(str(self._line_width))
+        if 0 <= self._selected_idx < len(self._shapes):
+            s = self._shapes[self._selected_idx]
+            if s['type'] in self._STROKE_TYPES:
+                self._set_shape_prop('width', self._line_width)
 
-    def _on_width_slider(self, value: int) -> None:
-        self._line_width = int(value)
-        self._width_lbl.setText(f"Size {self._line_width}")
+    def _on_dash_toggled(self, checked: bool) -> None:
+        self._dashed = checked
 
-    def _on_font_slider(self, value: int) -> None:
-        self._font_size = int(value)
-        self._font_lbl.setText(f"Font {self._font_size}")
+    def _sync_dash_from_shape(self, idx: int) -> None:
+        # Kept for call-site compatibility; the toolbar toggle is a stable
+        # default now and no longer follows the selection.
+        return
 
     def _show_color_menu(self) -> None:
         self._color_menu.exec(
             self._color_btn.mapToGlobal(QPoint(0, self._color_btn.height())))
 
     def _build_color_menu(self) -> QMenu:
-        """Preset-swatch popup mirroring the web editor's colour panel."""
         menu = QMenu(self)
         grid_w = QWidget()
         grid = QGridLayout(grid_w)
@@ -75704,38 +76163,21 @@ class SnapshotEditorDialog(QDialog):
         menu.addAction(wa)
         menu.addSeparator()
         menu.addAction("Custom…", self._pick_color)
+        menu.addAction("Pick from image…", self._toolbar_eyedrop)
         return menu
 
     def _pick_preset_color(self, hexs: str) -> None:
         self._color = QColor(hexs)
+        self._push_recent_color(hexs)
         self._refresh_color_btn()
         self._color_menu.close()
 
-    def _on_dash_toggled(self, checked: bool) -> None:
-        self._dashed = checked
-        if 0 <= self._selected_idx < len(self._shapes):
-            shape = self._shapes[self._selected_idx]
-            if shape['type'] != 'text':
-                shape['dashed'] = checked
-                self._canvas.update()
-
-    def _sync_dash_from_shape(self, idx: int) -> None:
-        if idx < 0 or idx >= len(self._shapes):
-            return
-        shape = self._shapes[idx]
-        if shape['type'] == 'text':
-            return
-        dashed = bool(shape.get('dashed')) or shape['type'] == 'dash'
-        self._dashed = dashed
-        self._dash_cb.blockSignals(True)
-        self._dash_cb.setChecked(dashed)
-        self._dash_cb.blockSignals(False)
-
     def _pick_color(self) -> None:
-        from PySide6.QtWidgets import QColorDialog  # always available, import locally
+        from PySide6.QtWidgets import QColorDialog
         color = QColorDialog.getColor(self._color, self, "Pick Colour")
         if color.isValid():
             self._color = color
+            self._push_recent_color(color.name())
             self._refresh_color_btn()
 
     def _refresh_color_btn(self) -> None:
@@ -75743,8 +76185,507 @@ class SnapshotEditorDialog(QDialog):
             f"QPushButton {{ background-color: {self._color.name()};"
             f" border: 1px solid #888; border-radius: 6px; }}")
 
+    def _push_recent_color(self, hexs: str) -> None:
+        h = QColor(hexs).name().lower()
+        self._recent_colors = [h] + [c for c in self._recent_colors if c != h]
+        self._recent_colors = self._recent_colors[:6]
+
+    def _sample_image_color(self, x: float, y: float) -> Optional[QColor]:
+        ix, iy = int(x), int(y)
+        if 0 <= ix < self._orig_image.width() and 0 <= iy < self._orig_image.height():
+            return QColor(self._orig_image.pixelColor(ix, iy))
+        return None
+
+    def _toolbar_eyedrop(self) -> None:
+        self._eyedrop_cb = self._apply_default_color
+        self._canvas.setCursor(Qt.CursorShape.CrossCursor)
+
+    def _apply_default_color(self, col: QColor) -> None:
+        self._color = QColor(col)
+        self._push_recent_color(col.name())
+        self._refresh_color_btn()
+
+    def _inspector_pick_custom(self) -> None:
+        from PySide6.QtWidgets import QColorDialog
+        s = self._sel_shape()
+        if s is None:
+            return
+        color = QColorDialog.getColor(s['color'], self, "Pick Colour")
+        if color.isValid():
+            self._set_shape_prop('color', color)
+
+    def _inspector_eyedrop(self) -> None:
+        self._eyedrop_cb = lambda col: self._set_shape_prop('color', col)
+        self._canvas.setCursor(Qt.CursorShape.CrossCursor)
+
+    # ==================================================================
+    # Selection inspector
+    # ==================================================================
+
+    def _sel_shape(self) -> Optional[dict]:
+        if 0 <= self._selected_idx < len(self._shapes):
+            return self._shapes[self._selected_idx]
+        return None
+
+    def _select(self, idx: int) -> None:
+        self._selected_idx = idx
+        self._canvas.update()
+        self._update_inspector()
+
+    def _set_shape_prop(self, key: str, val) -> None:
+        s = self._sel_shape()
+        if s is None:
+            return
+        if key == 'label' and not val:
+            s.pop('label', None)
+            s.pop('label_font_size', None)
+        else:
+            s[key] = val
+            if key == 'label' and val and 'label_font_size' not in s:
+                s['label_font_size'] = self._font_size
+        if key == 'color':
+            self._push_recent_color(QColor(val).name())
+        self._canvas.update()
+        self._schedule_history()
+        self._update_inspector()
+
+    def _on_inspector_text(self, txt: str) -> None:
+        s = self._sel_shape()
+        if s is None:
+            return
+        if s['type'] == 'text':
+            s['text'] = txt
+        elif txt:
+            s['label'] = txt
+            s.setdefault('label_font_size', self._font_size)
+        else:
+            s.pop('label', None)
+            s.pop('label_font_size', None)
+        self._canvas.update()
+        self._schedule_history()
+
+    def _on_inspector_font(self, val) -> None:
+        s = self._sel_shape()
+        if s is None:
+            return
+        if s['type'] == 'text':
+            s['font_size'] = int(val)
+        else:
+            s['label_font_size'] = int(val)
+        self._canvas.update()
+        self._schedule_history()
+
+    def _z_selected(self, direction: str) -> None:
+        i = self._selected_idx
+        n = len(self._shapes)
+        if i < 0 or n < 2:
+            return
+        sh = self._shapes.pop(i)
+        if direction == 'back':
+            ni = 0
+        elif direction == 'front':
+            ni = n - 1
+        elif direction == 'backward':
+            ni = max(0, i - 1)
+        else:
+            ni = min(n - 1, i + 1)
+        self._shapes.insert(ni, sh)
+        self._selected_idx = ni
+        self._push_history()
+        self._canvas.update()
+        self._update_inspector()
+
+    def _duplicate_selected(self) -> None:
+        if self._selected_idx < 0:
+            return
+        ni = self._duplicate_shape(self._selected_idx)
+        self._move_shape(ni, 12, 12)
+        self._select(ni)
+        self._push_history()
+        self._canvas.update()
+
+    def _delete_selected(self) -> None:
+        i = self._selected_idx
+        if not (0 <= i < len(self._shapes)):
+            return
+        self._shapes.pop(i)
+        self._selected_idx = -1
+        self._push_history()
+        self._canvas.update()
+        self._update_inspector()
+
+    def _inspector_dims(self, s: dict) -> str:
+        t = s['type']
+        if t == 'text':
+            return f"{s.get('font_size', 20)} pt"
+        if t == 'badge':
+            return f"#{s.get('n', 1)}"
+        x, y, w, h = self._shape_bounds(s)
+        if t in self._LINE_TOOLS:
+            return f"{int(round(math.hypot(w, h)))} px"
+        return f"{int(round(w))} x {int(round(h))}"
+
+    def _update_inspector(self) -> None:
+        s = self._sel_shape()
+        if s is None or self._drawing is not None or self._exporting or self._text_edit_active():
+            self._inspector.hide()
+            return
+        t = s['type']
+        self._insp_title.setText(self._SHAPE_LABELS.get(t, 'Shape'))
+        self._insp_dims.setText(self._inspector_dims(s))
+        self._insp_color_row.setVisible(t != 'blur')
+        for row, sl, val, sig in (
+            (self._insp_stroke_row, self._insp_stroke, s.get('width', 3), t in self._STROKE_TYPES),
+            (self._insp_strength_row, self._insp_strength, s.get('strength', 4), t == 'blur'),
+            (self._insp_opacity_row, self._insp_opacity,
+             int(round(s.get('opacity', 1.0) * 100)), t != 'blur'),
+        ):
+            row.setVisible(bool(sig))
+            if sig:
+                sl.blockSignals(True); sl.setValue(int(val)); sl.blockSignals(False)
+        self._insp_dash_row.setVisible(t in self._DASHABLE)
+        dashed = bool(s.get('dashed')) or t == 'dash'
+        self._insp_dash_solid.setChecked(not dashed)
+        self._insp_dash_dashed.setChecked(dashed)
+
+        is_text = t == 'text'
+        show_label = t in self._DASHABLE
+        self._insp_text_row.setVisible(is_text or show_label)
+        self._insp_text_lbl.setText("Text" if is_text else "Label")
+        self._insp_text_edit.blockSignals(True)
+        self._insp_text_edit.setText(s.get('text', '') if is_text else s.get('label', ''))
+        self._insp_text_edit.blockSignals(False)
+        show_font = is_text or (show_label and s.get('label'))
+        self._insp_font_row.setVisible(bool(show_font))
+        if show_font:
+            fv = s.get('font_size', self._font_size) if is_text else s.get('label_font_size', self._font_size)
+            self._insp_font.blockSignals(True); self._insp_font.setValue(int(fv)); self._insp_font.blockSignals(False)
+
+        # recent-colour chips
+        while self._insp_recent_layout.count():
+            it = self._insp_recent_layout.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        self._insp_recent_row.setVisible(bool(self._recent_colors) and t != 'blur')
+        for hexs in self._recent_colors:
+            b = QPushButton()
+            b.setFixedSize(15, 15)
+            b.setStyleSheet(f"QPushButton{{background:{hexs};border:1px solid #888;"
+                            f"border-radius:7px;}}")
+            b.clicked.connect(lambda _c, h=hexs: self._set_shape_prop('color', QColor(h)))
+            self._insp_recent_layout.addWidget(b)
+        self._insp_recent_layout.addStretch()
+
+        self._inspector.adjustSize()
+        self._position_inspector(s)
+        self._inspector.show()
+        self._inspector.raise_()
+
+    def _position_inspector(self, s: dict) -> None:
+        x, y, w, h = self._shape_bounds(s)
+        k = self._scale
+        left, top = int(x * k), int(y * k)
+        bw, bh = int(w * k), int(h * k)
+        iw, ih = self._inspector.width(), self._inspector.height()
+        px = max(4, min(left + bw // 2 - iw // 2, max(4, self._disp_w - iw - 4)))
+        gap = 12
+        above = top - ih - gap
+        below = top + bh + gap
+        if above >= 4:
+            py = above
+        elif below + ih <= self._disp_h - 4:
+            py = below
+        else:
+            # Not enough room above or below — dodge sideways so the shape
+            # (e.g. a small numbered badge) is never hidden under the panel.
+            py = max(4, min(self._disp_h - ih - 4, top))
+            if left + bw + gap + iw <= self._disp_w - 4:
+                px = left + bw + gap
+            elif left - gap - iw >= 4:
+                px = left - gap - iw
+        self._inspector.move(px, max(4, py))
+
+    # ==================================================================
+    # Zoom & pan
+    # ==================================================================
+
+    def _apply_zoom(self) -> None:
+        iw, ih = self._orig_pixmap.width(), self._orig_pixmap.height()
+        self._scale = max(0.02, min(8.0, self._fit_scale * self._zoom))
+        self._disp_w = max(1, int(iw * self._scale))
+        self._disp_h = max(1, int(ih * self._scale))
+        self._canvas.setFixedSize(self._disp_w, self._disp_h)
+        self._canvas.update()
+        self._zoom_val.setText(f"{int(round(self._scale * 100))}%")
+        fit = abs(self._zoom - 1.0) < 1e-4
+        self._fit_btn.setEnabled(not fit)
+        self._zoom_out_btn.setEnabled(not fit)
+        self._zoom_in_btn.setEnabled(self._zoom < self._max_zoom() - 1e-4)
+        self._update_inspector()
+        self._position_crop_chip()
+
+    def _max_zoom(self) -> float:
+        return max(1.0, 8.0 / max(self._fit_scale, 1e-6))
+
+    def _set_zoom(self, z: float) -> None:
+        self._zoom = max(1.0, min(self._max_zoom(), z))
+        self._apply_zoom()
+
+    def _zoom_by(self, factor: float) -> None:
+        self._set_zoom(self._zoom * factor)
+
+    def _zoom_fit(self) -> None:
+        self._set_zoom(1.0)
+        self._scroll.horizontalScrollBar().setValue(0)
+        self._scroll.verticalScrollBar().setValue(0)
+
+    def _zoom_actual(self) -> None:
+        self._set_zoom(1.0 / self._fit_scale)
+
+    def _zoom_at(self, cx: float, cy: float, factor: float) -> None:
+        before = self._scale
+        self._set_zoom(self._zoom * factor)
+        ratio = self._scale / before
+        sb_h = self._scroll.horizontalScrollBar()
+        sb_v = self._scroll.verticalScrollBar()
+        sb_h.setValue(int((sb_h.value() + cx) * ratio - cx))
+        sb_v.setValue(int((sb_v.value() + cy) * ratio - cy))
+
+    # ==================================================================
+    # History (undo / redo)
+    # ==================================================================
+
+    def _snapshot_state(self) -> dict:
+        return {
+            'shapes': [self._copy_shape(s) for s in self._shapes],
+            'crop': dict(self._crop) if self._crop else None,
+        }
+
+    @staticmethod
+    def _copy_shape(s: dict) -> dict:
+        out = {}
+        for k, v in s.items():
+            out[k] = QColor(v) if isinstance(v, QColor) else v
+        return out
+
+    def _push_history(self) -> None:
+        self._nudge_timer.stop()
+        if self._hist_idx < len(self._history) - 1:
+            del self._history[self._hist_idx + 1:]
+        self._history.append(self._snapshot_state())
+        if len(self._history) > self._HISTORY_LIMIT:
+            self._history.pop(0)
+        self._hist_idx = len(self._history) - 1
+        self._refresh_undo_redo()
+
+    def _schedule_history(self, ms: int = 350) -> None:
+        self._nudge_timer.start(ms)
+
+    def _flush_history(self) -> None:
+        if self._nudge_timer.isActive():
+            self._nudge_timer.stop()
+            self._push_history()
+
+    def _restore_history(self, idx: int) -> None:
+        if not (0 <= idx < len(self._history)):
+            return
+        self._hist_idx = idx
+        snap = self._history[idx]
+        self._shapes = [self._copy_shape(s) for s in snap['shapes']]
+        self._crop = dict(snap['crop']) if snap['crop'] else None
+        if self._selected_idx >= len(self._shapes):
+            self._selected_idx = -1
+        self._refresh_undo_redo()
+        self._canvas.update()
+        self._update_inspector()
+        self._update_crop_chip()
+
+    def _refresh_undo_redo(self) -> None:
+        if hasattr(self, '_undo_btn'):
+            self._undo_btn.setEnabled(self._hist_idx > 0 or self._text_edit_active())
+            self._redo_btn.setEnabled(self._hist_idx < len(self._history) - 1)
+
+    def _undo(self) -> None:
+        if self._text_edit_active():
+            self._cancel_text_edit()
+            return
+        self._flush_history()
+        if self._hist_idx > 0:
+            self._restore_history(self._hist_idx - 1)
+
+    def _redo(self) -> None:
+        if self._text_edit_active():
+            return
+        self._flush_history()
+        if self._hist_idx < len(self._history) - 1:
+            self._restore_history(self._hist_idx + 1)
+
+    def _clear_all(self) -> None:
+        if self._text_edit_active():
+            self._cancel_text_edit()
+        if not self._shapes and not self._crop:
+            return
+        self._shapes.clear()
+        self._crop = None
+        self._selected_idx = -1
+        self._push_history()
+        self._canvas.update()
+        self._update_inspector()
+        self._update_crop_chip()
+
+    # ==================================================================
+    # Crop
+    # ==================================================================
+
+    def _set_crop(self, x: float, y: float, w: float, h: float) -> None:
+        iw, ih = self._orig_pixmap.width(), self._orig_pixmap.height()
+        x = max(0.0, min(x, iw))
+        y = max(0.0, min(y, ih))
+        self._crop = {'x': x, 'y': y, 'w': min(iw - x, w), 'h': min(ih - y, h)}
+        self._push_history()
+        self._canvas.update()
+        self._update_crop_chip()
+
+    def _clear_crop(self) -> None:
+        if not self._crop:
+            return
+        self._crop = None
+        self._push_history()
+        self._canvas.update()
+        self._update_crop_chip()
+
+    def _update_crop_chip(self) -> None:
+        if not self._crop:
+            self._crop_chip.hide()
+            return
+        self._crop_chip_lbl.setText(
+            f"Cropped {int(round(self._crop['w']))} x {int(round(self._crop['h']))}")
+        self._crop_chip.adjustSize()
+        self._position_crop_chip()
+        self._crop_chip.show()
+        self._crop_chip.raise_()
+
+    def _position_crop_chip(self) -> None:
+        if self._crop_chip.isVisible() or self._crop:
+            self._crop_chip.move(12, 12)
+
+    def _paint_crop_overlay(self, painter: QPainter) -> None:
+        c = self._crop
+        iw, ih = self._orig_pixmap.width(), self._orig_pixmap.height()
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 128))
+        painter.drawRect(QRectF(0, 0, iw, max(0.0, c['y'])))
+        painter.drawRect(QRectF(0, c['y'] + c['h'], iw, max(0.0, ih - c['y'] - c['h'])))
+        painter.drawRect(QRectF(0, c['y'], max(0.0, c['x']), c['h']))
+        painter.drawRect(QRectF(c['x'] + c['w'], c['y'],
+                                max(0.0, iw - c['x'] - c['w']), c['h']))
+        pen = QPen(QColor(255, 255, 255, 235),
+                   max(1.0, 1.5 / max(self._scale, 0.01)), Qt.PenStyle.DashLine)
+        pen.setDashPattern([6.0 / max(self._scale, 0.01), 4.0 / max(self._scale, 0.01)])
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(QRectF(c['x'], c['y'], c['w'], c['h']))
+        painter.restore()
+
+    # ==================================================================
+    # Keyboard
+    # ==================================================================
+
+    def _handle_key(self, event) -> bool:
+        key = event.key()
+        mods = event.modifiers()
+        typing = isinstance(QApplication.focusWidget(), QLineEdit)
+
+        if key == Qt.Key.Key_Escape:
+            if self._shortcuts_dlg is not None and self._shortcuts_dlg.isVisible():
+                self._shortcuts_dlg.close(); return True
+            if self._text_edit_active():
+                self._cancel_text_edit(); return True
+            if self._selected_idx >= 0:
+                self._select(-1); self._canvas.update(); return True
+            if self._crop:
+                self._clear_crop(); return True
+            if self._tool != 'select':
+                self._select_tool('select'); return True
+            return True
+
+        if typing or self._text_edit_active():
+            return False
+
+        if key == Qt.Key.Key_Question:
+            self._toggle_shortcuts()
+            return True
+
+        if key == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_down = True
+            self._canvas.setCursor(Qt.CursorShape.OpenHandCursor)
+            return True
+
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if self._selected_idx >= 0:
+                self._delete_selected(); return True
+            if self._crop:
+                self._clear_crop(); return True
+            return True
+
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+            if self._selected_idx >= 0:
+                step = 10 if (mods & Qt.KeyboardModifier.ShiftModifier) else 1
+                dx = -step if key == Qt.Key.Key_Left else step if key == Qt.Key.Key_Right else 0
+                dy = -step if key == Qt.Key.Key_Up else step if key == Qt.Key.Key_Down else 0
+                self._move_shape(self._selected_idx, dx, dy)
+                self._canvas.update()
+                self._update_inspector()
+                self._schedule_history()
+                return True
+            return False
+
+        if key in (Qt.Key.Key_BracketLeft, Qt.Key.Key_BracketRight):
+            if self._selected_idx >= 0:
+                self._z_selected('backward' if key == Qt.Key.Key_BracketLeft else 'forward')
+                return True
+            return True
+
+        if Qt.Key.Key_0 <= key <= Qt.Key.Key_9 and not (mods & Qt.KeyboardModifier.ControlModifier):
+            digit = key - Qt.Key.Key_0
+            self._set_default_width(10 if digit == 0 else digit)
+            self._dash_btn.setChecked(self._dashed)
+            return True
+
+        if not (mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
+            tool = self._TOOL_KEYS.get(key)
+            if tool:
+                self._select_tool(tool)
+                return True
+        return False
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._handle_key(event):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_down = False
+            self._canvas.setCursor(Qt.CursorShape.ArrowCursor)
+        super().keyReleaseEvent(event)
+
+    def _toggle_shortcuts(self) -> None:
+        if self._shortcuts_dlg is not None and self._shortcuts_dlg.isVisible():
+            self._shortcuts_dlg.close()
+            return
+        if self._shortcuts_dlg is None:
+            self._shortcuts_dlg = _ShortcutsDialog(self)
+        self._shortcuts_dlg.show()
+        self._shortcuts_dlg.raise_()
+
+    # ==================================================================
+    # Text edit
+    # ==================================================================
+
     def _to_img(self, cx: float, cy: float) -> tuple:
-        """Convert canvas display coordinates to image pixel coordinates."""
         return cx / self._scale, cy / self._scale
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
@@ -75762,14 +76703,6 @@ class SnapshotEditorDialog(QDialog):
         if QApplication.focusWidget() is self._text_input:
             return
         self._commit_text_edit()
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        if event.key() == Qt.Key.Key_Escape:
-            if self._text_edit_active():
-                self._cancel_text_edit()
-            event.accept()
-            return
-        super().keyPressEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._commit_text_edit()
@@ -75802,16 +76735,13 @@ class SnapshotEditorDialog(QDialog):
                 'y': (shape['y1'] + shape['y2']) / 2.0,
                 'angle': SnapshotEditorDialog._label_angle_for_line(
                     shape['x1'], shape['y1'], shape['x2'], shape['y2']),
-                'font_size': fs,
-                'color': col,
+                'font_size': fs, 'color': col,
             }
         if t in ('rect', 'circle'):
             return {
                 'x': shape['x'] + shape['w'] / 2.0,
                 'y': shape['y'] + shape['h'] / 2.0,
-                'angle': 0.0,
-                'font_size': fs,
-                'color': col,
+                'angle': 0.0, 'font_size': fs, 'color': col,
             }
         return {'x': 0.0, 'y': 0.0, 'angle': 0.0, 'font_size': fs, 'color': col}
 
@@ -75821,6 +76751,7 @@ class SnapshotEditorDialog(QDialog):
         self._text_edit_shape_idx = -1
         self._canvas.setFocus()
         self._canvas.update()
+        self._update_inspector()
 
     def _cancel_text_edit(self) -> None:
         if not self._text_edit_active():
@@ -75834,6 +76765,7 @@ class SnapshotEditorDialog(QDialog):
         if not self._text_edit_active():
             return
         self._text_input.blockSignals(True)
+        mutated = False
         try:
             text = self._text_input.text().strip()
             idx = self._text_edit_shape_idx
@@ -75841,33 +76773,36 @@ class SnapshotEditorDialog(QDialog):
                 shape = self._shapes[idx]
                 if shape['type'] == 'text':
                     if text:
-                        shape['text'] = text
+                        if shape.get('text') != text:
+                            shape['text'] = text; mutated = True
                     else:
-                        self._shapes.pop(idx)
+                        self._shapes.pop(idx); mutated = True
                         if self._selected_idx == idx:
                             self._selected_idx = -1
                         elif self._selected_idx > idx:
                             self._selected_idx -= 1
                 elif text:
-                    shape['label'] = text
+                    if shape.get('label') != text:
+                        shape['label'] = text; mutated = True
                     shape.setdefault('label_font_size', self._font_size)
-                else:
+                elif shape.get('label') is not None:
                     shape.pop('label', None)
-                    shape.pop('label_font_size', None)
+                    shape.pop('label_font_size', None); mutated = True
             elif text:
                 self._shapes.append({
-                    'type': 'text',
-                    'color': QColor(self._color),
+                    'type': 'text', 'color': QColor(self._color),
                     'font_size': self._font_size,
-                    'x': self._text_edit_img_x,
-                    'y': self._text_edit_img_y,
+                    'x': self._text_edit_img_x, 'y': self._text_edit_img_y,
                     'text': text,
                 })
-                self._selected_idx = -1
+                self._selected_idx = len(self._shapes) - 1
+                mutated = True
             self._text_input.clear()
             self._hide_text_edit()
         finally:
             self._text_input.blockSignals(False)
+        if mutated:
+            self._push_history()
 
     def _position_text_edit(self, img_x: float, img_y: float, angle: float,
                             color: QColor, font_size: int, initial: str,
@@ -75877,12 +76812,8 @@ class SnapshotEditorDialog(QDialog):
         est_h = px + 10
         dx = int(img_x * self._scale)
         dy = int(img_y * self._scale)
-        if center:
-            x = dx - est_w // 2
-            y = dy - est_h // 2
-        else:
-            x = dx
-            y = dy
+        x = dx - est_w // 2 if center else dx
+        y = dy - est_h // 2 if center else dy
         x = max(0, min(x, self._disp_w - est_w))
         y = max(0, min(y, self._disp_h - est_h))
         self._text_input.setStyleSheet(
@@ -75892,8 +76823,7 @@ class SnapshotEditorDialog(QDialog):
             "  border: 1px dashed rgba(255,255,255,180);"
             "  font-weight: bold;"
             f"  font-size: {px}px;"
-            "  padding: 2px 4px;"
-            "}")
+            "  padding: 2px 4px; }")
         self._text_input.setGeometry(x, y, est_w, est_h)
         self._text_input.setText(initial)
         self._text_input.show()
@@ -75901,17 +76831,10 @@ class SnapshotEditorDialog(QDialog):
         self._text_input.setFocus(Qt.FocusReason.OtherFocusReason)
         self._text_input.selectAll()
 
-    def _begin_text_edit(
-        self,
-        shape_idx: int = -1,
-        img_x: float = 0.0,
-        img_y: float = 0.0,
-        angle: float = 0.0,
-        initial: str = '',
-        color: Optional[QColor] = None,
-        font_size: Optional[int] = None,
-        center: bool = False,
-    ) -> None:
+    def _begin_text_edit(self, shape_idx: int = -1, img_x: float = 0.0,
+                         img_y: float = 0.0, angle: float = 0.0, initial: str = '',
+                         color: Optional[QColor] = None, font_size: Optional[int] = None,
+                         center: bool = False) -> None:
         self._commit_text_edit()
         col = color if color is not None else self._color
         fs = font_size if font_size is not None else self._font_size
@@ -75919,73 +76842,49 @@ class SnapshotEditorDialog(QDialog):
         self._text_edit_img_x = img_x
         self._text_edit_img_y = img_y
         self._position_text_edit(img_x, img_y, angle, col, fs, initial, center)
+        self._inspector.hide()
         self._canvas.update()
 
     def _begin_edit_shape_text(self, idx: int) -> None:
-        if idx < 0 or idx >= len(self._shapes):
+        if not (0 <= idx < len(self._shapes)):
             return
         self._selected_idx = idx
         shape = self._shapes[idx]
         if shape['type'] == 'text':
             self._begin_text_edit(
-                shape_idx=idx,
-                img_x=shape['x'],
-                img_y=shape['y'],
-                angle=0.0,
-                initial=shape.get('text', ''),
-                color=shape['color'],
-                font_size=shape.get('font_size', self._font_size),
-                center=False,
-            )
+                shape_idx=idx, img_x=shape['x'], img_y=shape['y'], angle=0.0,
+                initial=shape.get('text', ''), color=shape['color'],
+                font_size=shape.get('font_size', self._font_size), center=False)
         else:
             anchor = self._shape_label_anchor(shape, self._font_size)
             self._begin_text_edit(
-                shape_idx=idx,
-                img_x=anchor['x'],
-                img_y=anchor['y'],
-                angle=anchor['angle'],
-                initial=shape.get('label', ''),
-                color=anchor['color'],
-                font_size=anchor['font_size'],
-                center=True,
-            )
+                shape_idx=idx, img_x=anchor['x'], img_y=anchor['y'],
+                angle=anchor['angle'], initial=shape.get('label', ''),
+                color=anchor['color'], font_size=anchor['font_size'], center=True)
 
-    # ------------------------------------------------------------------
-    # Undo
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # Hit-testing / geometry
+    # ==================================================================
 
-    def _undo(self) -> None:
-        if self._text_edit_active():
-            self._cancel_text_edit()
-            return
-        if self._shapes:
-            self._shapes.pop()
-            if self._selected_idx >= len(self._shapes):
-                self._selected_idx = -1
-            self._canvas.update()
-
-    def _clear_all(self) -> None:
-        if self._text_edit_active():
-            self._cancel_text_edit()
-        self._shapes.clear()
-        self._selected_idx = -1
-        self._canvas.update()
-
-    # ------------------------------------------------------------------
-    # Hit-testing and shape movement
-    # ------------------------------------------------------------------
+    def _next_badge_number(self) -> int:
+        return 1 + max((s.get('n', 0) for s in self._shapes if s['type'] == 'badge'),
+                       default=0)
 
     def _hit_test(self, x: float, y: float) -> int:
-        """Return index of the topmost shape at image-coord (x,y), or -1."""
-        thr = 10.0 / max(self._scale, 0.01)  # 10 display px in image space
+        thr = 10.0 / max(self._scale, 0.01)
         for i in range(len(self._shapes) - 1, -1, -1):
             s = self._shapes[i]
             t = s['type']
-            if t in self._LINE_TOOLS:
-                d = _point_to_seg_dist(x, y, s['x1'], s['y1'], s['x2'], s['y2'])
-                if d < thr + s.get('width', 2):
+            if t == 'badge':
+                if math.hypot(x - s['x'], y - s['y']) <= s.get('r', 15) + thr:
                     return i
-            elif t in ('rect', 'circle'):
+            elif t in self._LINE_TOOLS:
+                d = _point_to_seg_dist(x, y, s['x1'], s['y1'], s['x2'], s['y2'])
+                w = float(s.get('width', 2) or 2)
+                half = max(w * 3.0, 10.0) / 2.0 if t == 'highlight' else w
+                if d < thr + half:
+                    return i
+            elif t in self._BOX_TOOLS:
                 rx, ry, rw, rh = s['x'], s['y'], s['w'], s['h']
                 if rw < 0: rx += rw; rw = -rw
                 if rh < 0: ry += rh; rh = -rh
@@ -76000,56 +76899,24 @@ class SnapshotEditorDialog(QDialog):
         return -1
 
     def _move_shape(self, idx: int, dx: float, dy: float) -> None:
-        """Translate shape at *idx* by (dx, dy) in image coordinates."""
         s = self._shapes[idx]
         t = s['type']
         if t in self._LINE_TOOLS:
-            s['x1'] += dx;  s['y1'] += dy
-            s['x2'] += dx;  s['y2'] += dy
-        elif t in ('rect', 'circle'):
-            s['x'] += dx;  s['y'] += dy
-        elif t == 'text':
-            s['x'] += dx;  s['y'] += dy
+            s['x1'] += dx; s['y1'] += dy
+            s['x2'] += dx; s['y2'] += dy
+        else:
+            s['x'] += dx; s['y'] += dy
 
     def _duplicate_shape(self, idx: int) -> int:
-        """Append a copy of shape *idx* and return the new index."""
-        s = self._shapes[idx]
-        t = s['type']
-        dup: dict = {'type': t, 'color': QColor(s['color'])}
-        if t in self._LINE_TOOLS:
-            dup['width'] = s.get('width', 2)
-            dup['x1'] = s['x1']
-            dup['y1'] = s['y1']
-            dup['x2'] = s['x2']
-            dup['y2'] = s['y2']
-        elif t in ('rect', 'circle'):
-            dup['width'] = s.get('width', 2)
-            dup['x'] = s['x']
-            dup['y'] = s['y']
-            dup['w'] = s['w']
-            dup['h'] = s['h']
-        elif t == 'text':
-            dup['font_size'] = s['font_size']
-            dup['x'] = s['x']
-            dup['y'] = s['y']
-            dup['text'] = s['text']
-        if s.get('label'):
-            dup['label'] = s['label']
-        if s.get('label_font_size'):
-            dup['label_font_size'] = s['label_font_size']
-        if s.get('dashed') or t == 'dash':
-            dup['dashed'] = True
-        self._shapes.append(dup)
+        self._shapes.append(self._copy_shape(self._shapes[idx]))
         return len(self._shapes) - 1
 
     def _get_control_points(self, shape: dict) -> list:
         t = shape['type']
         if t in self._LINE_TOOLS:
-            return [
-                ('start', shape['x1'], shape['y1']),
-                ('end', shape['x2'], shape['y2']),
-            ]
-        if t in ('rect', 'circle'):
+            return [('start', shape['x1'], shape['y1']),
+                    ('end', shape['x2'], shape['y2'])]
+        if t in self._BOX_TOOLS:
             x, y, w, h = shape['x'], shape['y'], shape['w'], shape['h']
             return [
                 ('nw', x, y), ('n', x + w / 2.0, y), ('ne', x + w, y),
@@ -76060,7 +76927,7 @@ class SnapshotEditorDialog(QDialog):
         return []
 
     def _hit_control_point(self, x: float, y: float) -> Optional[str]:
-        if self._selected_idx < 0 or self._selected_idx >= len(self._shapes):
+        if not (0 <= self._selected_idx < len(self._shapes)):
             return None
         points = self._get_control_points(self._shapes[self._selected_idx])
         if not points:
@@ -76072,7 +76939,7 @@ class SnapshotEditorDialog(QDialog):
         return None
 
     def _get_handle_anchor(self, shape: dict, handle: str) -> Optional[tuple]:
-        if shape['type'] not in ('rect', 'circle'):
+        if shape['type'] not in self._BOX_TOOLS:
             return None
         x, y, w, h = shape['x'], shape['y'], shape['w'], shape['h']
         if handle == 'nw': return (x + w, y + h)
@@ -76092,63 +76959,44 @@ class SnapshotEditorDialog(QDialog):
             return Qt.CursorShape.SizeHorCursor
         return Qt.CursorShape.CrossCursor
 
-    def _resize_shape_by_handle(self, idx: int, handle: str, x: float, y: float, force_snap: bool = False) -> None:
+    def _resize_shape_by_handle(self, idx: int, handle: str, x: float, y: float,
+                                force_snap: bool = False) -> None:
         s = self._shapes[idx]
         t = s['type']
-
         if t in self._LINE_TOOLS:
             if handle == 'start':
                 s['x1'], s['y1'] = _snap_line_end(s['x2'], s['y2'], x, y, force_snap)
             elif handle == 'end':
                 s['x2'], s['y2'] = _snap_line_end(s['x1'], s['y1'], x, y, force_snap)
             return
-
-        if t not in ('rect', 'circle'):
+        if t not in self._BOX_TOOLS:
             return
-
         if handle == 'n':
-            bottom = s['y'] + s['h']
-            top = y
-            s['y'] = min(top, bottom)
-            s['h'] = abs(bottom - top)
-            return
+            bottom = s['y'] + s['h']; s['y'] = min(y, bottom); s['h'] = abs(bottom - y); return
         if handle == 's':
-            top = s['y']
-            bottom = y
-            s['y'] = min(top, bottom)
-            s['h'] = abs(bottom - top)
-            return
+            top = s['y']; s['y'] = min(top, y); s['h'] = abs(y - top); return
         if handle == 'w':
-            right = s['x'] + s['w']
-            left = x
-            s['x'] = min(left, right)
-            s['w'] = abs(right - left)
-            return
+            right = s['x'] + s['w']; s['x'] = min(x, right); s['w'] = abs(right - x); return
         if handle == 'e':
-            left = s['x']
-            right = x
-            s['x'] = min(left, right)
-            s['w'] = abs(right - left)
-            return
-
+            left = s['x']; s['x'] = min(left, x); s['w'] = abs(x - left); return
         if handle in ('nw', 'ne', 'se', 'sw') and self._drag_anchor is not None:
             ax, ay = self._drag_anchor
             x1, y1 = x, y
             if force_snap:
-                dx = x1 - ax
-                dy = y1 - ay
+                dx = x1 - ax; dy = y1 - ay
                 size = min(abs(dx), abs(dy))
                 x1 = ax + (-size if dx < 0 else size)
                 y1 = ay + (-size if dy < 0 else size)
-            s['x'] = min(x1, ax)
-            s['y'] = min(y1, ay)
-            s['w'] = abs(x1 - ax)
-            s['h'] = abs(y1 - ay)
+            s['x'] = min(x1, ax); s['y'] = min(y1, ay)
+            s['w'] = abs(x1 - ax); s['h'] = abs(y1 - ay)
 
     def _shape_bounds(self, shape: dict) -> tuple:
         t = shape['type']
-        if t in ('rect', 'circle'):
+        if t in self._BOX_TOOLS:
             return shape['x'], shape['y'], shape['w'], shape['h']
+        if t == 'badge':
+            r = shape.get('r', 15)
+            return shape['x'] - r, shape['y'] - r, 2 * r, 2 * r
         if t == 'text':
             fs = shape.get('font_size', 20)
             w = len(shape.get('text', '')) * fs * 0.65
@@ -76159,38 +77007,35 @@ class SnapshotEditorDialog(QDialog):
 
     def _paint_selection(self, painter: QPainter, shape: dict) -> None:
         x, y, w, h = self._shape_bounds(shape)
-        sel_pen = QPen(QColor('#50beff'), max(1.0, 1.5 / max(self._scale, 0.01)), Qt.PenStyle.DashLine)
-        sel_pen.setDashPattern([5.0 / max(self._scale, 0.01), 4.0 / max(self._scale, 0.01)])
+        pad = 0.0
+        if shape['type'] in self._LINE_TOOLS:
+            pad = max(float(shape.get('width', 3) or 3), 6.0) + 4.0
+        inv = 1.0 / max(self._scale, 0.01)
+        sel_pen = QPen(QColor('#50beff'), max(1.0, 1.5 * inv), Qt.PenStyle.DashLine)
+        sel_pen.setDashPattern([5.0 * inv, 4.0 * inv])
         painter.setPen(sel_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRect(QRectF(x, y, max(1.0, w), max(1.0, h)))
-
+        painter.drawRect(QRectF(x - pad, y - pad,
+                                max(1.0, w) + 2 * pad, max(1.0, h) + 2 * pad))
         points = self._get_control_points(shape)
         if not points:
             return
-        r = max(4.0, 6.0 / max(self._scale, 0.01))
-        outline_pen = QPen(QColor('#2c8cff'), max(1.2, 1.8 / max(self._scale, 0.01)))
-        painter.setPen(outline_pen)
+        r = max(4.0, 6.0 * inv)
+        painter.setPen(QPen(QColor('#2c8cff'), max(1.2, 1.8 * inv)))
         painter.setBrush(QBrush(QColor('#ffffff')))
         for _hid, px, py in points:
             painter.drawEllipse(QPointF(px, py), r, r)
 
-    # ------------------------------------------------------------------
+    # ==================================================================
     # Shape rendering
-    # ------------------------------------------------------------------
+    # ==================================================================
 
     @staticmethod
     def _shape_is_dashed(shape: dict) -> bool:
         return bool(shape.get('dashed')) or shape.get('type') == 'dash'
 
-    def _stroke_pen(
-        self,
-        col: QColor,
-        w: float,
-        dashed: bool = False,
-        cap=Qt.PenCapStyle.RoundCap,
-        join=Qt.PenJoinStyle.RoundJoin,
-    ) -> QPen:
+    def _stroke_pen(self, col: QColor, w: float, dashed: bool = False,
+                    cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin) -> QPen:
         if dashed:
             pen = QPen(col, w, Qt.PenStyle.CustomDashLine, cap, join)
             pen.setDashPattern([20.0 / max(w, 1), 10.0 / max(w, 1)])
@@ -76198,46 +77043,112 @@ class SnapshotEditorDialog(QDialog):
             pen = QPen(col, w, Qt.PenStyle.SolidLine, cap, join)
         return pen
 
-    def _paint_shapes(
-        self,
-        painter: QPainter,
-        shapes: list,
-        override_color: Optional[QColor] = None,
-        extra_width: int = 0,
-    ) -> None:
+    @staticmethod
+    def _with_opacity(col: QColor, shape: dict, extra: float = 1.0) -> QColor:
+        op = float(shape.get('opacity', 1.0)) * extra
+        if op >= 1.0:
+            return col
+        c = QColor(col)
+        c.setAlphaF(max(0.0, min(1.0, c.alphaF() * op)))
+        return c
+
+    def _paint_shapes(self, painter: QPainter, shapes: list,
+                      override_color: Optional[QColor] = None,
+                      extra_width: int = 0) -> None:
         for shape in shapes:
             t = shape['type']
-            col = override_color if override_color is not None else shape['color']
-            w = shape.get('width', 2) + extra_width
-            if t == 'text':
-                self._paint_text(painter, shape, override_color, extra_width)
-            elif t == 'arrow' or t == 'dblarrow':
-                self._paint_line_arrow(
-                    painter, shape, col, w, extra_width, double=(t == 'dblarrow'))
-            elif t == 'line' or t == 'dash':
-                dashed = self._shape_is_dashed(shape)
-                painter.setPen(self._stroke_pen(col, w, dashed))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                self._draw_line_with_label_gap(
-                    painter,
-                    shape['x1'], shape['y1'], shape['x2'], shape['y2'],
-                    self._line_label_gap_half(shape),
-                )
-            elif t == 'rect':
-                dashed = self._shape_is_dashed(shape)
-                pen = self._stroke_pen(col, w, dashed, Qt.PenCapStyle.SquareCap, Qt.PenJoinStyle.MiterJoin)
+            if t == 'crop':
+                # Drag preview only — no colour/width, just a dashed frame.
+                pen = QPen(QColor(255, 255, 255, 235),
+                           max(1.0, 1.5 / max(self._scale, 0.01)), Qt.PenStyle.DashLine)
                 painter.setPen(pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawRect(QRectF(shape['x'], shape['y'],
-                                        shape['w'], shape['h']))
-            elif t == 'circle':
-                dashed = self._shape_is_dashed(shape)
-                painter.setPen(self._stroke_pen(col, w, dashed))
+                painter.drawRect(QRectF(shape['x'], shape['y'], shape['w'], shape['h']))
+                continue
+            base = override_color if override_color is not None else shape.get('color', QColor('#ffffff'))
+            w = shape.get('width', 2) + extra_width
+
+            if t == 'text':
+                col = self._with_opacity(base, shape) if override_color is None else base
+                self._paint_text(painter, shape, col if override_color is None else override_color, extra_width)
+            elif t in ('arrow', 'dblarrow'):
+                col = self._with_opacity(base, shape) if override_color is None else base
+                self._paint_line_arrow(painter, shape, col, w, extra_width,
+                                       double=(t == 'dblarrow'))
+            elif t in ('line', 'dash'):
+                col = self._with_opacity(base, shape) if override_color is None else base
+                painter.setPen(self._stroke_pen(col, w, self._shape_is_dashed(shape)))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawEllipse(QRectF(shape['x'], shape['y'],
-                                           shape['w'], shape['h']))
-            if t != 'text' and shape.get('label') and not self._is_editing_shape_label(shape):
+                self._draw_line_with_label_gap(
+                    painter, shape['x1'], shape['y1'], shape['x2'], shape['y2'],
+                    self._line_label_gap_half(shape))
+            elif t == 'highlight':
+                if override_color is not None:
+                    continue
+                col = self._with_opacity(base, shape, 0.3)
+                painter.setPen(self._stroke_pen(col, max(w * 3.0, 10.0)))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawLine(QPointF(shape['x1'], shape['y1']),
+                                 QPointF(shape['x2'], shape['y2']))
+            elif t == 'rect':
+                col = self._with_opacity(base, shape) if override_color is None else base
+                painter.setPen(self._stroke_pen(col, w, self._shape_is_dashed(shape),
+                                                Qt.PenCapStyle.SquareCap,
+                                                Qt.PenJoinStyle.MiterJoin))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(QRectF(shape['x'], shape['y'], shape['w'], shape['h']))
+            elif t == 'circle':
+                col = self._with_opacity(base, shape) if override_color is None else base
+                painter.setPen(self._stroke_pen(col, w, self._shape_is_dashed(shape)))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(QRectF(shape['x'], shape['y'], shape['w'], shape['h']))
+            elif t == 'badge':
+                if override_color is not None:
+                    continue
+                self._paint_badge(painter, shape)
+            elif t == 'blur':
+                if override_color is not None:
+                    continue
+                self._paint_blur(painter, shape)
+
+            if (t != 'text' and shape.get('label')
+                    and not self._is_editing_shape_label(shape)):
                 self._paint_attached_label(painter, shape, override_color, extra_width)
+
+    def _paint_badge(self, painter: QPainter, shape: dict) -> None:
+        r = shape.get('r', 15)
+        cx, cy = shape['x'], shape['y']
+        col = self._with_opacity(shape['color'], shape)
+        painter.setPen(QPen(QColor('#ffffff'), max(2.0, r * 0.16)))
+        painter.setBrush(QBrush(col))
+        painter.drawEllipse(QPointF(cx, cy), r, r)
+        font = QFont()
+        font.setBold(True)
+        font.setPixelSize(int(round(r * 1.15)))
+        painter.setFont(font)
+        painter.setPen(QColor('#ffffff'))
+        painter.drawText(QRectF(cx - r, cy - r, 2 * r, 2 * r),
+                         Qt.AlignmentFlag.AlignCenter, str(shape.get('n', 1)))
+
+    def _paint_blur(self, painter: QPainter, shape: dict) -> None:
+        x = int(round(shape['x'])); y = int(round(shape['y']))
+        w = max(1, int(round(shape['w']))); h = max(1, int(round(shape['h'])))
+        iw, ih = self._orig_image.width(), self._orig_image.height()
+        sx = max(0, x); sy = max(0, y)
+        sw = min(iw, x + w) - sx; sh = min(ih, y + h) - sy
+        if sw <= 0 or sh <= 0:
+            return
+        strength = max(1, min(10, int(shape.get('strength', 4))))
+        block = max(3, int(round(min(w, h) / (15 - strength))))
+        small = self._orig_image.copy(sx, sy, sw, sh).scaled(
+            max(1, sw // block), max(1, sh // block),
+            Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
+        big = small.scaled(sw, sh, Qt.AspectRatioMode.IgnoreAspectRatio,
+                           Qt.TransformationMode.FastTransformation)
+        painter.save()
+        painter.setClipRect(QRectF(x, y, w, h))
+        painter.drawImage(QPointF(sx, sy), big)
+        painter.restore()
 
     @staticmethod
     def _label_angle_for_line(x1: float, y1: float, x2: float, y2: float) -> float:
@@ -76256,11 +77167,8 @@ class SnapshotEditorDialog(QDialog):
         return max(len(label) * fs * 0.65, fs) / 2.0 + 6.0
 
     @staticmethod
-    def _draw_line_with_label_gap(
-        painter: QPainter,
-        x1: float, y1: float, x2: float, y2: float,
-        gap_half: float,
-    ) -> None:
+    def _draw_line_with_label_gap(painter: QPainter, x1: float, y1: float,
+                                  x2: float, y2: float, gap_half: float) -> None:
         if gap_half <= 0:
             painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
             return
@@ -76273,42 +77181,34 @@ class SnapshotEditorDialog(QDialog):
             return
         ux, uy = dx / length, dy / length
         mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-        painter.drawLine(
-            QPointF(x1, y1), QPointF(mx - ux * gap_half, my - uy * gap_half))
-        painter.drawLine(
-            QPointF(mx + ux * gap_half, my + uy * gap_half), QPointF(x2, y2))
+        painter.drawLine(QPointF(x1, y1), QPointF(mx - ux * gap_half, my - uy * gap_half))
+        painter.drawLine(QPointF(mx + ux * gap_half, my + uy * gap_half), QPointF(x2, y2))
 
-    def _paint_attached_label(
-        self,
-        painter: QPainter,
-        shape: dict,
-        override_color: Optional[QColor] = None,
-        extra_width: int = 0,
-    ) -> None:
+    def _paint_attached_label(self, painter: QPainter, shape: dict,
+                              override_color: Optional[QColor] = None,
+                              extra_width: int = 0) -> None:
         label = shape.get('label')
         if not label or shape['type'] == 'text':
             return
         t = shape['type']
-        col = override_color if override_color is not None else shape['color']
+        col = override_color if override_color is not None else self._with_opacity(shape['color'], shape)
         fs = shape.get('label_font_size', self._font_size)
         font = QFont()
         font.setBold(True)
         font.setPixelSize(fs)
         fm = QFontMetrics(font)
         tw = fm.horizontalAdvance(label)
-
         if t in self._LINE_TOOLS:
             cx = (shape['x1'] + shape['x2']) / 2.0
             cy = (shape['y1'] + shape['y2']) / 2.0
-            angle = self._label_angle_for_line(
-                shape['x1'], shape['y1'], shape['x2'], shape['y2'])
+            angle = self._label_angle_for_line(shape['x1'], shape['y1'],
+                                               shape['x2'], shape['y2'])
         elif t in ('rect', 'circle'):
             cx = shape['x'] + shape['w'] / 2.0
             cy = shape['y'] + shape['h'] / 2.0
             angle = 0.0
         else:
             return
-
         painter.save()
         painter.translate(cx, cy)
         if angle:
@@ -76316,25 +77216,15 @@ class SnapshotEditorDialog(QDialog):
         path = QPainterPath()
         path.addText(QPointF(-tw / 2.0, fm.ascent() / 2.0), font, label)
         if override_color is not None:
-            stroke_w = 4 + extra_width * 2
-            painter.strokePath(
-                path,
-                QPen(col, stroke_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.strokePath(path, QPen(col, 4 + extra_width * 2, Qt.PenStyle.SolidLine,
+                                          Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         else:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.fillPath(path, col)
         painter.restore()
 
-    def _paint_line_arrow(
-        self,
-        painter: QPainter,
-        shape: dict,
-        col: QColor,
-        w: int,
-        extra_width: int,
-        *,
-        double: bool = False,
-    ) -> None:
+    def _paint_line_arrow(self, painter: QPainter, shape: dict, col: QColor,
+                          w: int, extra_width: int, *, double: bool = False) -> None:
         x1, y1 = shape['x1'], shape['y1']
         x2, y2 = shape['x2'], shape['y2']
         length = math.hypot(x2 - x1, y2 - y1)
@@ -76345,24 +77235,19 @@ class SnapshotEditorDialog(QDialog):
         arrow_ang = math.pi / 6.0
         if double:
             inset = arrow_len * 0.6
-            sx = x1 + inset * math.cos(angle)
-            sy = y1 + inset * math.sin(angle)
-            ex = x2 - inset * math.cos(angle)
-            ey = y2 - inset * math.sin(angle)
+            sx = x1 + inset * math.cos(angle); sy = y1 + inset * math.sin(angle)
+            ex = x2 - inset * math.cos(angle); ey = y2 - inset * math.sin(angle)
             tips = ((x2, y2, angle), (x1, y1, angle + math.pi))
         else:
             sx, sy = x1, y1
             ex = x2 - arrow_len * 0.6 * math.cos(angle)
             ey = y2 - arrow_len * 0.6 * math.sin(angle)
             tips = ((x2, y2, angle),)
-
         painter.setPen(self._stroke_pen(col, w, self._shape_is_dashed(shape)))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        self._draw_line_with_label_gap(
-            painter, sx, sy, ex, ey, self._line_label_gap_half(shape))
-
-        stroke_w = max(1, extra_width)
-        painter.setPen(QPen(col, stroke_w, Qt.PenStyle.SolidLine))
+        self._draw_line_with_label_gap(painter, sx, sy, ex, ey,
+                                       self._line_label_gap_half(shape))
+        painter.setPen(QPen(col, max(1, extra_width), Qt.PenStyle.SolidLine))
         painter.setBrush(QBrush(col))
         for tip_x, tip_y, ang in tips:
             tip = QPointF(tip_x, tip_y)
@@ -76372,13 +77257,8 @@ class SnapshotEditorDialog(QDialog):
                          tip_y - arrow_len * math.sin(ang + arrow_ang))
             painter.drawPolygon(QPolygonF([tip, p1, p2]))
 
-    def _paint_text(
-        self,
-        painter: QPainter,
-        shape: dict,
-        override_color: Optional[QColor],
-        extra_width: int,
-    ) -> None:
+    def _paint_text(self, painter: QPainter, shape: dict,
+                    override_color: Optional[QColor], extra_width: int) -> None:
         col = override_color if override_color is not None else shape['color']
         font = QFont()
         font.setBold(True)
@@ -76388,30 +77268,35 @@ class SnapshotEditorDialog(QDialog):
         path = QPainterPath()
         path.addText(shape['x'], baseline_y, font, shape['text'])
         if override_color is not None:
-            # Outline pass: stroke path with a wider pen (4 px -> 2 px halo each side)
-            stroke_w = 4 + extra_width * 2
-            painter.strokePath(path,
-                               QPen(col, stroke_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.strokePath(path, QPen(col, 4 + extra_width * 2, Qt.PenStyle.SolidLine,
+                                          Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         else:
-            # Colour pass: fill the glyph path
             painter.setPen(Qt.PenStyle.NoPen)
             painter.fillPath(path, col)
 
-    # ------------------------------------------------------------------
+    # ==================================================================
     # Export
-    # ------------------------------------------------------------------
+    # ==================================================================
 
     def _render_final_pixmap(self) -> QPixmap:
-        """Composite the original image and all annotations at full resolution."""
         self._commit_text_edit()
-        result = QPixmap(self._orig_pixmap)
-        painter = QPainter(result)
+        self._exporting = True
         try:
-            painter.setRenderHint(QPainter.Antialiasing)
-            self._paint_shapes(painter, self._shapes, QColor('#ffffff'), 2)
-            self._paint_shapes(painter, self._shapes)
+            result = QPixmap(self._orig_pixmap)
+            painter = QPainter(result)
+            try:
+                painter.setRenderHint(QPainter.Antialiasing)
+                outline = [s for s in self._shapes if s['type'] not in self._NO_OUTLINE]
+                self._paint_shapes(painter, outline, QColor('#ffffff'), 2)
+                self._paint_shapes(painter, self._shapes)
+            finally:
+                painter.end()
+            if self._crop:
+                c = self._crop
+                result = result.copy(int(round(c['x'])), int(round(c['y'])),
+                                     max(1, int(round(c['w']))), max(1, int(round(c['h']))))
         finally:
-            painter.end()
+            self._exporting = False
         return result
 
     def _on_copy(self) -> None:
@@ -76421,8 +77306,7 @@ class SnapshotEditorDialog(QDialog):
     def _on_save(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Annotated Image", "annotated-snapshot.png",
-            "PNG images (*.png);;All files (*)"
-        )
+            "PNG images (*.png);;All files (*)")
         if not path:
             return
         pixmap = self._render_final_pixmap()
@@ -76446,8 +77330,7 @@ class SnapshotEditorDialog(QDialog):
         self._toast_anim.start()
         self._toast_seq = getattr(self, "_toast_seq", 0) + 1
         _seq = self._toast_seq
-        QTimer.singleShot(
-            3000, lambda: self._hide_status(_seq))
+        QTimer.singleShot(3000, lambda: self._hide_status(_seq))
 
     def _hide_status(self, seq: int) -> None:
         if getattr(self, "_toast_seq", 0) != seq:
@@ -76458,7 +77341,6 @@ class SnapshotEditorDialog(QDialog):
         self._toast_anim.setEndValue(0.0)
         self._toast_anim.finished.connect(self._status_lbl.hide)
         self._toast_anim.start()
-
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Main Window
@@ -86164,7 +87046,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         # --- Help menu ---
         hm = mb.addMenu("&Help")
-        hm.addAction("&Keyboard && Mouse Shortcuts…", self._on_keyboard_shortcuts)
+        _sc_act = hm.addAction("&Keyboard && Mouse Shortcuts…", self._on_keyboard_shortcuts)
+        # "?" opens the shortcuts reference — web parity. F1 too. As a menu-action
+        # shortcut Qt auto-suppresses it while a text field has focus. ("?" and
+        # "Shift+/" are the same sequence, so only bind one to avoid an ambiguous
+        # overload.)
+        _sc_act.setShortcuts([QKeySequence("?"), QKeySequence("F1")])
         hm.addSeparator()
         hm.addAction("&About", self._on_about)
 

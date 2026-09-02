@@ -121,6 +121,19 @@ class CliReportTests(unittest.TestCase):
         self.assertNotIn("Worker", a)
         self.assertIn("Task-", a)
 
+    def test_anonymize_html_report_leaves_no_task_names(self) -> None:
+        plain = self.tmp / "p.html"
+        anon = self.tmp / "a.html"
+        self.assertEqual(
+            _cli_report_run(_args(str(self.trace), str(plain), "html")), 0)
+        self.assertEqual(
+            _cli_report_run(
+                _args(str(self.trace), str(anon), "html", anonymize=True)), 0)
+        self.assertIn("Worker", plain.read_text(encoding="utf-8"))
+        html = anon.read_text(encoding="utf-8")
+        self.assertNotIn("Worker", html)
+        self.assertIn("Task-", html)
+
     def test_scoped_report_labels_cursor_range(self) -> None:
         out = self.tmp / "s.csv"
         args = _args(str(self.trace), str(out), "csv")

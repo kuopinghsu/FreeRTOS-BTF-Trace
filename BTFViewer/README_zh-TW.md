@@ -146,6 +146,23 @@ make demo-pack DEMO_LANGS=en,zh-tw
 
 BTFViewer 使用一致的檢視介面、控制項目及分析流程。判讀結果前，請先確認目前的 trace、**Scope**、**Filters**、View Mode、**Selection** 與 **Highlight**。
 
+### 主視窗（The main window）
+
+Desktop 與 Web 版本共用同一套版面配置。
+
+![BTFViewer 主視窗](../images/btfviewer-web-main.png)
+
+| # | 區域 | 說明 |
+|---|---|---|
+| 1 | **活動列（Activity rail）** | 開啟與時間軸並列的工具——**Migration heatmap**、**Analysis Findings** 與 **Snapshot editor**——底部為 **Help** 與 **Settings**。 |
+| 2 | **工具列（Toolbar）** | 分組控制項——開啟、版面方向、縮放、View Mode、**Load**、佈景主題、示範、錄影。將滑鼠移到圖示上可看到名稱與快捷鍵；視窗過窄時會將分組收進 **More (⋯)**。詳見[主要控制項目](#主要控制項目)。 |
+| 3 | **Trace 分頁（Trace tabs）** | 每份開啟的 trace 各一個分頁，並各自保留 Scope、Filters、View Mode、縮放、游標與標記。 |
+| 4 | **圖例／工作清單（Legend / task list）** | 各列的顏色對照。將滑鼠移到項目上為 **Highlight**，點選為 **Selection**；在 Core View 中，**Cores** 核取方塊即為 Core Filter。 |
+| 5 | **時間軸與時間刻度（Timeline and time ruler）** | 依比例呈現的事件檢視。`Ctrl`+滾輪以游標為中心縮放、拖曳可平移、點選可放置游標，將滑鼠移到區段上會顯示工作、核心、起訖時間與長度。右下角的小方框是整份擷取的概覽圖。 |
+| 6 | **CPU 負載圖（CPU load graph）** | 時間軸下方的使用率；以 **Load** 切換顯示，拖曳分隔線可調整高度。選取某個工作後，Task View 可在此顯示該工作在各核心的使用率。 |
+| 7 | **右側面板（Right panel）** | 圖示列可在 **Statistics**、**Marks**、**Find**、**Legend** 與 **AI Assistant** 之間切換。Statistics（圖中所示）包含 **Limit to C1–Cn** 開關、調查分類篩選、摘要、可摺疊的指標區塊，以及底部的 **Anonymize** 與 **Export HTML**。 |
+| 8 | **狀態列（Status bar）** | 目前 trace 摘要、目前的 **Selection**、**Scope**、**Filtered:** 狀態、縮放（µs/px 與可見範圍），以及 Find 的 `k of N` 結果。 |
+
 ### 調查用語（Investigation terminology）
 
 | 用語 | 意義 |
@@ -305,6 +322,19 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 
 對於可量測使用率的多核心 trace，核心平衡分析會顯示 **Load Balance Score** 與相關分布數值。分數越高，表示工作分配越平均。判斷分配方式是否適合目前工作負載前，仍應檢查時間軸及核心遷移資料。
 
+可從工具列的 **Investigation** 分組，或活動列的 **Analysis findings** 按鈕開啟 Findings 視窗。
+
+![Analysis Findings](../images/btfviewer-web-findings.png)
+
+| # | 區域 | 說明 |
+|---|---|---|
+| 1 | **內容與分流狀態** | 目前 trace、目前的 **Scope** 與樣本數，以及追蹤每項結果分流進度的 **Open / Done / Case / Dismissed** 分頁。 |
+| 2 | **篩選與排序** | 依 **Severity**、**Evidence** 強度或 **Category** 過濾，變更 **Sort**，並可切換 **Group incidents** 將同一問題的重複項目摺疊在一起。 |
+| 3 | **結果清單** | 依嚴重度排序並依受影響物件分組；每筆項目會顯示分類，以及證據為 `Estimated / heuristic`（推估／啟發式）或實測。 |
+| 4 | **詳細窗格** | 所選結果的完整內容——現象與解讀、證據強度、確切證據、**Check next** 指引，以及建議的 Scope。 |
+| 5 | **結果動作** | **Apply cursors** / **Show on timeline** / **Investigate…** 可跳至證據；**Done** / **Dismiss…** / **Add to case** 可記錄分流結果。 |
+| 6 | **底部列** | 對所選結果 **Ask AI**，以及 **More** 中的匯出與 case 選項。 |
+
 ### Max、p95 與 p99 的判讀方式
 
 - **Max** 是量測到的最大值，用於尋找觀察期間內最差的事件。
@@ -321,11 +351,38 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 請一併檢查 **Task View**、各核心負載、**Core Migrations** 及 **Migration & Corridor Inspector**。Inspector 以三欄顯示核心路徑、遷移熱圖與 **Topology**；點選熱圖會在右欄開啟 **Path info**。**Analysis Scope** 預設為 **Follow zoom**（Fit 視為 Full Trace；放大後的視窗視為 Viewport）。可鎖定 Full Trace 或 Viewport，或選擇 Cursor C1–Cn。若偏高的核心遷移次數同時伴隨快取行為變差、內容切換成本增加、延遲升高或負載分配不穩，才具有較明確的分析意義。Handoff 關聯是啟發式結果，不是量測到的快取行搬移。
 
+可從工具列的 **Investigation** 分組，或活動列的 **Migration heatmap** 按鈕開啟 Inspector。
+
+![Migration & Corridor Inspector](../images/btfviewer-web-migration.png)
+
+| # | 區域 | 說明 |
+|---|---|---|
+| 1 | **判讀列（Verdict strip）** | 一行結論加上佐證資料：Scope、最受影響的工作、負載平衡、最熱路徑、遷移總數（含速率），以及主要疑慮。 |
+| 2 | **工具列（Toolbar）** | **Analysis Scope**（Follow zoom / Full Trace / Viewport / Cursor C1–Cn）、**Show** 路徑深度、**All Migrations** 與僅顯示彈跳（ping-pong）路徑的切換、**Direction**，以及 **Task filter**。 |
+| 3 | **範圍橫幅（Scope banner）** | 數據對應的確切時間視窗與時間單位，避免將放大或游標限定的檢視誤認為整份 trace。 |
+| 4 | **核心路徑樹（Core-path tree）** | 依速率排序的來源 → 目的走廊，並列出 Count、Ping（彈跳比例）、Dwell、Handoff、Net 與 Share。展開某列（▶）可看該走廊的各工作細目。 |
+| 5 | **遷移熱圖（Migration heatmap）** | 各走廊在每個時間區間的遷移次數——儲存格顏色代表次數，斜線標示同步交接（synchronization handoff）疑似比例超過門檻的區間，並標出空白區間。點選儲存格可聚焦該走廊與區間。 |
+| 6 | **Topology / Path info** | 核心間流量的弦圖；**Path info** 分頁顯示所選走廊的細節。右上角的按鈕可切換版面。 |
+| 7 | **AI 動作（AI actions）** | **Investigate with AI**，以及一鍵提示——Investigate this path、Explain this migration burst、Verify possible ping-pong 與 Compare with another trace。 |
+
 ### 比較已開啟的 trace（Comparing open traces）
 
 開啟兩份以上的 trace 時，可以使用 **Compare** 查看使用率、核心遷移、執行時間、阻塞時間、回應時間（Response Time）、同步活動及錯過截止期限（Deadline Miss）等差異。
 
 **Summary** 分頁會標示 **Baseline**（參考 trace）與 **Candidate**（新 trace），統計變差與改善的項目，並說明整體結果。沒有實際工程影響的小幅變化會省略。點選欄位標題可排序任一比較表格，再點一次可反向排序。
+
+![Trace Compare](../images/btfviewer-web-compare.png)
+
+| # | 區域 | 說明 |
+|---|---|---|
+| 1 | **Trace A / Trace B 選擇器** | 選擇哪一個已開啟的 trace 作為 **Baseline (A)**、哪一個作為 **Candidate (B)**。 |
+| 2 | **範圍與 Δ 慣例** | 可選擇僅比較各分頁的游標範圍；說明文字指出 **Δ = Baseline A − Candidate B**（`—` 代表無法取得，`pp` 代表百分點）。 |
+| 3 | **區段導覽列** | 在各比較區段間切換——Summary、Top Tasks、Core Utilisation、Migrations、Execution、Blocking、Inter-Arrival、Response、Preemption、Sync、Mutex，以及跨 trace 的 Trends。 |
+| 4 | **可比較性檢查** | 當兩份 trace 無法直接比較時提出警告——核心數不同，或工作集幾乎不重疊——提醒謹慎解讀各核心與負載平衡的差異。 |
+| 5 | **判定橫幅（Verdict banner）** | 整體結論（Improved / Regressed / Mixed / Unchanged），以及其背後的變差與改善數量。 |
+| 6 | **摘要卡片** | 變差數、改善數、警告數，以及單一的 **Biggest mover**（變動最大項）。 |
+| 7 | **變化圖與指標表** | 具工程意義的差異以雙向長條圖呈現（改善 ↔ 變差），下方為完整的 **All summary metrics** 表格（Metric / Baseline A / Candidate B / Change）。 |
+| 8 | **底部列** | **Export HTML**、**Save baseline** / **Score vs baseline**、**Validate experiment…**，或 **Ask AI about this**。 |
 
 這是選用的比較工具，不是基本分析流程的必要步驟。使用時，應比較相同的工作負載階段與量測範圍。
 
@@ -334,6 +391,19 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 ## AI Assistant
 
 選配的 AI Assistant 可說明 BTFViewer 量測出的 Analysis Findings（分析結果）與 Statistics（統計資料）。它不能取代時間軸驗證，也無法補出 trace 中未記錄的量測資料。
+
+可從右側面板的圖示列（**AI Assistant**）開啟。
+
+![AI Assistant panel](../images/btfviewer-web-ai.png)
+
+| # | 區域 | 說明 |
+|---|---|---|
+| 1 | **標頭（Header）** | 面板標題、供應商／隱私標記（**Local** 或 **Cloud**），以及目前的 context 等級。 |
+| 2 | **工具列（Toolbar）** | **Clear** 清除對話、切換回覆 **Language…**，或開啟 **Settings…**（模型、端點、驗證、隱私）。 |
+| 3 | **導引式調查** | **Triage → Scope → Investigate → Verify → Experiment → Compare** 步驟列與 **Start Investigation**，帶你走一遍結構化流程。 |
+| 4 | **對話與起始提示** | 回覆討論串。第一則訊息前會顯示目前的 Trace / Scope / Filters，以及分組的一鍵提示（Start、Investigate、SMP、Verify、Compare）。 |
+| 5 | **快捷範本** | 針對目前選取內容的現成提示——**Investigate**、**Verify finding**、**Explain evidence** 與 **More…**。 |
+| 6 | **輸入框與 context 量表** | 輸入問題（Enter 送出，Shift+Enter 換行）；下方量表顯示本次請求使用的 context 等級。 |
 
 建議操作方式：
 
@@ -367,7 +437,24 @@ BTFViewer 提供以下匯出功能。
 | Trace 比較報告 | 開啟 Compare，再選取 **Export HTML** |
 | 示範錄影 | 選取 **Record** 並分享目前分頁；停止錄影後會下載 WebM 檔案 |
 
-Statistics 與 Trace Compare 都使用單一的 **Export HTML** 功能。儲存後的報告會在每個統計表格提供 **CSV** 按鈕，用來下載該表格目前顯示的資料列。若要下載完整表格，請先清除 **Search** 內容並取消 **Problems only**，再啟用 **Show all** 後點選 **CSV**。
+Statistics 與 Trace Compare 都使用單一的 **Export HTML** 功能。儲存後的報告會在每個表格提供 **CSV** 按鈕，依目前排序下載所有符合 **Search** 與 **Problems only** 篩選的資料列（不受分頁影響）。若要匯出完整表格，請先清除這些篩選條件。**Export HTML** 旁的 **Anonymize** 核取方塊會將整份匯出報告中的工作名稱以固定的 `Task-N` 別名取代。
+
+### 快照編輯器（Snapshot editor）
+
+按 `Ctrl+S`（或活動列的相機圖示）擷取目前的時間軸畫面並開啟註記編輯器。Desktop 與 Web 採用相同設計：左側為垂直工具列、隨選取物件浮動的屬性面板，以及一條精簡的歷史／縮放列，讓畫布保有最大空間，每個控制項都落在實際操作的位置。
+
+![快照編輯器](../images/btfviewer-web-snapshot.png)
+
+| # | 區域 | 說明 |
+|---|---|---|
+| 1 | **工具列（Tool rail）** | 最上方為 **Select（選取）**，其後為註記工具：箭頭、雙向箭頭、直線、矩形、橢圓、文字、螢光筆、編號標記、模糊／遮蔽、裁切。僅顯示圖示、單一啟用工具；每個工具的提示（tooltip）都會列出單鍵快捷鍵。 |
+| 2 | **預設樣式（Default style）** | 設定**下一個**繪製圖形的顏色、線寬（`−` / `+`）與虛線。數字鍵 `1`–`9`、`0` 也可設定線寬。修改既有圖形請在浮動屬性面板（5）操作。 |
+| 3 | **歷史（History）** | 完整的復原／重做——繪製、移動、縮放、改樣式、刪除與裁切皆為可回復的步驟（`Ctrl+Z`、`Ctrl+Shift+Z`）。 |
+| 4 | **縮放與平移（Zoom & pan）** | 縮小、放大（放大鏡圖示按鈕）、百分比顯示與 **Fit**。`Ctrl`+滾輪以游標為中心縮放；按住 `Space` 拖曳可平移。開啟時會自動縮放至符合畫面。 |
+| 5 | **浮動屬性面板（Floating inspector）** | 出現在選取的圖形旁並跟隨移動：顏色（含最近使用色與影像取色器）、線寬、虛線、透明度、標籤／文字、字型大小、堆疊順序、複製，以及刪除該圖形的垃圾桶按鈕。 |
+| 6 | **底部列（Footer）** | **Copy to Clipboard**、**Save PNG…**、**Close**。若已設定裁切，僅會匯出裁切後的區域。 |
+
+`?` 開啟鍵盤快捷鍵面板。`Esc` 會逐層退出——先關閉面板、再取消選取、最後回到 Select 工具——不會關閉編輯器本身。
 
 <a id="desktop-command-line" name="desktop-command-line">&#x200B;</a>
 
@@ -437,7 +524,7 @@ Desktop 將設定儲存在 BTFViewer 旁的 `btf_viewer.rc`；Web 則儲存在�
 | `Ctrl+S` | 開啟 Snapshot editor（快照編輯器） |
 | `Ctrl+Shift+S` | 儲存 SVG |
 | `Ctrl+Shift+E` | 匯出 Perfetto JSON |
-| `?` | 顯示 Web 快速鍵 |
+| `?` / `F1` | 顯示鍵盤與滑鼠快速鍵參考 |
 
 ### 滑鼠操作
 

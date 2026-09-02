@@ -1,29 +1,19 @@
 <template>
   <div class="se-overlay" ref="overlayEl" @click.self="handleClose">
-    <div class="se-win">
-      <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
-      <div class="se-toolbar">
+    <div class="se-win" ref="winEl" tabindex="-1" :style="winStyle" @keydown.tab="trapFocus">
+      <!-- ── Toolbar (history + zoom + shortcuts) ─────────────── -->
+      <div class="se-toolbar" role="toolbar" aria-label="Editor options" @mousedown="onWinDragStart">
 
-        <!-- Tool buttons -->
-        <div class="se-tools">
+        <!-- Default style for the next shape (per-shape editing is in the inspector) -->
+        <div class="se-style">
           <button
-            v-for="t in TOOLS"
-            :key="t.id"
-            class="se-tbtn icon-btn"
-            :class="{ active: tool === t.id }"
-            :title="t.label"
-            @click="setTool(t.id)"
-            v-html="t.icon"
+            class="se-style-swatch"
+            :style="{ background: color }"
+            :title="`Default colour — ${color}`"
+            aria-label="Default colour"
+            :aria-expanded="colorPanelOpen"
+            @click.stop="colorPanelOpen = !colorPanelOpen"
           />
-        </div>
-
-        <div class="se-sep" />
-
-        <!-- Color picker -->
-        <div class="se-ctl se-color-ctl" title="Stroke / text color">
-          <span class="se-ctl-lbl">Color</span>
-          <button class="se-color-swatch" :style="{ background: color }"
-                  @click.stop="colorPanelOpen = !colorPanelOpen" />
           <div v-if="colorPanelOpen" class="se-color-panel" @click.stop>
             <div
               v-for="c in PRESET_COLORS" :key="c"
@@ -33,51 +23,99 @@
               :title="c"
               @click="pickColor(c)"
             />
-            <label class="se-color-custom" title="Custom color\u2026">
+            <label class="se-color-custom" title="Custom colour">
               <span v-html="ICON_PALETTE" />
-              <input type="color" :value="color" @input="e => pickColor(e.target.value)"
-                     class="se-color-custom-input" />
+              <input type="color" :value="color" class="se-color-custom-input"
+                     @input="e => pickColor(e.target.value)" />
             </label>
+            <button
+              v-if="hasEyeDropper"
+              class="se-color-eyedrop"
+              title="Pick a colour from the image"
+              aria-label="Pick a colour from the image"
+              @click="eyeDrop(pickColor)"
+            >
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+                   stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10.5 2.5a2 2 0 0 1 3 3L7 12l-3 1 1-3z" />
+              </svg>
+            </button>
+            <div v-if="recentColors.length" class="se-color-recent">
+              <div
+                v-for="c in recentColors" :key="'tr' + c"
+                class="se-color-dot"
+                :class="{ active: color === c }"
+                :style="{ background: c }"
+                :title="c"
+                @click="pickColor(c)"
+              />
+            </div>
           </div>
+
+          <span class="se-style-div" />
+          <button class="se-tbtn se-zoom-btn" aria-label="Thinner stroke"
+                  :disabled="lineWidth <= 1" @click="lineWidth = Math.max(1, lineWidth - 1)">&minus;</button>
+          <span class="se-style-val" title="Default stroke width">{{ lineWidth }}</span>
+          <button class="se-tbtn se-zoom-btn" aria-label="Thicker stroke"
+                  :disabled="lineWidth >= 20" @click="lineWidth = Math.min(20, lineWidth + 1)">+</button>
+          <span class="se-style-div" />
+          <button class="se-tbtn se-style-dash" :class="{ on: dashChecked }"
+                  :aria-pressed="dashChecked" title="Dashed by default"
+                  @click="dashChecked = !dashChecked">Dash</button>
         </div>
 
-        <!-- Stroke width -->
-        <label class="se-ctl" title="Stroke width">
-          <span class="se-ctl-lbl">Size&nbsp;{{ lineWidth }}</span>
-          <input class="se-range" type="range" min="1" max="20" step="1" v-model.number="lineWidth" />
-        </label>
+        <!-- Undo / redo -->
+        <div class="se-zoom">
+          <button
+            class="se-tbtn icon-btn"
+            :disabled="!canUndo && !textEdit.active"
+            title="Undo (Ctrl+Z)"
+            aria-label="Undo"
+            @click="undo"
+            v-html="ICON_UNDO"
+          />
+          <button
+            class="se-tbtn icon-btn"
+            :disabled="!canRedo"
+            title="Redo (Ctrl+Shift+Z)"
+            aria-label="Redo"
+            @click="redo"
+            v-html="ICON_REDO"
+          />
+        </div>
 
-        <!-- Dash stroke -->
-        <label v-if="tool !== 'text'" class="se-ctl se-dash-ctl" title="Dashed stroke">
-          <input type="checkbox" v-model="dashChecked" @change="onDashToggle" />
-          <span class="se-ctl-lbl">Dash</span>
-        </label>
-
-        <!-- Font size (text tool only) -->
-        <label v-if="tool === 'text'" class="se-ctl" title="Font size">
-          <span class="se-ctl-lbl">Font&nbsp;{{ fontSize }}</span>
-          <input class="se-range" type="range" min="10" max="72" step="2" v-model.number="fontSize" />
-        </label>
+        <!-- Zoom / pan -->
+        <div class="se-zoom" title="Zoom — Ctrl+scroll to zoom, Space-drag to pan">
+          <button class="se-tbtn icon-btn" :disabled="isFit"
+                  @click="zoomBy(1 / 1.25)" title="Zoom out" aria-label="Zoom out">
+            <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor"
+                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.3" /><path d="M10.2 10.2 14 14M5 7h4" />
+            </svg>
+          </button>
+          <button class="se-tbtn se-zoom-val" title="Reset to 100%"
+                  @click="zoomActual">{{ zoomPct }}%</button>
+          <button class="se-tbtn icon-btn" :disabled="zoom >= maxZoom - 1e-4"
+                  @click="zoomBy(1.25)" title="Zoom in" aria-label="Zoom in">
+            <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor"
+                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.3" /><path d="M10.2 10.2 14 14M5 7h4M7 5v4" />
+            </svg>
+          </button>
+          <button class="se-tbtn" :disabled="isFit" @click="zoomFit">Fit</button>
+        </div>
 
         <div class="se-spacer" />
 
-        <!-- Undo -->
-        <button
-          class="se-tbtn icon-btn"
-          :disabled="!shapes.length && !textEdit.active"
-          title="Undo (Ctrl+Z)"
-          @click="undo"
-          v-html="ICON_UNDO"
-        />
-
-        <!-- Clear all -->
-        <button
-          class="se-tbtn icon-btn"
-          :disabled="!shapes.length"
-          title="Clear all annotations"
-          @click="clearAll"
-          v-html="ICON_CLEAR"
-        />
+        <!-- Shortcuts hint -->
+        <button class="se-hint" title="Keyboard shortcuts" @click="shortcutsOpen = true">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+               stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
+            <path d="M4 7h.01M6.5 7h.01M9 7h.01M11.5 7h.01M4.5 9.5h7" />
+          </svg>
+          Press <kbd>?</kbd> for shortcuts
+        </button>
       </div>
 
       <!-- ── Status toast ────────────────────────────────────────────── -->
@@ -85,8 +123,36 @@
         <div v-if="statusVisible" class="se-status" :class="statusType">{{ statusMsg }}</div>
       </Transition>
 
-      <!-- ── Canvas area ────────────────────────────────────────────────── -->
-      <div class="se-body" ref="bodyEl">
+      <!-- ── Tool rail ─────────────────────────────────────────────────── -->
+      <div class="se-rail" role="toolbar" aria-label="Annotation tools" aria-orientation="vertical">
+        <template v-for="(t, i) in TOOLS" :key="t.id">
+          <div v-if="RAIL_SEPS.includes(i)" class="se-rail-sep" />
+          <button
+            class="se-rail-btn"
+            :class="{ active: tool === t.id }"
+            :title="t.label"
+            :aria-label="t.label"
+            :aria-pressed="tool === t.id"
+            @click="setTool(t.id)"
+            v-html="t.icon"
+          />
+        </template>
+      </div>
+
+      <!-- ── Canvas ────────────────────────────────────────────────────── -->
+      <div class="se-body" ref="bodyEl" :class="{ 'se-panning': spaceDown }" @wheel="onWheel">
+
+        <!-- Applied-crop chip -->
+        <div v-if="crop" class="se-crop-chip">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4.5 1.5v9.6a.9.9 0 0 0 .9.9H15M1 4.5h9.6a.9.9 0 0 1 .9.9V15" />
+          </svg>
+          <span>Cropped {{ Math.round(crop.w) }} &times; {{ Math.round(crop.h) }}</span>
+          <button title="Remove crop (restore full image)" aria-label="Remove crop"
+                  @click="clearCrop">&times;</button>
+        </div>
+
         <div class="se-canvas-wrap" :style="wrapStyle">
           <canvas
             ref="canvasEl"
@@ -113,6 +179,143 @@
             @keydown.esc.stop.prevent="cancelText"
             @blur="commitText"
           />
+
+          <!-- Floating selection inspector -->
+          <div
+            v-if="inspectorVisible"
+            class="se-inspector"
+            :class="{ below: !inspectorAbove }"
+            :style="inspectorStyle"
+            @mousedown.stop
+            @dblclick.stop
+            @contextmenu.stop.prevent
+          >
+            <div class="se-insp-head">
+              <span class="se-insp-title">{{ inspectorTitle }}</span>
+              <span class="se-insp-dims">{{ inspectorDims }}</span>
+              <button class="se-insp-x se-insp-trash" title="Delete shape (Del)"
+                      aria-label="Delete shape" @click="deleteSelected" v-html="ICON_TRASH" />
+            </div>
+
+            <div v-if="selectedShape.type !== 'blur'" class="se-insp-row">
+              <span class="se-insp-lbl">Color</span>
+              <div class="se-insp-colors">
+                <button
+                  v-for="c in INSPECTOR_COLORS" :key="c"
+                  class="se-insp-dot"
+                  :class="{ active: selectedShape.color === c }"
+                  :style="{ background: c }"
+                  :title="c"
+                  :aria-label="`Colour ${c}`"
+                  @click="setShapeProp('color', c)"
+                />
+                <label class="se-insp-custom" title="Custom colour…">
+                  <input type="color" :value="selectedShape.color"
+                         @input="e => setShapeProp('color', e.target.value)" />
+                </label>
+                <button
+                  v-if="hasEyeDropper"
+                  class="se-insp-eyedrop"
+                  title="Pick a colour from the image"
+                  aria-label="Pick a colour from the image"
+                  @click="eyeDrop(hex => setShapeProp('color', hex))"
+                >
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+                       stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.5 2.5a2 2 0 0 1 3 3L7 12l-3 1 1-3z" />
+                  </svg>
+                </button>
+                <input class="se-insp-hex" type="text" spellcheck="false"
+                       :value="selectedShape.color" aria-label="Hex colour"
+                       @change="e => applyHex(e.target.value)" />
+              </div>
+              <div v-if="recentColors.length" class="se-insp-recent">
+                <button
+                  v-for="c in recentColors" :key="'r' + c"
+                  class="se-insp-dot"
+                  :class="{ active: selectedShape.color === c }"
+                  :style="{ background: c }"
+                  :title="`Recent — ${c}`"
+                  :aria-label="`Recent colour ${c}`"
+                  @click="setShapeProp('color', c)"
+                />
+              </div>
+            </div>
+
+            <div v-if="STROKE_TYPES.has(selectedShape.type)" class="se-insp-row">
+              <span class="se-insp-lbl">Stroke</span>
+              <input class="se-range" type="range" min="1" max="20" step="1"
+                     :value="selectedShape.width"
+                     @input="e => setShapeProp('width', +e.target.value)" />
+              <span class="se-insp-val">{{ selectedShape.width }}</span>
+            </div>
+
+            <div v-if="DASHABLE.has(selectedShape.type)" class="se-insp-row">
+              <span class="se-insp-lbl">Dash</span>
+              <div class="se-insp-seg">
+                <button :class="{ on: !selectedShape.dashed }" @click="setShapeProp('dashed', false)">Solid</button>
+                <button :class="{ on: !!selectedShape.dashed }" @click="setShapeProp('dashed', true)">Dashed</button>
+              </div>
+            </div>
+
+            <div v-if="selectedShape.type === 'blur'" class="se-insp-row">
+              <span class="se-insp-lbl">Strength</span>
+              <input class="se-range" type="range" min="1" max="10" step="1"
+                     :value="selectedShape.strength || 4"
+                     @input="e => setShapeProp('strength', +e.target.value)" />
+              <span class="se-insp-val">{{ selectedShape.strength || 4 }}</span>
+            </div>
+
+            <div v-if="selectedShape.type !== 'blur'" class="se-insp-row">
+              <span class="se-insp-lbl">Opacity</span>
+              <input class="se-range" type="range" min="10" max="100" step="5"
+                     :value="Math.round((selectedShape.opacity ?? 1) * 100)"
+                     @input="e => setShapeProp('opacity', +e.target.value / 100)" />
+              <span class="se-insp-val">{{ Math.round((selectedShape.opacity ?? 1) * 100) }}%</span>
+            </div>
+
+            <template v-if="DASHABLE.has(selectedShape.type)">
+              <div class="se-insp-row">
+                <span class="se-insp-lbl">Label</span>
+                <input class="se-insp-text" type="text" :value="selectedShape.label || ''"
+                       placeholder="—"
+                       @input="e => setShapeProp('label', e.target.value)" />
+              </div>
+              <div v-if="selectedShape.label" class="se-insp-row">
+                <span class="se-insp-lbl">Font</span>
+                <input class="se-range" type="range" min="10" max="72" step="2"
+                       :value="selectedShape.labelFontSize || fontSize"
+                       @input="e => setLabelFont(+e.target.value)" />
+                <span class="se-insp-val">{{ selectedShape.labelFontSize || fontSize }}</span>
+              </div>
+            </template>
+
+            <template v-if="selectedShape.type === 'text'">
+              <div class="se-insp-row">
+                <span class="se-insp-lbl">Text</span>
+                <input class="se-insp-text" type="text" :value="selectedShape.text"
+                       @input="e => setShapeProp('text', e.target.value)" />
+              </div>
+              <div class="se-insp-row">
+                <span class="se-insp-lbl">Font</span>
+                <input class="se-range" type="range" min="10" max="72" step="2"
+                       :value="selectedShape.fontSize"
+                       @input="e => setLabelFont(+e.target.value)" />
+                <span class="se-insp-val">{{ selectedShape.fontSize }}</span>
+              </div>
+            </template>
+
+            <div class="se-insp-row">
+              <span class="se-insp-lbl">Arrange</span>
+              <div class="se-insp-zrow">
+                <button title="Send to back" @click="zSelected('back')">⤓</button>
+                <button title="Send backward" @click="zSelected('backward')">‹</button>
+                <button title="Bring forward" @click="zSelected('forward')">›</button>
+                <button title="Bring to front" @click="zSelected('front')">⤒</button>
+                <button title="Duplicate (Ctrl+D)" @click="duplicateSelected">Dup</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -139,50 +342,28 @@
           Close
         </button>
       </div>
+
+      <!-- ── Keyboard shortcuts overlay ────────────────────────────────── -->
+      <Transition name="se-toast">
+        <div v-if="shortcutsOpen" class="se-sc-backdrop" @click.self="shortcutsOpen = false">
+          <div class="se-sc-card" role="dialog" aria-label="Keyboard shortcuts">
+            <div class="se-sc-head">
+              <span>Keyboard shortcuts</span>
+              <button class="se-insp-x" aria-label="Close" @click="shortcutsOpen = false" v-html="ICON_CLEAR" />
+            </div>
+            <div class="se-sc-grid">
+              <div v-for="row in SHORTCUTS" :key="row[1]" class="se-sc-row">
+                <kbd>{{ row[0] }}</kbd><span>{{ row[1] }}</span>
+              </div>
+            </div>
+            <button class="se-sc-clear" :disabled="!shapes.length" @click="clearAll(); shortcutsOpen = false">
+              Clear all annotations
+            </button>
+          </div>
+        </div>
+      </Transition>
     </div>
 
-    <!-- ── Context menu ─────────────────────────────────────────────────── -->
-    <div v-if="ctxMenu.visible"
-         class="se-ctx-menu"
-         :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
-         @mousedown.stop>
-      <div class="se-ctx-item se-ctx-delete" @click="ctxDelete">Delete</div>
-      <div class="se-ctx-sep" />
-      <div class="se-ctx-item">
-        <span class="se-ctx-lbl">Color</span>
-        <input type="color" class="se-ctx-color"
-               :value="ctxShape?.color"
-               @input="e => ctxSetProp('color', e.target.value)" />
-      </div>
-      <template v-if="ctxShape?.type !== 'text'">
-        <div class="se-ctx-item">
-          <span class="se-ctx-lbl">Size (px)</span>
-          <input type="number" class="se-ctx-num" min="1" max="20"
-                 :value="ctxShape?.width"
-                 @change="e => ctxSetProp('width', +e.target.value)" />
-        </div>
-        <div class="se-ctx-item">
-          <span class="se-ctx-lbl">Label</span>
-          <input type="text" class="se-ctx-text"
-                 :value="ctxShape?.label || ''"
-                 @change="e => ctxSetProp('label', e.target.value)" />
-        </div>
-      </template>
-      <template v-else>
-        <div class="se-ctx-item">
-          <span class="se-ctx-lbl">Text</span>
-          <input type="text" class="se-ctx-text"
-                 :value="ctxShape?.text"
-                 @change="e => ctxSetProp('text', e.target.value)" />
-        </div>
-        <div class="se-ctx-item">
-          <span class="se-ctx-lbl">Font (pt)</span>
-          <input type="number" class="se-ctx-num" min="8" max="72"
-                 :value="ctxShape?.fontSize"
-                 @change="e => ctxSetProp('fontSize', +e.target.value)" />
-        </div>
-      </template>
-    </div>
   </div>
 </template>
 
@@ -191,7 +372,9 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'v
 import {
   SNAP_TOOL_ICONS,
   ICON_UNDO,
+  ICON_REDO,
   ICON_CLEAR,
+  ICON_TRASH,
   ICON_COPY,
   ICON_SAVE,
   ICON_PALETTE,
@@ -207,34 +390,75 @@ const emit = defineEmits(['close'])
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
 const TOOLS = [
-  { id: 'arrow', label: 'Arrow', icon: SNAP_TOOL_ICONS.arrow },
-  { id: 'dblarrow', label: 'Double Arrow', icon: SNAP_TOOL_ICONS.dblarrow },
-  { id: 'line', label: 'Line', icon: SNAP_TOOL_ICONS.line },
-  { id: 'rect', label: 'Rectangle (Shift: square)', icon: SNAP_TOOL_ICONS.rect },
-  { id: 'circle', label: 'Circle / Ellipse (Shift: circle)', icon: SNAP_TOOL_ICONS.circle },
-  { id: 'text', label: 'Add Text (click to place)', icon: SNAP_TOOL_ICONS.text },
+  { id: 'select', label: 'Select / move (V)', icon: SNAP_TOOL_ICONS.select },
+  { id: 'arrow', label: 'Arrow (A)', icon: SNAP_TOOL_ICONS.arrow },
+  { id: 'dblarrow', label: 'Double Arrow (D)', icon: SNAP_TOOL_ICONS.dblarrow },
+  { id: 'line', label: 'Line (L)', icon: SNAP_TOOL_ICONS.line },
+  { id: 'rect', label: 'Rectangle — Shift: square (R)', icon: SNAP_TOOL_ICONS.rect },
+  { id: 'circle', label: 'Circle / Ellipse — Shift: circle (O)', icon: SNAP_TOOL_ICONS.circle },
+  { id: 'text', label: 'Add Text — click to place (T)', icon: SNAP_TOOL_ICONS.text },
+  { id: 'highlight', label: 'Highlighter (H)', icon: SNAP_TOOL_ICONS.highlight },
+  { id: 'badge', label: 'Numbered step badge — click to place (S)', icon: SNAP_TOOL_ICONS.badge },
+  { id: 'blur', label: 'Blur / redact — drag a region (B)', icon: SNAP_TOOL_ICONS.blur },
+  { id: 'crop', label: 'Crop — drag to trim the export (C)', icon: SNAP_TOOL_ICONS.crop },
 ]
+// One separator after Select; the drawing tools form a single group.
+const RAIL_SEPS = [1]
 
 const TOOL_CURSORS = {
+  select: 'default',
   arrow: 'crosshair',
   dblarrow: 'crosshair',
   line:  'crosshair',
   rect:  'crosshair',
   circle:'crosshair',
   text:  'text',
+  highlight: 'crosshair',
+  badge: 'copy',
+  blur:  'crosshair',
+  crop:  'crosshair',
 }
 
-const LINE_TOOL_TYPES = new Set(['line', 'arrow', 'dblarrow', 'dash'])
+const LINE_TOOL_TYPES = new Set(['line', 'arrow', 'dblarrow', 'dash', 'highlight'])
+// Types with box geometry (x, y, w, h) — resize handles, box hit-testing.
+const BOX_TOOL_TYPES  = new Set(['rect', 'circle', 'blur'])
+// Which inspector rows apply to which shape type.
+const STROKE_TYPES = new Set(['rect', 'circle', 'line', 'arrow', 'dblarrow', 'dash', 'highlight'])
+const DASHABLE     = new Set(['rect', 'circle', 'line', 'arrow', 'dblarrow', 'dash'])
 
 // ── Reactive state ────────────────────────────────────────────────────────────
 
-const tool      = ref('arrow')
+const tool      = ref('select')
 const color     = ref('#ff4444')
 const lineWidth = ref(3)
 const fontSize  = ref(20)
 const dashChecked = ref(false)
 
 const colorPanelOpen = ref(false)
+const shortcutsOpen  = ref(false)
+
+const SHORTCUTS = [
+  ['V', 'Select / move'],
+  ['A / D', 'Arrow / double arrow'],
+  ['L', 'Line'],
+  ['R / O', 'Rectangle / ellipse'],
+  ['T', 'Text'],
+  ['H', 'Highlighter'],
+  ['S', 'Numbered badge'],
+  ['B', 'Blur / redact'],
+  ['C', 'Crop'],
+  ['1 – 9, 0', 'Set stroke width'],
+  ['Ctrl+Z', 'Undo'],
+  ['Ctrl+Shift+Z', 'Redo'],
+  ['Ctrl+D', 'Duplicate selection'],
+  ['Delete', 'Delete selection'],
+  ['Arrows', 'Nudge selection (Shift = ×10)'],
+  ['[ / ]', 'Send back / bring forward'],
+  ['Ctrl+scroll', 'Zoom to cursor'],
+  ['Space + drag', 'Pan'],
+  ['Esc', 'Deselect, back to Select'],
+  ['?', 'This panel'],
+]
 const PRESET_COLORS = [
   '#ff4444', '#ff8800', '#ffdd00', '#44cc44', '#00bbff', '#4466ff', '#9944ff', '#ff44aa',
   '#ffffff', '#cccccc', '#888888', '#444444', '#000000',
@@ -242,22 +466,355 @@ const PRESET_COLORS = [
 ]
 function pickColor(hex) {
   color.value = hex
+  pushRecentColor(hex)
   colorPanelOpen.value = false
   scheduleRedraw()
 }
 function closeColorPanel() {
   colorPanelOpen.value = false
 }
+
+// ── Colour system (Phase 5): recent colours + eyedropper ─────────────────────
+const recentColors = ref([])
+function pushRecentColor(hex) {
+  if (!hex) return
+  const h = String(hex).toLowerCase()
+  const next = [h, ...recentColors.value.filter(c => c !== h)]
+  recentColors.value = next.slice(0, 6)
+}
+
+const hasEyeDropper = typeof window !== 'undefined' && typeof window.EyeDropper === 'function'
+async function eyeDrop(apply) {
+  if (!hasEyeDropper) return
+  try {
+    const { sRGBHex } = await new window.EyeDropper().open()
+    apply(sRGBHex)
+    pushRecentColor(sRGBHex)
+  } catch { /* user pressed Esc */ }
+}
 const shapes    = ref([])
 const drawing   = ref(null)
 const selectedIdx = ref(-1)
 
+// ── Undo / redo history ───────────────────────────────────────────────────────
+// Snapshot-based: each entry is a deep-cloned copy of the shapes array. Simple
+// and robust for this plain-object model; moves, resizes and property edits are
+// all undoable steps.
+const HISTORY_LIMIT = 100
+const history   = ref([])
+const histIndex = ref(-1)
+let _histTimer  = null
+let _gestureDirty = false   // a drag/resize mutated a shape this gesture
+
+const canUndo = computed(() => histIndex.value > 0)
+const canRedo = computed(() => histIndex.value < history.value.length - 1)
+
+// A history entry is a full snapshot: the shapes plus the applied crop, so
+// undo/redo covers crop changes too.
+function snapshotState() {
+  return {
+    shapes: shapes.value.map(cloneShape),
+    crop: crop.value ? { ...crop.value } : null,
+  }
+}
+
+function pushHistory() {
+  if (histIndex.value < history.value.length - 1) {
+    history.value.splice(histIndex.value + 1)
+  }
+  history.value.push(snapshotState())
+  if (history.value.length > HISTORY_LIMIT) history.value.shift()
+  histIndex.value = history.value.length - 1
+}
+
+// Coalesce rapid mutations (arrow-key nudges, colour-picker drags) into one entry.
+function scheduleHistory(delay = 350) {
+  clearTimeout(_histTimer)
+  _histTimer = setTimeout(() => { _histTimer = null; pushHistory() }, delay)
+}
+
+function flushHistory() {
+  if (_histTimer) { clearTimeout(_histTimer); _histTimer = null; pushHistory() }
+}
+
+function restoreHistory(idx) {
+  if (idx < 0 || idx >= history.value.length) return
+  histIndex.value = idx
+  const snap = history.value[idx]
+  shapes.value = snap.shapes.map(cloneShape)
+  crop.value = snap.crop ? { ...snap.crop } : null
+  if (selectedIdx.value >= shapes.value.length) selectedIdx.value = -1
+  scheduleRedraw()
+}
+
+// ── Selection inspector (Phase 2) ────────────────────────────────────────────
+// A floating properties panel that tracks the selection — replaces the old
+// right-click context menu. The top toolbar now only sets next-shape defaults.
+const INSPECTOR_COLORS = PRESET_COLORS.slice(0, 10)
+const SHAPE_LABELS = {
+  arrow: 'Arrow', dblarrow: 'Double arrow', line: 'Line', dash: 'Line',
+  rect: 'Rectangle', circle: 'Ellipse', text: 'Text',
+  highlight: 'Highlighter', badge: 'Number', blur: 'Blur',
+}
+
+const selectedShape = computed(() =>
+  selectedIdx.value >= 0 && selectedIdx.value < shapes.value.length
+    ? shapes.value[selectedIdx.value]
+    : null
+)
+
+const inspectorVisible = computed(() =>
+  !!selectedShape.value &&
+  !drawing.value &&
+  dragMode.value === 'none' &&
+  !(textEdit.active && textEdit.shapeIdx === selectedIdx.value)
+)
+
+const inspectorTitle = computed(() =>
+  selectedShape.value ? (SHAPE_LABELS[selectedShape.value.type] || 'Shape') : ''
+)
+
+const inspectorDims = computed(() => {
+  const s = selectedShape.value
+  if (!s) return ''
+  if (s.type === 'text') return `${s.fontSize} pt`
+  if (s.type === 'badge') return `#${s.n}`
+  const b = shapeBounds(s)
+  if (LINE_TOOL_TYPES.has(s.type)) return `${Math.round(Math.hypot(b.w, b.h))} px`
+  return `${Math.round(b.w)} × ${Math.round(b.h)}`
+})
+
+const inspectorAbove = computed(() => {
+  const s = selectedShape.value
+  return s ? (shapeBounds(s).y * dScale.value) > 168 : true
+})
+
+const inspectorStyle = computed(() => {
+  const s = selectedShape.value
+  if (!s) return { display: 'none' }
+  const k     = dScale.value
+  const b     = shapeBounds(s)
+  const wrapW = imgNW.value * k
+  const wrapH = imgNH.value * k
+  const left  = b.x * k
+  const top   = b.y * k
+  const w     = b.w * k
+  const h     = b.h * k
+  const INSP_W = 250
+  let px = left + w / 2 - INSP_W / 2
+  px = Math.max(4, Math.min(px, Math.max(4, wrapW - INSP_W - 4)))
+  const style = { left: `${Math.round(px)}px`, width: `${INSP_W}px` }
+  if (inspectorAbove.value) style.bottom = `${Math.round(wrapH - top + 12)}px`
+  else                      style.top    = `${Math.round(top + h + 12)}px`
+  return style
+})
+
+function setShapeProp(key, val) {
+  const s = selectedShape.value
+  if (!s) return
+  if (key === 'label' && !val) {
+    delete s.label
+    delete s.labelFontSize
+  } else {
+    s[key] = val
+    if (key === 'label' && val && !s.labelFontSize) s.labelFontSize = fontSize.value
+  }
+  if (key === 'color') pushRecentColor(val)
+  scheduleHistory()
+  scheduleRedraw()
+}
+
+// Accept "#rrggbb", "rrggbb", "#rgb" — normalise and apply to the selection.
+function applyHex(raw) {
+  let h = String(raw).trim().replace(/^#/, '').toLowerCase()
+  if (/^[0-9a-f]{3}$/.test(h)) h = h.split('').map(c => c + c).join('')
+  if (!/^[0-9a-f]{6}$/.test(h)) return
+  setShapeProp('color', '#' + h)
+}
+
+// Focus trap — keep Tab within the editor window while it is open.
+function trapFocus(e) {
+  const root = winEl.value
+  if (!root) return
+  const f = [...root.querySelectorAll(
+    'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].filter(el => el.offsetParent !== null)
+  if (!f.length) return
+  const first = f[0]
+  const last  = f[f.length - 1]
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+}
+
+function setLabelFont(val) {
+  const s = selectedShape.value
+  if (!s) return
+  if (s.type === 'text') s.fontSize = val
+  else s.labelFontSize = val
+  scheduleHistory()
+  scheduleRedraw()
+}
+
+function duplicateSelected() {
+  if (selectedIdx.value < 0) return
+  const ni = duplicateShape(selectedIdx.value)
+  moveShape(ni, 12, 12)
+  selectedIdx.value = ni
+  syncDashFromShape(ni)
+  pushHistory()
+  scheduleRedraw()
+}
+
+// dir: 'back' | 'backward' | 'forward' | 'front' — array order is z-order
+function zSelected(dir) {
+  const i = selectedIdx.value
+  const n = shapes.value.length
+  if (i < 0 || n < 2) return
+  const arr = shapes.value
+  const [sh] = arr.splice(i, 1)
+  const ni = dir === 'back'     ? 0
+           : dir === 'front'    ? n - 1
+           : dir === 'backward' ? Math.max(0, i - 1)
+           :                      Math.min(n - 1, i + 1)
+  arr.splice(ni, 0, sh)
+  selectedIdx.value = ni
+  pushHistory()
+  scheduleRedraw()
+}
+
 const imgNW  = ref(1)
 const imgNH  = ref(1)
 const imgEl  = ref(null)
-const dScale = ref(1)
+
+// ── Zoom & pan (Phase 3) ─────────────────────────────────────────────────────
+// dScale = fitScale (fit-to-window, ≤ 1) × zoom (user multiplier, 1 = fit).
+// Pan is plain scrollLeft/scrollTop on the .se-body scroll container.
+const DSCALE_MAX = 8
+const fitScale = ref(1)
+const zoom     = ref(1)
+const dScale   = computed(() =>
+  Math.min(DSCALE_MAX, Math.max(0.02, fitScale.value * zoom.value))
+)
+const zoomPct  = computed(() => Math.round(dScale.value * 100))
+const maxZoom  = computed(() => Math.max(1, DSCALE_MAX / fitScale.value))
+const isFit    = computed(() => Math.abs(zoom.value - 1) < 1e-4)
+const spaceDown = ref(false)
+
+let _panning  = false
+let _panStart = null
+
+function setZoom(z) {
+  zoom.value = Math.min(maxZoom.value, Math.max(1, z))
+}
+function zoomBy(f) { setZoom(zoom.value * f) }
+function zoomFit() { setZoom(1); resetPan() }
+function zoomActual() { setZoom(1 / fitScale.value) }
+
+function resetPan() {
+  if (bodyEl.value) { bodyEl.value.scrollLeft = 0; bodyEl.value.scrollTop = 0 }
+}
+
+// Ctrl/Cmd + wheel — zoom toward the cursor, keeping that point anchored.
+function onWheel(e) {
+  if (!(e.ctrlKey || e.metaKey)) return
+  e.preventDefault()
+  const body = bodyEl.value
+  if (!body) return
+  const r  = body.getBoundingClientRect()
+  const cx = e.clientX - r.left
+  const cy = e.clientY - r.top
+  const px = body.scrollLeft + cx
+  const py = body.scrollTop  + cy
+  const before = dScale.value
+  zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15)
+  nextTick(() => {
+    const ratio = dScale.value / before
+    body.scrollLeft = px * ratio - cx
+    body.scrollTop  = py * ratio - cy
+  })
+}
+
+function startPan(e) {
+  _panning = true
+  _panStart = {
+    x: e.clientX, y: e.clientY,
+    sl: bodyEl.value?.scrollLeft || 0,
+    st: bodyEl.value?.scrollTop  || 0,
+  }
+  window.addEventListener('mousemove', onPanMove)
+  window.addEventListener('mouseup', endPan)
+}
+function onPanMove(e) {
+  if (!_panning || !bodyEl.value) return
+  bodyEl.value.scrollLeft = _panStart.sl - (e.clientX - _panStart.x)
+  bodyEl.value.scrollTop  = _panStart.st - (e.clientY - _panStart.y)
+}
+function endPan() {
+  _panning = false
+  window.removeEventListener('mousemove', onPanMove)
+  window.removeEventListener('mouseup', endPan)
+}
+
+// ── Movable editor window — drag by the toolbar background ────────────────────
+const winOffset = reactive({ x: 0, y: 0 })
+let _winDrag = null
+
+const winStyle = computed(() => ({
+  transform: `translate(${Math.round(winOffset.x)}px, ${Math.round(winOffset.y)}px)`,
+}))
+
+function onWinDragStart(e) {
+  if (e.button !== 0) return
+  // Only the bare toolbar is a drag handle — not its buttons / groups.
+  if (e.target.closest('button, input, label, .se-zoom, .se-hint, .se-style')) return
+  _winDrag = { mx: e.clientX, my: e.clientY, x: winOffset.x, y: winOffset.y }
+  window.addEventListener('mousemove', onWinDragMove)
+  window.addEventListener('mouseup', onWinDragEnd)
+  e.preventDefault()
+}
+function onWinDragMove(e) {
+  if (!_winDrag) return
+  const maxX = Math.max(0, window.innerWidth  / 2 - 80)
+  const maxY = Math.max(0, window.innerHeight / 2 - 60)
+  winOffset.x = Math.max(-maxX, Math.min(maxX, _winDrag.x + (e.clientX - _winDrag.mx)))
+  winOffset.y = Math.max(-maxY, Math.min(maxY, _winDrag.y + (e.clientY - _winDrag.my)))
+}
+function onWinDragEnd() {
+  _winDrag = null
+  window.removeEventListener('mousemove', onWinDragMove)
+  window.removeEventListener('mouseup', onWinDragEnd)
+}
+
+// ── Phase 4 tools: badge / blur / crop ───────────────────────────────────────
+const crop = ref(null)          // { x, y, w, h } in image px, or null
+let _exporting = false          // suppress overlay + selection during export
+const _blurCanvas = document.createElement('canvas')
+
+function nextBadgeNumber() {
+  return 1 + shapes.value.reduce((m, s) => s.type === 'badge' ? Math.max(m, s.n) : m, 0)
+}
+
+function setCrop(box) {
+  const x = Math.max(0, Math.min(box.x, imgNW.value))
+  const y = Math.max(0, Math.min(box.y, imgNH.value))
+  crop.value = {
+    x, y,
+    w: Math.min(imgNW.value - x, box.w),
+    h: Math.min(imgNH.value - y, box.h),
+  }
+  pushHistory()
+  scheduleRedraw()
+}
+
+function clearCrop() {
+  if (!crop.value) return
+  crop.value = null
+  pushHistory()
+  scheduleRedraw()
+}
 
 const overlayEl  = ref(null)
+const winEl      = ref(null)
 const bodyEl     = ref(null)
 const canvasEl   = ref(null)
 const textareaEl = ref(null)
@@ -305,7 +862,9 @@ const canvasStyle = computed(() => ({
   display: 'block',
   width:   `${Math.round(imgNW.value * dScale.value)}px`,
   height:  `${Math.round(imgNH.value * dScale.value)}px`,
-  cursor:  tool.value === 'text'
+  cursor:  spaceDown.value
+             ? 'grab'
+             : tool.value === 'text'
              ? 'text'
              : dragMode.value === 'handle'
                ? cursorForHandle(hoverHandleId.value || _dragHandle)
@@ -386,42 +945,182 @@ onMounted(() => {
   image.src = props.imageUrl
 
   document.addEventListener('keydown', onDocKeyDown, true)
+  document.addEventListener('keyup', onDocKeyUp, true)
+  document.addEventListener('keypress', onDocKeyPress, true)
   document.addEventListener('click', closeColorPanel)
   window.addEventListener('resize', computeScale)
+
+  pushHistory()   // empty baseline so the first edit is undoable
+  nextTick(() => winEl.value?.focus())   // a11y: move focus into the modal
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onDocKeyDown, true)
+  document.removeEventListener('keyup', onDocKeyUp, true)
+  document.removeEventListener('keypress', onDocKeyPress, true)
   document.removeEventListener('click', closeColorPanel)
   window.removeEventListener('resize', computeScale)
   if (_rafId) cancelAnimationFrame(_rafId)
+  clearTimeout(_histTimer)
+  endPan()
+  onWinDragEnd()
 })
+
+function isTypingTarget() {
+  const ae = document.activeElement
+  return textEdit.active ||
+    !!(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable))
+}
+
+function onDocKeyUp(e) {
+  if (e.key === ' ') { spaceDown.value = false; endPan() }
+  // Don't let a "?" release reach a main-window help handler either.
+  if (e.key === '?' && !isTypingTarget()) e.stopImmediatePropagation()
+}
+
+// Some apps trigger help on the "?" character (keypress) rather than keydown.
+function onDocKeyPress(e) {
+  if (e.key === '?' && !isTypingTarget()) {
+    e.preventDefault()
+    e.stopImmediatePropagation()
+  }
+}
 
 function computeScale() {
   if (!bodyEl.value || !imgNW.value || !imgNH.value) return
   const r     = bodyEl.value.getBoundingClientRect()
   const availW = Math.max(1, r.width  - 48)
   const availH = Math.max(1, r.height - 48)
-  dScale.value = Math.min(1, availW / imgNW.value, availH / imgNH.value)
+  fitScale.value = Math.min(1, availW / imgNW.value, availH / imgNH.value)
+  if (zoom.value > maxZoom.value) zoom.value = maxZoom.value
+}
+
+// Single-key tool shortcuts (shown in each button's tooltip).
+const TOOL_KEYS = {
+  v: 'select',
+  a: 'arrow', d: 'dblarrow', l: 'line', r: 'rect', o: 'circle', t: 'text',
+  h: 'highlight', s: 'badge', b: 'blur', c: 'crop',
 }
 
 function onDocKeyDown(e) {
-  // Esc — close color panel, then context menu (does NOT close the editor)
+  // Esc — peel back one layer at a time; never closes the editor itself.
   if (e.key === 'Escape') {
     e.preventDefault()
     e.stopPropagation()
+    if (shortcutsOpen.value) { shortcutsOpen.value = false; return }
     if (colorPanelOpen.value) { colorPanelOpen.value = false; return }
-    if (ctxMenu.visible) { closeCtxMenu(); return }
     if (textEdit.active) { cancelText(); return }
+    if (selectedIdx.value >= 0) { selectedIdx.value = -1; scheduleRedraw(); return }
+    if (crop.value) { clearCrop(); return }
+    if (tool.value !== 'select') { setTool('select'); return }
     return
   }
-  // Ctrl/Cmd+Z — undo
-  if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
-    if (overlayEl.value?.contains(document.activeElement) || document.activeElement === document.body) {
-      e.preventDefault()
-      undo()
+
+  // Never steal keys while the user is typing in the text editor or a menu field.
+  const ae = document.activeElement
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return
+  if (textEdit.active) return
+
+  // The editor is a modal — no key below here should reach the window behind it
+  // (otherwise e.g. "?" would also pop the main-window shortcuts help).
+  e.stopPropagation()
+
+  // ? — toggle the keyboard-shortcuts panel.
+  if (e.key === '?') {
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    shortcutsOpen.value = !shortcutsOpen.value
+    return
+  }
+  if (shortcutsOpen.value) return
+
+  // Space — hold to pan. Skip when a button is focused (space would click it).
+  if (e.key === ' ' && !e.repeat) {
+    if (ae && ae.tagName === 'BUTTON') return
+    e.preventDefault()
+    spaceDown.value = true
+    return
+  }
+
+  const mod = e.ctrlKey || e.metaKey
+
+  // Undo / redo — Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y
+  if (mod && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault(); e.stopPropagation()
+    e.shiftKey ? redo() : undo()
+    return
+  }
+  if (mod && (e.key === 'y' || e.key === 'Y')) {
+    e.preventDefault(); e.stopPropagation()
+    redo()
+    return
+  }
+
+  // Ctrl/Cmd+D — duplicate the selection, offset slightly
+  if (mod && (e.key === 'd' || e.key === 'D')) {
+    e.preventDefault(); e.stopPropagation()
+    duplicateSelected()
+    return
+  }
+
+  if (mod) return   // leave every other Ctrl/Cmd combo to the browser / app
+
+  // Delete / Backspace — remove the selection, or the crop when nothing is selected
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (selectedIdx.value >= 0) {
+      e.preventDefault(); e.stopPropagation()
+      deleteSelected()
+      return
+    }
+    if (crop.value) {
+      e.preventDefault(); e.stopPropagation()
+      clearCrop()
+      return
     }
   }
+
+  // Arrow keys — nudge the selection (Shift = ×10)
+  if (selectedIdx.value >= 0 && e.key.startsWith('Arrow')) {
+    e.preventDefault(); e.stopPropagation()
+    const step = e.shiftKey ? 10 : 1
+    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0
+    const dy = e.key === 'ArrowUp'   ? -step : e.key === 'ArrowDown'  ? step : 0
+    if (dx || dy) { moveShape(selectedIdx.value, dx, dy); scheduleRedraw(); scheduleHistory() }
+    return
+  }
+
+  // [ / ] — z-order of the selection
+  if ((e.key === '[' || e.key === ']') && selectedIdx.value >= 0) {
+    e.preventDefault(); e.stopPropagation()
+    zSelected(e.key === '[' ? 'backward' : 'forward')
+    return
+  }
+
+  // 1–9, 0 — set the default stroke width (0 = 10)
+  if (/^[0-9]$/.test(e.key)) {
+    e.stopPropagation()
+    lineWidth.value = e.key === '0' ? 10 : Number(e.key)
+    if (selectedIdx.value >= 0 && STROKE_TYPES.has(selectedShape.value?.type)) {
+      setShapeProp('width', lineWidth.value)
+    }
+    return
+  }
+
+  // Single-key tool switch
+  const t = TOOL_KEYS[e.key.toLowerCase()]
+  if (t && !e.altKey && !e.shiftKey) {
+    e.stopPropagation()
+    setTool(t)
+  }
+}
+
+function deleteSelected() {
+  const i = selectedIdx.value
+  if (i < 0 || i >= shapes.value.length) return
+  shapes.value.splice(i, 1)
+  selectedIdx.value = -1
+  pushHistory()
+  scheduleRedraw()
 }
 
 // ── Tool selection ────────────────────────────────────────────────────────────
@@ -431,21 +1130,9 @@ function setTool(t) {
   tool.value = t
 }
 
-function onDashToggle() {
-  if (selectedIdx.value >= 0) {
-    const s = shapes.value[selectedIdx.value]
-    if (s && s.type !== 'text') {
-      s.dashed = dashChecked.value
-      scheduleRedraw()
-    }
-  }
-}
-
-function syncDashFromShape(idx) {
-  if (idx < 0 || idx >= shapes.value.length) return
-  const s = shapes.value[idx]
-  if (s.type !== 'text') dashChecked.value = !!s.dashed
-}
+// The toolbar "Dash" toggle is now a stable default — it no longer follows the
+// selection (that would make the control jump around as you click shapes).
+function syncDashFromShape(_idx) { /* intentionally a no-op */ }
 
 function handleClose() {
   commitText()
@@ -466,7 +1153,7 @@ function getPos(e) {
 
 function onMouseDown(e) {
   if (e.button !== 0) return
-  closeCtxMenu()
+  if (spaceDown.value) { e.preventDefault(); startPan(e); return }
   const pos = getPos(e)
 
   if (tool.value === 'text') {
@@ -483,6 +1170,27 @@ function onMouseDown(e) {
     textEdit.value   = ''
     textEdit.active  = true
     nextTick(() => textareaEl.value?.focus())
+    return
+  }
+
+  // Numbered step badge — click to drop the next number.
+  if (tool.value === 'badge') {
+    shapes.value.push({
+      type: 'badge', color: color.value,
+      x: pos.x, y: pos.y, n: nextBadgeNumber(), r: 15,
+    })
+    selectedIdx.value = shapes.value.length - 1
+    pushHistory()
+    scheduleRedraw()
+    return
+  }
+
+  // Crop always drags a fresh frame — never grabs a shape underneath.
+  if (tool.value === 'crop') {
+    selectedIdx.value = -1
+    _mouseDown = true
+    _startPos  = pos
+    drawing.value = buildShape('crop', pos, pos, e.shiftKey)
     return
   }
 
@@ -507,6 +1215,7 @@ function onMouseDown(e) {
       _dragHandle = null
       _dragAnchor = null
       dragMode.value = 'move'
+      _gestureDirty = true
       hoverHandleId.value = ''
       scheduleRedraw()
       return
@@ -516,6 +1225,14 @@ function onMouseDown(e) {
     _pendingDrag = { idx: hit, startX: pos.x, startY: pos.y, startPos: pos }
     _dragHandle = null
     _dragAnchor = null
+    hoverHandleId.value = ''
+    scheduleRedraw()
+    return
+  }
+
+  // Select tool never draws — an empty-space click just clears the selection.
+  if (tool.value === 'select') {
+    selectedIdx.value = -1
     hoverHandleId.value = ''
     scheduleRedraw()
     return
@@ -544,6 +1261,7 @@ function onMouseMove(e) {
 
   if (dragMode.value === 'handle' && _dragIdx >= 0 && _dragHandle) {
     updateShapeByHandle(_dragIdx, _dragHandle, pos, e.shiftKey)
+    _gestureDirty = true
     scheduleRedraw()
     return
   }
@@ -551,6 +1269,7 @@ function onMouseMove(e) {
   if (dragMode.value === 'move' && _dragIdx >= 0 && _dragPrev) {
     moveShape(_dragIdx, pos.x - _dragPrev.x, pos.y - _dragPrev.y)
     _dragPrev = pos
+    _gestureDirty = true
     scheduleRedraw()
     return
   }
@@ -577,6 +1296,7 @@ function onMouseUp(e) {
     _dragHandle = null
     _dragAnchor = null
     dragMode.value = 'none'
+    if (_gestureDirty) { _gestureDirty = false; pushHistory() }
     scheduleRedraw()
     return
   }
@@ -585,7 +1305,16 @@ function onMouseUp(e) {
   if (drawing.value && _startPos) {
     const pos   = getPos(e)
     const shape = buildShape(tool.value, _startPos, pos, e.shiftKey)
-    if (!isTrivial(shape)) shapes.value.push(shape)
+    if (tool.value === 'crop') {
+      if (!isTrivial(shape)) setCrop(shape)
+    } else if (!isTrivial(shape)) {
+      shapes.value.push(shape)
+      // Select the shape we just drew so it can be moved / restyled / deleted
+      // straight away, without a separate click to find it again.
+      selectedIdx.value = shapes.value.length - 1
+      syncDashFromShape(selectedIdx.value)
+      pushHistory()
+    }
     drawing.value = null
   }
   _startPos = null
@@ -602,6 +1331,7 @@ function onMouseLeave() {
     _dragHandle = null
     _dragAnchor = null
     dragMode.value = 'none'
+    if (_gestureDirty) { _gestureDirty = false; pushHistory() }
     scheduleRedraw()
     return
   }
@@ -614,7 +1344,6 @@ function onMouseLeave() {
 }
 
 function onDoubleClick(e) {
-  closeCtxMenu()
   _pendingDrag = null
   _mouseDown = false
   drawing.value = null
@@ -630,6 +1359,12 @@ function onDoubleClick(e) {
   const pos = getPos(e)
   const hit = hitTest(pos.x, pos.y)
   if (hit < 0) return
+  // Badge / blur / highlighter carry no editable text.
+  if (['badge', 'blur', 'highlight'].includes(shapes.value[hit].type)) {
+    selectedIdx.value = hit
+    scheduleRedraw()
+    return
+  }
   beginEditShapeText(hit)
 }
 
@@ -651,11 +1386,17 @@ function hitTest(x, y) {
       const w = s.fontSize * 0.65 * s.text.length
       if (x >= s.x - thr && x <= s.x + w + thr &&
           y >= s.y - thr && y <= s.y + s.fontSize + thr) return i
-    } else if (s.type === 'rect' || s.type === 'circle') {
+    } else if (s.type === 'badge') {
+      if (Math.hypot(x - s.x, y - s.y) <= (s.r || 15) + thr) return i
+    } else if (BOX_TOOL_TYPES.has(s.type)) {
       if (x >= s.x - thr && x <= s.x + s.w + thr &&
           y >= s.y - thr && y <= s.y + s.h + thr) return i
     } else {
-      if (ptToSegDist(x, y, s.x1, s.y1, s.x2, s.y2) < thr + s.width) return i
+      // Match the *rendered* thickness — the highlighter draws far wider than
+      // its stored width, so its hit zone has to follow.
+      const w = Number(s.width) || 3
+      const half = s.type === 'highlight' ? Math.max(w * 3, 10) / 2 : w
+      if (ptToSegDist(x, y, s.x1, s.y1, s.x2, s.y2) < thr + half) return i
     }
   }
   return -1
@@ -663,7 +1404,7 @@ function hitTest(x, y) {
 
 function moveShape(idx, dx, dy) {
   const s = shapes.value[idx]
-  if (s.type === 'text' || s.type === 'rect' || s.type === 'circle') {
+  if (s.type === 'text' || s.type === 'badge' || BOX_TOOL_TYPES.has(s.type)) {
     s.x += dx; s.y += dy
   } else {
     s.x1 += dx; s.y1 += dy
@@ -672,6 +1413,7 @@ function moveShape(idx, dx, dy) {
 }
 
 function cloneShape(shape) {
+  const op = (shape.opacity != null && shape.opacity < 1) ? { opacity: shape.opacity } : {}
   if (shape.type === 'text') {
     return {
       type: shape.type,
@@ -680,9 +1422,21 @@ function cloneShape(shape) {
       x: shape.x,
       y: shape.y,
       text: shape.text,
+      ...op,
     }
   }
-  if (shape.type === 'rect' || shape.type === 'circle') {
+  if (shape.type === 'badge') {
+    return {
+      type: 'badge',
+      color: shape.color,
+      x: shape.x,
+      y: shape.y,
+      n: shape.n,
+      r: shape.r,
+      ...op,
+    }
+  }
+  if (BOX_TOOL_TYPES.has(shape.type)) {
     return {
       type: shape.type,
       color: shape.color,
@@ -694,6 +1448,8 @@ function cloneShape(shape) {
       ...(shape.label ? { label: shape.label } : {}),
       ...(shape.labelFontSize ? { labelFontSize: shape.labelFontSize } : {}),
       ...(shape.dashed ? { dashed: true } : {}),
+      ...(shape.strength ? { strength: shape.strength } : {}),
+      ...op,
     }
   }
   return {
@@ -704,6 +1460,7 @@ function cloneShape(shape) {
     y1: shape.y1,
     x2: shape.x2,
     y2: shape.y2,
+    ...op,
     ...(shape.label ? { label: shape.label } : {}),
     ...(shape.labelFontSize ? { labelFontSize: shape.labelFontSize } : {}),
     ...(shape.dashed ? { dashed: true } : {}),
@@ -723,7 +1480,7 @@ function getControlPoints(shape) {
       { id: 'end', x: shape.x2, y: shape.y2 },
     ]
   }
-  if (shape.type === 'rect' || shape.type === 'circle') {
+  if (BOX_TOOL_TYPES.has(shape.type)) {
     return [
       { id: 'nw', x: shape.x,           y: shape.y },
       { id: 'n',  x: shape.x + shape.w / 2, y: shape.y },
@@ -751,7 +1508,7 @@ function hitControlPoint(x, y) {
 
 function getHandleAnchor(shape, handleId) {
   if (!shape) return null
-  if (shape.type === 'rect' || shape.type === 'circle') {
+  if (BOX_TOOL_TYPES.has(shape.type)) {
     if (handleId === 'nw') return { x: shape.x + shape.w, y: shape.y + shape.h }
     if (handleId === 'n')  return { x: shape.x + shape.w / 2, y: shape.y + shape.h }
     if (handleId === 'ne') return { x: shape.x, y: shape.y + shape.h }
@@ -780,7 +1537,7 @@ function updateShapeByHandle(idx, handleId, pos, forceSnap = false) {
     return
   }
 
-  if ((s.type === 'rect' || s.type === 'circle') && handleId === 'n') {
+  if ((BOX_TOOL_TYPES.has(s.type)) && handleId === 'n') {
     const bottom = s.y + s.h
     const top = pos.y
     s.y = Math.min(top, bottom)
@@ -788,7 +1545,7 @@ function updateShapeByHandle(idx, handleId, pos, forceSnap = false) {
     return
   }
 
-  if ((s.type === 'rect' || s.type === 'circle') && handleId === 's') {
+  if ((BOX_TOOL_TYPES.has(s.type)) && handleId === 's') {
     const top = s.y
     const bottom = pos.y
     s.y = Math.min(top, bottom)
@@ -796,7 +1553,7 @@ function updateShapeByHandle(idx, handleId, pos, forceSnap = false) {
     return
   }
 
-  if ((s.type === 'rect' || s.type === 'circle') && handleId === 'w') {
+  if ((BOX_TOOL_TYPES.has(s.type)) && handleId === 'w') {
     const right = s.x + s.w
     const left = pos.x
     s.x = Math.min(left, right)
@@ -804,7 +1561,7 @@ function updateShapeByHandle(idx, handleId, pos, forceSnap = false) {
     return
   }
 
-  if ((s.type === 'rect' || s.type === 'circle') && handleId === 'e') {
+  if ((BOX_TOOL_TYPES.has(s.type)) && handleId === 'e') {
     const left = s.x
     const right = pos.x
     s.x = Math.min(left, right)
@@ -812,7 +1569,7 @@ function updateShapeByHandle(idx, handleId, pos, forceSnap = false) {
     return
   }
 
-  if ((s.type === 'rect' || s.type === 'circle') && _dragAnchor) {
+  if ((BOX_TOOL_TYPES.has(s.type)) && _dragAnchor) {
     let x1 = pos.x
     let y1 = pos.y
     const x2 = _dragAnchor.x
@@ -840,49 +1597,15 @@ function cursorForHandle(handleId) {
   return 'crosshair'
 }
 
-// ── Context menu ──────────────────────────────────────────────────────────────
-
-const ctxMenu  = reactive({ visible: false, x: 0, y: 0, idx: -1 })
-const ctxShape = computed(() =>
-  ctxMenu.idx >= 0 && ctxMenu.idx < shapes.value.length ? shapes.value[ctxMenu.idx] : null
-)
-
+// ── Right-click ───────────────────────────────────────────────────────────────
+// Selects the shape under the cursor; the floating inspector then does the rest.
 function onContextMenu(e) {
-  closeCtxMenu()
   const pos = getPos(e)
   const hit = hitTest(pos.x, pos.y)
   if (hit < 0) return
   selectedIdx.value = hit
-  ctxMenu.idx     = hit
-  ctxMenu.x       = e.clientX
-  ctxMenu.y       = e.clientY
-  ctxMenu.visible = true
-}
-
-function closeCtxMenu() {
-  ctxMenu.visible = false
-}
-
-function ctxDelete() {
-  if (ctxMenu.idx === selectedIdx.value) selectedIdx.value = -1
-  shapes.value.splice(ctxMenu.idx, 1)
-  closeCtxMenu()
+  syncDashFromShape(hit)
   scheduleRedraw()
-}
-
-function ctxSetProp(key, val) {
-  if (ctxShape.value) {
-    if (key === 'label' && !val) {
-      delete ctxShape.value.label
-      delete ctxShape.value.labelFontSize
-    } else {
-      ctxShape.value[key] = val
-      if (key === 'label' && val && !ctxShape.value.labelFontSize) {
-        ctxShape.value.labelFontSize = fontSize.value
-      }
-    }
-    scheduleRedraw()
-  }
 }
 
 function isTrivial(shape) {
@@ -936,17 +1659,16 @@ function buildShape(type, p1, p2, forceSnap = false) {
     width: lineWidth.value,
     ...(type !== 'text' && dashChecked.value ? { dashed: true } : {}),
   }
-  if (type === 'rect' || type === 'circle') {
+  if (type === 'rect' || type === 'circle' || type === 'blur' || type === 'crop') {
     const box = forceSnap ? constrainBox(p1, p2) : {
       x: Math.min(p1.x, p2.x),
       y: Math.min(p1.y, p2.y),
       w: Math.abs(p2.x - p1.x),
       h: Math.abs(p2.y - p1.y),
     }
-    return {
-      ...base,
-      ...box,
-    }
+    const s = { ...base, ...box }
+    if (type === 'blur') s.strength = 4
+    return s
   }
   // Line-based tools: apply angle snapping to the endpoint
   const end = LINE_TOOL_TYPES.has(type)
@@ -984,7 +1706,7 @@ function shapeLabelAnchor(shape) {
       color: shape.color,
     }
   }
-  if (shape.type === 'rect' || shape.type === 'circle') {
+  if (BOX_TOOL_TYPES.has(shape.type)) {
     return {
       x: shape.x + shape.w / 2,
       y: shape.y + shape.h / 2,
@@ -1101,30 +1823,29 @@ function beginEditShapeText(idx) {
   })
 }
 
-function beginEditText(idx) {
-  beginEditShapeText(idx)
-}
-
 function commitText() {
   if (!textEdit.active) return
   const text = textEdit.value.trim()
+  let mutated = false
   if (textEdit.shapeIdx >= 0) {
     const s = shapes.value[textEdit.shapeIdx]
     if (s?.type === 'text') {
       if (text) {
-        s.text = text
+        if (s.text !== text) { s.text = text; mutated = true }
       } else {
         shapes.value.splice(textEdit.shapeIdx, 1)
         if (selectedIdx.value === textEdit.shapeIdx) selectedIdx.value = -1
         else if (selectedIdx.value > textEdit.shapeIdx) selectedIdx.value -= 1
+        mutated = true
       }
     } else if (s) {
       if (text) {
-        s.label = text
+        if (s.label !== text) { s.label = text; mutated = true }
         if (!s.labelFontSize) s.labelFontSize = fontSize.value
-      } else {
+      } else if (s.label !== undefined) {
         delete s.label
         delete s.labelFontSize
+        mutated = true
       }
     }
   } else if (text) {
@@ -1136,11 +1857,13 @@ function commitText() {
       y:        textEdit.canvasY,
       text,
     })
+    mutated = true
   }
   textEdit.shapeIdx = -1
   textEdit.angle = 0
   textEdit.active = false
   textEdit.value  = ''
+  if (mutated) pushHistory()
   scheduleRedraw()
 }
 
@@ -1155,17 +1878,22 @@ function cancelText() {
 
 function undo() {
   if (textEdit.active) { cancelText(); return }
-  if (shapes.value.length) {
-    shapes.value.pop()
-    if (selectedIdx.value >= shapes.value.length) selectedIdx.value = -1
-    scheduleRedraw()
-  }
+  flushHistory()
+  if (canUndo.value) restoreHistory(histIndex.value - 1)
+}
+
+function redo() {
+  if (textEdit.active) return
+  flushHistory()
+  if (canRedo.value) restoreHistory(histIndex.value + 1)
 }
 
 function clearAll() {
   cancelText()
+  if (!shapes.value.length) return
   shapes.value = []
   selectedIdx.value = -1
+  pushHistory()
   scheduleRedraw()
 }
 
@@ -1189,15 +1917,19 @@ function redraw() {
     && shapes.value[textEdit.shapeIdx]?.type === 'text'
     ? shapes.value[textEdit.shapeIdx]
     : null
-  // White outline pass — always drawn first so color sits on top
+  // White outline pass — always drawn first so color sits on top.
+  // Highlighter / badge / blur render their own contrast, so they skip it.
   for (const shape of shapes.value) {
     if (shape === skipTextEdit) continue
+    if (NO_OUTLINE_TYPES.has(shape.type)) continue
     paint(ctx, shape, '#ffffff', 2)
     if (shape.label && !isEditingShapeLabel(shape)) {
       paintAttachedLabel(ctx, shape, '#ffffff')
     }
   }
-  if (drawing.value) paint(ctx, drawing.value, '#ffffff', 2)
+  if (drawing.value && !NO_OUTLINE_TYPES.has(drawing.value.type)) {
+    paint(ctx, drawing.value, '#ffffff', 2)
+  }
   for (const shape of shapes.value) {
     if (shape === skipTextEdit) continue
     paint(ctx, shape)
@@ -1206,16 +1938,38 @@ function redraw() {
     }
   }
   if (drawing.value) paint(ctx, drawing.value)
+  if (crop.value && !_exporting) paintCropOverlay(ctx, crop.value)
   const sel = selectedIdx.value
-  if (sel >= 0 && sel < shapes.value.length && !drawing.value
+  if (sel >= 0 && sel < shapes.value.length && !drawing.value && !_exporting
       && (!textEdit.active || textEdit.shapeIdx !== sel)) {
     paintSelection(ctx, shapes.value[sel])
   }
 }
 
+const NO_OUTLINE_TYPES = new Set(['highlight', 'badge', 'blur', 'crop'])
+
+function paintCropOverlay(ctx, c) {
+  const W = imgNW.value, H = imgNH.value
+  ctx.save()
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
+  ctx.fillRect(0, 0, W, Math.max(0, c.y))
+  ctx.fillRect(0, c.y + c.h, W, Math.max(0, H - c.y - c.h))
+  ctx.fillRect(0, c.y, Math.max(0, c.x), c.h)
+  ctx.fillRect(c.x + c.w, c.y, Math.max(0, W - c.x - c.w), c.h)
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)'
+  ctx.lineWidth = Math.max(1, 1.5 / dScale.value)
+  ctx.setLineDash([6 / dScale.value, 4 / dScale.value])
+  ctx.strokeRect(c.x, c.y, c.w, c.h)
+  ctx.restore()
+}
+
 function shapeBounds(shape) {
-  if (shape.type === 'rect' || shape.type === 'circle') {
+  if (BOX_TOOL_TYPES.has(shape.type)) {
     return { x: shape.x, y: shape.y, w: shape.w, h: shape.h }
+  }
+  if (shape.type === 'badge') {
+    const r = shape.r || 15
+    return { x: shape.x - r, y: shape.y - r, w: 2 * r, h: 2 * r }
   }
   if (shape.type === 'text') {
     const w = shape.fontSize * 0.65 * shape.text.length
@@ -1231,11 +1985,15 @@ function shapeBounds(shape) {
 
 function paintSelection(ctx, shape) {
   const b = shapeBounds(shape)
+  // Pad thin line-type selections so the marquee is actually visible.
+  const pad = LINE_TOOL_TYPES.has(shape.type)
+    ? Math.max(Number(shape.width) || 3, 6) + 4
+    : 0
   ctx.save()
   ctx.setLineDash([5 / dScale.value, 4 / dScale.value])
   ctx.lineWidth = Math.max(1, 1.5 / dScale.value)
   ctx.strokeStyle = 'rgba(80, 190, 255, 0.95)'
-  ctx.strokeRect(b.x, b.y, Math.max(1, b.w), Math.max(1, b.h))
+  ctx.strokeRect(b.x - pad, b.y - pad, Math.max(1, b.w) + pad * 2, Math.max(1, b.h) + pad * 2)
   ctx.setLineDash([])
 
   const points = getControlPoints(shape)
@@ -1280,6 +2038,7 @@ function applyShapeDash(ctx, shape) {
 function paint(ctx, shape, overrideColor = null, extraWidth = 0) {
   const eff = overrideColor ?? shape.color
   ctx.save()
+  if (shape.opacity != null && shape.opacity < 1) ctx.globalAlpha = shape.opacity
   ctx.strokeStyle = eff
   ctx.fillStyle   = eff
   ctx.lineWidth   = shape.width + extraWidth
@@ -1379,19 +2138,109 @@ function paint(ctx, shape, overrideColor = null, extraWidth = 0) {
       ctx.shadowOffsetY = 1
       ctx.fillText(shape.text, shape.x, shape.y)
     }
+
+  } else if (type === 'highlight') {
+    if (overrideColor !== null) { ctx.restore(); return }
+    ctx.globalAlpha = 0.3 * (shape.opacity ?? 1)
+    ctx.lineWidth   = Math.max(shape.width * 3, 10)
+    ctx.lineCap     = 'round'
+    strokeSegment(ctx, shape.x1, shape.y1, shape.x2, shape.y2)
+
+  } else if (type === 'badge') {
+    if (overrideColor !== null) { ctx.restore(); return }
+    const r = shape.r || 15
+    ctx.beginPath()
+    ctx.arc(shape.x, shape.y, r, 0, 2 * Math.PI)
+    ctx.fillStyle = shape.color
+    ctx.shadowColor = 'rgba(0,0,0,0.45)'
+    ctx.shadowBlur  = 4
+    ctx.shadowOffsetY = 1
+    ctx.fill()
+    ctx.shadowColor = 'transparent'
+    ctx.lineWidth   = Math.max(2, r * 0.16)
+    ctx.strokeStyle = '#ffffff'
+    ctx.stroke()
+    ctx.fillStyle    = '#ffffff'
+    ctx.font         = `bold ${Math.round(r * 1.15)}px sans-serif`
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(String(shape.n), shape.x, shape.y + r * 0.04)
+
+  } else if (type === 'blur') {
+    if (overrideColor !== null) { ctx.restore(); return }
+    drawBlurRegion(ctx, shape)
+
+  } else if (type === 'crop') {
+    // Drag preview only — the applied crop is drawn by paintCropOverlay().
+    ctx.strokeStyle = 'rgba(255,255,255,0.92)'
+    ctx.lineWidth   = Math.max(1, 1.5 / dScale.value)
+    ctx.setLineDash([6 / dScale.value, 4 / dScale.value])
+    ctx.strokeRect(shape.x, shape.y, shape.w, shape.h)
   }
 
   ctx.restore()
 }
 
+// Pixelate the source-image pixels inside a blur region (redacts the base image).
+function drawBlurRegion(ctx, shape) {
+  if (!imgEl.value) return
+  const x = Math.round(shape.x)
+  const y = Math.round(shape.y)
+  const w = Math.max(1, Math.round(shape.w))
+  const h = Math.max(1, Math.round(shape.h))
+  const strength = Math.min(10, Math.max(1, shape.strength || 4))
+  const block = Math.max(3, Math.round(Math.min(w, h) / (15 - strength)))
+  const sw = Math.max(1, Math.round(w / block))
+  const sh = Math.max(1, Math.round(h / block))
+
+  const sx  = Math.max(0, x)
+  const sy  = Math.max(0, y)
+  const sxw = Math.min(imgNW.value, x + w) - sx
+  const syh = Math.min(imgNH.value, y + h) - sy
+  if (sxw <= 0 || syh <= 0) return
+
+  const tmp  = _blurCanvas
+  tmp.width  = sw
+  tmp.height = sh
+  const tctx = tmp.getContext('2d')
+  tctx.imageSmoothingEnabled = false
+  tctx.clearRect(0, 0, sw, sh)
+  tctx.drawImage(imgEl.value, sx, sy, sxw, syh, 0, 0, sw, sh)
+
+  ctx.save()
+  ctx.imageSmoothingEnabled = false
+  ctx.beginPath()
+  ctx.rect(x, y, w, h)
+  ctx.clip()
+  ctx.drawImage(tmp, 0, 0, sw, sh, x, y, w, h)
+  ctx.restore()
+}
+
 // ── Export ────────────────────────────────────────────────────────────────────
+
+// Re-render without the selection / crop overlay, then hand back the canvas to
+// export — the full canvas, or just the crop region when one is set.
+function exportCanvas() {
+  _exporting = true
+  redraw()
+  _exporting = false
+  const src = canvasEl.value
+  if (!src || !crop.value) return src
+  const c = crop.value
+  const out = document.createElement('canvas')
+  out.width  = Math.max(1, Math.round(c.w))
+  out.height = Math.max(1, Math.round(c.h))
+  out.getContext('2d').drawImage(src, c.x, c.y, c.w, c.h, 0, 0, out.width, out.height)
+  return out
+}
 
 async function copyToClipboard() {
   commitText()
   await nextTick()
-  const canvas = canvasEl.value
+  const canvas = exportCanvas()
   if (!canvas) return
   canvas.toBlob(async (blob) => {
+    scheduleRedraw()   // restore the on-screen overlay
     if (!blob) { showStatus('Failed to capture image.', 'error'); return }
     if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write && window.isSecureContext) {
       try {
@@ -1408,9 +2257,10 @@ async function copyToClipboard() {
 function saveAsPng() {
   commitText()
   nextTick(() => {
-    const canvas = canvasEl.value
+    const canvas = exportCanvas()
     if (!canvas) return
     canvas.toBlob((blob) => {
+      scheduleRedraw()
       if (blob) { triggerDownload(blob); showStatus(`Saved as ${props.downloadFilename}`) }
     }, 'image/png')
   })
@@ -1458,8 +2308,13 @@ function triggerDownload(blob) {
 /* ── Window ────────────────────────────────────────────────────────────────── */
 .se-win {
   position: relative;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "toolbar toolbar"
+    "rail    canvas"
+    "footer  footer";
   background: var(--se-surface);
   border: 1px solid var(--se-border-soft);
   border-radius: var(--se-radius);
@@ -1473,6 +2328,10 @@ function triggerDownload(blob) {
   user-select: none;
   animation: se-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
 }
+.se-toolbar { grid-area: toolbar; }
+.se-rail    { grid-area: rail; }
+.se-body    { grid-area: canvas; min-width: 0; }
+.se-footer  { grid-area: footer; }
 
 @keyframes se-pop {
   from { opacity: 0; transform: translateY(8px) scale(0.985); }
@@ -1489,10 +2348,63 @@ function triggerDownload(blob) {
   background: linear-gradient(180deg, var(--se-surface), var(--se-surface-2));
   border-bottom: 1px solid var(--se-border-soft);
   flex-shrink: 0;
+  cursor: move;          /* the toolbar background is the window drag handle */
+}
+.se-toolbar button,
+.se-toolbar input,
+.se-toolbar .se-zoom,
+.se-toolbar .se-hint { cursor: default; }
+.se-toolbar button:not(:disabled),
+.se-toolbar .se-hint { cursor: pointer; }
+
+/* ── Tool rail ─────────────────────────────────────────────────────────────── */
+.se-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 6px;
+  background: var(--se-surface-2);
+  border-right: 1px solid var(--se-border-soft);
+  overflow-y: auto;
 }
 
-/* Tool picker — segmented control */
-.se-tools {
+.se-rail-btn {
+  width: 34px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--se-radius-xs);
+  color: var(--se-fg-dim);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+}
+.se-rail-btn :deep(svg) { width: 16px; height: 16px; display: block; }
+.se-rail-btn:hover {
+  background: color-mix(in srgb, var(--se-fg) 10%, transparent);
+  color: var(--se-fg);
+}
+.se-rail-btn.active {
+  background: var(--se-accent);
+  color: #fff;
+  box-shadow: 0 2px 10px -3px color-mix(in srgb, var(--se-accent) 75%, transparent);
+}
+.se-rail-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--se-ring);
+}
+
+.se-rail-sep {
+  width: 20px;
+  height: 1px;
+  background: var(--se-border-soft);
+  margin: 4px 0;
+}
+
+/* ── Zoom control group ────────────────────────────────────────────────────── */
+.se-zoom {
   display: flex;
   gap: 2px;
   padding: 3px;
@@ -1500,6 +2412,68 @@ function triggerDownload(blob) {
   border: 1px solid var(--se-border-soft);
   border-radius: var(--se-radius-sm);
 }
+.se-zoom .se-tbtn { height: 28px; }
+.se-zoom-btn {
+  min-width: 26px;
+  padding: 0 6px;
+  font-size: 15px;
+}
+.se-zoom-val {
+  min-width: 48px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Default-style group ───────────────────────────────────────────────────── */
+.se-style {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 5px;
+  background: var(--se-surface-2);
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-sm);
+}
+.se-style .se-tbtn { height: 28px; }
+.se-style-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 2px solid color-mix(in srgb, #fff 30%, transparent);
+  border-radius: var(--se-radius-xs);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 25%, transparent);
+  cursor: pointer;
+}
+.se-style-div {
+  width: 1px;
+  height: 18px;
+  background: var(--se-border-soft);
+  margin: 0 3px;
+}
+.se-style-val {
+  min-width: 20px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--se-fg);
+}
+.se-style-dash {
+  height: 24px;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: var(--se-radius-xs);
+}
+.se-style-dash.on {
+  background: var(--se-accent);
+  color: #fff;
+}
+/* The default-colour popup drops from the toolbar swatch. */
+.se-style .se-color-panel { top: calc(100% + 8px); left: 0; }
 
 /* ── Toolbar button ────────────────────────────────────────────────────────── */
 .se-tbtn {
@@ -1523,7 +2497,6 @@ function triggerDownload(blob) {
   box-sizing: border-box;
 }
 
-.se-tools .se-tbtn { height: 28px; }
 
 .se-tbtn.icon-btn {
   padding: 0 7px;
@@ -1618,71 +2591,34 @@ function triggerDownload(blob) {
   color: var(--se-fg);
 }
 
-/* ── Separator / Spacer ────────────────────────────────────────────────────── */
-.se-sep {
-  width: 1px;
-  height: 22px;
-  background: var(--se-border-soft);
-  margin: 0 4px;
-  flex-shrink: 0;
-}
-
 .se-spacer {
   flex: 1;
 }
 
-/* ── Controls ──────────────────────────────────────────────────────────────── */
-.se-ctl {
+/* ── Shortcuts hint chip ───────────────────────────────────────────────────── */
+.se-hint {
   display: inline-flex;
-  flex-direction: row;
   align-items: center;
   gap: 7px;
-  height: 32px;
-  padding: 0 10px;
-  background: var(--se-surface-2);
+  height: 30px;
+  padding: 0 12px;
+  background: transparent;
   border: 1px solid var(--se-border-soft);
-  border-radius: var(--se-radius-sm);
-  cursor: default;
-  box-sizing: border-box;
-}
-
-.se-ctl-lbl {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  border-radius: 999px;
   color: var(--se-fg-dim);
-  white-space: nowrap;
-  line-height: 1;
-}
-
-.se-dash-ctl {
+  font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
+  transition: color 0.14s ease, border-color 0.14s ease;
 }
-
-.se-dash-ctl input {
-  margin: 0;
-  cursor: pointer;
-}
-
-.se-color-ctl {
-  position: relative;
-}
-
-.se-color-swatch {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 2px solid color-mix(in srgb, #fff 30%, transparent);
-  border-radius: var(--se-radius-xs);
-  cursor: pointer;
-  flex-shrink: 0;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 25%, transparent);
-  transition: transform 0.1s ease, box-shadow 0.14s ease;
-}
-
-.se-color-swatch:hover {
-  transform: scale(1.08);
+.se-hint:hover { color: var(--se-fg); border-color: var(--se-border); }
+.se-hint kbd {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--se-border-soft);
+  background: var(--se-surface-2);
 }
 
 .se-color-panel {
@@ -1701,6 +2637,46 @@ function triggerDownload(blob) {
   box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.55),
               0 0 0 1px color-mix(in srgb, #fff 5%, transparent);
   animation: se-pop 0.14s ease;
+}
+
+/* ── Applied-crop chip ─────────────────────────────────────────────────────── */
+.se-crop-chip {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 6px 5px 10px;
+  background: color-mix(in srgb, var(--se-surface) 92%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--se-border);
+  border-radius: 999px;
+  color: var(--se-fg-dim);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 8px 22px -10px rgba(0, 0, 0, 0.55);
+}
+.se-crop-chip button {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--se-fg-dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.se-crop-chip button:hover {
+  background: color-mix(in srgb, #e5484d 20%, transparent);
+  color: #ff8a8a;
 }
 
 .se-color-dot {
@@ -1751,6 +2727,31 @@ function triggerDownload(blob) {
   height: 100%;
 }
 
+.se-color-eyedrop {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--se-border-soft);
+  border-radius: 50%;
+  background: var(--se-surface-2);
+  color: var(--se-fg-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.se-color-eyedrop:hover { color: var(--se-fg); border-color: var(--se-border); }
+
+.se-color-recent {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  padding-top: 8px;
+  margin-top: 2px;
+  border-top: 1px solid var(--se-border-soft);
+}
+
 .se-range {
   width: 92px;
   height: 4px;
@@ -1761,11 +2762,14 @@ function triggerDownload(blob) {
 
 /* ── Canvas body ───────────────────────────────────────────────────────────── */
 .se-body {
+  position: relative;
   flex: 1;
   overflow: auto;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  /* `safe` keeps the canvas reachable when it is zoomed larger than the
+     viewport — plain `center` would clip the top / left and block scrolling. */
+  align-items: safe center;
+  justify-content: safe center;
   padding: 28px;
   min-height: 0;
   background: color-mix(in srgb, var(--se-surface-2) 82%, #000);
@@ -1779,6 +2783,9 @@ function triggerDownload(blob) {
   background-size: 22px 22px;
   background-position: 0 0, 0 11px, 11px -11px, -11px 0;
 }
+
+.se-body.se-panning,
+.se-body.se-panning .se-canvas-wrap canvas { cursor: grab; }
 
 /* ── Canvas wrap ───────────────────────────────────────────────────────────── */
 .se-canvas-wrap {
@@ -1855,88 +2862,332 @@ function triggerDownload(blob) {
   transform: translateX(-50%) translateY(8px);
 }
 
-/* ── Context menu ─────────────────────────────────────────────────────────── */
-.se-ctx-menu {
-  position: fixed;
-  z-index: 10100;
-  background: color-mix(in srgb, var(--se-surface) 92%, transparent);
+
+/* ── Floating selection inspector ─────────────────────────────────────────── */
+.se-inspector {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--se-surface) 96%, transparent);
   backdrop-filter: blur(14px) saturate(1.2);
   -webkit-backdrop-filter: blur(14px) saturate(1.2);
-  border: 1px solid var(--se-border-soft);
+  border: 1px solid var(--se-border);
   border-radius: var(--se-radius-sm);
-  box-shadow: 0 20px 48px -12px rgba(0, 0, 0, 0.6),
+  box-shadow: 0 18px 44px -14px rgba(0, 0, 0, 0.6),
               0 0 0 1px color-mix(in srgb, #fff 5%, transparent);
-  padding: 5px;
-  min-width: 168px;
   user-select: none;
-  font-size: 12px;
   animation: se-pop 0.13s ease;
 }
 
-.se-ctx-item {
+.se-insp-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 6px 10px;
+}
+
+.se-insp-title { font-size: 12px; font-weight: 600; color: var(--se-fg); }
+
+.se-insp-dims {
+  font-size: 11px;
+  color: var(--se-fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.se-insp-x {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--se-radius-xs);
-  color: var(--se-fg);
+  color: var(--se-fg-dim);
   cursor: pointer;
-  transition: background 0.1s ease;
+  transition: background 0.12s ease, color 0.12s ease;
 }
-
-.se-ctx-item:hover {
-  background: color-mix(in srgb, var(--se-accent) 16%, transparent);
-}
-
-.se-ctx-delete {
+.se-insp-x:hover {
+  background: color-mix(in srgb, #e5484d 18%, transparent);
   color: #ff8a8a;
 }
+.se-insp-x :deep(svg) { width: 13px; height: 13px; display: block; }
 
-.se-ctx-delete:hover {
-  background: color-mix(in srgb, #e5484d 18%, transparent);
+.se-insp-row {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  align-items: center;
+  gap: 8px;
 }
 
-.se-ctx-sep {
-  height: 1px;
-  background: var(--se-border-soft);
-  margin: 5px 4px;
-}
-
-.se-ctx-lbl {
-  flex: 1;
+.se-insp-lbl {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--se-fg-dim);
   white-space: nowrap;
 }
 
-.se-ctx-color {
-  width: 34px;
-  height: 22px;
-  padding: 1px 2px;
-  border: 1px solid var(--se-border-soft);
-  border-radius: var(--se-radius-xs);
-  background: transparent;
+.se-insp-val {
+  font-size: 11px;
+  color: var(--se-fg-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 16px;
+  text-align: right;
+}
+
+.se-inspector .se-range { width: 100%; }
+
+.se-insp-colors {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.se-insp-dot {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  box-sizing: border-box;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 25%, transparent);
+  transition: transform 0.1s ease, border-color 0.1s ease;
+}
+.se-insp-dot:hover { transform: scale(1.15); }
+.se-insp-dot.active {
+  border-color: #fff;
+  outline: 2px solid var(--se-accent);
+  outline-offset: 1px;
+}
+
+.se-insp-custom {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #555;
+  background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.se-insp-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
   cursor: pointer;
 }
 
-.se-ctx-num,
-.se-ctx-text {
+.se-insp-eyedrop {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--se-border-soft);
+  border-radius: 50%;
+  background: var(--se-surface-2);
+  color: var(--se-fg-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.se-insp-eyedrop:hover { color: var(--se-fg); border-color: var(--se-border); }
+
+.se-insp-hex {
+  width: 72px;
+  margin-left: auto;
+  background: var(--se-surface-2);
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-xs);
+  color: var(--se-fg-dim);
+  font: 400 10px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  text-transform: uppercase;
+  padding: 4px 6px;
+  box-sizing: border-box;
+}
+.se-insp-hex:focus {
+  outline: none;
+  border-color: var(--se-accent);
+  box-shadow: var(--se-ring);
+  color: var(--se-fg);
+}
+
+.se-insp-recent {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--se-border-soft);
+}
+
+.se-insp-seg {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--se-surface-2);
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-xs);
+}
+.se-insp-seg button {
+  flex: 1;
+  height: 22px;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--se-fg-dim);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.se-insp-seg button.on { background: var(--se-accent); color: #fff; }
+
+.se-insp-text {
+  grid-column: 2 / -1;
+  width: 100%;
   background: var(--se-surface-2);
   border: 1px solid var(--se-border-soft);
   border-radius: var(--se-radius-xs);
   color: var(--se-fg);
-  padding: 4px 6px;
+  padding: 4px 7px;
   font-size: 12px;
+  box-sizing: border-box;
   transition: border-color 0.14s ease, box-shadow 0.14s ease;
 }
-
-.se-ctx-num { width: 52px; }
-.se-ctx-text { width: 118px; }
-
-.se-ctx-num:focus,
-.se-ctx-text:focus,
-.se-ctx-color:focus-visible {
+.se-insp-text:focus {
   outline: none;
   border-color: var(--se-accent);
   box-shadow: var(--se-ring);
+}
+
+.se-insp-zrow {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 3px;
+}
+.se-insp-zrow button {
+  flex: 1;
+  height: 24px;
+  background: var(--se-surface-2);
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-xs);
+  color: var(--se-fg-dim);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.se-insp-zrow button:hover { color: var(--se-fg); border-color: var(--se-border); }
+
+/* ── Keyboard-shortcuts overlay ───────────────────────────────────────────── */
+.se-sc-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, #000 45%, transparent);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.se-sc-card {
+  width: min(460px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 16px 18px;
+  background: var(--se-surface);
+  border: 1px solid var(--se-border);
+  border-radius: var(--se-radius);
+  box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.7);
+  animation: se-pop 0.16s ease;
+}
+
+.se-sc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--se-fg);
+  margin-bottom: 12px;
+}
+
+.se-sc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 18px;
+}
+@media (max-width: 520px) { .se-sc-grid { grid-template-columns: 1fr; } }
+
+.se-sc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--se-fg-dim);
+}
+.se-sc-row kbd {
+  flex-shrink: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  color: var(--se-fg);
+  background: var(--se-surface-2);
+  border: 1px solid var(--se-border-soft);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.se-sc-clear {
+  margin-top: 14px;
+  width: 100%;
+  height: 30px;
+  background: transparent;
+  border: 1px solid var(--se-border-soft);
+  border-radius: var(--se-radius-xs);
+  color: var(--se-fg-dim);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.se-sc-clear:hover:not(:disabled) {
+  color: #ff8a8a;
+  border-color: color-mix(in srgb, #e5484d 45%, transparent);
+}
+.se-sc-clear:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Reduced motion ───────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .se-win,
+  .se-color-panel,
+  .se-inspector,
+  .se-sc-card { animation: none; }
+  .se-tbtn,
+  .se-btn,
+  .se-hint,
+  .se-rail-btn,
+  .se-color-dot,
+  .se-insp-dot,
+  .se-insp-seg button,
+  .se-insp-zrow button,
+  .se-toast-enter-active,
+  .se-toast-leave-active { transition: none; }
 }
 </style>

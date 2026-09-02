@@ -170,7 +170,9 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("Metric glossary,", csv)
         self.assertIn("Search table", html)
         self.assertIn("Show all", html)
-        self.assertNotIn("data-csv", html)
+        # Each interactive table offers a per-table CSV download.
+        self.assertIn('class="table-csv"', html)
+        self.assertIn("text/csv", html)
         self.assertIn("toc-count", html)
         self.assertIn("report-toc-lead", html)
         self.assertIn("CPU &amp; Cores", html)

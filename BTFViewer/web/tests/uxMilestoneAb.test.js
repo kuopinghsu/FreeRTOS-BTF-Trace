@@ -57,8 +57,10 @@ describe('UX Milestone A+B', () => {
     assert.ok(rep.groups.length)
   })
 
-  it('HTML report script has no per-table CSV button', () => {
-    assert.doesNotMatch(HTML_REPORT_INTERACTIVE_SCRIPT, /data-csv/)
+  it('HTML report script has a per-table CSV download button', () => {
+    assert.match(HTML_REPORT_INTERACTIVE_SCRIPT, /class="table-csv"/)
+    assert.match(HTML_REPORT_INTERACTIVE_SCRIPT, /text\/csv/)
+    assert.match(HTML_REPORT_INTERACTIVE_SCRIPT, /lastFiltered/)
   })
 
   it('guided review has workflow steps', () => {
