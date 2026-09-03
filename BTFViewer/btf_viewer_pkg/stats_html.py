@@ -12,7 +12,8 @@ STATS_TOC_GROUPS = (
     )),
     ("CPU and Scheduling", (
         "Core Utilisation", "Trace Health (TICK)", "Core Time Breakdown",
-        "Concurrent Core Active Distribution", "Kernel Switch Overhead",
+        "Concurrent Core Active Distribution", "Switch Reason Breakdown",
+        "Scheduling Load Over Time", "Kernel Switch Overhead", "Idle Analysis",
         "Top Tasks by CPU",
     )),
     ("Migrations and Core Affinity", (
@@ -23,11 +24,13 @@ STATS_TOC_GROUPS = (
     ("Timing, Latency and Jitter", (
         "Investigate Anomalies", "Execution Time Per Slice",
         "Off-CPU Time", "Dispatch / Scheduling Latency", "Inter-Arrival Time",
+        "Activation Latency", "Ready-Gap (Starvation)",
         "Period / Jitter", "Response Time", "Unified Jitter",
     )),
     ("Synchronization and Custom Events", (
         "Preemption Chain Analysis", "Preemption Matrix", "Priority Inheritance",
         "Mutex / Semaphore", "Waiter × Owner", "Mutex Blocking", "Queue",
+        "Queue Backlog / Semaphore Level",
         "Interval Analysis", "Tag Analysis", "Statistics Notes",
     )),
 )

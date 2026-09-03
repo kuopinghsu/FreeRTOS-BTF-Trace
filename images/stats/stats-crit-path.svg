@@ -20,54 +20,54 @@
 <rect x="0" y="84" width="544" height="22" fill="#252526"/>
 <line x1="0" y1="106" x2="544" y2="106" stroke="#3c3c3c" stroke-width="1"/>
 <text x="10" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Runner[1]</text>
-<text x="94" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">361.995 ms</text>
-<text x="186" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">174.000 µs</text>
-<text x="278" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">229.497 ms</text>
-<text x="370" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">361.821 ms</text>
-<text x="462" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">395.979 ms</text>
+<text x="94" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">393.899 ms</text>
+<text x="186" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">211.000 µs</text>
+<text x="278" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">270.492 ms</text>
+<text x="370" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">393.688 ms</text>
+<text x="462" y="100" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">396.287 ms</text>
 <line x1="0" y1="128" x2="544" y2="128" stroke="#3c3c3c" stroke-width="1"/>
 <text x="10" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Runner[1]</text>
-<text x="94" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">332.613 ms</text>
-<text x="186" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">368.000 µs</text>
-<text x="278" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">267.042 ms</text>
-<text x="370" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">332.245 ms</text>
-<text x="462" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">335.737 ms</text>
+<text x="94" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">311.114 ms</text>
+<text x="186" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">240.000 µs</text>
+<text x="278" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">257.319 ms</text>
+<text x="370" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">310.874 ms</text>
+<text x="462" y="122" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">324.842 ms</text>
 <rect x="0" y="128" width="544" height="22" fill="#252526"/>
 <line x1="0" y1="150" x2="544" y2="150" stroke="#3c3c3c" stroke-width="1"/>
 <text x="10" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Runner[1]</text>
-<text x="94" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">109.899 ms</text>
-<text x="186" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">317.000 µs</text>
-<text x="278" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">104.979 ms</text>
-<text x="370" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">109.582 ms</text>
-<text x="462" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">109.582 ms</text>
+<text x="94" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">111.289 ms</text>
+<text x="186" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">242.000 µs</text>
+<text x="278" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">105.890 ms</text>
+<text x="370" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">111.047 ms</text>
+<text x="462" y="144" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">111.047 ms</text>
 <line x1="0" y1="172" x2="544" y2="172" stroke="#3c3c3c" stroke-width="1"/>
 <text x="10" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">NC[118]</text>
-<text x="94" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">109.744 ms</text>
-<text x="186" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">109.744 ms</text>
-<text x="278" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">0.000 ns</text>
-<text x="370" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">0.000 ns</text>
-<text x="462" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">1.530 ms</text>
+<text x="94" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">110.818 ms</text>
+<text x="186" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">110.223 ms</text>
+<text x="278" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">574.000 µs</text>
+<text x="370" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">595.000 µs</text>
+<text x="462" y="166" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">2.453 ms</text>
 <rect x="0" y="172" width="544" height="22" fill="#252526"/>
 <line x1="0" y1="194" x2="544" y2="194" stroke="#3c3c3c" stroke-width="1"/>
-<text x="10" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Runner[1]</text>
-<text x="94" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">93.780 ms</text>
-<text x="186" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">126.000 µs</text>
-<text x="278" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">89.007 ms</text>
-<text x="370" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">93.654 ms</text>
+<text x="10" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">High[268]</text>
+<text x="94" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">105.829 ms</text>
+<text x="186" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">521.000 µs</text>
+<text x="278" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">95.149 ms</text>
+<text x="370" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">105.308 ms</text>
 <text x="462" y="188" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">0.000 ns</text>
 <line x1="0" y1="216" x2="544" y2="216" stroke="#3c3c3c" stroke-width="1"/>
-<text x="10" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Low[266]</text>
-<text x="94" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">67.095 ms</text>
-<text x="186" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">210.000 µs</text>
-<text x="278" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">49.026 ms</text>
-<text x="370" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">66.885 ms</text>
+<text x="10" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">High[268]</text>
+<text x="94" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">105.701 ms</text>
+<text x="186" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">329.000 µs</text>
+<text x="278" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">95.200 ms</text>
+<text x="370" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">105.372 ms</text>
 <text x="462" y="210" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">0.000 ns</text>
 <rect x="0" y="216" width="544" height="22" fill="#252526"/>
 <line x1="0" y1="238" x2="544" y2="238" stroke="#3c3c3c" stroke-width="1"/>
-<text x="10" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Runner[1]</text>
-<text x="94" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">60.715 ms</text>
-<text x="186" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">134.000 µs</text>
-<text x="278" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">3.724 ms</text>
-<text x="370" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">60.581 ms</text>
-<text x="462" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">60.581 ms</text>
+<text x="10" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">High[268]</text>
+<text x="94" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">105.440 ms</text>
+<text x="186" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">163.000 µs</text>
+<text x="278" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">95.103 ms</text>
+<text x="370" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">105.277 ms</text>
+<text x="462" y="232" fill="#d4d4d4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">0.000 ns</text>
 </svg>

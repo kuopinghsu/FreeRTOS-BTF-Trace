@@ -66,6 +66,8 @@ async function cursorStatsSnapshot() {
     peakPri: r.peakPri,
     episodeCount: r.episodeCount,
     totalBoostNs: r.totalBoostNs,
+    invertWorstNs: r.invertWorstNs,
+    invertTotalNs: r.invertTotalNs,
     pattern: r.pattern,
   })).sort((a, b) => a.label.localeCompare(b.label))
 

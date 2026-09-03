@@ -121,7 +121,7 @@
       <wait seconds="9"/>
       <move target="stats_summary"/>
       <wait seconds="2"/>
-      <show_message text="Span: 2.421 s / Tasks: 163 / Cores: 8" seconds="10"/>
+      <show_message text="Span: 2.521 s / Tasks: 163 / Cores: 8" seconds="10"/>
     </step>
 
     <step id="2" title="Open trace" tags="intro">

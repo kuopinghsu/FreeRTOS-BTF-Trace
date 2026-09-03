@@ -838,7 +838,12 @@ class DemoStatusBanner(QWidget):
         lab.setStyleSheet(f"color:{fg}; font-size:11px;")
         self._lang = QComboBox()
         self._lang.setObjectName("demo_lang_select")
-        self._lang.setFixedHeight(22)
+        # macOS clips the current-item text / popup rows when the combo is forced
+        # too short, so let it size to its contents with a sane floor instead of
+        # pinning a fixed height.
+        self._lang.setMinimumHeight(24)
+        self._lang.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self._lang.setMinimumContentsLength(8)
         self._lang.currentIndexChanged.connect(self._on_lang)
         lang_lay.addWidget(lab)
         lang_lay.addWidget(self._lang)

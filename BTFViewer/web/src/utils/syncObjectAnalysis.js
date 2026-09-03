@@ -37,6 +37,10 @@ function emptyObject(kind, ptr) {
     issues: [],
     openTakes: [],
     openGives: [],
+    // Review item A7: distinct tasks that acquired while already held, and the
+    // deepest simultaneously-open take count.
+    waiters: new Set(),
+    maxNest: 0,
   }
 }
 
@@ -144,7 +148,13 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax, core
           const send = obj.openGives.shift()
           recordHold(obj, { ...send, timeNs: send.timeNs }, rec, true)
         } else {
+          // Contended acquire: already held by a different task → the taker waited.
+          if (obj.openTakes.length && taskMk
+              && taskMk !== obj.openTakes[obj.openTakes.length - 1].taskMk) {
+            obj.waiters.add(taskMk)
+          }
           obj.openTakes.push(rec)
+          if (obj.openTakes.length > obj.maxNest) obj.maxNest = obj.openTakes.length
         }
       } else if (action === 'give' || action === 'send') {
         if (action === 'give' && isPostCreateKernelGive(obj, ev.time)) {
@@ -301,6 +311,11 @@ function objectStatus(obj, lo, hi) {
   return 'warning'
 }
 
+function nearestRankHold(sorted, p) {
+  if (!sorted.length) return 0
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))]
+}
+
 /** Stats rows: one per mutex/sem/queue object in scope. */
 export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
   if (!trace?.hasSyncObjectInstrumentation) return []
@@ -346,6 +361,19 @@ export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
       avgHold: holds.length
         ? formatTime(Math.floor(holds.reduce((s, h) => s + h.durationNs, 0) / holds.length), scale)
         : '—',
+      ...(() => {
+        const hd = holds.map(h => h.durationNs).sort((a, b) => a - b)
+        const p95 = nearestRankHold(hd, 0.95)
+        const p99 = nearestRankHold(hd, 0.99)
+        return {
+          p95HoldNs: p95,
+          p99HoldNs: p99,
+          p95Hold: hd.length ? formatTime(p95, scale) : '—',
+          p99Hold: hd.length ? formatTime(p99, scale) : '—',
+        }
+      })(),
+      waiters: (obj.waiters && obj.waiters.size) || 0,
+      maxNest: Math.trunc(obj.maxNest || 0),
     })
   }
   rows.sort((a, b) => {

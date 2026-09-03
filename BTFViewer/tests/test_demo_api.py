@@ -386,11 +386,16 @@ class DemoApiUiTests(unittest.TestCase):
         self.assertLess(int(fit.get("x")), int(combo_pt.x()))
         self.assertLess(int(fit.get("x")), int(core.get("x")))
         self.assertLess(int(open_hit.get("x")), int(fit.get("x")))
+        # The QTabBar is hidden by the right-panel redesign; <move
+        # target="find_tab"/> must land on the visible icon-rail button, not
+        # the stale hidden tab-bar rect (web parity: App.vue .icon-rail).
         find_tab = win._demo_handle({"op": "target", "name": "find_tab"})
-        bar = win._panel_tabs.tabBar()
-        tab_pt = bar.mapToGlobal(bar.tabRect(_PANEL_TAB_FIND).center())
-        self.assertEqual(find_tab.get("x"), int(tab_pt.x()))
-        self.assertEqual(find_tab.get("y"), int(tab_pt.y()))
+        rail_btn = win._icon_rail.button(_PANEL_TAB_FIND)
+        self.assertIsNotNone(rail_btn)
+        rail_pt = rail_btn.mapToGlobal(rail_btn.rect().center())
+        self.assertEqual(find_tab.get("x"), int(rail_pt.x()))
+        self.assertEqual(find_tab.get("y"), int(rail_pt.y()))
+        self.assertTrue(win._panel_tabs.tabBar().isHidden())
         stats_hit = win._demo_handle({"op": "target", "name": "stats_summary"})
         summary = getattr(win._stats_panel, "_stats_summary", None)
         self.assertIsNotNone(summary)

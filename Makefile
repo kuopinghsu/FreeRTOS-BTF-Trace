@@ -1,4 +1,4 @@
-FREERTOS_VER ?= V11.3.0
+FREERTOS_VER ?= V11.3.1
 RISCV_PREFIX ?= /opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
 
 .DEFAULT_GOAL := all

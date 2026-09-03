@@ -358,6 +358,449 @@
 
     </StatsSectionBlock>
     <StatsSectionBlock
+      :section-id="'switch_reason'"
+      :order="sectionOrderIndex('switch_reason')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Switch Reason Breakdown (A1) -->
+      <StatsSectionHeader
+        :section-id="'switch_reason'"
+        :collapsed="switchReasonCollapsed"
+        :pinned="isSectionPinned('switch_reason')"
+        @toggle="toggleSectionCollapse('switch_reason')"
+        @toggle-pin="toggleSectionPin('switch_reason')"
+      >
+        Switch Reason Breakdown{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!switchReasonCollapsed">
+        <div
+          v-if="switchReasonStats.length === 0"
+          class="range-hint"
+        >
+          No off-CPU switches in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <p class="detail-note">
+            Heuristic: Preempted = another task ran on the core; Blocked = STI take/recv;
+            Suspended = STI suspend; Period = only IDLE ran; Other = no signal.
+          </p>
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('switch_reason') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('switch_reason', 'name')" @click="toggleTableSort('switch_reason', 'name')">Task</th>
+                  <th :class="thSortClass('switch_reason', 'preempted')" @click="toggleTableSort('switch_reason', 'preempted')">Preempted</th>
+                  <th :class="thSortClass('switch_reason', 'blocked')" @click="toggleTableSort('switch_reason', 'blocked')">Blocked</th>
+                  <th :class="thSortClass('switch_reason', 'suspended')" @click="toggleTableSort('switch_reason', 'suspended')">Suspended</th>
+                  <th :class="thSortClass('switch_reason', 'periodWait')" @click="toggleTableSort('switch_reason', 'periodWait')">Period</th>
+                  <th :class="thSortClass('switch_reason', 'unknown')" @click="toggleTableSort('switch_reason', 'unknown')">Other</th>
+                  <th :class="thSortClass('switch_reason', 'total')" @click="toggleTableSort('switch_reason', 'total')">Total</th>
+                  <th :class="thSortClass('switch_reason', 'preemptRate')" @click="toggleTableSort('switch_reason', 'preemptRate')">Preempt/s</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedSwitchReasonStats"
+                  :key="row.mk"
+                  class="stats-table-row clickable"
+                  :title="`Highlight ${row.name} on the timeline`"
+                  tabindex="0"
+                  @click="emit('highlightTask', row.mk)"
+                  @keydown.enter.prevent="emit('highlightTask', row.mk)"
+                  @keydown.space.prevent="emit('highlightTask', row.mk)"
+                >
+                  <td class="task-col">{{ row.name }}</td>
+                  <td>{{ row.preempted }}</td>
+                  <td>{{ row.blocked }}</td>
+                  <td>{{ row.suspended }}</td>
+                  <td>{{ row.periodWait }}</td>
+                  <td>{{ row.unknown }}</td>
+                  <td>{{ row.total }}</td>
+                  <td>{{ fmtRatePerS(row.preemptRate) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize switch reason table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('switch_reason', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'sched_load'"
+      :order="sectionOrderIndex('sched_load')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Scheduling Load Over Time (A2 + A9) -->
+      <StatsSectionHeader
+        :section-id="'sched_load'"
+        :collapsed="schedLoadCollapsed"
+        :pinned="isSectionPinned('sched_load')"
+        @toggle="toggleSectionCollapse('sched_load')"
+        @toggle-pin="toggleSectionPin('sched_load')"
+      >
+        Scheduling Load Over Time{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!schedLoadCollapsed">
+        <div
+          v-if="schedLoadStats.length === 0"
+          class="range-hint"
+        >
+          No on-CPU slices in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('sched_load') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('sched_load', 'start')" @click="toggleTableSort('sched_load', 'start')">Time</th>
+                  <th :class="thSortClass('sched_load', 'ctx')" @click="toggleTableSort('sched_load', 'ctx')">Ctx sw</th>
+                  <th :class="thSortClass('sched_load', 'ctxPerS')" @click="toggleTableSort('sched_load', 'ctxPerS')">Ctx sw/s</th>
+                  <th :class="thSortClass('sched_load', 'busiestCore')" @click="toggleTableSort('sched_load', 'busiestCore')">Busiest core</th>
+                  <th :class="thSortClass('sched_load', 'sigmaPct')" @click="toggleTableSort('sched_load', 'sigmaPct')">Util σ</th>
+                  <th :class="thSortClass('sched_load', 'lbScore')" @click="toggleTableSort('sched_load', 'lbScore')">LB score</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedSchedLoadStats"
+                  :key="row.start"
+                  class="stats-table-row clickable"
+                  :title="`Select this time bin on the timeline`"
+                  tabindex="0"
+                  @click="onSchedLoadRowClick(row)"
+                  @keydown.enter.prevent="onSchedLoadRowClick(row)"
+                  @keydown.space.prevent="onSchedLoadRowClick(row)"
+                >
+                  <td class="task-col">{{ fmtTime(row.start) }}</td>
+                  <td>{{ row.ctx }}</td>
+                  <td>{{ Math.round(row.ctxPerS).toLocaleString() }}</td>
+                  <td>{{ row.busiestCore || '—' }}</td>
+                  <td>{{ row.sigmaPct.toFixed(1) }}%</td>
+                  <td>{{ row.lbScore == null ? '—' : Math.round(row.lbScore) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize scheduling load table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('sched_load', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'activation'"
+      :order="sectionOrderIndex('activation')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Activation Latency (A3) -->
+      <StatsSectionHeader
+        :section-id="'activation'"
+        :collapsed="activationCollapsed"
+        :pinned="isSectionPinned('activation')"
+        @toggle="toggleSectionCollapse('activation')"
+        @toggle-pin="toggleSectionPin('activation')"
+      >
+        Activation Latency{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!activationCollapsed">
+        <div
+          v-if="activationStats.length === 0"
+          class="range-hint"
+        >
+          Need at least 3 activations per periodic task
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <p class="detail-note">
+            Error = distance from a fitted periodic grid (φ + k·T, T = p50 inter-arrival),
+            anchored at the first activation in scope.
+          </p>
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('activation') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('activation', 'task')" @click="toggleTableSort('activation', 'task')">Task</th>
+                  <th :class="thSortClass('activation', 'count')" @click="toggleTableSort('activation', 'count')">Activations</th>
+                  <th :class="thSortClass('activation', 'min')" @click="toggleTableSort('activation', 'min')">Min</th>
+                  <th :class="thSortClass('activation', 'avg')" @click="toggleTableSort('activation', 'avg')">Avg</th>
+                  <th :class="thSortClass('activation', 'max')" @click="toggleTableSort('activation', 'max')">Max</th>
+                  <th :class="thSortClass('activation', 'jitter')" @click="toggleTableSort('activation', 'jitter')">Jitter</th>
+                  <th :class="thSortClass('activation', 'sigma')" @click="toggleTableSort('activation', 'sigma')">σ</th>
+                  <th :class="thSortClass('activation', 'p50')" @click="toggleTableSort('activation', 'p50')">P50</th>
+                  <th :class="thSortClass('activation', 'p95')" @click="toggleTableSort('activation', 'p95')">P95</th>
+                  <th :class="thSortClass('activation', 'p99')" @click="toggleTableSort('activation', 'p99')">P99</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedActivationStats"
+                  :key="row.mk"
+                  class="stats-table-row clickable"
+                  :title="`Highlight ${row.name} on the timeline`"
+                  tabindex="0"
+                  @click="emit('highlightTask', row.mk)"
+                  @keydown.enter.prevent="emit('highlightTask', row.mk)"
+                  @keydown.space.prevent="emit('highlightTask', row.mk)"
+                >
+                  <td class="task-col">{{ row.name }}</td>
+                  <td>{{ row.count }}</td>
+                  <td>{{ fmtTime(row.minNs) }}</td>
+                  <td>{{ fmtTime(row.avgNs) }}</td>
+                  <td>{{ fmtTime(row.maxNs) }}</td>
+                  <td>{{ fmtTime(row.jitterNs) }}</td>
+                  <td>{{ fmtTime(row.sigmaNs) }}</td>
+                  <td>{{ fmtTime(row.p50Ns) }}</td>
+                  <td>{{ fmtTime(row.p95Ns) }}</td>
+                  <td>{{ fmtTime(row.p99Ns) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize activation latency table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('activation', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'ready_gap'"
+      :order="sectionOrderIndex('ready_gap')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Ready-Gap (Starvation) (A4) -->
+      <StatsSectionHeader
+        :section-id="'ready_gap'"
+        :collapsed="readyGapCollapsed"
+        :pinned="isSectionPinned('ready_gap')"
+        @toggle="toggleSectionCollapse('ready_gap')"
+        @toggle-pin="toggleSectionPin('ready_gap')"
+      >
+        Ready-Gap (Starvation){{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!readyGapCollapsed">
+        <div
+          v-if="readyGapStats.length === 0"
+          class="range-hint"
+        >
+          No ready-gaps in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <p class="detail-note">
+            Off-CPU gaps where the task was arguably runnable: preempted, blocked on a lock,
+            or unattributed. Sleep and period-wait excluded. % preempt is the preempted share.
+          </p>
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('ready_gap') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('ready_gap', 'task')" @click="toggleTableSort('ready_gap', 'task')">Task</th>
+                  <th :class="thSortClass('ready_gap', 'count')" @click="toggleTableSort('ready_gap', 'count')">Gaps</th>
+                  <th :class="thSortClass('ready_gap', 'longest')" @click="toggleTableSort('ready_gap', 'longest')">Longest</th>
+                  <th :class="thSortClass('ready_gap', 'total')" @click="toggleTableSort('ready_gap', 'total')">Total</th>
+                  <th :class="thSortClass('ready_gap', 'avg')" @click="toggleTableSort('ready_gap', 'avg')">Avg</th>
+                  <th :class="thSortClass('ready_gap', 'p95')" @click="toggleTableSort('ready_gap', 'p95')">P95</th>
+                  <th :class="thSortClass('ready_gap', 'preemptPct')" @click="toggleTableSort('ready_gap', 'preemptPct')">% preempt</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedReadyGapStats"
+                  :key="row.mk"
+                  class="stats-table-row clickable"
+                  :title="`Highlight ${row.name} on the timeline`"
+                  tabindex="0"
+                  @click="emit('highlightTask', row.mk)"
+                  @keydown.enter.prevent="emit('highlightTask', row.mk)"
+                  @keydown.space.prevent="emit('highlightTask', row.mk)"
+                >
+                  <td class="task-col">{{ row.name }}</td>
+                  <td>{{ row.count }}</td>
+                  <td>{{ fmtTime(row.longestNs) }}</td>
+                  <td>{{ fmtTime(row.totalNs) }}</td>
+                  <td>{{ fmtTime(row.avgNs) }}</td>
+                  <td>{{ fmtTime(row.p95Ns) }}</td>
+                  <td>{{ Math.round(row.preemptPct) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize ready-gap table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('ready_gap', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'idle'"
+      :order="sectionOrderIndex('idle')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Idle Analysis (A5) -->
+      <StatsSectionHeader
+        :section-id="'idle'"
+        :collapsed="idleCollapsed"
+        :pinned="isSectionPinned('idle')"
+        @toggle="toggleSectionCollapse('idle')"
+        @toggle-pin="toggleSectionPin('idle')"
+      >
+        Idle Analysis{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!idleCollapsed">
+        <div
+          v-if="sortedIdleStats.length === 0"
+          class="range-hint"
+        >
+          No idle time in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <p
+            v-if="idleModel.allIdleSpanNs > 0"
+            class="detail-note"
+          >
+            Longest all-cores-idle window: {{ fmtTime(idleModel.allIdleSpanNs) }}
+            at {{ fmtTime(idleModel.allIdleStartNs) }}.
+          </p>
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('idle') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('idle', 'core')" @click="toggleTableSort('idle', 'core')">Core</th>
+                  <th :class="thSortClass('idle', 'total')" @click="toggleTableSort('idle', 'total')">Idle total</th>
+                  <th :class="thSortClass('idle', 'longest')" @click="toggleTableSort('idle', 'longest')">Longest</th>
+                  <th :class="thSortClass('idle', 'fragments')" @click="toggleTableSort('idle', 'fragments')">Frags</th>
+                  <th :class="thSortClass('idle', 'p95')" @click="toggleTableSort('idle', 'p95')">P95</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedIdleStats"
+                  :key="row.core"
+                  class="stats-table-row clickable"
+                  :title="`Highlight ${row.core} on the timeline`"
+                  tabindex="0"
+                  @click="emit('highlightTask', row.core)"
+                  @keydown.enter.prevent="emit('highlightTask', row.core)"
+                  @keydown.space.prevent="emit('highlightTask', row.core)"
+                >
+                  <td class="task-col">{{ row.core }}</td>
+                  <td>{{ fmtTime(row.totalNs) }}</td>
+                  <td>{{ fmtTime(row.longestNs) }}</td>
+                  <td>{{ row.fragments }}</td>
+                  <td>{{ fmtTime(row.p95Ns) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize idle analysis table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('idle', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      v-if="trace?.hasSyncObjectInstrumentation"
+      :section-id="'sync_level'"
+      :order="sectionOrderIndex('sync_level')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Queue Backlog / Semaphore Level (A8) -->
+      <StatsSectionHeader
+        :section-id="'sync_level'"
+        :collapsed="syncLevelCollapsed"
+        :pinned="isSectionPinned('sync_level')"
+        @toggle="toggleSectionCollapse('sync_level')"
+        @toggle-pin="toggleSectionPin('sync_level')"
+      >
+        Queue Backlog / Semaphore Level{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!syncLevelCollapsed">
+        <div
+          v-if="sortedSyncLevelStats.length === 0"
+          class="range-hint"
+        >
+          No queue / semaphore events in this scope
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <p class="detail-note">
+            Level = give/send minus take/recv, floored at 0. Starved = take/recv attempted on an empty object.
+          </p>
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('sync_level') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('sync_level', 'label')" @click="toggleTableSort('sync_level', 'label')">Object</th>
+                  <th :class="thSortClass('sync_level', 'kind')" @click="toggleTableSort('sync_level', 'kind')">Kind</th>
+                  <th :class="thSortClass('sync_level', 'maxLevel')" @click="toggleTableSort('sync_level', 'maxLevel')">Peak</th>
+                  <th :class="thSortClass('sync_level', 'timeAtMax')" @click="toggleTableSort('sync_level', 'timeAtMax')">Time at peak</th>
+                  <th :class="thSortClass('sync_level', 'endLevel')" @click="toggleTableSort('sync_level', 'endLevel')">End level</th>
+                  <th :class="thSortClass('sync_level', 'starved')" @click="toggleTableSort('sync_level', 'starved')">Starved</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedSyncLevelStats"
+                  :key="row.key"
+                >
+                  <td class="task-col">{{ row.label }}</td>
+                  <td>{{ row.kind }}</td>
+                  <td>{{ row.maxLevel }}</td>
+                  <td>{{ fmtTime(row.timeAtMaxNs) }}</td>
+                  <td>{{ row.endLevel }}</td>
+                  <td>{{ row.starved }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize sync level table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('sync_level', $event)"
+          />
+        </div>
+      </template>
+    </StatsSectionBlock>
+    <StatsSectionBlock
       v-if="(trace?.coreNames?.length > 0) || switchOverheadStats.length"
       :section-id="'switch_overhead'"
       :order="sectionOrderIndex('switch_overhead')"
@@ -2544,6 +2987,18 @@
                     Boosted
                   </th>
                   <th
+                    :class="thSortClass('priority', 'invertWorst')"
+                    @click="toggleTableSort('priority', 'invertWorst')"
+                  >
+                    Invert (worst)
+                  </th>
+                  <th
+                    :class="thSortClass('priority', 'invertTotal')"
+                    @click="toggleTableSort('priority', 'invertTotal')"
+                  >
+                    Invert (total)
+                  </th>
+                  <th
                     :class="thSortClass('priority', 'pattern')"
                     @click="toggleTableSort('priority', 'pattern')"
                   >
@@ -2568,6 +3023,8 @@
                   <td>{{ row.peakPri }}</td>
                   <td>{{ row.episodeCount }}</td>
                   <td>{{ row.total }}</td>
+                  <td>{{ row.invertWorst }}</td>
+                  <td>{{ row.invertTotal }}</td>
                   <td>
                     <span
                       class="priority-pattern"
@@ -2668,6 +3125,32 @@
                     Avg hold
                   </th>
                   <th
+                    :class="thSortClass('sync', 'p95Hold')"
+                    @click="toggleTableSort('sync', 'p95Hold')"
+                  >
+                    p95 hold
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'p99Hold')"
+                    @click="toggleTableSort('sync', 'p99Hold')"
+                  >
+                    p99 hold
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'waiters')"
+                    @click="toggleTableSort('sync', 'waiters')"
+                    title="Distinct tasks that acquired while the object was already held (whole trace)"
+                  >
+                    Waiters
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'maxNest')"
+                    @click="toggleTableSort('sync', 'maxNest')"
+                    title="Deepest simultaneously-open takes (whole trace)"
+                  >
+                    MaxNest
+                  </th>
+                  <th
                     :class="thSortClass('sync', 'status')"
                     @click="toggleTableSort('sync', 'status')"
                   >
@@ -2692,6 +3175,10 @@
                     {{ row.holdCount ? row.bouncePct.toFixed(1) + '%' : '—' }}
                   </td>
                   <td>{{ row.avgHold }}</td>
+                  <td>{{ row.p95Hold }}</td>
+                  <td>{{ row.p99Hold }}</td>
+                  <td :class="row.waiters >= 3 ? 'sev-warning' : ''">{{ row.waiters }}</td>
+                  <td>{{ row.maxNest }}</td>
                   <td :class="syncStatusClass(row.status)">
                     {{ row.statusLabel }}
                   </td>
@@ -3007,6 +3494,10 @@
                   <th :class="thSortClass('queue', 'bounces')" @click="toggleTableSort('queue', 'bounces')">Bounces</th>
                   <th :class="thSortClass('queue', 'bouncePct')" @click="toggleTableSort('queue', 'bouncePct')" title="Share of holds that crossed a core boundary">Bounce %</th>
                   <th :class="thSortClass('queue', 'avg')" @click="toggleTableSort('queue', 'avg')">Avg hold</th>
+                  <th :class="thSortClass('queue', 'p95Hold')" @click="toggleTableSort('queue', 'p95Hold')">p95 hold</th>
+                  <th :class="thSortClass('queue', 'p99Hold')" @click="toggleTableSort('queue', 'p99Hold')">p99 hold</th>
+                  <th :class="thSortClass('queue', 'waiters')" @click="toggleTableSort('queue', 'waiters')" title="Distinct tasks that acquired while already held (whole trace)">Waiters</th>
+                  <th :class="thSortClass('queue', 'maxNest')" @click="toggleTableSort('queue', 'maxNest')" title="Deepest simultaneously-open takes (whole trace)">MaxNest</th>
                   <th :class="thSortClass('queue', 'status')" @click="toggleTableSort('queue', 'status')">Status</th>
                 </tr>
               </thead>
@@ -3019,6 +3510,10 @@
                   <td :class="row.bounceCount > 0 ? 'sev-warning' : ''">{{ row.bounceCount ?? 0 }}</td>
                   <td :class="row.holdCount && row.bouncePct >= 25 ? 'sev-warning' : ''">{{ row.holdCount ? row.bouncePct.toFixed(1) + '%' : '—' }}</td>
                   <td>{{ row.avgHold }}</td>
+                  <td>{{ row.p95Hold }}</td>
+                  <td>{{ row.p99Hold }}</td>
+                  <td :class="row.waiters >= 3 ? 'sev-warning' : ''">{{ row.waiters }}</td>
+                  <td>{{ row.maxNest }}</td>
                   <td :class="syncStatusClass(row.status)">{{ row.statusLabel }}</td>
                 </tr>
               </tbody>
@@ -4392,6 +4887,9 @@ import {
   allTimingSamples,
   resolutionNote,
 } from '../utils/statsAnalysis.js'
+import { switchReasonRows, schedLoadOverTimeRows } from '../utils/schedulingLoad.js'
+import { activationLatencyRows, readyGapRows } from '../utils/timingLatency.js'
+import { idleAnalysisRows, syncLevelRows } from '../utils/idleSyncLevel.js'
 import {
   intervalStatsRows,
   intervalPlotPoints,
@@ -4460,6 +4958,12 @@ import {
   SYNC_ISSUE_SORT_ACCESSORS,
   CORE_BREAKDOWN_SORT_ACCESSORS,
   CONCURRENCY_SORT_ACCESSORS,
+  SWITCH_REASON_SORT_ACCESSORS,
+  SCHED_LOAD_SORT_ACCESSORS,
+  ACTIVATION_SORT_ACCESSORS,
+  READY_GAP_SORT_ACCESSORS,
+  IDLE_SORT_ACCESSORS,
+  SYNC_LEVEL_SORT_ACCESSORS,
   SWITCH_OVERHEAD_SORT_ACCESSORS,
   DISPATCH_SORT_ACCESSORS,
   CORE_PAIR_SORT_ACCESSORS,
@@ -4591,6 +5095,12 @@ const tagsCollapsed = ref(defaultSectionCollapsed('tags'))
 const corePairsCollapsed = ref(defaultSectionCollapsed('core_pairs'))
 const coreBreakdownCollapsed = ref(defaultSectionCollapsed('core_breakdown'))
 const concurrencyCollapsed = ref(defaultSectionCollapsed('concurrency'))
+const switchReasonCollapsed = ref(defaultSectionCollapsed('switch_reason'))
+const schedLoadCollapsed = ref(defaultSectionCollapsed('sched_load'))
+const activationCollapsed = ref(defaultSectionCollapsed('activation'))
+const readyGapCollapsed = ref(defaultSectionCollapsed('ready_gap'))
+const idleCollapsed = ref(defaultSectionCollapsed('idle'))
+const syncLevelCollapsed = ref(defaultSectionCollapsed('sync_level'))
 const switchOverheadCollapsed = ref(defaultSectionCollapsed('switch_overhead'))
 const dispatchCollapsed = ref(defaultSectionCollapsed('dispatch'))
 const affinityCollapsed = ref(defaultSectionCollapsed('affinity'))
@@ -4640,6 +5150,12 @@ const SECTION_COLLAPSE_REFS = {
   cores: coresCollapsed,
   core_breakdown: coreBreakdownCollapsed,
   concurrency: concurrencyCollapsed,
+  switch_reason: switchReasonCollapsed,
+  sched_load: schedLoadCollapsed,
+  activation: activationCollapsed,
+  ready_gap: readyGapCollapsed,
+  idle: idleCollapsed,
+  sync_level: syncLevelCollapsed,
   switch_overhead: switchOverheadCollapsed,
   tasks: tasksCollapsed,
   health: healthCollapsed,
@@ -5036,6 +5552,12 @@ const DEFAULT_LOCAL_SECTION_HEIGHTS = {
   intervals: STATS_TABLE_DEFAULT_H,
   tags: STATS_TABLE_DEFAULT_H,
   concurrency: STATS_TABLE_DEFAULT_H,
+  switch_reason: STATS_TABLE_DEFAULT_H,
+  sched_load: STATS_TABLE_DEFAULT_H,
+  activation: STATS_TABLE_DEFAULT_H,
+  ready_gap: STATS_TABLE_DEFAULT_H,
+  idle: STATS_TABLE_DEFAULT_H,
+  sync_level: STATS_TABLE_DEFAULT_H,
   switch_overhead: STATS_TABLE_DEFAULT_H,
 }
 const localSectionHeights = ref({ ...DEFAULT_LOCAL_SECTION_HEIGHTS })
@@ -5076,6 +5598,12 @@ const tableSort = ref({
   tags: defaultStatsTableSort(),
   core_breakdown: defaultStatsTableSort(),
   concurrency: defaultStatsTableSort(),
+  switch_reason: defaultStatsTableSort(),
+  sched_load: defaultStatsTableSort(),
+  activation: defaultStatsTableSort(),
+  ready_gap: defaultStatsTableSort(),
+  idle: defaultStatsTableSort(),
+  sync_level: defaultStatsTableSort(),
   switch_overhead: defaultStatsTableSort(),
   core_pairs: defaultStatsTableSort(),
   queue: defaultStatsTableSort(),
@@ -6104,6 +6632,92 @@ const concurrentCoreStats = computed(() => {
 
 const sortedConcurrentCoreStats = computed(() =>
   sortStatsRows(concurrentCoreStats.value, tableSort.value.concurrency, CONCURRENCY_SORT_ACCESSORS))
+
+// Review item A1 — Switch Reason Breakdown.
+const switchReasonStats = computed(() => {
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  return switchReasonRows(tr, r?.lo ?? null, r?.hi ?? null)
+})
+const sortedSwitchReasonStats = computed(() =>
+  sortStatsRows(switchReasonStats.value, tableSort.value.switch_reason, SWITCH_REASON_SORT_ACCESSORS))
+
+// Review items A2 + A9 — Scheduling Load Over Time.
+const schedLoadStats = computed(() => {
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  return schedLoadOverTimeRows(tr, uxEvents.value, r?.lo ?? null, r?.hi ?? null)
+})
+const sortedSchedLoadStats = computed(() =>
+  sortStatsRows(schedLoadStats.value, tableSort.value.sched_load, SCHED_LOAD_SORT_ACCESSORS))
+
+// Review item A3 — Activation Latency (vs. a fitted periodic grid).
+const activationStats = computed(() => {
+  if (activationCollapsed.value) return []
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  return activationLatencyRows(tr, uxEvents.value, r?.lo ?? null, r?.hi ?? null)
+})
+const sortedActivationStats = computed(() =>
+  sortStatsRows(activationStats.value, tableSort.value.activation, ACTIVATION_SORT_ACCESSORS))
+
+// Review item A4 — Ready-Gap (Starvation).
+const readyGapStats = computed(() => {
+  if (readyGapCollapsed.value) return []
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  return readyGapRows(tr, r?.lo ?? null, r?.hi ?? null)
+})
+const sortedReadyGapStats = computed(() =>
+  sortStatsRows(readyGapStats.value, tableSort.value.ready_gap, READY_GAP_SORT_ACCESSORS))
+
+// Review item A5 — Idle Analysis (per core + longest all-cores-idle window).
+const idleModel = computed(() => {
+  if (idleCollapsed.value) return { rows: [], allIdleSpanNs: 0, allIdleStartNs: 0 }
+  const tr = props.trace
+  if (!tr) return { rows: [], allIdleSpanNs: 0, allIdleStartNs: 0 }
+  const r = statsRange.value
+  return idleAnalysisRows(tr, r?.lo ?? null, r?.hi ?? null)
+})
+const sortedIdleStats = computed(() =>
+  sortStatsRows(idleModel.value.rows, tableSort.value.idle, IDLE_SORT_ACCESSORS))
+
+// Review item A8 — Queue Backlog / Semaphore Level.
+const syncLevelStats = computed(() => {
+  if (syncLevelCollapsed.value) return []
+  const tr = props.trace
+  if (!tr?.hasSyncObjectInstrumentation) return []
+  const r = statsRange.value
+  return syncLevelRows(tr, r?.lo ?? null, r?.hi ?? null)
+})
+const sortedSyncLevelStats = computed(() =>
+  sortStatsRows(syncLevelStats.value, tableSort.value.sync_level, SYNC_LEVEL_SORT_ACCESSORS))
+
+function fmtRatePerS(rate) {
+  if (rate == null) return '—'
+  if (Math.abs(rate) < 0.005) return '0/s'
+  return `${rate.toFixed(2)}/s`
+}
+// Mirror the desktop `_sl_ev` -> `_activate_ux_event`: a scheduling-load row is a
+// time bin, so selecting it marks the whole bin range on the timeline (not just a
+// cursor drop at its start).
+function onSchedLoadRowClick(row) {
+  if (!row) return
+  const note = `${row.busiestCore || 'CPU'} — episode`
+  emit('plotPointActivate', { ns: row.jumpNs, note, segment: null })
+  emit('exploreRange', {
+    lo: row.start,
+    hi: Math.max(row.stop, row.start + 1),
+    mk: '',
+    section: 'sched_load',
+    note,
+    ns: row.jumpNs,
+  })
+}
 
 const switchOverheadStats = computed(() => {
   const tr = props.trace
@@ -7578,9 +8192,12 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
         `<tr><td>${_htmlCell(row.label)}</td><td>${_htmlCell(row.kind)}</td><td>${row.holdCount}</td><td>${row.issueCount}</td>`
         + `<td class="${row.bounceCount > 0 ? 'sev-warning' : ''}">${row.bounceCount ?? 0}</td>`
         + syncBouncePctCell(row)
-        + `<td>${_htmlCell(row.avgHold)}</td><td class="${syncStatusClass(row.status)}">${_htmlCell(row.statusLabel)}</td></tr>`,
+        + `<td>${_htmlCell(row.avgHold)}</td>`
+        + `<td>${_htmlCell(row.p95Hold ?? '—')}</td><td>${_htmlCell(row.p99Hold ?? '—')}</td>`
+        + `<td>${row.waiters ?? 0}</td><td>${row.maxNest ?? 0}</td>`
+        + `<td class="${syncStatusClass(row.status)}">${_htmlCell(row.statusLabel)}</td></tr>`,
       ).join('')
-    : '<tr><td colspan="8" class="empty">No mutex/sem activity in scope</td></tr>'
+    : '<tr><td colspan="12" class="empty">No mutex/sem activity in scope</td></tr>'
   const issueBody = issues.length
     ? issues.map(iss =>
         `<tr><td>${_htmlCell(iss.objKey || '—')}</td><td>${_htmlCell(formatTime(iss.timeNs, tr.timeScale))}</td><td>${_htmlCell(iss.detail)}</td><td class="${_issueSeverityClass(iss.severity)}">${_htmlCell(iss.kind)}</td><td>${_htmlCell(iss.taskLabel || '—')}</td><td>${_htmlCell(iss.core || '')}</td></tr>`,
@@ -7595,7 +8212,8 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
     ? '<p class="detail-note">Showing longest 150 hold episodes in scope.</p>'
     : ''
   return `<section class="report-card"><h2>Mutex / Semaphore${_htmlCell(suffix)}</h2>
-    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>Status</th></tr></thead>
+    <p class="detail-note">Waiters = distinct tasks that acquired while already held; MaxNest = deepest simultaneously-open takes (both over the whole trace).</p>
+    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>p95 hold</th><th>p99 hold</th><th>Waiters</th><th>MaxNest</th><th>Status</th></tr></thead>
     <tbody>${summaryBody}</tbody></table>
     <h3 class="sub">Pairing issues</h3>
     <table><thead><tr><th>Object</th><th>Time</th><th>Detail</th><th>Issue</th><th>Task</th><th>Core</th></tr></thead>
@@ -7611,9 +8229,9 @@ function _renderPriorityReportHtml(tr, lo, hi, suffix) {
   const episodes = priorityEpisodeDetailRows(tr, lo, hi, 200)
   const summaryBody = priorityHtmlRows.length
     ? priorityHtmlRows.map(row =>
-        `<tr><td>${_htmlCell(row.label)}</td><td>${row.basePri}</td><td>${row.peakPri}</td><td>${row.episodeCount}</td><td>${_htmlCell(row.total)}</td><td>${_htmlCell(row.pattern)}</td></tr>`,
+        `<tr><td>${_htmlCell(row.label)}</td><td>${row.basePri}</td><td>${row.peakPri}</td><td>${row.episodeCount}</td><td>${_htmlCell(row.total)}</td><td>${_htmlCell(row.invertWorst)}</td><td>${_htmlCell(row.invertTotal)}</td><td>${_htmlCell(row.pattern)}</td></tr>`,
       ).join('')
-    : '<tr><td colspan="6" class="empty">No priority boosts in scope</td></tr>'
+    : '<tr><td colspan="8" class="empty">No priority boosts in scope</td></tr>'
   const epBody = episodes.length
     ? episodes.map(ep =>
         `<tr><td>${_htmlCell(ep.task)}</td><td>${ep.basePri}→${ep.peakPri}</td><td>${_htmlCell(ep.start)}</td><td>${_htmlCell(ep.stop)}</td><td>${_htmlCell(ep.duration)}</td><td>${_htmlCell(ep.pattern)}</td></tr>`,
@@ -7623,7 +8241,8 @@ function _renderPriorityReportHtml(tr, lo, hi, suffix) {
     ? '<p class="detail-note">Showing first 200 boost episodes in scope (by start time).</p>'
     : ''
   return `<section class="report-card"><h2>Priority Inheritance${_htmlCell(suffix)}</h2>
-    <table><thead><tr><th>Task</th><th>Base</th><th>Peak</th><th>Boosts</th><th>Boosted</th><th>Pattern</th></tr></thead>
+    <p class="detail-note">Invert = time a medium-priority task ran while the boosted holder did not.</p>
+    <table><thead><tr><th>Task</th><th>Base</th><th>Peak</th><th>Boosts</th><th>Boosted</th><th>Invert (worst)</th><th>Invert (total)</th><th>Pattern</th></tr></thead>
     <tbody>${summaryBody}</tbody></table>
     <h3 class="sub">Boost episodes</h3>
     ${epNote}
@@ -7907,6 +8526,37 @@ function exportHtml() {
         `<tbody>${body}</tbody></table></section>`
     })()}
     ${(() => {
+      const srRows = switchReasonRows(tr, lo, hi)
+      const body = srRows.length
+        ? srRows.map(r =>
+            `<tr><td>${_htmlCell(r.name)}</td><td>${r.preempted}</td><td>${r.blocked}</td>` +
+            `<td>${r.suspended}</td><td>${r.periodWait}</td><td>${r.unknown}</td><td>${r.total}</td>` +
+            `<td>${_htmlCell(fmtRatePerS(r.preemptRate))}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="8" class="empty">No off-CPU switches in scope</td></tr>'
+      return `<section class="report-card"><h2>Switch Reason Breakdown${_htmlCell(suffix)}</h2>` +
+        '<p class="detail-note">Heuristic: Preempted = another task ran on the core; ' +
+        'Blocked = STI take/recv; Suspended = STI suspend; Period = only IDLE ran; Other = no signal.</p>' +
+        '<table><thead><tr><th>Task</th><th>Preempted</th><th>Blocked</th><th>Suspended</th>' +
+        '<th>Period</th><th>Other</th><th>Total</th><th>Preempt/s</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const slRows = schedLoadOverTimeRows(tr, harvestUxEvents(tr, lo, hi), lo, hi)
+      const body = slRows.length
+        ? slRows.map(r =>
+            `<tr><td>${_htmlCell(formatTime(r.start, tr.timeScale))}</td><td>${r.ctx}</td>` +
+            `<td>${Math.round(r.ctxPerS).toLocaleString()}</td>` +
+            `<td>${_htmlCell(r.busiestCore || '—')}</td><td>${r.sigmaPct.toFixed(1)}%</td>` +
+            `<td>${r.lbScore == null ? '—' : Math.round(r.lbScore)}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="6" class="empty">No on-CPU slices in scope</td></tr>'
+      return `<section class="report-card"><h2>Scheduling Load Over Time${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Time</th><th>Ctx sw</th><th>Ctx sw/s</th><th>Busiest core</th>' +
+        '<th>Util &#963;</th><th>LB score</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
       const swRows = switchOverheadRows(tr, lo, hi)
       const body = swRows.length
         ? swRows.map(r =>
@@ -7928,6 +8578,25 @@ function exportHtml() {
         swNote +
         '<table><thead><tr><th>Core</th><th>Switches</th><th>Min</th><th>Avg</th>' +
         '<th>Max</th><th>Total Overhead</th><th>% of Core</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const { rows, allIdleSpanNs, allIdleStartNs } = idleAnalysisRows(tr, lo, hi)
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.core)}</td>` +
+            `<td>${_htmlCell(formatTime(r.totalNs, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.longestNs, tr.timeScale))}</td>` +
+            `<td>${r.fragments}</td>` +
+            `<td>${_htmlCell(formatTime(r.p95Ns, tr.timeScale))}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="5" class="empty">No idle time in scope</td></tr>'
+      const note = allIdleSpanNs > 0
+        ? `<p class="detail-note">Longest all-cores-idle window: ${_htmlCell(formatTime(allIdleSpanNs, tr.timeScale))} at ${_htmlCell(formatTime(allIdleStartNs, tr.timeScale))}.</p>`
+        : ''
+      return `<section class="report-card"><h2>Idle Analysis${_htmlCell(suffix)}</h2>` + note +
+        '<table><thead><tr><th>Core</th><th>Idle total</th><th>Longest</th>' +
+        '<th>Frags</th><th>p95</th></tr></thead>' +
         `<tbody>${body}</tbody></table></section>`
     })()}
     ${taskHtml}
@@ -8137,6 +8806,48 @@ function exportHtml() {
     })()}
     ${_renderHtmlTableReport(`Inter-Arrival Time${suffix}`, interReportRows)}
     ${(() => {
+      const rows = activationLatencyRows(tr, harvestUxEvents(tr, lo, hi), lo, hi)
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.name)}</td><td>${r.count}</td>` +
+            `<td>${_htmlCell(formatTime(r.minNs, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.avgNs, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.maxNs, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.jitterNs, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.sigmaNs, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p50Ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p95Ns, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p99Ns, tr.timeScale))}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="10" class="empty">Need at least 3 activations per periodic task</td></tr>'
+      return `<section class="report-card"><h2>Activation Latency${_htmlCell(suffix)}</h2>` +
+        '<p class="detail-note">Error = distance from a fitted periodic grid ' +
+        '(&#966; + k&#183;T, T = p50 inter-arrival), anchored at the first activation in scope.</p>' +
+        '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th><th>Avg</th>' +
+        '<th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const rows = readyGapRows(tr, lo, hi)
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.name)}</td><td>${r.count}</td>` +
+            `<td>${_htmlCell(formatTime(r.longestNs, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.totalNs, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.avgNs, tr.timeScale))}</td>` +
+            `<td>${_htmlCell(formatTime(r.p95Ns, tr.timeScale))}</td>` +
+            `<td>${Math.round(r.preemptPct)}%</td></tr>`
+          ).join('')
+        : '<tr><td colspan="7" class="empty">No ready-gaps in scope</td></tr>'
+      return `<section class="report-card"><h2>Ready-Gap (Starvation)${_htmlCell(suffix)}</h2>` +
+        '<p class="detail-note">Off-CPU gaps where the task was arguably runnable: ' +
+        'preempted, blocked on a lock, or unattributed. Sleep and period-wait excluded. ' +
+        '% preempt is the preempted share of the total.</p>' +
+        '<table><thead><tr><th>Task</th><th>Gaps</th><th>Longest</th><th>Total</th>' +
+        '<th>Avg</th><th>p95</th><th>% preempt</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
       const rows = periodRows.value
       const body = rows.length
         ? rows.map(r =>
@@ -8277,12 +8988,33 @@ function exportHtml() {
         `<td class="${r.bounceCount > 0 ? 'sev-warning' : ''}">${r.bounceCount ?? 0}</td>` +
         syncBouncePctCell(r) +
         `<td>${_htmlCell(r.avgHold)}</td>` +
+        `<td>${_htmlCell(r.p95Hold ?? '—')}</td><td>${_htmlCell(r.p99Hold ?? '—')}</td>` +
+        `<td>${r.waiters ?? 0}</td><td>${r.maxNest ?? 0}</td>` +
         `<td class="${r.status !== 'ok' ? (r.status === 'error' ? 'sev-error' : 'sev-warning') : ''}">${_htmlCell(r.statusLabel)}</td></tr>`
       ).join('')
       return `<section class="report-card"><h2>Queue${_htmlCell(suffix)}</h2>` +
         '<table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th>' +
-        '<th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>Status</th></tr></thead>' +
+        '<th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th>' +
+        '<th>p95 hold</th><th>p99 hold</th><th>Waiters</th><th>MaxNest</th>' +
+        '<th>Status</th></tr></thead>' +
         `<tbody>${qBody}</tbody></table></section>`
+    })() : ''}
+    ${tr?.hasSyncObjectInstrumentation ? (() => {
+      const rows = syncLevelRows(tr, lo, hi)
+      const body = rows.length
+        ? rows.map(r =>
+            `<tr><td>${_htmlCell(r.label)}</td><td>${_htmlCell(r.kind)}</td>` +
+            `<td>${r.maxLevel}</td>` +
+            `<td>${_htmlCell(formatTime(r.timeAtMaxNs, tr.timeScale))}</td>` +
+            `<td>${r.endLevel}</td><td>${r.starved}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="6" class="empty">No queue / semaphore events in scope</td></tr>'
+      return `<section class="report-card"><h2>Queue Backlog / Semaphore Level${_htmlCell(suffix)}</h2>` +
+        '<p class="detail-note">Level = give/send minus take/recv, floored at 0. ' +
+        'Starved = take/recv attempted on an empty object.</p>' +
+        '<table><thead><tr><th>Object</th><th>Kind</th><th>Peak</th>' +
+        '<th>Time at peak</th><th>End level</th><th>Starved</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
     })() : ''}
     ${_renderIntervalReportHtml(tr, lo, hi, suffix)}
     ${_renderTagReportHtml(tr, lo, hi, suffix)}

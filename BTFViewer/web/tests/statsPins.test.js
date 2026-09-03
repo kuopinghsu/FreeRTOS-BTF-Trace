@@ -10,6 +10,7 @@ import {
   defaultStatsPresentation,
   mergeSectionCollapsed,
   normalizeStatsPins,
+  normalizeStatsSectionOrder,
   statsCategoryBadgeColors,
   statsTraceIsSmpActive,
   toggleStatsPin,
@@ -103,5 +104,31 @@ describe('statsPins', () => {
     assert.deepEqual(statsCategoryBadgeColors('TIMING', true), {
       bg: '#243449', fg: '#A9C5E8', border: '#47658A',
     })
+  })
+
+  it('section order: heals catalogue with IDs tacked on at the end', () => {
+    const cat = [...STATS_PINNABLE_SECTIONS]
+    const stale = [...cat.slice(0, 22), ...cat.slice(24), ...cat.slice(22, 24)]
+    assert.notDeepEqual(stale, cat)
+    assert.deepEqual(normalizeStatsSectionOrder(stale), cat)
+  })
+
+  it('section order: splices a missing section into its group', () => {
+    const cat = [...STATS_PINNABLE_SECTIONS]
+    const older = cat.filter((_, i) => i !== 10)
+    assert.deepEqual(normalizeStatsSectionOrder(older), cat)
+  })
+
+  it('section order: keeps a deliberately dragged order', () => {
+    const cat = [...STATS_PINNABLE_SECTIONS]
+    const dragged = [cat[7], ...cat.filter((_, i) => i !== 7)]
+    assert.deepEqual(normalizeStatsSectionOrder(dragged), dragged)
+  })
+
+  it('section order: partial list still fills the catalogue', () => {
+    const out = normalizeStatsSectionOrder('tags,cores')
+    assert.deepEqual(out.slice(0, 2), ['tags', 'cores'])
+    assert.equal(out.length, STATS_PINNABLE_SECTIONS.length)
+    assert.deepEqual([...out].sort(), [...STATS_PINNABLE_SECTIONS].sort())
   })
 })

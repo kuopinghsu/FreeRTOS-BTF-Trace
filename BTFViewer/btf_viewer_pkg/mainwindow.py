@@ -1380,6 +1380,12 @@ class _IconRail(QWidget):
                 b.setChecked(True)
                 b.blockSignals(False)
 
+    def button(self, index: int) -> Optional[QToolButton]:
+        """The rail button for panel *index* (Statistics=0 … AI=4), or None."""
+        if 0 <= index < len(self._buttons):
+            return self._buttons[index]
+        return None
+
     def set_item_visible(self, index: int, visible: bool) -> None:
         if 0 <= index < len(self._buttons):
             self._buttons[index].setVisible(bool(visible))
@@ -4820,7 +4826,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             }}
             QWidget#demo_status_banner QComboBox {{
                 background:#16303c; color:#cdefff; border:1px solid #2a5a70;
-                padding:0 4px; min-height:1.4em; font-size:11px;
+                border-radius:4px; padding:2px 6px; min-height:20px; font-size:11px;
+            }}
+            QWidget#demo_status_banner QComboBox::drop-down {{
+                border:none; width:16px;
+            }}
+            QWidget#demo_status_banner QComboBox QAbstractItemView {{
+                background:#16303c; color:#cdefff; border:1px solid #2a5a70;
+                padding:2px; outline:0;
+                selection-background-color:#2a5a70; selection-color:#ffffff;
+                font-size:11px;
+            }}
+            QWidget#demo_status_banner QComboBox QAbstractItemView::item {{
+                padding:4px 8px; min-height:1.7em;
             }}
             QWidget#demo_status_banner QLabel {{
                 color:#cdefff; font-size:12px;
@@ -8094,6 +8112,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return self._demo_widget_screen_center(tb.widgetForAction(action))
 
     def _demo_panel_tab_center(self, index: int) -> dict:
+        idx = int(index)
+        # Right-panel redesign: the QTabBar is hidden and navigation moved to
+        # the vertical icon rail.  Point demo <move target="*_tab"/> at the
+        # rail button so the pointer lands on the real, visible control
+        # (web parity: App.vue .icon-rail).  The hidden tab bar is only a
+        # fallback when the rail is somehow unavailable.
+        rail = getattr(self, "_icon_rail", None)
+        btn = rail.button(idx) if rail is not None else None
+        if btn is not None and btn.isVisible():
+            return self._demo_widget_screen_center(btn)
         tabs = getattr(self, "_panel_tabs", None)
         if tabs is None:
             raise ValueError("demo target panel tabs missing")
@@ -8101,7 +8129,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.processEvents()
-        r = bar.tabRect(int(index))
+        r = bar.tabRect(idx)
         p = bar.mapToGlobal(r.center())
         return {"x": int(p.x()), "y": int(p.y())}
 

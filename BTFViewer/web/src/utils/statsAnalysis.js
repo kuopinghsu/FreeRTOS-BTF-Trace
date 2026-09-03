@@ -530,3 +530,112 @@ export function preemptionChainPlotPoints(trace, victimMk, preemptorDisp, lo, hi
       payload: ev.payload,
     }))
 }
+
+// ---------------------------------------------------------------------------
+// Off-CPU gap classification (review items A1 Switch Reason, A4 Ready-Gap).
+// Parity with parser.py `_classify_offcpu_gaps`.
+// ---------------------------------------------------------------------------
+
+const OFFCPU_STI_WINDOW = 50
+export const OFFCPU_GAP_KINDS = ['preempted', 'blocked', 'suspended', 'period_wait', 'unknown']
+
+function hasTimeNear(sortedTimes, t, window) {
+  const i = bisectLeft(sortedTimes, t - window)
+  return i < sortedTimes.length && sortedTimes[i] <= t + window
+}
+
+function hasSyncCause(sortedTimes, cores, t, core, window) {
+  let i = bisectLeft(sortedTimes, t - window)
+  while (i < sortedTimes.length && sortedTimes[i] <= t + window) {
+    if (cores[i] === core) return true
+    i += 1
+  }
+  return false
+}
+
+/**
+ * Per task (merge key) → array of `[gapNs, kind]` for every off-CPU gap between
+ * consecutive slices. `kind` ∈ OFFCPU_GAP_KINDS.
+ * @returns {Map<string, Array<[number, string]>>}
+ */
+export function classifyOffCpuGaps(trace, lo, hi) {
+  const out = new Map()
+  const coreSegs = trace?.coreSegs
+  if (!coreSegs || !trace?.segByMergeKey) return out
+  const coreStarts = new Map()
+  for (const [core, segs] of coreSegs) coreStarts.set(core, segs.map(s => s.start))
+
+  const syncTimes = []
+  const syncCores = []
+  const byTgt = trace.stiEventsByTarget
+  for (const tgt of ['mutex', 'sem', 'queue']) {
+    for (const ev of (byTgt?.get?.(tgt) || [])) {
+      const note = ev.note || ''
+      if (note.startsWith('take') || note.startsWith('recv')) {
+        syncTimes.push(ev.time)
+        syncCores.push(ev.core)
+      }
+    }
+  }
+  // sort the two parallel arrays by time
+  const order = syncTimes.map((_, i) => i).sort((a, b) => syncTimes[a] - syncTimes[b])
+  const st = order.map(i => syncTimes[i])
+  const sc = order.map(i => syncCores[i])
+
+  const suspendByMk = new Map()
+  for (const ev of (byTgt?.get?.('task') || [])) {
+    const note = ev.note || ''
+    if (!note.startsWith('suspend')) continue
+    const m = /^suspend\s+(.+)$/.exec(note)
+    if (!m) continue
+    const smk = taskMergeKey(m[1].trim())
+    if (!suspendByMk.has(smk)) suspendByMk.set(smk, [])
+    suspendByMk.get(smk).push(ev.time)
+  }
+  for (const lst of suspendByMk.values()) lst.sort((a, b) => a - b)
+
+  for (const [mk, segs] of trace.segByMergeKey) {
+    if (!segs || segs.length < 2) continue
+    const { name: tname } = parseTaskName(taskReprGet(trace, mk) || mk)
+    if (isIdleTaskName(tname) || tname === 'TICK') continue
+    const ordered = [...segs].sort((a, b) => a.start - b.start)
+    const gaps = []
+    const susp = suspendByMk.get(mk) || []
+    for (let i = 1; i < ordered.length; i++) {
+      const prev = ordered[i - 1]
+      const nxt = ordered[i]
+      const g0 = prev.end
+      const g1 = nxt.start
+      if (g1 <= g0) continue
+      if (lo != null && hi != null && !(segFullyInRange(prev, lo, hi) && segFullyInRange(nxt, lo, hi))) continue
+      const gap = g1 - g0
+      const core = prev.core
+      const cslist = coreSegs.get(core) || []
+      const cstarts = coreStarts.get(core) || []
+      let nonIdle = 0
+      let idle = 0
+      let j = Math.max(0, bisectRight(cstarts, g1 - 1) - 1)
+      for (; j < cslist.length; j++) {
+        const cs = cslist[j]
+        if (cs.start >= g1) break
+        if (cs.end <= g0) continue
+        const ov = Math.min(cs.end, g1) - Math.max(cs.start, g0)
+        if (ov <= 0) continue
+        const cmk = taskMergeKey(cs.task)
+        if (cmk === mk) continue
+        const cn = parseTaskName(taskReprGet(trace, cmk) || cs.task).name
+        if (isIdleTaskName(cn)) idle += ov
+        else if (cn !== 'TICK') nonIdle += ov
+      }
+      let kind
+      if (nonIdle > 0) kind = 'preempted'
+      else if (susp.length && hasTimeNear(susp, g0, OFFCPU_STI_WINDOW)) kind = 'suspended'
+      else if (hasSyncCause(st, sc, g0, core, OFFCPU_STI_WINDOW)) kind = 'blocked'
+      else if (idle >= 0.8 * gap) kind = 'period_wait'
+      else kind = 'unknown'
+      gaps.push([gap, kind])
+    }
+    if (gaps.length) out.set(mk, gaps)
+  }
+  return out
+}

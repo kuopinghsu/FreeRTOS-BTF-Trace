@@ -260,8 +260,14 @@ The table below identifies the strongest dependencies. “Requires” describes 
 | Blocking Time | Consecutive task slices | Preemption, Mutex Blocking, Period |
 | Critical Path | Response windows and overlapping evidence | Execution, Blocking, Preemption, Migration |
 | Period / Inter-arrival | Consecutive activation starts | Unified Jitter, Deadline, Core Time |
+| Activation Latency | Activation starts plus fitted period T | Period / Jitter, Dispatch Latency, Ready-Gap |
+| Ready-Gap (Starvation) | Off-CPU gaps, same-core overlap, STI take/suspend | Preemption Chain, Priority, Mutex Blocking |
 | Migration statistics | Consecutive slices and core IDs | Affinity, Task × Core, Switch Overhead |
+| Idle Analysis | Per-core IDLE segments clipped to scope | Core Utilisation, Ready-Gap, Blocking Time |
+| Queue Backlog / Semaphore Level | STI give/send and take/recv per object | Mutex / Semaphore, Dispatch Latency, Ready-Gap |
 | Preemption statistics | Off-CPU gaps plus same-core overlap | Priority, Core Time, Timeline |
+| Switch Reason Breakdown | Off-CPU gaps, same-core overlap, STI take/suspend | Preemption Matrix, Preemption Chain, Priority |
+| Scheduling Load Over Time | Per-core slice starts and utilisation bins | Core Utilization Over Time, Task × Core, Core Utilisation |
 | Mutex statistics | STI synchronization events | Waiter × Owner, Priority, Timeline |
 | Queue statistics | STI queue events | Tags, Intervals, Timeline |
 | Intervals / Tags | Application STI events | Execution, Response, Timeline |
@@ -719,6 +725,28 @@ The example spans very short and much longer activation gaps, so the duration ax
 
 ![Inter-arrival time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-inter-cs11.svg)
 
+<a id="statistics-activation" name="statistics-activation"></a>
+### Activation Latency ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+For each periodic task, how far every actual activation lands from a fitted ideal periodic clock. Inter-Arrival and Period / Jitter measure each release against the *previous* release; a task can drift steadily against the schedule while every gap still looks close to `T`. Activation Latency measures each release against a fixed grid, so accumulating phase error shows up.
+
+**Calculation.** The period `T` is the p50 inter-arrival gap (the same value **Period / Jitter** calls "Expected"). The grid is `anchor + k·T`, anchored at the first activation in the current Scope. For activation `t`, the error is `min_k |t − (anchor + k·T)|` — the distance to the nearest grid point. The Min / Avg / Max / Jitter / σ / p50 / p95 / p99 columns summarise that error distribution, worst (largest Max) first. Needs at least three activations per task.
+
+**How to use it.** A near-zero row is a task locked to the schedule. A large Max with a small p50 is an occasional slip; a p50 that is itself large is steady phase drift — check the task's release path and any lower-priority work delaying it. Compare with **Dispatch / Scheduling Latency** (ready → running) and **Ready-Gap** to see whether the late release is the task itself or the scheduler. Click a row to highlight the task on the timeline.
+
+<a id="statistics-ready_gap" name="statistics-ready_gap"></a>
+### Ready-Gap (Starvation) ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Per task, the off-CPU time it spent while arguably able to run — a starvation view. Long or frequent ready-gaps mean the task wanted the CPU and did not get it.
+
+**Calculation.** Built on the same off-CPU gap classifier as **Switch Reason Breakdown**. Each gap between two consecutive slices of a task is labelled `preempted` (another task ran on its core), `blocked` (an STI take/recv ended the slice), `suspended` (STI suspend), `period_wait` (only IDLE ran), or `unknown`. Ready-Gap keeps the `preempted` / `blocked` / `unknown` gaps and drops `suspended` / `period_wait`, which are the task voluntarily off-CPU. Columns: gap count, Longest single gap, Total, Avg, p95, and **% preempt** — the preempted share of the total, so you can tell scheduling starvation (high %) from lock contention (low %). Sorted longest-gap first.
+
+**How to use it.** Rank by Longest or Total. A high **% preempt** points at priority or affinity — cross-check **Preemption Chain Analysis** and task priorities. A low **% preempt** means the gap is mostly `blocked`; follow it into **Mutex / Semaphore** and **Waiter × Owner**. `blocked` here is a heuristic (STI take/recv near the slice end), not a kernel-recorded wait. Click a row to highlight the task on the timeline.
+
 ## 4. SCHED — multicore scheduling and placement ![](../images/readme/h3.svg)
 
 These sections explain where tasks run, how they move, and which tasks interfere with one another.
@@ -861,7 +889,9 @@ Orange ranges show boosts. A red L/M/H pattern indicates that a medium-priority 
 
 **Calculation.** The create priority is the baseline. Later `set_priority` STI events define changes over time. A value above the baseline is shown as a boost. The L/M/H pattern combines low/base, medium, and high/boosted priority activity observed in the same episode.
 
-**How to use it.** Pair a boost with **Mutex / Semaphore**, **Waiter × Owner**, and task scheduling. A priority change can have an application-specific cause; it is not automatically priority inheritance. A boost usually shows that mitigation occurred, while the associated wait duration shows whether latency remains important.
+**Columns.** `Boosted` is the total time the task spent above its base priority. `Invert (worst)` / `Invert (total)` are the *measured* priority-inversion duration: for each boost episode, the wall-clock time a medium-priority task (base priority strictly between this task's base and peak) actually ran on some core while this task — the resource holder — was off-CPU. Worst is the largest single episode; total is the sum. A dash means no medium task ran during any episode — for an inherited boost that is priority inheritance working (the boost stops medium tasks preempting the holder); a large value means the mechanism was absent or too slow.
+
+**How to use it.** Rank by `Invert (total)` to find where a lock actually caused unbounded inversion, then pair that episode with **Mutex / Semaphore**, **Waiter × Owner**, and **Ready-Gap** for the blocked high-priority task. A priority change can have an application-specific cause; it is not automatically priority inheritance. A boost with a `—` inversion usually shows that mitigation occurred, while a non-zero value shows latency that a working PI mutex would have removed.
 
 ![Timeline view: Low[266] with three red priority-inheritance stripes](../images/stats/tasks-priority-low.svg)
 
@@ -881,6 +911,30 @@ This measures **temporal parallelism**. It differs from load balance: cores can 
 **How to use it.** Compare the observed distribution with the workload's expected parallelism. High time at one active core in an SMP workload can indicate serialization, affinity restrictions, or insufficient ready work. Use **Core Utilisation**, **Task × Core**, and synchronization statistics to explain it.
 
 ![Concurrent core active interval-duration distribution for N=4 in example-8cores.btf.gz](../images/stats/stats-concurrency-4.svg)
+
+<a id="statistics-switch_reason" name="statistics-switch_reason"></a>
+### Switch Reason Breakdown ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+For each task, why it went off-CPU on every context switch in the Scope: **Preempted** (another user task ran on its previous core during the gap — involuntary), **Blocked** (an STI `take` / `recv` on that core ended the slice), **Suspended** (an STI `suspend` for that task), **Period** (only IDLE ran for the whole gap — the task is between activations), or **Other** (no signal — partial coverage, a capture gap, or an unrecorded cause). **Preempt/s** is the involuntary rate, the number most worth ranking on.
+
+Involuntary preemption count is a first-order real-time metric; a high or rising value points to scheduling thrash, an over-tuned tick, or a lock convoy.
+
+**Calculation.** Each off-CPU gap between consecutive slices of a task is classified in that priority order using same-core slice overlap and STI events within ~50 native time units of the slice end. The result is a heuristic screen, not a kernel-recorded reason.
+
+**How to use it.** Rank by **Preempted** or **Preempt/s**. Click a row to highlight that task on the timeline. Confirm a high count against **Preemption Matrix** and **Preemption Chain Analysis** for the interfering tasks, and check task priorities. A high **Period** count is normal for a periodic task that sleeps between jobs.
+
+<a id="statistics-sched_load" name="statistics-sched_load"></a>
+### Scheduling Load Over Time ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Divides the Scope into equal time bins and reports, per bin, the **context-switch count** and rate (**Ctx sw/s**), the **busiest core**, and the load-balance spread — core-utilisation standard deviation (**Util σ**) and **LB score** (`100 × (1 − Gini)`). It places a switching burst or a load imbalance *in time* rather than only detecting it as a Scope-wide average.
+
+**Calculation.** Bins reuse the Core Utilization Over Time grid (4–32 bins). Context switches per bin are slice starts per core inside the bin. Util σ and LB score use the per-bin per-core utilisation percentages.
+
+**How to use it.** Look for bins with a spike in Ctx sw/s, a persistent low LB score, or a load change aligned with a latency spike elsewhere. Click a row to select that time bin on the timeline, then use **Task × Core** and **Switch Reason Breakdown** to identify the work inside it.
 
 ## 5. SYNC — synchronization and waiting ![](../images/readme/h3.svg)
 
@@ -925,7 +979,9 @@ Common issues include an unmatched take, an orphan give, deletion while held, or
 
 **Calculation.** Events are grouped by object pointer and processed in timestamp order. A matching take/give pair forms a hold-duration sample. The current owner and held-object state support orphan, unmatched, delete-while-held, and end-of-trace checks. Nested or recursive behavior is only as accurate as the recorded events allow.
 
-**How to use it.** Resolve pairing problems before trusting hold or blocking estimates. Long holds identify objects that can delay other tasks, but a long uncontended hold may be harmless. Combine hold time with **Mutex Blocking**, **Waiter × Owner**, task priorities, and the timeline.
+**Columns.** Alongside `Avg hold`, the table reports **p95 hold** / **p99 hold** — the tail of the hold-duration distribution, so one pathological hold shows even when the average looks fine. **Waiters** is the number of distinct tasks that acquired the object while it was already held (a fan-in count); **MaxNest** is the deepest set of simultaneously-open takes seen. Both are computed over the whole trace, not the current Scope. They only register when the capture logs a `take` before the previous holder's `give` — which happens with recursive mutexes or a tracer that logs `take` at the blocking attempt; a tracer that logs `take` only at acquire will show `0` even for a heavily contended lock.
+
+**How to use it.** Resolve pairing problems before trusting hold or blocking estimates. Rank by **p99 hold** to find the objects with the worst hold tail, then a non-zero **Waiters** tells you that tail actually delayed other tasks — follow it into **Mutex Blocking** and **Waiter × Owner**. A **MaxNest** above 1 means lock nesting; check the acquire order against your locking hierarchy for deadlock risk. A long *uncontended* hold (Waiters 0) may be harmless. Combine with task priorities and the timeline.
 
 <a id="statistics-queue" name="statistics-queue"></a>
 ### Queue ![](../images/readme/h4.svg)
@@ -939,6 +995,17 @@ The table describes recorded queue activity; it does not reconstruct queue conte
 **Calculation.** Send and receive events are grouped by queue pointer and paired in recorded order to form completed activity intervals. Without message IDs or queue-content snapshots, the viewer cannot prove which receive consumed which application message in complex producer/consumer patterns.
 
 **How to use it.** Check pairing quality and event rates, then correlate queue activity with **Inter-Arrival**, **Dispatch Latency**, Tags such as queue depth, and end-to-end Intervals. A long send-to-receive interval can include normal batching or consumer scheduling delay.
+
+<a id="statistics-sync_level" name="statistics-sync_level"></a>
+### Queue Backlog / Semaphore Level ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+The running fill level of every queue and semaphore over the Scope, reconstructed from the STI event stream. For a queue this is the message backlog; for a counting semaphore it is the number of available tokens. Peak level flags a producer outrunning its consumer (or a token leak); a rising end-of-scope level is a slow leak.
+
+**Calculation.** Per object pointer, `give` / `send` add 1 and `take` / `recv` subtract 1, with the level floored at 0. **Peak** is the highest level reached, **Time at peak** is how long it sat there, and **End level** is the level at the end of the Scope. **Starved** counts `take` / `recv` events issued while the level was 0 — an attempt that would block (a genuine capacity limit or a lost `give`). Sorted by peak, then starved.
+
+**How to use it.** A high Peak with a large Time-at-peak on a queue means the consumer cannot keep up — check the consumer's **Dispatch / Scheduling Latency**, priority, and **Ready-Gap**. A non-zero End level that grows across runs is a leak. Frequent Starved counts on a semaphore point at a mis-sized token pool or a missing release path. This reconstruction assumes every `give`/`take` is instrumented; unmatched events (see **Mutex / Semaphore** issues) make the level approximate.
 
 ## 6. DETAIL — supporting measurements ![](../images/readme/h3.svg)
 
@@ -963,6 +1030,17 @@ Gap can include scheduling overhead, interrupts, critical sections, trace loss, 
 **Calculation.** Each recorded core slice is clipped to the Scope and classified as Active, Idle, or Tick. Gap is the remaining scoped core time not covered by those categories. Small overlaps or rounding can affect totals at trace resolution.
 
 **How to use it.** Active explains workload, Idle explains unused capacity, and Tick explains recorded tick service. Investigate a large Gap with **Kernel Switch Overhead**, Trace Health, and the timeline. If all cores show a gap at the same time, capture loss or a global event is more plausible than ordinary per-core scheduling.
+
+<a id="statistics-idle" name="statistics-idle"></a>
+### Idle Analysis ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Per core, how the IDLE time is shaped: the total, the single longest idle stretch, how many separate idle fragments there were, and p95. A large total with a large longest stretch is real headroom; a large total split into many tiny fragments is a core that is busy but constantly waiting. The note reports the longest window where **every** core was idle at once.
+
+**Calculation.** Every IDLE segment in each core's slice list is clipped to the Scope. **Idle total** is their sum, **Longest** the largest single one, **Frags** the count, **p95** the 95th-percentile fragment. The all-cores-idle window is a sweep over all cores' idle intervals for the longest stretch covered on every core simultaneously. Sorted by idle total, most-idle core first.
+
+**How to use it.** Use the total against **Core Utilisation** to size spare capacity. A long all-cores-idle window is fine if nothing was pending — cross-check **Ready-Gap** and **Blocking Time** for the same interval to be sure it was not a system-wide stall. A high fragment count with a small longest stretch usually means fine-grained blocking; follow it into **Switch Reason Breakdown**. Click a row to highlight that core on the timeline.
 
 <a id="statistics-switch_overhead" name="statistics-switch_overhead"></a>
 ### Kernel Switch Overhead ![](../images/readme/h4.svg)
@@ -1104,7 +1182,13 @@ The comparison uses two delta conventions:
 
 Always use the metric meaning and the **Improved / Regressed / Changed** status. A positive sign is not automatically good or bad.
 
-**Shape Δ.** The Execution Time, Blocking Time, and Inter-Arrival Time tables add a **Shape Δ** column: the two-sample Kolmogorov–Smirnov statistic between the task's Baseline A and Candidate B sample distributions (`0` = identical shape, `1` = disjoint). It is scale-free, so it catches a tail that widened or a mode that split even when Avg, Max, and the Δ column barely moved. A dash means one side had too few samples (`< 3`).
+**Shape Δ.** The Execution Time, Blocking Time, and Inter-Arrival Time tables add a **Shape Δ** column: the two-sample Kolmogorov–Smirnov (KS) *D* statistic between the task's Baseline A and Candidate B sample distributions.
+
+*What it measures.* Build the empirical CDF of each side — for every duration *x*, the fraction of that side's samples that are ≤ *x*. **Shape Δ** is the largest vertical gap between the two curves: `D = max over x of |F_A(x) − F_B(x)|`, a value in `[0, 1]`. `0` means the two sample sets trace the same curve — same spread *and* same location; `1` means they do not overlap at all. It is distribution-free (assumes no particular shape) and scale-free (a global unit or clock-rate change does not move it), so it reacts to a widened tail, a split mode, or a pure location shift that Avg, Max, and the `Δ` column can each miss.
+
+*Calculation.* Each side's raw per-slice samples for that metric are sorted, then the two ECDFs are walked together in one merge pass tracking the running fraction on each side; `D` is the maximum absolute difference seen. Samples are collected per task by display name over each trace's compare Scope — the same matching and scoping the other columns use — with IDLE and TICK excluded. The cell shows `D` to two decimals; a dash (`—`) means one side had fewer than three samples, too few to have a shape.
+
+*How to read it.* Treat it as a distance, not a direction: it says *how much* the distribution moved, not *which way* — read it next to the signed `Δ`, `p95`, and `p99` columns for direction, and open the distribution plot to see the change. Rough bands: `< 0.10` practically the same shape; `0.10–0.30` a visible change worth checking on the timeline; `> 0.30` a substantial shift. With very large sample counts even a trivial real difference yields a non-zero `D`, so do not chase small values; with counts near the three-sample floor a single outlier can swing `D`, so confirm against several runs. **Shape Δ** is the raw statistic only — BTFViewer applies no critical value or p-value — so it is evidence of a difference, not a significance test.
 
 ### Comparison workflow and dependencies
 

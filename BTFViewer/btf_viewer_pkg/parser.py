@@ -1812,6 +1812,77 @@ def _priority_boost_bands_for_viewport(
         bands.append((c1, span, ep.inversion_suspect))
     return bands
 
+def _merge_intervals(intervals: "List[Tuple[int, int]]") -> "List[Tuple[int, int]]":
+    """Sort + coalesce overlapping/touching ``(a, b)`` intervals (``a < b``)."""
+    if not intervals:
+        return []
+    ordered = sorted(intervals)
+    out = [list(ordered[0])]
+    for a, b in ordered[1:]:
+        if a <= out[-1][1]:
+            if b > out[-1][1]:
+                out[-1][1] = b
+        else:
+            out.append([a, b])
+    return [(a, b) for a, b in out]
+
+
+def _intervals_overlap_measure(
+    a: "List[Tuple[int, int]]", b: "List[Tuple[int, int]]",
+) -> int:
+    """Total length of the intersection of two coalesced interval lists."""
+    i = j = total = 0
+    while i < len(a) and j < len(b):
+        lo = max(a[i][0], b[j][0])
+        hi = min(a[i][1], b[j][1])
+        if hi > lo:
+            total += hi - lo
+        if a[i][1] < b[j][1]:
+            i += 1
+        else:
+            j += 1
+    return total
+
+
+def _priority_inversion_time(
+    trace: "BtfTrace", ep: "PriorityEpisode", med_mks: "set",
+    mk_cache: "Dict[str, str]",
+) -> int:
+    """Wall-clock time in ``ep`` where a medium-priority task actually runs while
+    the boosted holder does not — the measured priority-inversion duration
+    (review item A6).  0 when the episode has no medium candidates."""
+    lo, hi = ep.start_ns, ep.stop_ns
+    if not med_mks or hi <= lo:
+        return 0
+    med_iv: List[Tuple[int, int]] = []
+    for segs in trace.core_segs.values():
+        starts = [s.start for s in segs]
+        k = max(0, bisect_left(starts, lo) - 1)
+        for idx in range(k, len(segs)):
+            s = segs[idx]
+            if s.start >= hi:
+                break
+            if s.end <= lo:
+                continue
+            raw = s.task
+            smk = mk_cache.get(raw)
+            if smk is None:
+                smk = _task_merge_key(raw)
+                mk_cache[raw] = smk
+            if smk in med_mks:
+                med_iv.append((max(int(s.start), lo), min(int(s.end), hi)))
+    if not med_iv:
+        return 0
+    med_union = _merge_intervals(med_iv)
+    hold_union = _merge_intervals([
+        (max(int(s.start), lo), min(int(s.end), hi))
+        for s in trace.seg_map_by_merge_key.get(ep.mk, ())
+        if min(int(s.end), hi) > max(int(s.start), lo)
+    ])
+    med_total = sum(b - a for a, b in med_union)
+    return med_total - _intervals_overlap_measure(med_union, hold_union)
+
+
 def _priority_stats_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
@@ -1824,11 +1895,18 @@ def _priority_stats_rows(
     for ep in trace.priority_episodes:
         if _priority_overlaps_range(ep, lo, hi):
             by_mk[ep.mk].append(ep)
+    base_by_name = {
+        _task_display_name(trace.task_repr.get(m, m)): m
+        for m in trace.task_base_priority
+    }
+    mk_cache: Dict[str, str] = {}
     rows = []
     for mk, eps in by_mk.items():
         base_pri = trace.task_base_priority.get(mk, eps[0].base_pri)
         peak_pri = max(ep.peak_pri for ep in eps)
         total_ns = 0
+        inv_worst_ns = 0
+        inv_total_ns = 0
         inv_count = 0
         inherit_count = 0
         lmh_count = 0
@@ -1848,6 +1926,13 @@ def _priority_stats_rows(
             # that behind a plain "Mutex inherit" aggregate label.
             if ep.medium_tasks or "L/M/H" in (ep.pattern or ""):
                 lmh_count += 1
+            med_mks = {
+                base_by_name[n] for n in ep.medium_tasks if n in base_by_name
+            }
+            ep_inv = _priority_inversion_time(trace, ep, med_mks, mk_cache)
+            if ep_inv > 0:
+                inv_total_ns += ep_inv
+                inv_worst_ns = max(inv_worst_ns, ep_inv)
         if inherit_count:
             pattern = "Mutex inherit + L/M/H" if lmh_count else "Mutex inherit"
         elif lmh_count or inv_count:
@@ -1862,10 +1947,14 @@ def _priority_stats_rows(
             peak_pri,
             len(eps),
             _format_time(total_ns, scale),
+            _format_time(inv_worst_ns, scale) if inv_worst_ns else "—",
+            _format_time(inv_total_ns, scale) if inv_total_ns else "—",
             pattern,
             total_ns,
+            inv_worst_ns,
+            inv_total_ns,
         ))
-    rows.sort(key=lambda r: (-r[7], r[1]))
+    rows.sort(key=lambda r: (-r[11], -r[9], r[1]))
     return rows
 
 def _priority_plot_points(
@@ -1967,6 +2056,10 @@ def _build_sync_object_data(
             "issues": [],
             "open_takes": [],
             "open_gives": [],
+            # Review item A7: distinct tasks that took/recv'd while the object
+            # was already held, and the deepest simultaneously-open take count.
+            "waiters": set(),
+            "max_nest": 0,
         }
 
     def _is_post_create_kernel_give(obj: dict, time_ns: int) -> bool:
@@ -2039,7 +2132,14 @@ def _build_sync_object_data(
                     send = obj["open_gives"].pop(0)
                     _record_hold(obj, send, rec, True)
                 else:
+                    # Contended acquire: something is already held, and it is a
+                    # different task → the taker had to wait (review item A7).
+                    if (obj["open_takes"] and task_mk
+                            and task_mk != obj["open_takes"][-1].get("task_mk")):
+                        obj["waiters"].add(task_mk)
                     obj["open_takes"].append(rec)
+                    if len(obj["open_takes"]) > obj["max_nest"]:
+                        obj["max_nest"] = len(obj["open_takes"])
             elif action in ("give", "send"):
                 if action == "give" and _is_post_create_kernel_give(obj, ev.time):
                     continue
@@ -2189,6 +2289,15 @@ def _sync_object_stats_rows(
                 and bounce_pct >= _SYNC_HIGH_BOUNCE_PCT):
             status = "warning"
         status_label = {"ok": "OK", "error": "Error", "warning": "Warning"}[status]
+        # Review item A7: hold-time tail, waiter fan-in, deepest nesting.
+        _hd = sorted(h["duration_ns"] for h in holds)
+        if _hd:
+            p95_hold_ns = _hd[_nearest_rank_index(len(_hd), 0.95)]
+            p99_hold_ns = _hd[_nearest_rank_index(len(_hd), 0.99)]
+        else:
+            p95_hold_ns = p99_hold_ns = 0
+        waiters = len(obj.get("waiters") or ())
+        max_nest = int(obj.get("max_nest") or 0)
         rows.append((
             obj["key"],
             obj["kind"],
@@ -2202,6 +2311,12 @@ def _sync_object_stats_rows(
             avg_ns,
             bounces,
             bounce_pct,
+            _format_time(p95_hold_ns, scale) if _hd else "—",
+            _format_time(p99_hold_ns, scale) if _hd else "—",
+            waiters,
+            max_nest,
+            p95_hold_ns,
+            p99_hold_ns,
         ))
     rows.sort(key=lambda r: (
         0 if r[8] == "error" else 1 if r[8] == "warning" else 2,
@@ -3576,6 +3691,443 @@ def _collect_preemption_events(
                 events.append((mk, pre_disp, ov_lo, overlap, cs))
 
     return events
+
+# STI take/give/suspend within this many native time units of a slice end is
+# treated as the cause of the following off-CPU gap (review items A1 / A4).
+_OFFCPU_STI_WINDOW = 50
+
+_OFFCPU_GAP_KINDS = ("preempted", "blocked", "suspended", "period_wait", "unknown")
+
+
+def _classify_offcpu_gaps(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> "Dict[str, List[Tuple[int, str]]]":
+    """Per task (merge key) → list of ``(gap_ns, kind)`` for every off-CPU gap
+    between consecutive slices.  ``kind`` is one of ``_OFFCPU_GAP_KINDS``:
+
+    - ``preempted``  — a higher-or-equal task actually ran on the victim's core
+      during the gap (involuntary),
+    - ``blocked``    — an STI ``take``/``recv`` on that core ends the slice
+      (waiting on a sync object),
+    - ``suspended``  — an STI ``suspend`` for this task ends the slice
+      (voluntary self-suspend),
+    - ``period_wait``— nothing but IDLE ran on the core for the whole gap
+      (the task is sleeping between activations),
+    - ``unknown``    — none of the above (partial coverage, capture gap, …).
+
+    Foundation for the Switch Reason Breakdown (A1) and Ready-Gap (A4) sections.
+    """
+    core_segs: Dict[str, List["TaskSegment"]] = trace.core_segs
+    core_starts: Dict[str, List[int]] = {
+        c: [s.start for s in segs] for c, segs in core_segs.items()
+    }
+    # STI cause windows, indexed by source core and time.
+    sync_ev: List[Tuple[int, str]] = []
+    for tgt in ("mutex", "sem", "queue"):
+        for ev in trace.sti_events_by_target.get(tgt, ()):  # noqa: E501
+            note = ev.note or ""
+            if note.startswith("take") or note.startswith("recv"):
+                sync_ev.append((ev.time, ev.core))
+    sync_ev.sort()
+    sync_times = [t for t, _ in sync_ev]
+    suspend_by_mk: Dict[str, List[int]] = {}
+    for ev in trace.sti_events_by_target.get("task", ()):
+        note = ev.note or ""
+        if not note.startswith("suspend"):
+            continue
+        m = re.match(r"^suspend\s+(.+)$", note)
+        if not m:
+            continue
+        smk = _task_merge_key(m.group(1).strip())
+        suspend_by_mk.setdefault(smk, []).append(ev.time)
+    for lst in suspend_by_mk.values():
+        lst.sort()
+
+    out: Dict[str, List[Tuple[int, str]]] = {}
+    for mk, segs in trace.seg_map_by_merge_key.items():
+        if len(segs) < 2:
+            continue
+        raw = trace.task_repr.get(mk, mk)
+        _, _, tname = _parse_task_name(raw)
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        ordered = sorted(segs, key=lambda s: s.start)
+        gaps: List[Tuple[int, str]] = []
+        susp = suspend_by_mk.get(mk, [])
+        for i in range(1, len(ordered)):
+            prev, nxt = ordered[i - 1], ordered[i]
+            g0, g1 = prev.end, nxt.start
+            if g1 <= g0:
+                continue
+            if lo is not None and hi is not None and not (
+                _seg_fully_in_range(prev, lo, hi)
+                and _seg_fully_in_range(nxt, lo, hi)
+            ):
+                continue
+            gap = g1 - g0
+            core = prev.core
+            cslist = core_segs.get(core) or []
+            cstarts = core_starts.get(core) or []
+
+            non_idle_overlap = 0
+            idle_overlap = 0
+            j = max(0, bisect_right(cstarts, g1 - 1) - 1)
+            while j < len(cslist):
+                cs = cslist[j]
+                j += 1
+                if cs.start >= g1:
+                    break
+                if cs.end <= g0:
+                    continue
+                ov = min(cs.end, g1) - max(cs.start, g0)
+                if ov <= 0:
+                    continue
+                cmk = _task_merge_key(cs.task)
+                if cmk == mk:
+                    continue
+                cn = _parse_task_name(trace.task_repr.get(cmk, cs.task))[2]
+                if _is_idle_task_name(cn):
+                    idle_overlap += ov
+                elif cn != "TICK":
+                    non_idle_overlap += ov
+
+            if non_idle_overlap > 0:
+                kind = "preempted"
+            elif susp and _has_time_near(susp, g0, _OFFCPU_STI_WINDOW):
+                kind = "suspended"
+            elif _has_sync_cause(sync_times, sync_ev, g0, core, _OFFCPU_STI_WINDOW):
+                kind = "blocked"
+            elif idle_overlap >= 0.8 * gap:
+                kind = "period_wait"
+            else:
+                kind = "unknown"
+            gaps.append((gap, kind))
+        if gaps:
+            out[mk] = gaps
+    return out
+
+
+def _has_time_near(sorted_times: "List[int]", t: int, window: int) -> bool:
+    i = bisect_left(sorted_times, t - window)
+    return i < len(sorted_times) and sorted_times[i] <= t + window
+
+
+def _has_sync_cause(sorted_times: "List[int]", ev_pairs: "List[Tuple[int, str]]",
+                    t: int, core: str, window: int) -> bool:
+    i = bisect_left(sorted_times, t - window)
+    while i < len(sorted_times) and sorted_times[i] <= t + window:
+        if ev_pairs[i][1] == core:
+            return True
+        i += 1
+    return False
+
+
+def _switch_reason_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per-task off-CPU switch-reason counts (review item A1).
+
+    Row: ``(mk, name, preempted, blocked, suspended, period_wait, unknown,
+    total, preempt_rate_per_s)``.  ``preempt_rate_per_s`` is the involuntary
+    (preempted) switch rate — the number most worth ranking on.
+    """
+    from .timeline_util import _to_ns
+    if lo is not None and hi is not None:
+        span = max(1, hi - lo)
+    else:
+        span = max(1, trace.time_max - trace.time_min)
+    span_s = _to_ns(span, trace.time_scale) / 1_000_000_000.0
+    by_mk = _classify_offcpu_gaps(trace, lo, hi)
+    rows: List[tuple] = []
+    for mk, gaps in by_mk.items():
+        counts = {k: 0 for k in _OFFCPU_GAP_KINDS}
+        for _g, kind in gaps:
+            counts[kind] += 1
+        total = len(gaps)
+        name = _task_display_name(trace.task_repr.get(mk, mk))
+        rate = counts["preempted"] / span_s if span_s > 0 else 0.0
+        rows.append((
+            mk, name,
+            counts["preempted"], counts["blocked"], counts["suspended"],
+            counts["period_wait"], counts["unknown"], total, rate,
+        ))
+    rows.sort(key=lambda r: (-r[2], -r[7], r[1].lower()))
+    return rows
+
+
+def _sched_load_over_time_rows(
+    trace: "BtfTrace",
+    events: "Sequence[dict]",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[dict]:
+    """Per-time-bin scheduling load (review items A2 + A9).
+
+    Each dict: ``{start, stop, jump_ns, ctx, ctx_per_s, sigma_pct, lb_score,
+    busiest_core, peak_pct}``.  ``sigma_pct`` / ``lb_score`` are the per-bin
+    core-utilisation standard deviation and load-balance score, so an imbalance
+    can be placed in time rather than only detected overall.
+    """
+    from .timeline_util import _to_ns
+    grid_fn = globals().get("core_util_over_time")
+    if grid_fn is None:
+        from .ux_explore import core_util_over_time as grid_fn
+    grid = grid_fn(events, list(trace.core_names or []), lo, hi)
+    bins = grid.get("bins") or []
+    cores = grid.get("cores") or list(trace.core_names or [])
+    if not bins:
+        return []
+    core_seg_starts = {
+        c: sorted(s.start for s in trace.core_segs.get(c, ())) for c in cores
+    }
+    out: List[dict] = []
+    for b in bins:
+        b0 = int(b.get("start") or 0)
+        b1 = int(b.get("stop") or b0 + 1)
+        ctx = 0
+        for c in cores:
+            starts = core_seg_starts.get(c) or []
+            ctx += bisect_left(starts, b1) - bisect_left(starts, b0)
+        cells = b.get("cells") or {}
+        pcts = [float((cells.get(c) or {}).get("pct") or 0.0) for c in cores]
+        sigma = _core_util_stddev(pcts) if len(pcts) >= 2 else 0.0
+        lb_score = None
+        if len(pcts) >= 2 and sum(pcts) > 0.0:
+            lb_score = max(0.0, 100.0 * (1.0 - _gini_coefficient(pcts)))
+        span_s = _to_ns(max(1, b1 - b0), trace.time_scale) / 1_000_000_000.0
+        out.append({
+            "start": b0, "stop": b1, "jump_ns": b0,
+            "ctx": ctx,
+            "ctx_per_s": (ctx / span_s) if span_s > 0 else 0.0,
+            "sigma_pct": sigma,
+            "lb_score": lb_score,
+            "busiest_core": b.get("peak_core") or "",
+            "peak_pct": float(b.get("peak_pct") or 0.0),
+        })
+    return out
+
+
+def _activation_latency_rows(
+    trace: "BtfTrace",
+    events: "Sequence[dict]",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per periodic task, how far each activation lands from a fitted ideal
+    periodic grid ``phi + k*T`` (review item A3).
+
+    ``T`` is the p50 inter-arrival gap (from :func:`analyze_task_periods`); the
+    grid is anchored at the first activation in scope and the error for an
+    activation ``t`` is ``min_k |t - (anchor + k*T)|``.  Row (variability shape,
+    matching the exec / inter tables):
+    ``(mk, name, count, min, avg, max, jitter, sigma, p50, p95, p99)`` as
+    formatted strings, largest max first.  Needs >= 3 activations per task.
+    """
+    period_fn = globals().get("analyze_task_periods")
+    if period_fn is None:
+        from .ux_explore import analyze_task_periods as period_fn
+    scale = trace.time_scale
+    period_by_mk: Dict[str, int] = {}
+    for prow in period_fn(events, 3):
+        mk = str(prow.get("mk") or "")
+        t_ns = int(prow.get("expected_ns") or 0)
+        if mk and t_ns > 0:
+            period_by_mk[mk] = t_ns
+    starts_by_mk: Dict[str, List[int]] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "inter":
+            continue
+        mk = str(ev.get("mk") or ev.get("task") or "")
+        if mk not in period_by_mk:
+            continue
+        s = int(ev.get("start") or 0)
+        if lo is not None and hi is not None and not (lo <= s <= hi):
+            continue
+        starts_by_mk.setdefault(mk, []).append(s)
+    raw: List[tuple] = []
+    for mk, starts in starts_by_mk.items():
+        if len(starts) < 3:
+            continue
+        starts.sort()
+        period = period_by_mk[mk]
+        anchor = starts[0]
+        errs = sorted(
+            abs(t - (anchor + round((t - anchor) / period) * period))
+            for t in starts
+        )
+        n = len(errs)
+        mn, mx = errs[0], errs[-1]
+        avg = int(round(sum(errs) / n))
+        p95 = errs[_nearest_rank_index(n, 0.95)]
+        jitter, sigma_f, p50, p99 = _sample_variability(errs)
+        name = _task_display_name(trace.task_repr.get(mk, mk))
+        raw.append((mk, name, n, mn, avg, mx, int(jitter),
+                    int(round(sigma_f)), int(p50), p95, int(p99)))
+    raw.sort(key=lambda r: (-r[5], -r[4], r[1].lower()))
+    return [
+        (mk, name, n,
+         _format_time(mn, scale), _format_time(avg, scale),
+         _format_time(mx, scale), _format_time(jitter, scale),
+         _format_time(sigma, scale), _format_time(p50, scale),
+         _format_time(p95, scale), _format_time(p99, scale))
+        for mk, name, n, mn, avg, mx, jitter, sigma, p50, p95, p99 in raw
+    ]
+
+
+_READY_GAP_KINDS = ("preempted", "blocked", "unknown")
+
+
+def _ready_gap_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per task, off-CPU time it spent arguably able to run — the ready-gap /
+    starvation view (review item A4).
+
+    From :func:`_classify_offcpu_gaps`, keeps the ``preempted`` / ``blocked`` /
+    ``unknown`` gaps and drops ``suspended`` / ``period_wait`` (the task
+    voluntarily off-CPU).  Row (raw ns, formatted by the caller):
+    ``(mk, name, count, longest_ns, total_ns, avg_ns, p95_ns, preempt_pct)``,
+    longest gap first.
+    """
+    by_mk = _classify_offcpu_gaps(trace, lo, hi)
+    rows: List[tuple] = []
+    for mk, gaps in by_mk.items():
+        ready = sorted(g for g, k in gaps if k in _READY_GAP_KINDS)
+        if not ready:
+            continue
+        preempt_sum = sum(g for g, k in gaps if k == "preempted")
+        n = len(ready)
+        total = sum(ready)
+        avg = int(round(total / n))
+        p95 = ready[_nearest_rank_index(n, 0.95)]
+        preempt_pct = (100.0 * preempt_sum / total) if total > 0 else 0.0
+        name = _task_display_name(trace.task_repr.get(mk, mk))
+        rows.append((mk, name, n, ready[-1], total, avg, p95, preempt_pct))
+    rows.sort(key=lambda r: (-r[3], -r[4], r[1].lower()))
+    return rows
+
+
+def _idle_analysis_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> "Tuple[List[tuple], int, int]":
+    """Per-core idle analysis plus the longest all-cores-idle window (A5).
+
+    Returns ``(rows, all_idle_span_ns, all_idle_start_ns)``; each row is
+    ``(core, total_ns, longest_ns, longest_start_ns, fragments, p95_ns)``,
+    most-idle core first.  ``all_idle_span_ns`` is the longest stretch where
+    every core was IDLE at once (0 when it never happened).
+    """
+    eff_lo = lo if lo is not None else trace.time_min
+    eff_hi = hi if hi is not None else trace.time_max
+    idle_by_core: Dict[str, List[Tuple[int, int]]] = {}
+    rows: List[tuple] = []
+    for core in trace.core_names:
+        spans: List[Tuple[int, int]] = []
+        for seg in trace.core_segs.get(core, ()):  # segments are start-sorted
+            slo = max(int(seg.start), eff_lo)
+            shi = min(int(seg.end), eff_hi)
+            if slo >= shi:
+                continue
+            if _is_idle_task_name(_parse_task_name(seg.task)[2]):
+                spans.append((slo, shi))
+        idle_by_core[core] = spans
+        if not spans:
+            continue
+        durs = sorted(b - a for a, b in spans)
+        longest = max(spans, key=lambda p: p[1] - p[0])
+        p95 = durs[_nearest_rank_index(len(durs), 0.95)]
+        rows.append((core, sum(durs), longest[1] - longest[0], longest[0],
+                     len(spans), p95))
+    rows.sort(key=lambda r: (-r[1], r[0]))
+
+    all_span, all_start = 0, eff_lo
+    cores = list(trace.core_names)
+    if cores and all(idle_by_core.get(c) for c in cores):
+        evts: List[Tuple[int, int]] = []
+        for c in cores:
+            for a, b in idle_by_core[c]:
+                evts.append((a, 1))
+                evts.append((b, -1))
+        evts.sort()
+        active, seg_start, n = 0, None, len(cores)
+        for t, delta in evts:
+            if seg_start is not None and active == n and t > seg_start:
+                if t - seg_start > all_span:
+                    all_span, all_start = t - seg_start, seg_start
+            active += delta
+            seg_start = t if active == n else None
+    return rows, all_span, all_start
+
+
+def _sync_level_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Running fill level of every queue / semaphore over the scope (A8).
+
+    ``+1`` on give/send, ``-1`` on take/recv, floored at 0; ``create`` resets to
+    0.  Row: ``(key, kind, ptr, label, max_level, time_at_max_ns, end_level,
+    starved)`` where ``starved`` counts take/recv issued while the level was 0.
+    Highest peak first; empty without queue/semaphore instrumentation.
+    """
+    seq: Dict[str, List[Tuple[int, int]]] = {}
+    meta: Dict[str, Tuple[str, str]] = {}
+    for tgt in ("queue", "sem"):
+        for ev in trace.sti_events_by_target.get(tgt, ()):
+            if lo is not None and hi is not None and not (lo <= ev.time <= hi):
+                continue
+            parsed = _parse_sync_object_note(ev.note)
+            if not parsed:
+                continue
+            action, ptr = parsed
+            if action == "delete":
+                continue
+            key = _sync_object_key(tgt, ptr)
+            meta.setdefault(key, (tgt, ptr))
+            delta = (1 if action in ("give", "send")
+                     else -1 if action in ("take", "recv") else 0)
+            seq.setdefault(key, []).append((ev.time, delta))
+    eff_hi = hi if hi is not None else trace.time_max
+    rows: List[tuple] = []
+    for key, evts in seq.items():
+        evts.sort()
+        lvl = max_level = starved = 0
+        for _t, d in evts:
+            if d == 0:
+                lvl = 0
+            elif d < 0 and lvl == 0:
+                starved += 1
+            else:
+                lvl = max(0, lvl + d)
+                max_level = max(max_level, lvl)
+        lvl, time_at_max, last_t = 0, 0, evts[0][0]
+        for t, d in evts:
+            if t > last_t and lvl == max_level and max_level > 0:
+                time_at_max += t - last_t
+            last_t = t
+            if d == 0:
+                lvl = 0
+            elif d < 0 and lvl == 0:
+                pass
+            else:
+                lvl = max(0, lvl + d)
+        if eff_hi > last_t and lvl == max_level and max_level > 0:
+            time_at_max += eff_hi - last_t
+        tgt, ptr = meta[key]
+        rows.append((key, tgt, ptr, f"{tgt} {ptr}", max_level, time_at_max,
+                     lvl, starved))
+    rows.sort(key=lambda r: (-r[4], -r[7], r[3]))
+    return rows
+
 
 def _preemption_chain_rows(
     trace: "BtfTrace",

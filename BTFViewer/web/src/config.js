@@ -88,7 +88,8 @@ export const STATS_HEAVY_SECTIONS = [
   'anomalies', 'worst', 'crit_path', 'patterns',
   'response', 'period', 'jitter', 'preempt_matrix',
   'task_core', 'core_time', 'wait_owner', 'mutex_block',
-  'task_health',
+  'task_health', 'switch_reason', 'sched_load',
+  'activation', 'ready_gap', 'idle', 'sync_level',
 ]
 // Factory default: every section starts collapsed. SMP-active traces expand+pin
 // Core Utilisation via defaultStatsPresentation() (Step 1.1).
@@ -360,6 +361,12 @@ export const STATS_SECTION_HELP = Object.freeze({
   health: "TICK interval regularity, missed-tick estimate, and large gaps. Click a gap to jump. Tickless traces are expected to have uneven intervals.",
   core_breakdown: "How each core's scoped span splits into active task time, IDLE, TICK, and leftover gap. Click a core to show it in Core View.",
   concurrency: "How much of the scoped span had 0, 1, 2, … cores running a user task at once. Click a row to open the concurrency plot.",
+  switch_reason: "Why each task went off-CPU: preempted (another task ran on its core), blocked (sync take/recv), suspended, or waiting for its next period. Heuristic from slice overlap and STI events.",
+  sched_load: "Context-switch rate and load-balance spread (util σ, score) per equal time bin, so an imbalance or a switching burst can be placed in time. Click a bin to jump the timeline there.",
+  activation: "How far each task activation lands from a fitted ideal periodic clock (phi + k·T, T = p50 inter-arrival). Large values are release jitter against the schedule, not just against the previous release. Click a row to highlight the task.",
+  ready_gap: "Per task, off-CPU time it spent arguably able to run: gaps where another task ran (preempted), it waited on a lock (blocked), or the cause is unknown. Sleeping and period-waiting are excluded. Longest and total rank starvation. Click a row to highlight the task.",
+  idle: "Per core: total IDLE time, the longest single idle stretch, how many idle fragments, and p95. The note gives the longest window where every core was idle at once — headroom, or a stall if work was pending.",
+  sync_level: "Running fill level of every queue and semaphore (+1 on give/send, -1 on take/recv). Peak level, time spent at the peak, level at end of scope, and starved take/recv attempts on an empty object.",
   switch_overhead: "Time from one task leaving a core to the next task running (kernel switch gap). Click a core to open the switch-overhead plot.",
   tasks: "Top user tasks by CPU share of the scoped span, excluding IDLE and TICK. Click a name to highlight that task on the timeline.",
   migrations: "Tasks that ran on more than one core: count, rate, dwell, ping-pong, and STI proximity. Click a row to open the migration plot.",

@@ -47,13 +47,17 @@
  *                               lowers its own priority before exit
  *                               (exercises traceTASK_PRIORITY_SET).
  *
- *  8. Priority inversion      - textbook L/M/H on one core, repeated
- *                               T8_ROUNDS times: each round Low holds a
- *                               mutex, Med runs mid-priority work, High
- *                               blocks, and inheritance boosts Low→High
- *                               (multiple red stripes on Low in BTFViewer).
- *                               Tasks named Low/Med/High, pinned to core 0
- *                               on SMP so the geometry is unambiguous.
+ *  8. Priority inversion      - L/M/H on one core, repeated T8_ROUNDS times:
+ *                               each round Low holds mutex A, Med runs
+ *                               mid-priority work, High blocks, inheritance
+ *                               boosts Low→High.  Then a CHAINED phase: the
+ *                               boosted Low needs a second mutex B that Med
+ *                               holds, so boosted-Low blocks and Med runs on
+ *                               at medium priority — real inversion *inside*
+ *                               Low's boost episode (kernel nested-inherits
+ *                               Med→High).  Shows non-zero Invert (worst) /
+ *                               Invert (total) on Low in BTFViewer.  Tasks
+ *                               named Low/Med/High, pinned to core 0 on SMP.
  *
  *  9. Task suspend/resume     - several subjects (up to 4, pinned across
  *                               cores on SMP) each run T9_ROUNDS of:
@@ -159,6 +163,15 @@
 #define T8_MED_WORK_ITERS  ( ITER_FAST * 4 )
 #define T8_BUSY_SPIN       400
 #define T8_MED_SEEN_AT     ( T8_MED_WORK_ITERS / 4 )
+
+/* Chained (nested) inversion: after Low is boosted to H it needs a SECOND
+ * mutex that Med already holds, so boosted-Low blocks and Med runs on. That
+ * window is real priority inversion *inside* Low's boost episode (and the
+ * kernel nested-inherits Med -> H). T8_CHAIN_MED_ITERS is that inversion
+ * window; keep it a few scheduler quanta so BTFViewer's Invert (worst/total)
+ * columns show a clear non-zero value. */
+#define T8_CHAIN_MED_ITERS ( ITER_FAST * 2 )
+#define T8_CHAIN_LOW_ITERS ( ITER_SLOW )
 
 /* Test 9 — multi-subject suspend/resume for a rich STI timeline.
  * Cap subjects at 4 so CORES=8 stays quick (sync + few yields only). */
@@ -755,31 +768,38 @@ static int run_test7( void )
 }
 
 /* ==================================================================
- * TEST 8 - Priority inversion (mutex priority inheritance)
+ * TEST 8 - Priority inversion (mutex priority inheritance + chained/nested)
  *
  * Textbook single-core L / M / H geometry (pinned to Core_0 on SMP),
  * repeated T8_ROUNDS times so BTFViewer shows multiple red boost stripes
  * and several Priority Inheritance scatter points:
  *
- *   pri H  High  ─── waits for mutex ────────────────────────────┐
- *   pri M  Med   ─── CPU work while Low held the lock ──────────┤
- *   pri L  Low   ─── holds mutex ──► boosted to H (inherit) ────┘
+ *   pri H  High  ─── waits for mutex A ──────────────────────────┐
+ *   pri M  Med   ─── CPU work while Low held A ─────────────────┤
+ *   pri L  Low   ─── holds A ──► boosted to H (inherit) ────────┘
  *
  * Each round:
- *   1. Low takes the mutex (signals lock-held).
- *   2. Runner releases Med → Med preempts Low on the same core.
- *   3. Runner releases High → High blocks → priority_inherit on Low.
- *   4. Low finishes the critical section, gives the mutex.
- *   5. High acquires, signals done, gives back; runner arms the next round.
+ *   1. Low takes mutex A (signals lock-held).
+ *   2. Runner releases Med → Med preempts Low, then Med takes mutex B.
+ *   3. Runner releases High → High blocks on A → priority_inherit on Low.
+ *   4. Chained inversion: boosted-Low now needs mutex B (held by Med) and
+ *      blocks; Med runs the T8_CHAIN_MED_ITERS window at medium priority
+ *      while boosted-Low and High both wait → measurable inversion inside
+ *      Low's boost episode. The kernel nested-inherits Med → H.
+ *   5. Med gives B → Low takes B, finishes its critical section, gives B
+ *      then A. High acquires, signals done; runner arms the next round.
  *
  * Correctness: every round observes inheritance (t8_inherit_rounds ==
- * T8_ROUNDS) and High completes each round.
+ * T8_ROUNDS), the chained block happens (t8_chain_rounds == T8_ROUNDS),
+ * and High completes each round.
  * ================================================================== */
 
-static SemaphoreHandle_t  t8_mtx, t8_lock_held, t8_med_go, t8_med_seen,
-                          t8_med_done, t8_high_go, t8_h_done, t8_next_round;
+static SemaphoreHandle_t  t8_mtx, t8_mtx2, t8_lock_held, t8_med_go, t8_med_seen,
+                          t8_med_done, t8_high_go, t8_h_done, t8_next_round,
+                          t8_low_wants_b, t8_med_release_b;
 static volatile uint32_t  t8_inherit_ok;
 static volatile uint32_t  t8_inherit_rounds;
+static volatile uint32_t  t8_chain_rounds;
 static volatile uint32_t  t8_med_iters;
 
 /* Small busy+yield chunk so each scheduling quantum leaves a solid bar. */
@@ -832,6 +852,17 @@ static void vInvLow( void *pvArg )
             prvT8BusyYield();
         }
 
+        /* Chained inversion: boosted-Low now needs mutex B, which Med still
+         * holds → Low blocks here while boosted. Med runs its release window
+         * at medium priority (kernel nested-inherits Med → H). */
+        xSemaphoreGive( t8_low_wants_b );
+        xSemaphoreTake( t8_mtx2, portMAX_DELAY );
+        if( uxTaskPriorityGet( NULL ) == ( UBaseType_t )INV_HIGH_PRIORITY )
+            t8_chain_rounds++;
+        for( i = 0; i < T8_CHAIN_LOW_ITERS; ++i )
+            prvT8BusyYield();
+        xSemaphoreGive( t8_mtx2 );
+
         xSemaphoreGive( t8_mtx );
 
         /* Wait for High to finish this round before retaking the mutex. */
@@ -852,6 +883,9 @@ static void vInvMed( void *pvArg )
         xSemaphoreTake( t8_med_go, portMAX_DELAY );
         t8_med_iters = 0;
 
+        /* Grab mutex B up front and keep holding it across Low's boost. */
+        xSemaphoreTake( t8_mtx2, portMAX_DELAY );
+
         for( i = 0; i < T8_MED_WORK_ITERS; ++i )
         {
             t8_med_iters++;
@@ -859,6 +893,14 @@ static void vInvMed( void *pvArg )
                 xSemaphoreGive( t8_med_seen );
             prvT8BusyYield();
         }
+
+        /* Runner gates this so B is released only once boosted-Low is
+         * actually waiting on it → this loop is the inversion window that
+         * lands inside Low's boost episode. */
+        xSemaphoreTake( t8_med_release_b, portMAX_DELAY );
+        for( i = 0; i < T8_CHAIN_MED_ITERS; ++i )
+            prvT8BusyYield();
+        xSemaphoreGive( t8_mtx2 );
 
         /* Let the runner (and Low) proceed to the next round without Med
          * monopolising the core after the inherit window ends. */
@@ -891,8 +933,10 @@ static int run_test8( void )
 
     t8_inherit_ok     = 0;
     t8_inherit_rounds = 0;
+    t8_chain_rounds   = 0;
     t8_med_iters      = 0;
     t8_mtx            = xSemaphoreCreateMutex();
+    t8_mtx2           = xSemaphoreCreateMutex();
     t8_lock_held      = xSemaphoreCreateBinary();
     t8_med_go         = xSemaphoreCreateBinary();
     t8_med_seen       = xSemaphoreCreateBinary();
@@ -900,8 +944,11 @@ static int run_test8( void )
     t8_high_go        = xSemaphoreCreateBinary();
     t8_h_done         = xSemaphoreCreateBinary();
     t8_next_round     = xSemaphoreCreateBinary();
-    configASSERT( t8_mtx && t8_lock_held && t8_med_go && t8_med_seen &&
-                  t8_med_done && t8_high_go && t8_h_done && t8_next_round );
+    t8_low_wants_b    = xSemaphoreCreateBinary();
+    t8_med_release_b  = xSemaphoreCreateBinary();
+    configASSERT( t8_mtx && t8_mtx2 && t8_lock_held && t8_med_go && t8_med_seen &&
+                  t8_med_done && t8_high_go && t8_h_done && t8_next_round &&
+                  t8_low_wants_b && t8_med_release_b );
 
     configASSERT( prvT8Create( vInvLow,  "Low",  INV_LOW_PRIORITY  ) == pdPASS );
     configASSERT( prvT8Create( vInvMed,  "Med",  INV_MED_PRIORITY  ) == pdPASS );
@@ -923,6 +970,13 @@ static int run_test8( void )
 
         /* Phase 3 — High blocks → inheritance boosts Low. */
         xSemaphoreGive( t8_high_go );
+
+        /* Phase 4 — chained inversion: wait until boosted-Low is about to
+         * block on mutex B, then let Med run its release window. Med runs at
+         * medium priority while boosted-Low and High both wait. */
+        xSemaphoreTake( t8_low_wants_b, portMAX_DELAY );
+        xSemaphoreGive( t8_med_release_b );
+
         xSemaphoreTake( t8_h_done, portMAX_DELAY );
 
         /* Drain Med's leftover work so it cannot starve Low next round. */
@@ -937,6 +991,7 @@ static int run_test8( void )
 #endif
 
     vSemaphoreDelete( t8_mtx );
+    vSemaphoreDelete( t8_mtx2 );
     vSemaphoreDelete( t8_lock_held );
     vSemaphoreDelete( t8_med_go );
     vSemaphoreDelete( t8_med_seen );
@@ -944,6 +999,8 @@ static int run_test8( void )
     vSemaphoreDelete( t8_high_go );
     vSemaphoreDelete( t8_h_done );
     vSemaphoreDelete( t8_next_round );
+    vSemaphoreDelete( t8_low_wants_b );
+    vSemaphoreDelete( t8_med_release_b );
 
     if( t8_inherit_rounds != ( uint32_t )T8_ROUNDS )
     {
@@ -955,6 +1012,12 @@ static int run_test8( void )
     {
         printf( "  FAIL: Low was not boosted to priority %d while holding\n",
                 (int)INV_HIGH_PRIORITY );
+        ++fail;
+    }
+    if( t8_chain_rounds != ( uint32_t )T8_ROUNDS )
+    {
+        printf( "  FAIL: expected %d chained-inversion rounds, got %u\n",
+                T8_ROUNDS, (unsigned)t8_chain_rounds );
         ++fail;
     }
     return fail;

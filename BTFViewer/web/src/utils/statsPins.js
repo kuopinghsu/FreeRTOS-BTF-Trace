@@ -29,6 +29,8 @@ export const STATS_SECTION_CATEGORY = Object.freeze({
   period: 'TIMING',
   jitter: 'TIMING',
   inter: 'TIMING',
+  activation: 'TIMING',
+  ready_gap: 'TIMING',
   task_core: 'SCHED',
   core_time: 'SCHED',
   migrations: 'SCHED',
@@ -38,11 +40,15 @@ export const STATS_SECTION_CATEGORY = Object.freeze({
   preemption: 'SCHED',
   priority: 'SCHED',
   concurrency: 'SCHED',
+  switch_reason: 'SCHED',
+  sched_load: 'SCHED',
   mutex_block: 'SYNC',
   wait_owner: 'SYNC',
   sync: 'SYNC',
   queue: 'SYNC',
+  sync_level: 'SYNC',
   core_breakdown: 'DETAIL',
+  idle: 'DETAIL',
   switch_overhead: 'DETAIL',
   tasks: 'DETAIL',
   distrib: 'DETAIL',
@@ -122,6 +128,8 @@ export const STATS_PINNABLE_SECTIONS = Object.freeze([
   'period',
   'jitter',
   'inter',
+  'activation',
+  'ready_gap',
   // SCHED — scheduling / CPU / SMP
   'task_core',
   'core_time',
@@ -132,13 +140,17 @@ export const STATS_PINNABLE_SECTIONS = Object.freeze([
   'preemption',
   'priority',
   'concurrency',
+  'switch_reason',
+  'sched_load',
   // SYNC — blocking and synchronization
   'mutex_block',
   'wait_owner',
   'sync',
   'queue',
+  'sync_level',
   // DETAIL — supporting / lower-level measurements
   'core_breakdown',
+  'idle',
   'switch_overhead',
   'tasks',
   'distrib',
@@ -244,10 +256,45 @@ export function toggleStatsPin(pins, sectionId) {
  */
 export function normalizeStatsSectionOrder(raw) {
   const preferred = normalizeStatsPins(raw)
+  const catalogue = [...STATS_PINNABLE_SECTIONS]
+  if (!preferred.length) return catalogue
+  const catIndex = new Map(catalogue.map((sid, i) => [sid, i]))
+  // Self-heal an order that is just the catalogue with a few sections tacked on
+  // at the end — what older builds wrote whenever the catalogue gained a section
+  // (appended after every existing one instead of dropped into its own group).
+  // A deliberately drag-reordered list is left untouched.
+  const sameSet = preferred.length === catalogue.length
+    && preferred.every(sid => catIndex.has(sid))
+  if (sameSet) {
+    for (let k = 1; k < Math.min(preferred.length, 6); k++) {
+      const head = preferred.slice(0, preferred.length - k)
+      const headSorted = [...head].sort((a, b) => catIndex.get(a) - catIndex.get(b))
+      if (head.some((sid, i) => sid !== headSorted[i])) continue
+      const healed = [...head]
+      const tail = preferred.slice(preferred.length - k)
+        .sort((a, b) => catIndex.get(a) - catIndex.get(b))
+      for (const sid of tail) {
+        let pos = healed.findIndex(h => catIndex.get(h) > catIndex.get(sid))
+        if (pos < 0) pos = healed.length
+        healed.splice(pos, 0, sid)
+      }
+      if (healed.every((sid, i) => sid === catalogue[i])) return catalogue
+    }
+  }
   const seen = new Set(preferred)
   const out = [...preferred]
-  for (const sid of STATS_PINNABLE_SECTIONS) {
-    if (!seen.has(sid)) out.push(sid)
+  // A catalogue-ordered saved list that simply predates a newer section: drop
+  // the new IDs into their own group rather than after every existing one.
+  const splice = out.every((sid, i) => i === 0 || catIndex.get(out[i - 1]) < catIndex.get(sid))
+  for (const sid of catalogue) {
+    if (seen.has(sid)) continue
+    if (splice) {
+      let pos = out.findIndex(h => catIndex.get(h) > catIndex.get(sid))
+      if (pos < 0) pos = out.length
+      out.splice(pos, 0, sid)
+    } else {
+      out.push(sid)
+    }
   }
   return out
 }

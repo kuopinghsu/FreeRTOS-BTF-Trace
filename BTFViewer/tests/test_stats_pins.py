@@ -42,6 +42,29 @@ class StatsSectionOrderTest(unittest.TestCase):
         self.assertEqual(len(order), len(STATS_PINNABLE_SECTIONS))
         self.assertEqual(set(order), set(STATS_PINNABLE_SECTIONS))
 
+    def test_normalize_heals_appended_sections(self) -> None:
+        """An order that is the catalogue with a couple of IDs tacked on at the
+        end (what older builds wrote when the catalogue grew) snaps back to the
+        catalogue so the new sections sit in their own group, not at the bottom."""
+        cat = list(STATS_PINNABLE_SECTIONS)
+        stale = cat[:22] + cat[24:] + cat[22:24]  # two mid catalogue IDs tacked on last
+        self.assertNotEqual(stale, cat)
+        self.assertEqual(normalize_stats_section_order(stale), cat)
+
+    def test_normalize_splices_missing_sections_into_group(self) -> None:
+        """A catalogue-ordered order that simply predates a newer section gets
+        that section spliced into its catalogue slot, not appended last."""
+        cat = list(STATS_PINNABLE_SECTIONS)
+        missing = cat[10]
+        older = [s for s in cat if s != missing]
+        self.assertEqual(normalize_stats_section_order(older), cat)
+
+    def test_normalize_keeps_deliberate_reorder(self) -> None:
+        """A hand-dragged order (not catalogue-ordered) is left as-is."""
+        cat = list(STATS_PINNABLE_SECTIONS)
+        dragged = [cat[7]] + [s for s in cat if s != cat[7]]
+        self.assertEqual(normalize_stats_section_order(dragged), dragged)
+
     def test_move_section(self) -> None:
         base = list(STATS_PINNABLE_SECTIONS)
         moved = move_stats_section(base, "tags", "cores")

@@ -3,130 +3,323 @@
   "timeScale": "us",
   "lo": 3085000,
   "hi": 3310000,
-  "taskCount": 13,
-  "segCount": 1695,
+  "taskCount": 29,
+  "segCount": 1719,
   "scheduling": {
-    "contextSwitches": 1687,
-    "gapCount": 1687,
-    "gapSum": 23138
+    "contextSwitches": 1711,
+    "gapCount": 1711,
+    "gapSum": 23232
   },
   "priority": [
     {
       "label": "Low[266]",
       "basePri": 2,
       "peakPri": 4,
-      "episodeCount": 3,
-      "totalBoostNs": 102404,
+      "episodeCount": 2,
+      "totalBoostNs": 193072,
+      "invertWorstNs": 57921,
+      "invertTotalNs": 115762,
       "pattern": "Mutex inherit + L/M/H"
+    },
+    {
+      "label": "Med[267]",
+      "basePri": 3,
+      "peakPri": 4,
+      "episodeCount": 2,
+      "totalBoostNs": 117436,
+      "invertWorstNs": 0,
+      "invertTotalNs": 0,
+      "pattern": "Mutex inherit"
     }
   ],
   "lifecycle": [
     {
       "label": "High[268]",
-      "createNs": 3085946,
+      "createNs": 3087297,
       "deleteNs": null,
       "suspendCount": 0,
       "resumeCount": 0,
       "aliveNs": null,
       "eventCount": 1,
-      "runCount": 6
+      "runCount": 4
     },
     {
       "label": "Low[266]",
-      "createNs": 3085726,
+      "createNs": 3087113,
       "deleteNs": null,
       "suspendCount": 0,
       "resumeCount": 0,
       "aliveNs": null,
       "eventCount": 1,
-      "runCount": 720
+      "runCount": 533
     },
     {
       "label": "Med[267]",
-      "createNs": 3085846,
+      "createNs": 3087205,
       "deleteNs": null,
       "suspendCount": 0,
       "resumeCount": 0,
       "aliveNs": null,
       "eventCount": 1,
-      "runCount": 871
+      "runCount": 1076
     },
     {
-      "label": "PS[228]",
+      "label": "PF[237]",
       "createNs": null,
-      "deleteNs": 3086674,
+      "deleteNs": 3085302,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 2
+    },
+    {
+      "label": "PF[238]",
+      "createNs": null,
+      "deleteNs": 3085363,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 2
+    },
+    {
+      "label": "PF[239]",
+      "createNs": null,
+      "deleteNs": 3085508,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 2
+    },
+    {
+      "label": "PF[240]",
+      "createNs": null,
+      "deleteNs": 3085445,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 2
+    },
+    {
+      "label": "PF[241]",
+      "createNs": null,
+      "deleteNs": 3085347,
       "suspendCount": 0,
       "resumeCount": 0,
       "aliveNs": null,
       "eventCount": 1,
       "runCount": 1
+    },
+    {
+      "label": "PF[243]",
+      "createNs": null,
+      "deleteNs": 3085123,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 1
+    },
+    {
+      "label": "PF[244]",
+      "createNs": null,
+      "deleteNs": 3085286,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 1
+    },
+    {
+      "label": "PF[245]",
+      "createNs": null,
+      "deleteNs": 3085194,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 1
+    },
+    {
+      "label": "PF[246]",
+      "createNs": null,
+      "deleteNs": 3085210,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 1
+    },
+    {
+      "label": "PS[228]",
+      "createNs": null,
+      "deleteNs": 3087980,
+      "suspendCount": 0,
+      "resumeCount": 0,
+      "aliveNs": null,
+      "eventCount": 1,
+      "runCount": 3
     }
   ],
   "block": [
     {
       "label": "High[268]",
-      "n": 5,
-      "min": 14149,
-      "max": 52872,
-      "sum": 188741
+      "n": 3,
+      "min": 14226,
+      "max": 105372,
+      "sum": 134190
     },
     {
       "label": "Low[266]",
-      "n": 718,
+      "n": 532,
       "min": 13,
-      "max": 39724,
-      "sum": 129412
+      "max": 64274,
+      "sum": 99577
     },
     {
       "label": "Med[267]",
-      "n": 870,
+      "n": 1074,
       "min": 13,
-      "max": 35310,
-      "sum": 84016
+      "max": 34924,
+      "sum": 92168
     },
     {
-      "label": "Runner[1]",
-      "n": 9,
-      "min": 760,
-      "max": 38886,
-      "sum": 187763
-    }
-  ],
-  "exec": [
-    {
-      "label": "High[268]",
-      "n": 6,
-      "min": 167,
-      "max": 521,
-      "sum": 1770
+      "label": "PF[237]",
+      "n": 1,
+      "min": 113,
+      "max": 113,
+      "sum": 113
     },
     {
-      "label": "Low[266]",
-      "n": 719,
-      "min": 67,
-      "max": 338,
-      "sum": 93825
+      "label": "PF[238]",
+      "n": 1,
+      "min": 111,
+      "max": 111,
+      "sum": 111
     },
     {
-      "label": "Med[267]",
-      "n": 871,
-      "min": 60,
-      "max": 387,
-      "sum": 105901
-    },
-    {
-      "label": "PS[228]",
+      "label": "PF[239]",
       "n": 1,
       "min": 94,
       "max": 94,
       "sum": 94
     },
     {
+      "label": "PF[240]",
+      "n": 1,
+      "min": 134,
+      "max": 134,
+      "sum": 134
+    },
+    {
+      "label": "PS[228]",
+      "n": 2,
+      "min": 13,
+      "max": 1963,
+      "sum": 1976
+    },
+    {
       "label": "Runner[1]",
-      "n": 10,
-      "min": 136,
-      "max": 190,
-      "sum": 1531
+      "n": 16,
+      "min": 13,
+      "max": 70768,
+      "sum": 168079
+    }
+  ],
+  "exec": [
+    {
+      "label": "High[268]",
+      "n": 4,
+      "min": 141,
+      "max": 329,
+      "sum": 809
+    },
+    {
+      "label": "Low[266]",
+      "n": 533,
+      "min": 94,
+      "max": 338,
+      "sum": 69281
+    },
+    {
+      "label": "Med[267]",
+      "n": 1075,
+      "min": 60,
+      "max": 386,
+      "sum": 130248
+    },
+    {
+      "label": "PF[237]",
+      "n": 2,
+      "min": 141,
+      "max": 449,
+      "sum": 590
+    },
+    {
+      "label": "PF[238]",
+      "n": 2,
+      "min": 182,
+      "max": 480,
+      "sum": 662
+    },
+    {
+      "label": "PF[239]",
+      "n": 2,
+      "min": 138,
+      "max": 228,
+      "sum": 366
+    },
+    {
+      "label": "PF[240]",
+      "n": 2,
+      "min": 95,
+      "max": 189,
+      "sum": 284
+    },
+    {
+      "label": "PF[241]",
+      "n": 1,
+      "min": 266,
+      "max": 266,
+      "sum": 266
+    },
+    {
+      "label": "PF[244]",
+      "n": 1,
+      "min": 454,
+      "max": 454,
+      "sum": 454
+    },
+    {
+      "label": "PF[245]",
+      "n": 1,
+      "min": 308,
+      "max": 308,
+      "sum": 308
+    },
+    {
+      "label": "PF[246]",
+      "n": 1,
+      "min": 397,
+      "max": 397,
+      "sum": 397
+    },
+    {
+      "label": "PS[228]",
+      "n": 3,
+      "min": 114,
+      "max": 273,
+      "sum": 517
+    },
+    {
+      "label": "Runner[1]",
+      "n": 17,
+      "min": 16,
+      "max": 1206,
+      "sum": 2997
     }
   ]
 }

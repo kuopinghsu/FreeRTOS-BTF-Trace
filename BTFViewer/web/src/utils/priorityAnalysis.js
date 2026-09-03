@@ -216,6 +216,66 @@ export function visiblePriorityEpisodes(episodes, timeStart, timeEnd) {
 }
 
 /** Stats rows for the panel (one row per boosted task, scoped). */
+/** Sort + coalesce overlapping/touching [a, b] intervals (a < b). */
+function mergeIntervals(intervals) {
+  if (!intervals.length) return []
+  const ordered = [...intervals].sort((x, y) => x[0] - y[0])
+  const out = [[...ordered[0]]]
+  for (let k = 1; k < ordered.length; k++) {
+    const [a, b] = ordered[k]
+    if (a <= out[out.length - 1][1]) {
+      if (b > out[out.length - 1][1]) out[out.length - 1][1] = b
+    } else {
+      out.push([a, b])
+    }
+  }
+  return out
+}
+
+/** Total length of the intersection of two coalesced interval lists. */
+function intervalsOverlapMeasure(a, b) {
+  let i = 0
+  let j = 0
+  let total = 0
+  while (i < a.length && j < b.length) {
+    const lo = Math.max(a[i][0], b[j][0])
+    const hi = Math.min(a[i][1], b[j][1])
+    if (hi > lo) total += hi - lo
+    if (a[i][1] < b[j][1]) i++
+    else j++
+  }
+  return total
+}
+
+/** Wall-clock time in `ep` where a medium-priority task runs while the boosted
+ * holder does not — parity with `_priority_inversion_time` (A6). */
+export function priorityInversionTime(trace, ep) {
+  const lo = ep.startNs
+  const hi = ep.stopNs
+  const medMks = new Set((ep.mediumTasks || []).map(t => t.mk))
+  if (!medMks.size || hi <= lo) return 0
+  const medIv = []
+  for (const segs of (trace?.coreSegs?.values?.() || [])) {
+    for (const s of segs) {
+      if (s.start >= hi) break
+      if (s.end <= lo) continue
+      if (medMks.has(taskMergeKey(s.task))) {
+        medIv.push([Math.max(s.start, lo), Math.min(s.end, hi)])
+      }
+    }
+  }
+  if (!medIv.length) return 0
+  const medUnion = mergeIntervals(medIv)
+  const holdIv = []
+  for (const s of (trace?.segByMergeKey?.get?.(ep.mk) || [])) {
+    const a = Math.max(s.start, lo)
+    const b = Math.min(s.end, hi)
+    if (b > a) holdIv.push([a, b])
+  }
+  const medTotal = medUnion.reduce((acc, [a, b]) => acc + (b - a), 0)
+  return medTotal - intervalsOverlapMeasure(medUnion, mergeIntervals(holdIv))
+}
+
 export function priorityStatsRows(trace, lo, hi) {
   if (!trace?.hasPriorityInstrumentation) return []
   const rows = []
@@ -229,6 +289,8 @@ export function priorityStatsRows(trace, lo, hi) {
     let inversionCount = 0
     let inheritCount = 0
     let lmhCount = 0
+    let invertWorstNs = 0
+    let invertTotalNs = 0
     for (const ep of episodes) {
       if (ep.peakPri > peakPri) peakPri = ep.peakPri
       const clipLo = lo != null ? Math.max(lo, ep.startNs) : ep.startNs
@@ -238,6 +300,11 @@ export function priorityStatsRows(trace, lo, hi) {
       if (ep.inherited) inheritCount++
       if ((ep.mediumTasks && ep.mediumTasks.length) || String(ep.pattern || '').includes('L/M/H')) {
         lmhCount++
+      }
+      const epInv = priorityInversionTime(trace, ep)
+      if (epInv > 0) {
+        invertTotalNs += epInv
+        invertWorstNs = Math.max(invertWorstNs, epInv)
       }
     }
     const scale = trace.timeScale
@@ -253,12 +320,17 @@ export function priorityStatsRows(trace, lo, hi) {
       totalBoostNs,
       inversionCount,
       inheritCount,
+      invertWorstNs,
+      invertTotalNs,
       pattern,
       total: formatTime(totalBoostNs, scale),
+      invertWorst: invertWorstNs ? formatTime(invertWorstNs, scale) : '—',
+      invertTotal: invertTotalNs ? formatTime(invertTotalNs, scale) : '—',
       episodes,
     })
   }
-  rows.sort((a, b) => b.totalBoostNs - a.totalBoostNs || a.label.localeCompare(b.label))
+  rows.sort((a, b) => b.invertTotalNs - a.invertTotalNs
+    || b.totalBoostNs - a.totalBoostNs || a.label.localeCompare(b.label))
   return rows
 }
 

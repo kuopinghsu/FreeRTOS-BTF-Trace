@@ -242,7 +242,8 @@ STATS_HEAVY_SECTIONS         = frozenset({
     "anomalies", "worst", "crit_path", "patterns",
     "response", "period", "jitter", "preempt_matrix",
     "task_core", "core_time", "wait_owner", "mutex_block",
-    "task_health",
+    "task_health", "switch_reason", "sched_load",
+    "activation", "ready_gap", "idle", "sync_level",
 })
 # Factory default: every Statistics section starts collapsed. SMP-active traces
 # expand+pin Core Utilisation via ``default_stats_presentation`` (Step 1.1).
@@ -694,6 +695,8 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "period",
     "jitter",
     "inter",
+    "activation",
+    "ready_gap",
     # SCHED — scheduling / CPU / SMP
     "task_core",
     "core_time",
@@ -704,13 +707,17 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "preemption",
     "priority",
     "concurrency",
+    "switch_reason",
+    "sched_load",
     # SYNC — blocking and synchronization
     "mutex_block",
     "wait_owner",
     "sync",
     "queue",
+    "sync_level",
     # DETAIL — supporting / lower-level measurements
     "core_breakdown",
+    "idle",
     "switch_overhead",
     "tasks",
     "distrib",
@@ -736,6 +743,8 @@ STATS_SECTION_CATEGORY: Dict[str, str] = {
     "period": "TIMING",
     "jitter": "TIMING",
     "inter": "TIMING",
+    "activation": "TIMING",
+    "ready_gap": "TIMING",
     "task_core": "SCHED",
     "core_time": "SCHED",
     "migrations": "SCHED",
@@ -745,11 +754,15 @@ STATS_SECTION_CATEGORY: Dict[str, str] = {
     "preemption": "SCHED",
     "priority": "SCHED",
     "concurrency": "SCHED",
+    "switch_reason": "SCHED",
+    "sched_load": "SCHED",
     "mutex_block": "SYNC",
     "wait_owner": "SYNC",
     "sync": "SYNC",
     "queue": "SYNC",
+    "sync_level": "SYNC",
     "core_breakdown": "DETAIL",
+    "idle": "DETAIL",
     "switch_overhead": "DETAIL",
     "tasks": "DETAIL",
     "distrib": "DETAIL",
@@ -894,6 +907,38 @@ STATS_SECTION_HELP: dict[str, str] = {
     "concurrency": (
         "How much of the scoped span had 0, 1, 2, … cores running a user task "
         "at once. Click a row to open the concurrency plot."
+    ),
+    "switch_reason": (
+        "Why each task went off-CPU: preempted (another task ran on its core), "
+        "blocked (sync take/recv), suspended, or waiting for its next period. "
+        "Heuristic from slice overlap and STI events."
+    ),
+    "sched_load": (
+        "Context-switch rate and load-balance spread (util σ, score) per equal "
+        "time bin, so an imbalance or a switching burst can be placed in time. "
+        "Click a bin to jump the timeline there."
+    ),
+    "activation": (
+        "How far each task activation lands from a fitted ideal periodic clock "
+        "(phi + k·T, T = p50 inter-arrival). Large values are release jitter "
+        "against the schedule, not just against the previous release. Click a "
+        "row to highlight the task."
+    ),
+    "ready_gap": (
+        "Per task, off-CPU time it spent arguably able to run: gaps where "
+        "another task ran (preempted), it waited on a lock (blocked), or the "
+        "cause is unknown. Sleeping and period-waiting are excluded. Longest "
+        "and total rank starvation. Click a row to highlight the task."
+    ),
+    "idle": (
+        "Per core: total IDLE time, the longest single idle stretch, how many "
+        "idle fragments, and p95. The note gives the longest window where every "
+        "core was idle at once — headroom, or a stall if work was pending."
+    ),
+    "sync_level": (
+        "Running fill level of every queue and semaphore (+1 on give/send, -1 "
+        "on take/recv). Peak level, time spent at the peak, level at end of "
+        "scope, and starved take/recv attempts on an empty object."
     ),
     "switch_overhead": (
         "Time from one task leaving a core to the next task running (kernel "
@@ -1062,12 +1107,43 @@ def stats_pins_to_rc(pins: List[str]) -> str:
     return ",".join(normalize_stats_pins(pins))
 
 def normalize_stats_section_order(raw) -> List[str]:
-    """Full statistics section order: preferred IDs first, then catalogue defaults."""
+    """Full statistics section order: preferred IDs first, then catalogue defaults.
+
+    Self-heals an order that is just the catalogue with a few sections tacked on
+    at the end — what older builds wrote whenever the catalogue gained a section
+    (the new IDs were appended after every existing one instead of dropped into
+    their own group). A deliberately drag-reordered list is left untouched.
+    """
     preferred = normalize_stats_pins(raw)
+    catalogue = list(STATS_PINNABLE_SECTIONS)
+    if not preferred:
+        return catalogue
+    cat_index = {sid: i for i, sid in enumerate(catalogue)}
+    if set(preferred) == set(catalogue):
+        for k in range(1, min(len(preferred), 6)):
+            head = preferred[:-k]
+            if head != sorted(head, key=cat_index.__getitem__):
+                continue
+            healed = list(head)
+            for sid in sorted(preferred[-k:], key=cat_index.__getitem__):
+                pos = next((j for j, h in enumerate(healed)
+                            if cat_index[h] > cat_index[sid]), len(healed))
+                healed.insert(pos, sid)
+            if healed == catalogue:
+                return catalogue
     seen = set(preferred)
     out = list(preferred)
-    for sid in STATS_PINNABLE_SECTIONS:
-        if sid not in seen:
+    # A catalogue-ordered saved list that simply predates a newer section: drop
+    # the new IDs into their own group rather than after every existing one.
+    splice = out == sorted(out, key=cat_index.__getitem__)
+    for sid in catalogue:
+        if sid in seen:
+            continue
+        if splice:
+            pos = next((j for j, h in enumerate(out)
+                        if cat_index[h] > cat_index[sid]), len(out))
+            out.insert(pos, sid)
+        else:
             out.append(sid)
     return out
 
@@ -1118,6 +1194,10 @@ def default_section_table_heights() -> Dict[str, int]:
         "exec": STATS_TABLE_DEFAULT_H,
         "block": STATS_TABLE_DEFAULT_H,
         "inter": STATS_TABLE_DEFAULT_H,
+        "activation": STATS_TABLE_DEFAULT_H,
+        "ready_gap": STATS_TABLE_DEFAULT_H,
+        "idle": STATS_TABLE_DEFAULT_H,
+        "sync_level": STATS_TABLE_DEFAULT_H,
         "preemption": STATS_TABLE_MIG_DEFAULT_H,
         "priority": STATS_TABLE_DEFAULT_H,
         "intervals": STATS_TABLE_DEFAULT_H,
@@ -1132,6 +1212,8 @@ def default_section_table_heights() -> Dict[str, int]:
         "dispatch": STATS_TABLE_DEFAULT_H,
         "switch_overhead": STATS_TABLE_DEFAULT_H,
         "concurrency": STATS_TABLE_DEFAULT_H,
+        "switch_reason": STATS_TABLE_DEFAULT_H,
+        "sched_load": STATS_TABLE_DEFAULT_H,
     }
 
 STI_WAVEFORM_H           =  80  # Height of an expanded STI waveform row (px).

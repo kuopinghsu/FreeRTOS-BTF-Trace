@@ -77,7 +77,8 @@ def cursor_stats_snapshot(trace, lo: int, hi: int) -> dict:
 
     priority = []
     for (
-        _mk, label, base, peak, n_ep, _fmt, pattern, total_ns,
+        _mk, label, base, peak, n_ep, _fmt, _iw, _it, pattern, total_ns,
+        inv_worst_ns, inv_total_ns,
     ) in _priority_stats_rows(trace, lo, hi):
         priority.append({
             "label": label,
@@ -85,6 +86,8 @@ def cursor_stats_snapshot(trace, lo: int, hi: int) -> dict:
             "peakPri": int(peak),
             "episodeCount": int(n_ep),
             "totalBoostNs": int(total_ns),
+            "invertWorstNs": int(inv_worst_ns),
+            "invertTotalNs": int(inv_total_ns),
             "pattern": pattern,
         })
     priority.sort(key=lambda r: r["label"])

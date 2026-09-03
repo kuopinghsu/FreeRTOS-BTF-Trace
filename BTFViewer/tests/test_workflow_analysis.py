@@ -124,7 +124,8 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
             mig_rows=[],
             pair_rows=[],
             priority_rows=[
-                ("mk", "LowTask", 1, 10, 2, "100us", "L/M/H pattern", 100),
+                ("mk", "LowTask", 1, 10, 2, "100us", "—", "—",
+                 "L/M/H pattern", 100, 0, 0),
             ],
             sync_rows=[],
             sync_issues=[],
@@ -143,8 +144,10 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
             mig_rows=[],
             pair_rows=[],
             priority_rows=[
-                ("mk_low", "Low[266]", 2, 4, 3, "100ms", "Mutex inherit + L/M/H", 100),
-                ("mk_ps", "PS[228]", 2, 4, 1, "120us", "L/M/H pattern", 120),
+                ("mk_low", "Low[266]", 2, 4, 3, "100ms", "—", "—",
+                 "Mutex inherit + L/M/H", 100, 0, 0),
+                ("mk_ps", "PS[228]", 2, 4, 1, "120us", "—", "—",
+                 "L/M/H pattern", 120, 0, 0),
             ],
             sync_rows=[],
             sync_issues=[],

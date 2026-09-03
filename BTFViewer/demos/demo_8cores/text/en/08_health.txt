@@ -1,5 +1,5 @@
 Step 1: check whether the timing data is reliable.
 
-Open Trace Health. This trace runs in tickless mode. The coefficient of variation is about 37 percent, far above the 5 percent reference for a stable periodic tick. The average period is about 945 microseconds, the largest gap is about 3.3 milliseconds, and the estimated number of missed ticks is 10.
+Open Trace Health. This trace runs in tickless mode. The coefficient of variation is about 34 percent, far above the 5 percent reference for a stable periodic tick. The average period is about 950 microseconds, the largest gap is about 2.5 milliseconds, and the estimated number of missed ticks is 5.
 
 In tickless mode the kernel skips ticks when no task is ready, so long gaps during idle time can be normal. Limit the scope to a busy region and read Trace Health again before you treat this warning as a defect.

@@ -4,4 +4,4 @@ The window has three parts. On the left is the corridor list: every from-core to
 
 Switch the mode selector from Heatmap to Chord to see the same data as a ring. The outer ring is departures, the inner ring is arrivals, and each ribbon is one core-to-core flow, tapered from source to destination.
 
-Use the direction and scope controls to focus the view. Turn on Lock Bounces Only to keep just the migrations that happened while a task still held a lock; that is the difference between harmless thrashing and a real lock bounce. In this trace the mutex at address ending b80 accounts for the cross-core lock movement. From the footer you can jump to the timeline or send the selected path to AI with Investigate with AI.
+Use the direction and scope controls to focus the view. Turn on Lock Bounces Only to keep just the migrations that happened while a task still held a lock; that is the difference between harmless thrashing and a real lock bounce. In this trace the queue at address ending c420 accounts for the cross-core lock movement. From the footer you can jump to the timeline or send the selected path to AI with Investigate with AI.

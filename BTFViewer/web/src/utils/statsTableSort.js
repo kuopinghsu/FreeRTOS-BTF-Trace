@@ -160,6 +160,8 @@ export const PRIORITY_SORT_ACCESSORS = {
   peak: r => r.peakPri,
   boosts: r => r.episodeCount,
   total: r => r.totalBoostNs,
+  invertWorst: r => r.invertWorstNs,
+  invertTotal: r => r.invertTotalNs,
   pattern: r => r.pattern,
 }
 
@@ -171,6 +173,10 @@ export const SYNC_OBJECT_SORT_ACCESSORS = {
   bounces: r => r.bounceCount,
   bouncePct: r => r.bouncePct ?? 0,
   avg: r => r.avgHoldNs,
+  p95Hold: r => r.p95HoldNs ?? 0,
+  p99Hold: r => r.p99HoldNs ?? 0,
+  waiters: r => r.waiters ?? 0,
+  maxNest: r => r.maxNest ?? 0,
   status: r => r.statusLabel,
 }
 
@@ -195,6 +201,66 @@ export const CONCURRENCY_SORT_ACCESSORS = {
   activeCores: r => r.activeCores,
   duration: r => r.durationNs,
   pct: r => r.pctOfSpan,
+}
+
+export const SWITCH_REASON_SORT_ACCESSORS = {
+  name: r => r.name.toLowerCase(),
+  preempted: r => r.preempted,
+  blocked: r => r.blocked,
+  suspended: r => r.suspended,
+  periodWait: r => r.periodWait,
+  unknown: r => r.unknown,
+  total: r => r.total,
+  preemptRate: r => r.preemptRate,
+}
+
+export const SCHED_LOAD_SORT_ACCESSORS = {
+  start: r => r.start,
+  ctx: r => r.ctx,
+  ctxPerS: r => r.ctxPerS,
+  busiestCore: r => String(r.busiestCore || '').toLowerCase(),
+  sigmaPct: r => r.sigmaPct,
+  lbScore: r => (r.lbScore == null ? -1 : r.lbScore),
+}
+
+export const ACTIVATION_SORT_ACCESSORS = {
+  task: r => r.name.toLowerCase(),
+  count: r => r.count,
+  min: r => r.minNs,
+  avg: r => r.avgNs,
+  max: r => r.maxNs,
+  jitter: r => r.jitterNs,
+  sigma: r => r.sigmaNs,
+  p50: r => r.p50Ns,
+  p95: r => r.p95Ns,
+  p99: r => r.p99Ns,
+}
+
+export const READY_GAP_SORT_ACCESSORS = {
+  task: r => r.name.toLowerCase(),
+  count: r => r.count,
+  longest: r => r.longestNs,
+  total: r => r.totalNs,
+  avg: r => r.avgNs,
+  p95: r => r.p95Ns,
+  preemptPct: r => r.preemptPct,
+}
+
+export const IDLE_SORT_ACCESSORS = {
+  core: r => String(r.core || '').toLowerCase(),
+  total: r => r.totalNs,
+  longest: r => r.longestNs,
+  fragments: r => r.fragments,
+  p95: r => r.p95Ns,
+}
+
+export const SYNC_LEVEL_SORT_ACCESSORS = {
+  label: r => String(r.label || '').toLowerCase(),
+  kind: r => String(r.kind || '').toLowerCase(),
+  maxLevel: r => r.maxLevel,
+  timeAtMax: r => r.timeAtMaxNs,
+  endLevel: r => r.endLevel,
+  starved: r => r.starved,
 }
 
 export const SWITCH_OVERHEAD_SORT_ACCESSORS = {

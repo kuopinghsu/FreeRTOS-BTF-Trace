@@ -240,7 +240,12 @@ def _relax_widget_tree(root: QWidget) -> None:
         if isinstance(w, _StatsSectionGrip) or _in_legend_panel(w):
             continue
         if w.objectName() in ("stats_scope_action", "panel_seam_resizer",
-                              "cursors_clear_all_btn"):
+                              "cursors_clear_all_btn",
+                              "stats_section_grip", "stats_section_chevron"):
+            # Section-header grip + chevron are fixed-width spacers: clearing
+            # their minimum lets them shrink to glyph/pixmap width, and that
+            # width is measured inconsistently across rows on the macOS style,
+            # so the title after them drifts out of line between sections.
             continue
         # AI chip bars: only clear min width — never Forced Ignored (that
         # zeroed intent / mode chips when the right dock was resized).
@@ -2522,6 +2527,11 @@ class TimelineView(QGraphicsView):
         target_ns: Optional[int] = None
         target_seg_end: Optional[int] = None
         cur_task = sc._locked_task
+        # "First stop" == nothing was selected yet: Tab anchors on a marker in
+        # the current viewport, so the time axis is already framed where the
+        # user wants it (e.g. a centred cursor scope).  In that case we must not
+        # scroll the time axis to the picked segment - only the row may move.
+        first_stop = cur_task is None
         pick_forward = forward
         if cur_task is not None:
             ref_ns = sc._locked_ns if sc._locked_ns is not None else self.view_center_ns()
@@ -2601,6 +2611,8 @@ class TimelineView(QGraphicsView):
             content_left = visible_rect.left() + sc._label_width
             time_in_view = (content_left <= time_coord and
                             time_end_coord <= visible_rect.right())
+            if first_stop and content_left <= time_coord <= visible_rect.right():
+                time_in_view = True
             orth_out_of_view = False
             orth_center = vp_center_scene.y()
             if orth_span is not None:
@@ -2612,6 +2624,8 @@ class TimelineView(QGraphicsView):
             content_top = visible_rect.top() + RULER_WIDTH
             time_in_view = (content_top <= time_coord and
                             time_end_coord <= visible_rect.bottom())
+            if first_stop and content_top <= time_coord <= visible_rect.bottom():
+                time_in_view = True
             orth_out_of_view = False
             orth_center = vp_center_scene.x()
             if orth_span is not None:
@@ -2629,10 +2643,12 @@ class TimelineView(QGraphicsView):
                 self._reposition_time_at_viewport(
                     target_ns, vp_center_pt, orth_scene=orth_keep)
             elif sc._horizontal:
-                self.centerOn(time_coord, orth_center if orth_out_of_view else vp_center_scene.y())
+                keep_x = vp_center_scene.x() if time_in_view else time_coord
+                self.centerOn(keep_x, orth_center if orth_out_of_view else vp_center_scene.y())
             else:
+                keep_y = vp_center_scene.y() if time_in_view else time_coord
                 self.centerOn(orth_center if orth_out_of_view else vp_center_scene.x(),
-                              time_coord)
+                              keep_y)
         return True
 
     def focusNextPrevChild(self, next: bool) -> bool:

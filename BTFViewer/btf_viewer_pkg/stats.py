@@ -173,6 +173,14 @@ from .parser import (  # private symbols are not pulled in by import *
     _task_runs_on_selected_core,
     _all_timing_samples,
     _resolution_note,
+    _switch_reason_rows,
+    _sched_load_over_time_rows,
+    _activation_latency_rows,
+    _ready_gap_rows,
+    _idle_analysis_rows,
+    _sync_level_rows,
+    _classify_offcpu_gaps,
+    _fmt_rate_per_s,
 )
 from .timeline_util import *  # noqa: F403,F401
 from .timeline_util import (  # noqa: F401 — star-import skips leading _
@@ -2939,6 +2947,38 @@ class _StatsSectionDragFilter(QObject):
                 if src:
                     self._panel._on_section_drop(src, self._section_id)
                 event.acceptProposedAction()
+                return True
+        return False
+
+
+class _StatsHeaderClickFilter(QObject):
+    """Toggle a statistics section when its (label) header is clicked.
+
+    The header title is a plain ``QLabel`` rather than a flat ``QPushButton``:
+    a styled push button on the macOS style re-inks its label a few pixels off
+    once it has been laid out a second time (expand → collapse), so its text
+    drifts out of line with the other section headers.
+    """
+
+    def __init__(self, panel: "_StatsPanel", section_id: str) -> None:
+        super().__init__(panel)
+        self._panel = panel
+        self._section_id = section_id
+        self._press_pos: Optional[QPoint] = None
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        et = event.type()
+        if (et == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._press_pos = event.position().toPoint()
+        elif (et == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton
+                and self._press_pos is not None):
+            moved = (event.position().toPoint()
+                     - self._press_pos).manhattanLength()
+            self._press_pos = None
+            if moved < QApplication.startDragDistance():
+                self._panel._toggle_section(self._section_id)
                 return True
         return False
 
@@ -9425,10 +9465,11 @@ def _build_workflow_analysis_findings(
             impact="Long or frequent off-CPU gaps delay the next resume.",
         ))
 
-    # Priority inversion — row: (mk, label, base, peak, n, total_str, pattern, total_ns)
+    # Priority inversion — row: (mk, label, base, peak, n, total_str,
+    # invert_worst_str, invert_total_str, pattern, total_ns, iw_ns, it_ns)
     inv_rows = [
         r for r in (priority_rows or [])
-        if len(r) > 6 and "L/M/H" in str(r[6])
+        if len(r) > 8 and "L/M/H" in str(r[8])
     ]
     if inv_rows:
         names = ", ".join(str(r[1]) for r in inv_rows[:_WF_FINDING_CAP])
@@ -10988,7 +11029,8 @@ class _StatsPanel(QWidget):
         self._drop_target_sid: Optional[str] = None
         self._dragging_sid: Optional[str] = None
         self._scroll_tail_pin_active: bool = False
-        self._section_headers: Dict[str, QPushButton] = {}
+        self._section_headers: Dict[str, QLabel] = {}
+        self._section_chevrons: Dict[str, QLabel] = {}
         self._section_header_rows: Dict[str, QWidget] = {}
         self._section_seps: Dict[str, QWidget] = {}
         self._section_pin_btns: Dict[str, _StatsPinButton] = {}
@@ -10996,6 +11038,7 @@ class _StatsPanel(QWidget):
         self._section_bodies: Dict[str, QWidget] = {}
         self._section_populate: Dict[str, object] = {}
         self._section_drag_filters: List[_StatsSectionDragFilter] = []
+        self._section_click_filters: List[QObject] = []
         self._section_drag_filter_by_id: Dict[str, _StatsSectionDragFilter] = {}
         self._section_table_heights: Dict[str, int] = default_section_table_heights()
         self._table_grips: List[_StatsSectionGrip] = []
@@ -11332,6 +11375,7 @@ class _StatsPanel(QWidget):
         self._util_scroll_areas.clear()
         self._util_scroll_filters.clear()
         self._section_headers.clear()
+        self._section_chevrons.clear()
         self._section_header_rows.clear()
         self._section_seps.clear()
         self._section_pin_btns.clear()
@@ -11340,6 +11384,7 @@ class _StatsPanel(QWidget):
         self._section_populate.clear()
         self._section_drag_filters.clear()
         self._section_drag_filter_by_id.clear()
+        self._section_click_filters.clear()
         self._pending_sections.clear()
         self._distrib_ai_btn = None
         self._distrib_open_btn = None
@@ -12916,10 +12961,10 @@ class _StatsPanel(QWidget):
         ui_fs = self._ui_fs()
         accent = "#5B9BD5" if self._is_dark else "#2a6fb2"
         return (
-            "QPushButton {"
-            f" text-align:left; padding:2px 0 2px 2px; border:none;"
+            "QLabel {"
+            f" padding:2px 0 2px 2px; border:none;"
             f" background:transparent; font-weight:600; font-size:{ui_fs}; }}"
-            f"QPushButton:hover {{ color:{accent}; }}"
+            f"QLabel:hover {{ color:{accent}; }}"
         )
 
     def _restyle_section_headers(self) -> None:
@@ -12927,11 +12972,23 @@ class _StatsPanel(QWidget):
         for hdr in self._section_headers.values():
             hdr.setStyleSheet(sheet)
 
+    def _section_chevron_pixmap(self, collapsed: bool) -> "QPixmap":
+        """Chevron glyph for a section header, rasterised at the screen DPR so
+        the stroke stays crisp inside its QLabel."""
+        try:
+            dpr = max(1.0, float(self.devicePixelRatioF() or 1.0))
+        except Exception:
+            dpr = 1.0
+        px = max(1, int(round(10 * dpr)))
+        pm = _stats_chevron_icon(collapsed, self._is_dark).pixmap(px, px)
+        pm.setDevicePixelRatio(dpr)
+        return pm
+
     def _update_section_header_icon(self, section_id: str) -> None:
-        hdr = self._section_headers.get(section_id)
-        if hdr is not None:
+        chev = self._section_chevrons.get(section_id)
+        if chev is not None:
             collapsed = self._section_collapsed.get(section_id, False)
-            hdr.setIcon(_stats_chevron_icon(collapsed, self._is_dark))
+            chev.setPixmap(self._section_chevron_pixmap(collapsed))
 
     def _ensure_section_body(self, section_id: str) -> None:
         """Create a section body on first expand; reuse on later toggles."""
@@ -13180,22 +13237,37 @@ class _StatsPanel(QWidget):
         grip = QLabel("⠿")
         grip.setObjectName("stats_section_grip")
         grip.setFixedWidth(14)
+        grip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         grip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         grip.setToolTip("Drag to reorder this section")
         grip.setStyleSheet(
             f"color:#888888; font-size:{ui_fs}; padding:0; border:none;"
             " background:transparent;")
         grip.setCursor(Qt.CursorShape.OpenHandCursor)
-        hdr = QPushButton(title)
-        hdr.setFlat(True)
+        # Chevron and title are layout-managed QLabels, never a flat QPushButton:
+        # a styled push button on the macOS style re-inks its icon/text a few
+        # pixels off once it is laid out a second time (expand → collapse) or
+        # after it has held focus, so a toggled section's label would drift out
+        # of line with the other headers. The chevron keeps a rigid width so the
+        # title always starts at the same x (see _relax_widget_tree skip list).
+        chev = QLabel()
+        chev.setObjectName("stats_section_chevron")
+        chev.setFixedWidth(14)
+        chev.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        chev.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        chev.setPixmap(self._section_chevron_pixmap(collapsed))
+        hdr = QLabel(title)
+        hdr.setObjectName("stats_section_title")
         hdr.setCursor(Qt.CursorShape.PointingHandCursor)
-        hdr.setIcon(_stats_chevron_icon(collapsed, self._is_dark))
-        hdr.setIconSize(QSize(10, 10))
+        hdr.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        hdr.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         hdr.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         hdr.setStyleSheet(self._section_header_stylesheet())
-        hdr.clicked.connect(
-            lambda _checked=False, sid=section_id: self._toggle_section(sid))
+        click_filt = _StatsHeaderClickFilter(self, section_id)
+        hdr.installEventFilter(click_filt)
+        self._section_click_filters.append(click_filt)
         pin = _StatsPinButton()
         pin.clicked.connect(
             lambda sid=section_id: self._toggle_section_pin(sid))
@@ -13210,6 +13282,7 @@ class _StatsPanel(QWidget):
         pin_slot_lay.setSpacing(0)
         pin_slot_lay.addWidget(pin)
         row_lay.addWidget(grip, 0)
+        row_lay.addWidget(chev, 0)
         row_lay.addWidget(hdr, 1)
         # Meta order matches Web: Scope → Filtered → category → pin.
         if self._section_scope_chip:
@@ -13250,6 +13323,7 @@ class _StatsPanel(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._ilay.addWidget(row)
         self._section_headers[section_id] = hdr
+        self._section_chevrons[section_id] = chev
         self._section_header_rows[section_id] = row
         self._section_pin_btns[section_id] = pin
         self._section_populate[section_id] = populate
@@ -13259,7 +13333,7 @@ class _StatsPanel(QWidget):
         hover = _StatsHeaderHoverFilter(pin)
         row.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         row.installEventFilter(hover)
-        for w in (row, grip, hdr, pin, pin_slot):
+        for w in (row, grip, chev, hdr, pin, pin_slot):
             w.setAcceptDrops(True)
             w.installEventFilter(filt)
         self._sync_pin_buttons()
@@ -14240,7 +14314,7 @@ class _StatsPanel(QWidget):
     def _build_click_rows_table(
         self, rows: List[dict], headers: List[str], values_fn,
         ev_fn, ui_fs: str, empty_hint: str, section_id: str,
-        trace: "BtfTrace", on_cell=None, keys_fn=None,
+        trace: "BtfTrace", on_cell=None, keys_fn=None, on_row=None,
     ) -> QWidget:
         host = QWidget()
         lay = QVBoxLayout(host)
@@ -14265,7 +14339,10 @@ class _StatsPanel(QWidget):
                 item.setData(Qt.ItemDataRole.UserRole, row)
                 if c == 0 or on_cell is not None:
                     item.setForeground(link)
-                    item.setToolTip("Click to jump or open the matching plot")
+                    item.setToolTip(
+                        "Click to highlight the task on the timeline"
+                        if on_row is not None
+                        else "Click to jump or open the matching plot")
                 table.setItem(r, c, item)
 
         def _cell_clicked(row: int, col: int) -> None:
@@ -14273,6 +14350,9 @@ class _StatsPanel(QWidget):
             if item is None:
                 return
             data = item.data(Qt.ItemDataRole.UserRole)
+            if on_row is not None:
+                on_row(data)
+                return
             if on_cell is not None and isinstance(data, dict):
                 on_cell(data, col)
                 return
@@ -15060,9 +15140,10 @@ class _StatsPanel(QWidget):
         if trace.has_priority_instrumentation:
             pri_body = "".join(
                 f"<tr><td>{_esc(r[1])}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td>"
-                f"<td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
+                f"<td>{_esc(r[5])}</td><td>{_esc(r[6])}</td><td>{_esc(r[7])}</td>"
+                f"<td>{_esc(r[8])}</td></tr>"
                 for r in priority_rows
-            ) or '<tr><td colspan="6" class="empty">No priority boosts in scope</td></tr>'
+            ) or '<tr><td colspan="8" class="empty">No priority boosts in scope</td></tr>'
             ep_body = "".join(
                 f"<tr><td>{_esc(ep['task'])}</td><td>{_esc(ep['pri'])}</td>"
                 f"<td>{_esc(ep['start'])}</td><td>{_esc(ep['stop'])}</td>"
@@ -15073,7 +15154,8 @@ class _StatsPanel(QWidget):
                        if len(priority_eps) >= 200 else "")
             priority_html = f"""
     <section class=\"report-card\"><h2>Priority Inheritance{_esc(scope_title)}</h2>
-    <table><thead><tr><th>Task</th><th>Base</th><th>Peak</th><th>Boosts</th><th>Boosted</th><th>Pattern</th></tr></thead>
+    <p class=\"detail-note\">Invert = time a medium-priority task ran while the boosted holder did not.</p>
+    <table><thead><tr><th>Task</th><th>Base</th><th>Peak</th><th>Boosts</th><th>Boosted</th><th>Invert (worst)</th><th>Invert (total)</th><th>Pattern</th></tr></thead>
     <tbody>{pri_body}</tbody></table>
     <h3 class=\"sub\">Boost episodes</h3>{ep_note}
     <table><thead><tr><th>Task</th><th>pri</th><th>Start</th><th>End</th><th>Duration</th><th>Pattern</th></tr></thead>
@@ -15086,10 +15168,15 @@ class _StatsPanel(QWidget):
                 f"<tr><td>{_esc(r[3])}</td><td>{_esc(r[1])}</td><td>{r[4]}</td><td>{r[5]}</td>"
                 f"<td class=\"{'sev-warning' if len(r) > 10 and r[10] > 0 else ''}\">{r[10] if len(r) > 10 else 0}</td>"
                 f"{_sync_bounce_pct_cell(r)}"
-                f"<td>{_esc(r[6])}</td><td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
+                f"<td>{_esc(r[6])}</td>"
+                f"<td>{_esc(r[12] if len(r) > 12 else '—')}</td>"
+                f"<td>{_esc(r[13] if len(r) > 13 else '—')}</td>"
+                f"<td>{r[14] if len(r) > 14 else 0}</td>"
+                f"<td>{r[15] if len(r) > 15 else 0}</td>"
+                f"<td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
                 f"{_esc(r[7])}</td></tr>"
                 for r in sync_rows
-            ) or '<tr><td colspan="8" class="empty">No mutex/sem activity in scope</td></tr>'
+            ) or '<tr><td colspan="12" class="empty">No mutex/sem activity in scope</td></tr>'
             issue_body = "".join(
                 f"<tr><td>{_esc(i.get('obj_key') or '—')}</td>"
                 f"<td>{_esc(_format_time_trim(i['time_ns'], trace.time_scale))}</td>"
@@ -15110,7 +15197,8 @@ class _StatsPanel(QWidget):
                          if len(sync_holds) >= 150 else "")
             sync_html = f"""
     <section class=\"report-card\"><h2>Mutex / Semaphore{_esc(scope_title)}</h2>
-    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>Status</th></tr></thead>
+    <p class=\"detail-note\">Waiters = distinct tasks that acquired while already held; MaxNest = deepest simultaneously-open takes (both over the whole trace).</p>
+    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>p95 hold</th><th>p99 hold</th><th>Waiters</th><th>MaxNest</th><th>Status</th></tr></thead>
     <tbody>{sync_body}</tbody></table>
     <h3 class=\"sub\">Pairing issues</h3>
     <table><thead><tr><th>Object</th><th>Time</th><th>Detail</th><th>Issue</th><th>Task</th><th>Core</th></tr></thead>
@@ -15125,14 +15213,21 @@ class _StatsPanel(QWidget):
                     f"<tr><td>{_esc(r[3])}</td><td>{_esc(r[1])}</td><td>{r[4]}</td><td>{r[5]}</td>"
                     f"<td class=\"{'sev-warning' if len(r) > 10 and r[10] > 0 else ''}\">{r[10] if len(r) > 10 else 0}</td>"
                     f"{_sync_bounce_pct_cell(r)}"
-                    f"<td>{_esc(r[6])}</td><td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
+                    f"<td>{_esc(r[6])}</td>"
+                    f"<td>{_esc(r[12] if len(r) > 12 else '—')}</td>"
+                    f"<td>{_esc(r[13] if len(r) > 13 else '—')}</td>"
+                    f"<td>{r[14] if len(r) > 14 else 0}</td>"
+                    f"<td>{r[15] if len(r) > 15 else 0}</td>"
+                    f"<td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
                     f"{_esc(r[7])}</td></tr>"
                     for r in _queue_html_rows
                 )
                 queue_html = (
                     f'<section class="report-card"><h2>Queue{_esc(scope_title)}</h2>'
                     '<table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th>'
-                    '<th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>Status</th></tr></thead>'
+                    '<th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th>'
+                    '<th>p95 hold</th><th>p99 hold</th><th>Waiters</th><th>MaxNest</th>'
+                    '<th>Status</th></tr></thead>'
                     f'<tbody>{q_body}</tbody></table></section>'
                 )
 
@@ -15280,6 +15375,85 @@ class _StatsPanel(QWidget):
             f'<tbody>{sw_body}</tbody></table></section>'
         )
 
+        sr_rows_html = _switch_reason_rows(trace, lo, hi)
+        sr_body = "".join(
+            f"<tr><td>{_esc(name)}</td><td>{pre}</td><td>{blk}</td>"
+            f"<td>{sus}</td><td>{per}</td><td>{oth}</td><td>{tot}</td>"
+            f"<td>{_esc(_fmt_rate_per_s(rate))}</td></tr>"
+            for _mk, name, pre, blk, sus, per, oth, tot, rate in sr_rows_html
+        ) or '<tr><td colspan="8" class="empty">No off-CPU switches in scope</td></tr>'
+        switch_reason_html = (
+            f'<section class="report-card"><h2>Switch Reason Breakdown{_esc(scope_title)}</h2>'
+            '<p class="detail-note">Heuristic: Preempted = another task ran on the '
+            'core; Blocked = STI take/recv; Suspended = STI suspend; Period = only '
+            'IDLE ran; Other = no signal.</p>'
+            '<table><thead><tr><th>Task</th><th>Preempted</th><th>Blocked</th>'
+            '<th>Suspended</th><th>Period</th><th>Other</th><th>Total</th>'
+            '<th>Preempt/s</th></tr></thead>'
+            f'<tbody>{sr_body}</tbody></table></section>'
+        )
+
+        sl_rows_html = _sched_load_over_time_rows(
+            trace, self._ux_events(trace, lo, hi), lo, hi)
+        sl_body = "".join(
+            f"<tr><td>{_esc(_format_time_trim(int(r.get('start') or 0), ts))}</td>"
+            f"<td>{int(r.get('ctx') or 0)}</td>"
+            f"<td>{float(r.get('ctx_per_s') or 0):,.0f}</td>"
+            f"<td>{_esc(r.get('busiest_core') or '—')}</td>"
+            f"<td>{float(r.get('sigma_pct') or 0):.1f}%</td>"
+            f"<td>{'—' if r.get('lb_score') is None else format(float(r.get('lb_score') or 0), '.0f')}</td></tr>"
+            for r in sl_rows_html
+        ) or '<tr><td colspan="6" class="empty">No on-CPU slices in scope</td></tr>'
+        sched_load_html = (
+            f'<section class="report-card"><h2>Scheduling Load Over Time{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Time</th><th>Ctx sw</th><th>Ctx sw/s</th>'
+            '<th>Busiest core</th><th>Util &#963;</th><th>LB score</th></tr></thead>'
+            f'<tbody>{sl_body}</tbody></table></section>'
+        )
+
+        idle_rows_html, idle_all_span, idle_all_start = _idle_analysis_rows(
+            trace, lo, hi)
+        idle_body = "".join(
+            f"<tr><td>{_esc(core)}</td>"
+            f"<td>{_esc(_format_time_trim(int(total), ts))}</td>"
+            f"<td>{_esc(_format_time_trim(int(longest), ts))}</td>"
+            f"<td>{frags}</td>"
+            f"<td>{_esc(_format_time_trim(int(p95), ts))}</td></tr>"
+            for core, total, longest, _st, frags, p95 in idle_rows_html
+        ) or '<tr><td colspan="5" class="empty">No idle time in scope</td></tr>'
+        idle_note = (
+            f'<p class="detail-note">Longest all-cores-idle window: '
+            f'{_esc(_format_time_trim(int(idle_all_span), ts))} at '
+            f'{_esc(_format_time_trim(int(idle_all_start), ts))}.</p>'
+            if idle_all_span > 0 else ""
+        )
+        idle_html = (
+            f'<section class="report-card"><h2>Idle Analysis{_esc(scope_title)}</h2>'
+            f'{idle_note}'
+            '<table><thead><tr><th>Core</th><th>Idle total</th><th>Longest</th>'
+            '<th>Frags</th><th>p95</th></tr></thead>'
+            f'<tbody>{idle_body}</tbody></table></section>'
+        )
+
+        lvl_rows_html = _sync_level_rows(trace, lo, hi)
+        lvl_body = "".join(
+            f"<tr><td>{_esc(label)}</td><td>{_esc(kind)}</td><td>{peak}</td>"
+            f"<td>{_esc(_format_time_trim(int(tam), ts))}</td>"
+            f"<td>{endl}</td><td>{starv}</td></tr>"
+            for _k, kind, _p, label, peak, tam, endl, starv in lvl_rows_html
+        ) or (
+            '<tr><td colspan="6" class="empty">No queue / semaphore events '
+            'in scope</td></tr>'
+        )
+        sync_level_html = (
+            f'<section class="report-card"><h2>Queue Backlog / Semaphore Level{_esc(scope_title)}</h2>'
+            '<p class="detail-note">Level = give/send minus take/recv, floored '
+            'at 0. Starved = take/recv attempted on an empty object.</p>'
+            '<table><thead><tr><th>Object</th><th>Kind</th><th>Peak</th>'
+            '<th>Time at peak</th><th>End level</th><th>Starved</th></tr></thead>'
+            f'<tbody>{lvl_body}</tbody></table></section>'
+        )
+
         disp_rows_html = self._dispatch_latency_rows(trace, lo, hi)
         disp_body = "".join(
             f"<tr><td>{_esc(label)}</td><td>{n}</td>"
@@ -15314,6 +15488,51 @@ class _StatsPanel(QWidget):
         )
 
         _ux_evs = self._ux_events(trace, lo, hi)
+
+        act_rows_html = _activation_latency_rows(trace, _ux_evs, lo, hi)
+        act_body = "".join(
+            f"<tr><td>{_esc(name)}</td><td>{n}</td>"
+            f"<td>{_esc(mn)}</td><td>{_esc(avg)}</td><td>{_esc(mx)}</td>"
+            f"<td>{_esc(jitter)}</td><td>{_esc(sigma)}</td>"
+            f"<td>{_esc(p50)}</td><td>{_esc(p95)}</td><td>{_esc(p99)}</td></tr>"
+            for (_mk, name, n, mn, avg, mx, jitter, sigma, p50, p95, p99)
+            in act_rows_html
+        ) or (
+            '<tr><td colspan="10" class="empty">Need at least 3 activations '
+            'per periodic task</td></tr>'
+        )
+        activation_html = (
+            f'<section class="report-card"><h2>Activation Latency{_esc(scope_title)}</h2>'
+            '<p class="detail-note">Error = distance from a fitted periodic grid '
+            '(phi + k&#183;T, T = p50 inter-arrival), anchored at the first '
+            'activation in scope.</p>'
+            '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th>'
+            '<th>Avg</th><th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th>'
+            '<th>p95</th><th>p99</th></tr></thead>'
+            f'<tbody>{act_body}</tbody></table></section>'
+        )
+
+        rg_rows_html = _ready_gap_rows(trace, lo, hi)
+        rg_body = "".join(
+            f"<tr><td>{_esc(name)}</td><td>{n}</td>"
+            f"<td>{_esc(_format_time_trim(int(longest), ts))}</td>"
+            f"<td>{_esc(_format_time_trim(int(total), ts))}</td>"
+            f"<td>{_esc(_format_time_trim(int(avg), ts))}</td>"
+            f"<td>{_esc(_format_time_trim(int(p95), ts))}</td>"
+            f"<td>{float(ppct):.0f}%</td></tr>"
+            for (_mk, name, n, longest, total, avg, p95, ppct) in rg_rows_html
+        ) or '<tr><td colspan="7" class="empty">No ready-gaps in scope</td></tr>'
+        ready_gap_html = (
+            f'<section class="report-card"><h2>Ready-Gap (Starvation){_esc(scope_title)}</h2>'
+            '<p class="detail-note">Off-CPU gaps where the task was arguably '
+            'runnable: preempted, blocked on a lock, or unattributed. Sleep and '
+            'period-wait excluded. % preempt is the preempted share of the '
+            'total.</p>'
+            '<table><thead><tr><th>Task</th><th>Gaps</th><th>Longest</th>'
+            '<th>Total</th><th>Avg</th><th>p95</th><th>% preempt</th></tr></thead>'
+            f'<tbody>{rg_body}</tbody></table></section>'
+        )
+
         _span_ns = max(1, (hi - lo) if lo is not None and hi is not None
                        else (trace.time_max - trace.time_min))
         _tc = task_core_matrix(_ux_evs, list(trace.core_names or []), _span_ns)
@@ -15814,7 +16033,10 @@ class _StatsPanel(QWidget):
     {tick_health_html}
     {core_breakdown_html}
     {concurrency_html}
+    {switch_reason_html}
+    {sched_load_html}
     {switch_overhead_html}
+    {idle_html}
     {task_util_html}
     <section class=\"report-card\">
     <h2>Core Migrations{_esc(scope_title)}</h2>
@@ -15835,6 +16057,8 @@ class _StatsPanel(QWidget):
     {_render_stats_table(f'Off-CPU Time (Blocking Time){scope_title}', block_rows, _resolution_note(trace, _all_timing_samples(trace, 'block', lo, hi), lo, hi))}
     {dispatch_html}
     {_render_stats_table(f'Inter-Arrival Time{scope_title}', inter_rows)}
+    {activation_html}
+    {ready_gap_html}
     {period_html}
     {response_html}
     {jitter_html}
@@ -15849,6 +16073,7 @@ class _StatsPanel(QWidget):
     {wait_owner_html}
     {mutex_block_html}
     {queue_html}
+    {sync_level_html}
     {interval_html}
     {tag_html}
     {glossary_html}
@@ -16115,6 +16340,70 @@ class _StatsPanel(QWidget):
                 ])
             else:
                 writer.writerow(["No data"] + [""] * 6)
+
+            writer.writerow([])
+            writer.writerow([f"Switch Reason Breakdown{scope_suffix}"])
+            writer.writerow([
+                "Task", "Preempted", "Blocked", "Suspended", "Period",
+                "Other", "Total", "Preempt/s",
+            ])
+            _sr_csv = _switch_reason_rows(trace, lo, hi)
+            if _sr_csv:
+                for (_mk, name, pre, blk, sus, per, oth, tot,
+                     rate) in _sr_csv:
+                    writer.writerow([
+                        name, pre, blk, sus, per, oth, tot,
+                        _fmt_rate_per_s(rate),
+                    ])
+            else:
+                writer.writerow(["No data"] + [""] * 7)
+
+            writer.writerow([])
+            writer.writerow([f"Scheduling Load Over Time{scope_suffix}"])
+            writer.writerow([
+                "Time", "Ctx sw", "Ctx sw/s", "Busiest core", "Util sigma",
+                "LB score",
+            ])
+            _sl_csv = _sched_load_over_time_rows(
+                trace, self._ux_events(trace, lo, hi), lo, hi)
+            if _sl_csv:
+                for _rec in _sl_csv:
+                    writer.writerow([
+                        _us(_format_time(int(_rec.get("start") or 0),
+                                         trace.time_scale)),
+                        int(_rec.get("ctx") or 0),
+                        f"{float(_rec.get('ctx_per_s') or 0):.0f}",
+                        _rec.get("busiest_core") or "",
+                        f"{float(_rec.get('sigma_pct') or 0):.1f}%",
+                        ("" if _rec.get("lb_score") is None
+                         else f"{float(_rec.get('lb_score') or 0):.0f}"),
+                    ])
+            else:
+                writer.writerow(["No data"] + [""] * 5)
+
+            writer.writerow([])
+            writer.writerow([f"Idle Analysis{scope_suffix}"])
+            _idle_csv, _idle_all_span, _idle_all_start = _idle_analysis_rows(
+                trace, lo, hi)
+            if _idle_all_span > 0:
+                writer.writerow([
+                    "Longest all-cores-idle window",
+                    _us(_format_time(int(_idle_all_span), trace.time_scale)),
+                    "at",
+                    _us(_format_time(int(_idle_all_start), trace.time_scale)),
+                ])
+            writer.writerow(["Core", "Idle total", "Longest", "Frags", "p95"])
+            if _idle_csv:
+                for core, total, longest, _st, frags, p95 in _idle_csv:
+                    writer.writerow([
+                        core,
+                        _us(_format_time(int(total), trace.time_scale)),
+                        _us(_format_time(int(longest), trace.time_scale)),
+                        frags,
+                        _us(_format_time(int(p95), trace.time_scale)),
+                    ])
+            else:
+                writer.writerow(["No data"] + [""] * 4)
 
             writer.writerow([])
             writer.writerow([f"Top Tasks by CPU (excl. IDLE/TICK){scope_suffix}"])
@@ -16426,6 +16715,43 @@ class _StatsPanel(QWidget):
                 writer.writerow(["No data"] + [""] * 9)
 
             writer.writerow([])
+            writer.writerow([f"Activation Latency{scope_suffix}"])
+            writer.writerow([
+                "Task", "Activations", "Min", "Avg", "Max", "Jitter",
+                "StdDev (population)", "p50", "p95", "p99",
+            ])
+            _act_csv = _activation_latency_rows(trace, _ux_evs_csv, lo, hi)
+            if _act_csv:
+                for (_mk, name, n, mn, avg, mx, jitter, sigma,
+                     p50, p95, p99) in _act_csv:
+                    writer.writerow([
+                        name, n, _us(mn), _us(avg), _us(mx), _us(jitter),
+                        _us(sigma), _us(p50), _us(p95), _us(p99),
+                    ])
+            else:
+                writer.writerow(["No data"] + [""] * 9)
+
+            writer.writerow([])
+            writer.writerow([f"Ready-Gap (Starvation){scope_suffix}"])
+            writer.writerow([
+                "Task", "Gaps", "Longest", "Total", "Avg", "p95", "% preempt",
+            ])
+            _rg_csv = _ready_gap_rows(trace, lo, hi)
+            if _rg_csv:
+                for (_mk, name, n, longest, total, avg, p95,
+                     ppct) in _rg_csv:
+                    writer.writerow([
+                        name, n,
+                        _us(_format_time(int(longest), trace.time_scale)),
+                        _us(_format_time(int(total), trace.time_scale)),
+                        _us(_format_time(int(avg), trace.time_scale)),
+                        _us(_format_time(int(p95), trace.time_scale)),
+                        f"{float(ppct):.0f}%",
+                    ])
+            else:
+                writer.writerow(["No data"] + [""] * 6)
+
+            writer.writerow([])
             writer.writerow([f"Period / Jitter{scope_suffix}"])
             writer.writerow([
                 "Task", "N", "Expected", "Min", "Avg", "Max", "p95", "p99",
@@ -16531,23 +16857,34 @@ class _StatsPanel(QWidget):
 
             writer.writerow([])
             writer.writerow([f"Priority Inheritance{scope_suffix}"])
-            writer.writerow(["Task", "Base", "Peak", "Boosts", "Boosted", "Pattern"])
+            writer.writerow(["Task", "Base", "Peak", "Boosts", "Boosted",
+                             "Invert (worst)", "Invert (total)", "Pattern"])
             if priority_rows_csv:
-                for _mk, label, base, peak, n_eps, total, pattern, _total_ns in priority_rows_csv:
-                    writer.writerow([label, base, peak, n_eps, _us(total), pattern])
+                for (_mk, label, base, peak, n_eps, total, inv_worst,
+                     inv_total, pattern, _t, _iw, _it) in priority_rows_csv:
+                    writer.writerow([label, base, peak, n_eps, _us(total),
+                                     _us(inv_worst), _us(inv_total), pattern])
             elif trace.has_priority_instrumentation:
-                writer.writerow(["No priority boosts in scope", "", "", "", "", ""])
+                writer.writerow(["No priority boosts in scope"] + [""] * 7)
 
             writer.writerow([])
             writer.writerow([f"Mutex / Semaphore{scope_suffix}"])
-            writer.writerow(["Object", "Kind", "Holds", "Issues", "Bounces", "Bounce %", "Avg hold", "Status"])
+            writer.writerow(["Object", "Kind", "Holds", "Issues", "Bounces",
+                             "Bounce %", "Avg hold", "p95 hold", "p99 hold",
+                             "Waiters", "MaxNest", "Status"])
             if sync_rows_csv:
                 for row_csv in sync_rows_csv:
                     _key, kind, _ptr, label = row_csv[:4]
                     holds, issues, avg, status_label = row_csv[4], row_csv[5], row_csv[6], row_csv[7]
                     bounces = row_csv[10] if len(row_csv) > 10 else 0
                     bpct = f"{row_csv[11]:.1f}%" if len(row_csv) > 11 and holds else "—"
-                    writer.writerow([label, kind, holds, issues, bounces, bpct, _us(avg), status_label])
+                    p95h = _us(row_csv[12]) if len(row_csv) > 12 else "—"
+                    p99h = _us(row_csv[13]) if len(row_csv) > 13 else "—"
+                    waiters = row_csv[14] if len(row_csv) > 14 else 0
+                    max_nest = row_csv[15] if len(row_csv) > 15 else 0
+                    writer.writerow([label, kind, holds, issues, bounces, bpct,
+                                     _us(avg), p95h, p99h, waiters, max_nest,
+                                     status_label])
                 # Core affinity violations summary
                 total_bounces = sum(r[10] for r in sync_rows_csv if len(r) > 10)
                 if total_bounces > 0:
@@ -16559,7 +16896,7 @@ class _StatsPanel(QWidget):
                             writer.writerow([row_csv[3], row_csv[10],
                                              f"{row_csv[10]} hold(s) crossed core boundaries"])
             elif trace.has_sync_object_instrumentation:
-                writer.writerow(["No mutex/sem activity in scope", "", "", "", "", "", "", ""])
+                writer.writerow(["No mutex/sem activity in scope"] + [""] * 11)
 
             if trace.has_sync_object_instrumentation:
                 writer.writerow([])
@@ -16623,16 +16960,40 @@ class _StatsPanel(QWidget):
             queue_rows_csv = _sync_object_stats_rows(trace, lo, hi, kind_filter="queue")
             writer.writerow([])
             writer.writerow([f"Queue{scope_suffix}"])
-            writer.writerow(["Object", "Kind", "Holds", "Issues", "Bounces", "Bounce %", "Avg hold", "Status"])
+            writer.writerow(["Object", "Kind", "Holds", "Issues", "Bounces",
+                             "Bounce %", "Avg hold", "p95 hold", "p99 hold",
+                             "Waiters", "MaxNest", "Status"])
             if queue_rows_csv:
                 for row_csv in queue_rows_csv:
                     _key, kind, _ptr, label = row_csv[:4]
                     holds, issues, avg, status_label = row_csv[4], row_csv[5], row_csv[6], row_csv[7]
                     bounces = row_csv[10] if len(row_csv) > 10 else 0
                     bpct = f"{row_csv[11]:.1f}%" if len(row_csv) > 11 and holds else "—"
-                    writer.writerow([label, kind, holds, issues, bounces, bpct, _us(avg), status_label])
+                    p95h = _us(row_csv[12]) if len(row_csv) > 12 else "—"
+                    p99h = _us(row_csv[13]) if len(row_csv) > 13 else "—"
+                    waiters = row_csv[14] if len(row_csv) > 14 else 0
+                    max_nest = row_csv[15] if len(row_csv) > 15 else 0
+                    writer.writerow([label, kind, holds, issues, bounces, bpct,
+                                     _us(avg), p95h, p99h, waiters, max_nest,
+                                     status_label])
             else:
-                writer.writerow(["No queue activity in scope", "", "", "", "", "", "", ""])
+                writer.writerow(["No queue activity in scope"] + [""] * 11)
+
+            writer.writerow([])
+            writer.writerow([f"Queue Backlog / Semaphore Level{scope_suffix}"])
+            writer.writerow([
+                "Object", "Kind", "Peak", "Time at peak", "End level", "Starved",
+            ])
+            _lvl_csv = _sync_level_rows(trace, lo, hi)
+            if _lvl_csv:
+                for _k, kind, _p, label, peak, tam, endl, starv in _lvl_csv:
+                    writer.writerow([
+                        label, kind, peak,
+                        _us(_format_time(int(tam), trace.time_scale)),
+                        endl, starv,
+                    ])
+            else:
+                writer.writerow(["No data"] + [""] * 5)
 
             writer.writerow([])
             writer.writerow([f"Interval Analysis{scope_suffix}"])
@@ -16758,6 +17119,10 @@ class _StatsPanel(QWidget):
                 {"object": r[3], "kind": r[1], "holds": r[4], "issues": r[5],
                  "bounces": r[10] if len(r) > 10 else 0,
                  "bounce_pct": r[11] if len(r) > 11 else 0.0,
+                 "p95_hold": r[12] if len(r) > 12 else "—",
+                 "p99_hold": r[13] if len(r) > 13 else "—",
+                 "waiters": r[14] if len(r) > 14 else 0,
+                 "max_nest": r[15] if len(r) > 15 else 0,
                  "status": r[8]}
                 for r in sync_rows
             ],
@@ -17051,6 +17416,91 @@ class _StatsPanel(QWidget):
                 _populate_concurrency,
             )
 
+            # -- Switch reason breakdown (A1) ----------------------------------
+            def _populate_switch_reason(blay: QVBoxLayout) -> None:
+                _sr_rows = _switch_reason_rows(trace, lo, hi)
+                blay.addWidget(self._build_click_rows_table(
+                    _sr_rows,
+                    ["Task", "Preempted", "Blocked", "Suspended", "Period",
+                     "Other", "Total", "Preempt/s"],
+                    lambda r: [
+                        r[1], str(r[2]), str(r[3]), str(r[4]), str(r[5]),
+                        str(r[6]), str(r[7]), _fmt_rate_per_s(r[8]),
+                    ],
+                    lambda r: None,
+                    _fs,
+                    "No off-CPU switches in this scope",
+                    "switch_reason",
+                    trace,
+                    on_row=lambda r: (
+                        self.task_clicked.emit(str(r[0]))
+                        if r and r[0] else None),
+                    keys_fn=lambda r: [
+                        r[1].lower(), r[2], r[3], r[4], r[5], r[6], r[7], r[8],
+                    ],
+                ))
+
+            self._add_collapsible_section(
+                "switch_reason",
+                f"Switch Reason Breakdown{scope}",
+                _fs,
+                _populate_switch_reason,
+            )
+
+            # -- Scheduling load over time (A2 + A9) -------------------------
+            def _populate_sched_load(blay: QVBoxLayout) -> None:
+                _sl_rows = _sched_load_over_time_rows(
+                    trace, self._ux_events(trace, lo, hi), lo, hi)
+                scale = trace.time_scale
+
+                def _sl_ev(rec) -> Optional[dict]:
+                    if not isinstance(rec, dict):
+                        return None
+                    return {
+                        **rec,
+                        "task": rec.get("busiest_core") or "CPU",
+                        "mk": "",
+                        "duration": max(1, int(rec.get("stop") or 0)
+                                        - int(rec.get("start") or 0)),
+                        "section": "sched_load",
+                    }
+
+                blay.addWidget(self._build_click_rows_table(
+                    _sl_rows,
+                    ["Time", "Ctx sw", "Ctx sw/s", "Busiest core",
+                     "Util σ", "LB score"],
+                    lambda r: [
+                        _format_time(int(r.get("start") or 0), scale),
+                        str(int(r.get("ctx") or 0)),
+                        f"{float(r.get('ctx_per_s') or 0):,.0f}",
+                        r.get("busiest_core") or "—",
+                        f"{float(r.get('sigma_pct') or 0):.1f}%",
+                        ("—" if r.get("lb_score") is None
+                         else f"{float(r.get('lb_score') or 0):.0f}"),
+                    ],
+                    _sl_ev,
+                    _fs,
+                    "No on-CPU slices in this scope",
+                    "sched_load",
+                    trace,
+                    keys_fn=lambda r: [
+                        int(r.get("start") or 0),
+                        int(r.get("ctx") or 0),
+                        float(r.get("ctx_per_s") or 0),
+                        str(r.get("busiest_core") or "").lower(),
+                        float(r.get("sigma_pct") or 0),
+                        (-1.0 if r.get("lb_score") is None
+                         else float(r.get("lb_score") or 0)),
+                    ],
+                ))
+
+            self._add_collapsible_section(
+                "sched_load",
+                f"Scheduling Load Over Time{scope}",
+                _fs,
+                _populate_sched_load,
+            )
+
             # -- Kernel switch overhead -----------------------------------
             def _populate_switch_overhead(blay: QVBoxLayout) -> None:
                 _sw_rows = _switch_overhead_rows(trace, lo, hi)
@@ -17119,6 +17569,43 @@ class _StatsPanel(QWidget):
                 _fs,
                 _populate_switch_overhead,
             )
+
+        # -- Idle analysis (A5) -----------------------------------------
+        def _populate_idle(blay: QVBoxLayout) -> None:
+            _rows, _all_span, _all_start = _idle_analysis_rows(trace, lo, hi)
+            scale = trace.time_scale
+            if _all_span > 0:
+                blay.addWidget(self._lbl(
+                    "Longest all-cores-idle window: "
+                    f"{_format_time(_all_span, scale)} at "
+                    f"{_format_time(_all_start, scale)}",
+                    color="#888888", ui_fs=_fs))
+            blay.addWidget(self._build_click_rows_table(
+                _rows,
+                ["Core", "Idle total", "Longest", "Frags", "p95"],
+                lambda r: [
+                    r[0], _format_time(int(r[1]), scale),
+                    _format_time(int(r[2]), scale), str(r[4]),
+                    _format_time(int(r[5]), scale),
+                ],
+                lambda r: None,
+                _fs,
+                "No idle time in this scope",
+                "idle",
+                trace,
+                on_row=lambda r: (
+                    self.task_clicked.emit(str(r[0])) if r and r[0] else None),
+                keys_fn=lambda r: [
+                    r[0].lower(), int(r[1]), int(r[2]), int(r[4]), int(r[5]),
+                ],
+            ))
+
+        self._add_collapsible_section(
+            "idle",
+            f"Idle Analysis{scope}",
+            _fs,
+            _populate_idle,
+        )
 
         # -- Top tasks by CPU time (excl. IDLE, top 10) -------------------
         def _populate_tasks(blay: QVBoxLayout) -> None:
@@ -17735,6 +18222,64 @@ class _StatsPanel(QWidget):
             _populate_inter,
         )
 
+        # -- Activation latency vs. ideal periodic grid (A3) -------------
+        def _populate_activation(blay: QVBoxLayout) -> None:
+            _act_rows = _activation_latency_rows(
+                trace, self._ux_events(trace, lo, hi), lo, hi)
+            blay.addWidget(self._build_stats_table(
+                _act_rows,
+                _fs,
+                "Need at least 3 activations per periodic task",
+                count_header="Activations",
+                section_id="activation",
+                include_variability=True,
+                on_row_click=lambda mk: self.task_clicked.emit(str(mk)),
+            ))
+
+        self._add_collapsible_section(
+            "activation",
+            f"Activation Latency{scope}",
+            _fs,
+            _populate_activation,
+        )
+
+        # -- Ready-gap / starvation (A4) --------------------------------
+        def _populate_ready_gap(blay: QVBoxLayout) -> None:
+            _rg_rows = _ready_gap_rows(trace, lo, hi)
+            scale = trace.time_scale
+            blay.addWidget(self._build_click_rows_table(
+                _rg_rows,
+                ["Task", "Gaps", "Longest", "Total", "Avg", "p95",
+                 "% preempt"],
+                lambda r: [
+                    r[1], str(r[2]),
+                    _format_time(int(r[3]), scale),
+                    _format_time(int(r[4]), scale),
+                    _format_time(int(r[5]), scale),
+                    _format_time(int(r[6]), scale),
+                    f"{float(r[7]):.0f}%",
+                ],
+                lambda r: None,
+                _fs,
+                "No ready-gaps in this scope",
+                "ready_gap",
+                trace,
+                on_row=lambda r: (
+                    self.task_clicked.emit(str(r[0]))
+                    if r and r[0] else None),
+                keys_fn=lambda r: [
+                    r[1].lower(), r[2], int(r[3]), int(r[4]), int(r[5]),
+                    int(r[6]), float(r[7]),
+                ],
+            ))
+
+        self._add_collapsible_section(
+            "ready_gap",
+            f"Ready-Gap (Starvation){scope}",
+            _fs,
+            _populate_ready_gap,
+        )
+
         def _populate_period(blay: QVBoxLayout) -> None:
             evs = self._ux_events(trace, lo, hi)
             rows = analyze_task_periods(evs, 3)
@@ -18143,7 +18688,8 @@ class _StatsPanel(QWidget):
                 if not _priority_rows:
                     play.addWidget(self._lbl(empty_priority, color="#888888", ui_fs=_fs))
                 else:
-                    headers = ["Task", "Base", "Peak", "Boosts", "Boosted", "Pattern"]
+                    headers = ["Task", "Base", "Peak", "Boosts", "Boosted",
+                               "Invert (worst)", "Invert (total)", "Pattern"]
                     table = QTableWidget(len(_priority_rows), len(headers))
                     table.setHorizontalHeaderLabels(headers)
                     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -18163,13 +18709,18 @@ class _StatsPanel(QWidget):
                     _priority_align = [
                         Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignRight,
                         Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
+                        Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
                         Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignLeft,
                     ]
                     for ri, row in enumerate(_priority_rows):
-                        mk, label, base, peak, count, total, pattern, total_ns = row
-                        vals = [label, str(base), str(peak), str(count), total, pattern]
+                        (mk, label, base, peak, count, total, inv_worst,
+                         inv_total, pattern, total_ns, inv_worst_ns,
+                         inv_total_ns) = row
+                        vals = [label, str(base), str(peak), str(count), total,
+                                inv_worst, inv_total, pattern]
                         sort_keys = [
-                            label.lower(), base, peak, count, total_ns, pattern.lower(),
+                            label.lower(), base, peak, count, total_ns,
+                            inv_worst_ns, inv_total_ns, pattern.lower(),
                         ]
                         for ci, val in enumerate(vals):
                             item = _StatsSortItem(val, sort_keys[ci])
@@ -18178,7 +18729,7 @@ class _StatsPanel(QWidget):
                             item.setTextAlignment(_priority_align[ci] | Qt.AlignmentFlag.AlignVCenter)
                             if ci == 0:
                                 item.setData(Qt.ItemDataRole.UserRole, mk)
-                            if ci == 5 and "L/M/H" in pattern:
+                            if ci == 7 and "L/M/H" in pattern:
                                 item.setForeground(QBrush(QColor("#E74C3C")))
                             table.setItem(ri, ci, item)
                     table.setSortingEnabled(True)
@@ -18221,7 +18772,9 @@ class _StatsPanel(QWidget):
                 if not _sync_rows:
                     play.addWidget(self._lbl(empty_sync, color="#888888", ui_fs=_fs))
                 else:
-                    headers = ["Object", "Kind", "Holds", "Issues", "Bounces", "Bounce %", "Avg hold", "Status"]
+                    headers = ["Object", "Kind", "Holds", "Issues", "Bounces",
+                               "Bounce %", "Avg hold", "p95 hold", "p99 hold",
+                               "Waiters", "MaxNest", "Status"]
                     table = QTableWidget(len(_sync_rows), len(headers))
                     table.setHorizontalHeaderLabels(headers)
                     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -18243,18 +18796,28 @@ class _StatsPanel(QWidget):
                         Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignLeft,
                         Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
                         Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
+                        Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
+                        Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
                         Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignLeft,
                     ]
                     for ri, row in enumerate(_sync_rows):
                         (_key, kind, ptr, label, holds, issues, avg, status_label,
                          status, avg_ns, bounces) = row[:11]
                         bpct = row[11] if len(row) > 11 else 0.0
+                        p95h = row[12] if len(row) > 12 else "—"
+                        p99h = row[13] if len(row) > 13 else "—"
+                        waiters = row[14] if len(row) > 14 else 0
+                        max_nest = row[15] if len(row) > 15 else 0
+                        p95h_ns = row[16] if len(row) > 16 else 0
+                        p99h_ns = row[17] if len(row) > 17 else 0
                         bpct_s = f"{bpct:.1f}%" if holds else "—"
                         vals = [label, kind, str(holds), str(issues), str(bounces),
-                                bpct_s, avg, status_label]
+                                bpct_s, avg, p95h, p99h, str(waiters),
+                                str(max_nest), status_label]
                         sort_keys = [
                             label.lower(), kind.lower(), holds, issues, bounces, bpct,
                             avg_ns if avg_ns is not None else -1,
+                            p95h_ns, p99h_ns, waiters, max_nest,
                             _status_rank.get(status, 3),
                         ]
                         for ci, val in enumerate(vals):
@@ -18268,7 +18831,9 @@ class _StatsPanel(QWidget):
                                 item.setForeground(QBrush(QColor("#F39C12")))
                             if ci == 5 and holds and bpct >= _WF_PAIR_BOUNCE_PCT:
                                 item.setForeground(QBrush(QColor("#F39C12")))
-                            if ci == 7 and status != "ok":
+                            if ci == 9 and waiters >= 3:
+                                item.setForeground(QBrush(QColor("#F39C12")))
+                            if ci == 11 and status != "ok":
                                 color = "#E74C3C" if status == "error" else "#F39C12"
                                 item.setForeground(QBrush(QColor(color)))
                             table.setItem(ri, ci, item)
@@ -18377,7 +18942,9 @@ class _StatsPanel(QWidget):
                 if not _queue_rows:
                     blay.addWidget(self._lbl(empty_queue, color="#888888", ui_fs=_fs))
                     return
-                headers = ["Object", "Kind", "Holds", "Issues", "Bounces", "Bounce %", "Avg hold", "Status"]
+                headers = ["Object", "Kind", "Holds", "Issues", "Bounces",
+                           "Bounce %", "Avg hold", "p95 hold", "p99 hold",
+                           "Waiters", "MaxNest", "Status"]
                 table = QTableWidget(len(_queue_rows), len(headers))
                 table.setHorizontalHeaderLabels(headers)
                 table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -18399,18 +18966,28 @@ class _StatsPanel(QWidget):
                     Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignLeft,
                     Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
                     Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
+                    Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
+                    Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
                     Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignLeft,
                 ]
                 for ri, row in enumerate(_queue_rows):
                     (_key, kind, ptr, label, holds, issues, avg, status_label,
                      status, avg_ns, bounces) = row[:11]
                     bpct = row[11] if len(row) > 11 else 0.0
+                    p95h = row[12] if len(row) > 12 else "—"
+                    p99h = row[13] if len(row) > 13 else "—"
+                    waiters = row[14] if len(row) > 14 else 0
+                    max_nest = row[15] if len(row) > 15 else 0
+                    p95h_ns = row[16] if len(row) > 16 else 0
+                    p99h_ns = row[17] if len(row) > 17 else 0
                     bpct_s = f"{bpct:.1f}%" if holds else "—"
                     vals = [label, kind, str(holds), str(issues), str(bounces),
-                            bpct_s, avg, status_label]
+                            bpct_s, avg, p95h, p99h, str(waiters),
+                            str(max_nest), status_label]
                     sort_keys = [
                         label.lower(), kind.lower(), holds, issues, bounces, bpct,
                         avg_ns if avg_ns is not None else -1,
+                        p95h_ns, p99h_ns, waiters, max_nest,
                         _status_rank.get(status, 3),
                     ]
                     for ci, val in enumerate(vals):
@@ -18422,7 +18999,9 @@ class _StatsPanel(QWidget):
                             item.setForeground(QBrush(QColor("#F39C12")))
                         if ci == 5 and holds and bpct >= _WF_PAIR_BOUNCE_PCT:
                             item.setForeground(QBrush(QColor("#F39C12")))
-                        if ci == 7 and status != "ok":
+                        if ci == 9 and waiters >= 3:
+                            item.setForeground(QBrush(QColor("#F39C12")))
+                        if ci == 11 and status != "ok":
                             color = "#E74C3C" if status == "error" else "#F39C12"
                             item.setForeground(QBrush(QColor(color)))
                         table.setItem(ri, ci, item)
@@ -18435,6 +19014,35 @@ class _StatsPanel(QWidget):
                 f"Queue{scope}",
                 _fs,
                 _populate_queue,
+            )
+
+            # -- Queue backlog / semaphore level (A8) ------------------
+            def _populate_sync_level(blay: QVBoxLayout) -> None:
+                _rows = _sync_level_rows(trace, lo, hi)
+                scale = trace.time_scale
+                blay.addWidget(self._build_click_rows_table(
+                    _rows,
+                    ["Object", "Kind", "Peak", "Time at peak", "End level",
+                     "Starved"],
+                    lambda r: [
+                        r[3], r[1], str(r[4]),
+                        _format_time(int(r[5]), scale), str(r[6]), str(r[7]),
+                    ],
+                    lambda r: None,
+                    _fs,
+                    "No queue / semaphore events in this scope",
+                    "sync_level",
+                    trace,
+                    keys_fn=lambda r: [
+                        r[3].lower(), r[1], r[4], int(r[5]), r[6], r[7],
+                    ],
+                ))
+
+            self._add_collapsible_section(
+                "sync_level",
+                f"Queue Backlog / Semaphore Level{scope}",
+                _fs,
+                _populate_sync_level,
             )
 
         def _populate_wait_owner(blay: QVBoxLayout) -> None:
