@@ -1,3 +1,5 @@
-Open Statistics. The sections follow a diagnostic order: trace health, scope, load balance, CPU execution, latency, concurrency, and configuration compliance.
+Open Statistics. The report begins with a verdict and key indicators, followed by Analysis Findings and detailed sections for CPU scheduling, migrations, timing and latency, synchronization, and custom events.
 
-This trace has eight cores and about 32,100 execution slices, with instrumentation for priorities, mutexes, queues, and intervals. It also contains several test phases. Treat every warning as an investigation clue, not a confirmed defect. First limit the analysis to one phase, then check each warning in order.
+For this trace, the overall result is zero errors and six heuristic warnings. The eight cores are reasonably balanced, but the report also flags tick health, off-CPU delays, suspected priority inversion, heavy migration, synchronization bounces, and unusual execution-time spikes.
+
+Treat these findings as investigation leads, not automatic proof of a defect. Open the related Statistics section and verify the evidence on the timeline.

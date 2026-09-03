@@ -1,5 +1,5 @@
-Step 2: limit the analysis to the test phase that matters.
+Step 2: narrow the analysis when the trace contains several test phases.
 
-A trace with several phases can hide an issue among setup, stress, and cleanup activity. Place two cursors around the priority-inversion demo, from about 3.085 to 3.310 seconds. That window holds the Low, Medium, and High tasks.
+For the priority-inversion example, place two cursors around the relevant phase, roughly from 3.089 to 3.310 seconds, and enable Limit to C1 through Cn. Statistics and Analysis will then use that cursor range as the active scope.
 
-Enable Limit to C1 through Cn. Statistics and Analysis now use only this window, and the status bar shows the time between the cursors. Open Analysis again to build findings for this scope. We clear the cursors for the full-trace checks and restore this window for the latency check.
+Rebuild the findings for the selected range before comparing numbers or asking AI. We will return to the full trace for global checks, then use a focused cursor range again when verifying the priority-inversion evidence.

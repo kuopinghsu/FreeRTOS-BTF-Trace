@@ -1,7 +1,5 @@
-The core-migration view shows how tasks move between cores. Open Migration Heatmap from the activity rail. Click Fit first, because this view analyzes the visible time range, and the scope banner tells you whether you are looking at the viewport or the full trace.
+Migration Heatmap shows where tasks move between cores. Open it from the activity rail and confirm the current scope before interpreting the result.
 
-The window has three parts. On the left is the corridor list: every from-core to-core path, with its migration count, bounce count, and average gap. The center is the heatmap grid, one cell per core pair per time bin; brighter cells are busier. Expand a corridor to see the tasks that use it, then click a cell to move the timeline to that moment.
+The corridor list summarizes movement from one core to another. The heatmap shows activity by core pair and time bin, while Chord mode presents the same movement as directional flows. Select a corridor or heatmap cell to locate the related activity on the timeline.
 
-Switch the mode selector from Heatmap to Chord to see the same data as a ring. The outer ring is departures, the inner ring is arrivals, and each ribbon is one core-to-core flow, tapered from source to destination.
-
-Use the direction and scope controls to focus the view. Turn on Lock Bounces Only to keep just the migrations that happened while a task still held a lock; that is the difference between harmless thrashing and a real lock bounce. In this trace the queue at address ending c420 accounts for the cross-core lock movement. From the footer you can jump to the timeline or send the selected path to AI with Investigate with AI.
+Use the investigation order shown by the report: load distribution first, then migration rate, ping-pong, dwell time, core-pair movement, and finally synchronization bounce. Lock Bounces Only helps separate ordinary migration from movement that occurs while a synchronization object is still held.

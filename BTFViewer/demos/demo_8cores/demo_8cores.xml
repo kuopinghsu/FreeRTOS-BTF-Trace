@@ -89,7 +89,7 @@
       <hotkey keys="shift+a"/>
     </macro>
     <macro name="place_cursor">
-      <!-- params: time (seconds, e.g. 3.085) -->
+      <!-- params: time (seconds, e.g. 3.089) -->
       <hotkey keys="mod+g"/>
       <wait seconds="0.6" why="Jump to Time dialog"/>
       <hotkey keys="mod+a"/>
@@ -261,7 +261,7 @@
       <audio file="${XML_DIR}/voice/10_scope.mp3"/>
       <zoom_view/>
       <clear_cursors/>
-      <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
+      <cursors times="3.089,3.310" unit="s" limit="true" zoom="true"/>
       <fit_view/>
       <zoom_out/>
       <clear_highlight/>
@@ -299,7 +299,7 @@
       <zoom_view/>
       <clear_cursors/>
       <clear_annotations/>
-      <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
+      <cursors times="3.089,3.310" unit="s" limit="true" zoom="true"/>
       <panel name="stats"/>
       <stats_section id="block,priority,preemption" expand="true" collapse_others="true" scroll="block"/>
       <move target="timeline"/>
@@ -415,7 +415,7 @@
       <audio file="${XML_DIR}/voice/22_ai_explain.mp3"/>
       <zoom_view/>
       <clear_cursors/>
-      <cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>
+      <cursors times="3.089,3.310" unit="s" limit="true" zoom="true"/>
       <panel name="ai"/>
       <confirm prompt="Limit ON; click Explain region; every jump must land inside C1–Cn — then continue"/>
       <wait ai="true" why="explain region"/>

@@ -1,11 +1,9 @@
-Step 10: start an investigation from a named finding.
+Step 10: investigate and verify a finding.
 
-With an empty log, click Start Investigation. This runs Auto investigate on the highest-ranked Analysis finding. For a first investigation, use the built-in prompt templates, not a long free-form question.
+In this recorded example, the top actionable finding is suspected priority inversion. The AI investigation focuses on Low[266] and returns a Confirmed verdict.
 
-This example used gemini-3.1-flash-lite. It took about 20 seconds, used about 128,000 tokens, and called 11 tools. Your run will differ.
+The evidence chain identifies a priority-inheritance trigger at jump:3101862. Low[266] is boosted from base priority 2 to peak priority 4 until jump:3207230, a range of about 105.4 milliseconds. The investigation also finds an off-CPU gap of about 13.6 milliseconds beginning at jump:3101921.
 
-The selected finding is a priority inversion on task PS[228], the same Low, Medium, High pattern from the latency step. The tool cards work through it: they investigate the finding, detect the inversion, query Priority Inheritance, set cursors around 3.055 seconds, zoom, and highlight PS[228]. The run also checks the critical path, builds a task-dependency graph, estimates a shorter critical section with What-if, and drops a bookmark. With Auto-apply off, click Apply on each action that should change the timeline.
+Read the result from the conclusion outward: first the verdict, then the evidence chain, confidence and coverage, alternative explanations, and the recommended validation step. Detailed checks, supporting evidence, and investigation history can be expanded when needed.
 
-Read the reply in three passes. First, the conclusion and its confidence. Second, the causal chain, following each jump-to-time link. Third, the task dependencies and the alternative explanations. In this example the evidence is a priority boost from 2 to 4, a migration between cores, and shared-lock relationships with the CS tasks.
-
-The Evidence panel below the reply is built by BTFViewer, not by the model. It lists the current issue, the reason for each tool, the evidence quality, the cost, and the conditions that would disprove the conclusion. Click every jump-to-time link, then check Priority Inheritance, Mutex Blocking, Critical Path, and the red boost bar. Verify it yourself even when the model reports high confidence, and treat What-if as an estimate only.
+The important point is that the AI conclusion is tied to measurable trace evidence and jump times that you can verify yourself.

@@ -653,8 +653,9 @@ class AiWebParityTests(unittest.TestCase):
             "build_causal_chain",
             "generate_experiment_plan",
             "record_experiment_outcome",
-            "score_investigation",
         )
+        # score_investigation / investigation_replay are computed host-side on
+        # close; they are no longer model-facing tools.
         helper_only = frozenset({"score_hypotheses"})
         gui_shipped = [n for n in shipped if n not in helper_only]
 

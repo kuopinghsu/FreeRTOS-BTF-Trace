@@ -1,1 +1,3 @@
-The main area is the timeline. Each colored bar is one execution slice of a task. Move the pointer over a bar to see its duration, its core, and the nearby slices. The status bar shows the full duration, the active cores, and the context-switch count. This trace runs 2.521 seconds, and its timestamps start near 1.014 seconds, not at zero.
+The main area is the timeline. Each colored bar represents one execution slice of a task. Move the pointer over a bar to see its duration, core, and nearby activity. The status bar shows the trace duration, active cores, and context-switch count.
+
+This trace spans 2.521 seconds. Its timestamps start at about 1.014 seconds rather than zero, because BTFViewer keeps the timestamps from the original trace capture.

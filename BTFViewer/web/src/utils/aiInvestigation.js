@@ -46,6 +46,7 @@ const TOOL_STEP_MAP = {
   zoom_to_range: ['narrow'],
   highlight_task: ['related'],
   open_corridor_inspector: ['related'],
+  open_statistics_section: ['related'],
   add_annotation: ['validate'],
   bookmark_finding: ['validate'],
   check_budget: ['metrics', 'validate'],

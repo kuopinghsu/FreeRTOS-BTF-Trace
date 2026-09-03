@@ -1,5 +1,7 @@
-Step 3: check whether the cores share the work evenly.
+Step 3: check how evenly the cores share the workload.
 
-Open Core Utilization. Across the full trace the cores run about 55 to 72 percent busy. The Load Balance Score is 95 percent, and the spread, sigma, is about 6 percent. Load imbalance is not the main problem here.
+Across the full trace, core utilization ranges from about 55 to 72 percent. The Load Balance Score is 95 percent, with a standard deviation of about 5.8 percent. The report therefore considers the workload reasonably balanced.
 
-Next read Core Time Breakdown, Concurrent Core Active, and Kernel Switch Overhead. All eight cores are active together for about 33 percent of the span, and switch overhead is about 3 percent per core. Similar utilization does not mean low cost: frequent migrations can keep the cores balanced while still adding overhead.
+All eight cores are active at the same time for about 33 percent of the trace. Kernel switch overhead averages about 2.9 percent of core time.
+
+Good load balance does not mean low scheduling cost. Check migration activity next, because frequent movement between cores can keep utilization even while adding scheduling and cache-related cost.

@@ -524,7 +524,7 @@ These sections reduce a long trace to a short list of events and recurring probl
 
 Lists unusual long tails, bursts, CPU spikes, idle gaps, mutex waits, and deadline misses in the current Scope. Each row identifies the event type, affected task, time, and reason it was selected.
 
-Click a row to inspect the evidence on the timeline. An anomaly means “worth checking”; it does not prove a defect.
+Click a row to inspect the evidence on the timeline. An anomaly means “worth investigating”; it does not prove a defect.
 
 **Selection logic.** The section searches available sample sets for long tails, bursts, spikes, gaps, repeated migration or preemption, mutex-wait estimates, and configured deadline violations. Each row retains the source statistic and a timestamp.
 
@@ -1154,7 +1154,7 @@ Compares observed slice durations and CPU shares with per-task thresholds config
 - A **deadline violation** means an observed slice exceeded its configured duration threshold.
 - A **CPU budget violation** means the task's CPU share exceeded its configured limit in the current Scope.
 
-If no threshold is configured, BTFViewer cannot evaluate compliance. A result of zero violations is meaningful only for configured tasks and the selected Scope.
+If no threshold is configured, BTFViewer cannot evaluate compliance. A result of zero violations is meaningful only for tasks with configured thresholds and within the selected Scope.
 
 **Calculation.** Each execution slice is compared with the configured duration threshold. CPU budget compares the task's scoped CPU share with its configured percentage. These checks use the viewer's slice and CPU-share definitions; they do not automatically represent a complete application job or scheduling-server budget.
 
@@ -1180,7 +1180,7 @@ The comparison uses two delta conventions:
 | Data tables | `Δ = Baseline A − Candidate B` | Positive means A is numerically larger |
 | Change charts | `Change = Candidate B − Baseline A` | Positive means the candidate increased |
 
-Always use the metric meaning and the **Improved / Regressed / Changed** status. A positive sign is not automatically good or bad.
+Read the sign together with the metric meaning and the **Improved / Regressed / Changed** status. A positive value is not automatically good or bad.
 
 **Shape Δ.** The Execution Time, Blocking Time, and Inter-Arrival Time tables add a **Shape Δ** column: the two-sample Kolmogorov–Smirnov (KS) *D* statistic between the task's Baseline A and Candidate B sample distributions.
 
@@ -1188,13 +1188,13 @@ Always use the metric meaning and the **Improved / Regressed / Changed** status.
 
 *Calculation.* Each side's raw per-slice samples for that metric are sorted, then the two ECDFs are walked together in one merge pass tracking the running fraction on each side; `D` is the maximum absolute difference seen. Samples are collected per task by display name over each trace's compare Scope — the same matching and scoping the other columns use — with IDLE and TICK excluded. The cell shows `D` to two decimals; a dash (`—`) means one side had fewer than three samples, too few to have a shape.
 
-*How to read it.* Treat it as a distance, not a direction: it says *how much* the distribution moved, not *which way* — read it next to the signed `Δ`, `p95`, and `p99` columns for direction, and open the distribution plot to see the change. Rough bands: `< 0.10` practically the same shape; `0.10–0.30` a visible change worth checking on the timeline; `> 0.30` a substantial shift. With very large sample counts even a trivial real difference yields a non-zero `D`, so do not chase small values; with counts near the three-sample floor a single outlier can swing `D`, so confirm against several runs. **Shape Δ** is the raw statistic only — BTFViewer applies no critical value or p-value — so it is evidence of a difference, not a significance test.
+*How to read it.* Treat it as a distance, not a direction: it says *how much* the distribution moved, not *which way* — read it next to the signed `Δ`, `p95`, and `p99` columns for direction, and open the distribution plot to see the change. Rough bands: `< 0.10` practically the same shape; `0.10–0.30` a visible change worth investigating on the timeline; `> 0.30` a substantial shift. With very large sample counts even a trivial real difference yields a non-zero `D`, so do not chase small values; with counts near the three-sample floor a single outlier can swing `D`, so confirm against several runs. **Shape Δ** is the raw statistic only — BTFViewer applies no critical value or p-value — so it is evidence of a difference, not a significance test.
 
 ### Comparison workflow and dependencies
 
 Start with capture compatibility and workload duration, then compare overall load, top-task CPU share, timing tails, migration rates, and synchronization evidence. A difference in one metric often explains another: higher CPU load can increase dispatch and blocking tails; changed affinity can increase migration; changed instrumentation can alter event counts without changing runtime behavior.
 
-Use at least several comparable runs when normal run-to-run variation is unknown. Trace Compare shows an observed difference between two captures; it does not by itself perform a statistical significance test or prove that a code change caused the difference.
+Use several comparable runs when normal run-to-run variation is unknown. **Trace Compare** shows the observed difference between two captures. It does not perform a statistical significance test by itself, and it does not prove that a code change caused the difference.
 
 ## Documentation navigation
 

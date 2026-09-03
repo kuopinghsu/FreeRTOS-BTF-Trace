@@ -235,9 +235,7 @@ class AiInvestigationTests(unittest.TestCase):
             AI_TOOL_OPTIMIZE,
             AI_TOOL_REGRESSION_EXPLAIN,
             AI_TOOL_BOOKMARK_FINDING,
-            AI_TOOL_INVESTIGATION_REPLAY,
             AI_TOOL_WHAT_IF,
-    AI_TOOL_OPTIMIZE_EXPERIMENT,
             AI_TOOL_OPTIMIZE_EXPERIMENT,
             AI_TOOL_ANALYZE_TRACES,
         ):

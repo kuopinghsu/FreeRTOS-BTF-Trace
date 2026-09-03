@@ -1,7 +1,7 @@
-Step 11: verify the AI reply against the measurements.
+Step 11: verify the AI result against BTFViewer.
 
-Click every jump-to-time link in the reply. The value is in the trace time unit, which is microseconds in this file, and the timeline moves to that point. Check the same event and metric in Statistics. If the reply disagrees with the measured data, trust the Statistics result and the timeline.
+Click each jump:TIME link and inspect the corresponding event on the timeline. For this case, verify the priority-inheritance trigger, the boost from priority 2 to 4, the boost duration, and the nearby off-CPU interval. Then compare those events with Priority Inheritance, Mutex Blocking, and the related Statistics data.
 
-The Evidence panel lists each tool, why it was called, the evidence quality, and possible contradictions. Click a completed stage to jump to its output in the log.
+The Evidence and Validation information records the finding, checks, alternative hypothesis, missing evidence, and supporting timeline matches. A Confirmed verdict is useful only when its cited evidence is inside the active scope and agrees with the measured data.
 
-What-if and Optimize give heuristic estimates. They are not scheduler simulations and not measured results. To test a suggested change, edit the firmware, record a new trace, and use Compare. Do not commit to a fix until the timeline supports the cause.
+If the AI explanation and the trace disagree, use Statistics and the timeline as the source of truth.

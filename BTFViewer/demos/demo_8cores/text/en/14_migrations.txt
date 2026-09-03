@@ -1,5 +1,7 @@
-Clear the cursors and return to the full trace. Step 6 checks concurrency: migrations, locks, and priority inheritance.
+Clear the cursors and return to the full trace. Step 6 checks migration and synchronization behavior.
 
-The trace has about 19,000 migrations. Task CS[20] migrates about 1,640 times per second, its average dwell on a core is about half a millisecond, and its ping-pong count is high. This is migration thrashing. It does not by itself prove lock contention; common causes are task affinity or many similar worker tasks. A lock bounce is different: it is when a task moves to another core while it still holds a lock.
+The report records 18,992 core migrations. CS[20] has 595 migrations, a rate of about 1,644 per second, an average dwell near 501 microseconds, and repeated ping-pong movement. Similar patterns appear on several CS tasks.
 
-In Task View, lock the highlight on CS[20]. With Load enabled, the chart shows its CPU share on each core. Then open Mutex and Queue. One queue has 864 holds and 848 cross-core bounces: nearly every hold moved to another core while the object was still held, so its status is Warning. The mutexes in this trace are used lightly and read OK. Check each warning on the timeline before you call it a defect or just cleanup activity.
+Do not call migration a defect from the count alone. First confirm that load distribution is already balanced, then check migration rate, ping-pong, dwell time, core-pair movement, and synchronization bounce.
+
+The report also finds synchronization objects that cross core boundaries while held. That is a separate issue from ordinary task migration and should be checked with the Mutex, Queue, and migration views.

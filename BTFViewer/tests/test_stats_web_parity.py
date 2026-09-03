@@ -174,7 +174,11 @@ class TestStatsWebParity(unittest.TestCase):
 
     def test_demo_xml_inversion_window_matches_golden_bounds(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
-        self.assertIn('times="3.085,3.310"', xml)
+        # C1 = 3.089 s ≈ where the demo's AI investigation places its first
+        # cursor on the priority-inversion episode; CURSOR_LO_S below stays the
+        # round 3.085 s anchor for the stats-parity golden (a ~4 ms difference
+        # on a 221 ms window, immaterial to the snapshot).
+        self.assertIn('times="3.089,3.310"', xml)
         self.assertIn('unit="s"', xml)
         self.assertIn('limit="true"', xml)
 

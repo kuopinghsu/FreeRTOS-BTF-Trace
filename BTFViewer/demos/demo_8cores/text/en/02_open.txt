@@ -1,1 +1,1 @@
-Open a trace from the File menu, or drag a file into the window. BTFViewer reads compressed and uncompressed BTF files. For this demo we open the included eight-core sample trace.
+Open a trace from the File menu, or drag the file into the window. BTFViewer supports both compressed and uncompressed BTF files. For this demo, we open the included eight-core sample trace.

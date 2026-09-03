@@ -1,1 +1,3 @@
-Load shows CPU utilization below the timeline. Core View groups activity by core. Task View gives one row per task. Drag the divider to give the chart more height. Pick the view that fits the question, then use Load to line up CPU activity with the timeline.
+Load displays CPU utilization below the timeline. Core View groups execution by core, while Task View gives each task its own row. Drag the divider when you need more room for the chart.
+
+Choose the view that matches the question. Then use Load to compare CPU activity with the execution slices on the timeline.

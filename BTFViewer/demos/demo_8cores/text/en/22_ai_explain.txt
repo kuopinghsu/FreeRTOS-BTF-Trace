@@ -1,7 +1,7 @@
-Step 12: explain one phase instead of the whole trace.
+Step 12: keep a focused investigation inside its selected scope.
 
-Place two cursors around the priority-inversion window, from about 3.085 to 3.310 seconds, and enable Limit to C1 through Cn. Then click Explain region. BTFViewer puts the cursor bounds in the prompt, so every jump-to-time link should stay inside this window.
+Place cursors around the phase you want to explain and enable Limit to C1 through Cn. Then run the scoped AI request. Every jump:TIME used as evidence should fall inside that cursor range.
 
-If a link points outside the cursors, it is outside the current scope. Do not use it as evidence. Confirm Limit to C1 through Cn is on, rebuild the findings for this scope, and ask again.
+If an evidence link is outside the active scope, do not use it to support the conclusion. Recheck the scope, rebuild the findings for that range, and run the investigation again.
 
-When the investigation is done, create a diagnostic report from the AI tab. After a firmware change, record a new trace and use Compare. The full beginner loop is: find the evidence, start an investigation, verify every jump-to-time link, and use Explain region within the cursor scope.
+After the cause is supported by measured evidence, you can use Experiment or What-if to explore a possible change. These are estimates, not measured validation. Make the firmware change, capture another trace, and use Compare to verify the result.

@@ -1,5 +1,7 @@
 Open Analysis from the activity rail.
 
-This card lists findings for the current Statistics scope. Each finding has a severity. Findings can cover load, long execution slices, blocking, migrations, tick health, or synchronization-object bounces. When two or more cores are active it also shows the Load Balance Score.
+The findings summarize the most useful investigation leads for the current scope. In this trace, they include balanced core utilization, high CPU consumers, long execution slices, off-CPU delay candidates, suspected priority inversion, excessive migration, tick-health warnings, synchronization bounces, and execution-time spikes.
 
-Findings are not a separate Statistics section. Each one names the section to check next. Read every finding, not only the first. Open the section it points to, then click a Max value, a chart point, or a heatmap cell to move the timeline to the evidence. Confirm the evidence before you ask AI to explain it.
+Each finding points to measured evidence and the Statistics section to inspect next. Confidence also matters: measured utilization and execution times have high confidence, while findings based on mixed causes or heuristic thresholds need more verification.
+
+Use a finding to decide where to look. Then confirm the evidence in Statistics and on the timeline before drawing a conclusion.

@@ -208,11 +208,11 @@ class DemoXmlUsesApiTests(unittest.TestCase):
         step10 = re.search(r'<step id="10".*?</step>', xml, re.S)
         self.assertIsNotNone(step10)
         body = step10.group(0)
-        self.assertIn('<cursors times="3.085,3.310" unit="s" limit="true" zoom="true"/>', body)
+        self.assertIn('<cursors times="3.089,3.310" unit="s" limit="true" zoom="true"/>', body)
         self.assertIn("<clear_highlight/>", body)
         self.assertIn("<tab_nav/>", body)
         self.assertIn("<zoom_view/>", body)
-        cursors_idx = body.index('<cursors times="3.085,3.310"')
+        cursors_idx = body.index('<cursors times="3.089,3.310"')
         reset_idx = body.index("<zoom_view/>")
         fit_idxs = [m.start() for m in re.finditer(r"<fit_view/>", body)]
         zoom_out_idxs = [m.start() for m in re.finditer(r"<zoom_out/>", body)]

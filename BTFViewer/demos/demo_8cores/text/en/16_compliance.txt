@@ -1,7 +1,7 @@
-Step 7: check whether execution follows the firmware configuration.
+Step 7: check whether execution matches the configured behavior.
 
-Open Core Affinity. Mask is the set of cores a task is allowed to use. Observed Cores is where the task actually ran. Violations lists any core outside the mask. In this trace several affinity tasks ran on a core their mask does not permit, so the Violations column is not empty. Select a task with a violation and confirm it on the timeline before you treat it as a firmware bug rather than a test that sets the mask on purpose.
+Core Affinity compares the cores a task is allowed to use with the cores where it actually ran. If the Violations column is not empty, select the task and confirm the event on the timeline before deciding whether it is a firmware problem or intentional test behavior.
 
-Next open Task Lifecycle. Tasks SR0 through SR3 each show four suspends and four resumes. Select SR0 and confirm it never runs between a suspend and its matching resume. Runs counts scheduler dispatches, so it can be much higher than four; that is normal.
+Task Lifecycle summarizes events such as suspend and resume. Use it to verify that a task does not execute during a period when it should remain suspended.
 
-You can set deadline thresholds under Settings, Display, Analysis thresholds. The values are in nanoseconds.
+Deadline thresholds can be configured under Settings, Display, Analysis thresholds. A threshold helps BTFViewer flag suspicious timing, but the trace evidence is still needed to explain the cause.

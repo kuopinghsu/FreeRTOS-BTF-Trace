@@ -1,1 +1,3 @@
-Start every analysis with two checks. Is the recorded time range useful? Are you viewing the whole trace? Click Fit, or press its shortcut, to show the complete trace in the timeline before you read any number.
+Before reading the statistics, check the time range you are viewing. Click Fit, or use its shortcut, to show the complete trace in the timeline.
+
+This gives you a reliable starting point. Later, you can use cursors to narrow the analysis to one test phase without confusing a local issue with behavior from the rest of the trace.

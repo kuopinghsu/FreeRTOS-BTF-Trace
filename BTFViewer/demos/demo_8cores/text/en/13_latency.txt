@@ -1,7 +1,7 @@
-Step 5: check latency inside the priority-inversion window.
+Step 5: investigate delay and suspected priority inversion.
 
-Blocking Time measures how long a task stays off the CPU between runs. In this window High[268] waits up to about 105 milliseconds. Low[266] waits up to about 64 milliseconds and Medium up to about 35. Ignore Runner, which sleeps between phases by design.
+Off-CPU Time shows tasks that spend long or frequent periods away from the CPU. Across the full trace, Low[266] reaches about 64 milliseconds and Med[267] about 35 milliseconds. Off-CPU time can have several causes, so it is not automatically mutex blocking.
 
-Blocking Time is not end-to-end response time. Dispatch measures the delay from create or resume to the first switch-in; High dispatches in about 48 microseconds once it is ready. Preemption Chain shows which task preempted which: here High preempts Medium, and Medium preempts Low. Priority Inheritance shows the temporary boost from a mutex. Low[266] is boosted from priority 2 to 4 for about 105 milliseconds each round; watch for the red boost bar under Low. The Invert columns measure real inversion inside that boost: about 58 milliseconds in the worst round and about 116 in total, because Low then blocks on a second lock that Medium holds.
+The Analysis finding also detects an L/M/H priority-inversion pattern involving Low[266] and PS[228]. In the focused Low[266] case, Priority Inheritance shows a boost from base priority 2 to peak priority 4. The AI verification later confirms a boost episode lasting about 105 milliseconds.
 
-Task PS[228], just before this window, shows the same Low, Medium, High inversion geometry with a much shorter boost. This pattern needs a design review.
+Use Preemption Chain, Priority Inheritance, Mutex Blocking, and the timeline together. The goal is to connect the delay to a specific scheduling or synchronization event, not just to a large latency number.

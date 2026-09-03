@@ -1,3 +1,3 @@
-Welcome to BTFViewer. It is an AI-assisted tool for analyzing RTOS BTF traces. The rule is simple: find the evidence first, then use AI to explain it. The desktop and web versions share the same analysis features. In this demo we use the web version and an eight-core sample trace.
+Welcome to BTFViewer, an AI-assisted tool for analyzing RTOS BTF traces. The workflow is simple: find the evidence first, then use AI to help explain it. The desktop and web versions provide the same analysis features. In this demo, we use the web version with an eight-core sample trace.
 
-This trace is 2.521 seconds long. It records eight cores and 163 tasks. Several stress-test phases were captured in one file, so some warnings are expected. We will orient on the timeline, follow the diagnostic ladder in Statistics, and confirm every issue on the timeline before we ask AI for help.
+The trace is 2.521 seconds long and contains eight cores and 163 tasks. It combines several stress-test phases, so warnings are expected. We will first understand the timeline, then follow the Statistics findings, verify important evidence on the timeline, and only then use AI to investigate further.

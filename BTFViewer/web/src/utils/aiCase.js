@@ -181,7 +181,7 @@ export const AI_EMPTY_REPLY_NUDGE = (
 
 export const AI_CONTEXT_STAGE_TOOLS = {
   triage: ['detect_anomalies', 'cluster_findings', 'suggest_scope'],
-  scope: ['set_cursors', 'zoom_to_range', 'highlight_task'],
+  scope: ['set_cursors', 'zoom_to_range', 'highlight_task', 'open_statistics_section'],
   investigate: ['investigate', 'correlate_events', 'find_critical_path'],
   verify: ['verify_claim', 'detect_contradictions', 'challenge_conclusion'],
   experiment: ['what_if', 'optimize_experiment', 'recommend_experiments'],

@@ -1,9 +1,7 @@
-That completes the BTFViewer diagnostic workflow.
+That completes the BTFViewer investigation workflow.
 
-Open a trace and click Fit. Read Statistics, Analysis, and Trace Health. If the trace has several phases, scope one with cursors and Limit to C1 through Cn. Then work down the ladder: load balance, CPU execution, latency, concurrency and the core-migration view, and configuration compliance. Confirm every issue on the timeline.
+Start with the full timeline and Statistics. Read the verdict and Analysis Findings, then inspect trace health, load balance, CPU execution, latency, migrations, synchronization, and configuration evidence as needed. When a trace contains several phases, use cursors to keep the analysis scope focused.
 
-Once the evidence is clear, connect a model and click Start Investigation. Verify every jump-to-time link, and use Explain region within the cursor scope. AI can organize the evidence and suggest an explanation, but Statistics and the timeline stay the source of truth.
+Use AI after the evidence is visible. Follow its jump:TIME links, check the same events in Statistics and on the timeline, and treat unsupported or out-of-scope claims as unverified.
 
-After you change the firmware, record a new trace and compare the same test phase. When the new trace confirms the improvement, export HTML or CSV to keep the record.
-
-Thank you for watching. Open the eight-core sample trace and try the full workflow yourself.
+The workflow stays the same from beginning to end: find the evidence, narrow the scope, investigate the cause, verify it against the trace, test a change, and compare a new measurement.

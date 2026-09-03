@@ -78,6 +78,7 @@ AI_TOOL_ZOOM_TO_RANGE = "zoom_to_range"
 AI_TOOL_HIGHLIGHT_TASK = "highlight_task"
 AI_TOOL_SET_VIEW_MODE = "set_view_mode"
 AI_TOOL_OPEN_CORRIDOR = "open_corridor_inspector"
+AI_TOOL_OPEN_STATS_SECTION = "open_statistics_section"
 AI_TOOL_ADD_ANNOTATION = "add_annotation"
 AI_TOOL_QUERY_RAW_METRIC = "query_raw_metric"
 AI_TOOL_EXPORT_REPORT = "export_report"
@@ -147,6 +148,7 @@ _AI_TOOL_CAPABILITY_BY_NAME: Dict[str, str] = {
     AI_TOOL_HIGHLIGHT_TASK: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
     AI_TOOL_SET_VIEW_MODE: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
     AI_TOOL_OPEN_CORRIDOR: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
+    AI_TOOL_OPEN_STATS_SECTION: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
     AI_TOOL_ADD_ANNOTATION: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
     AI_TOOL_CLEAR_MARKS: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
     AI_TOOL_RESET_VIEW: AI_TOOL_CAPABILITY_VIEWER_MUTATION,
@@ -204,6 +206,7 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_SET_VIEW_MODE,
     AI_TOOL_OPEN_CORRIDOR,
+    AI_TOOL_OPEN_STATS_SECTION,
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_QUERY_RAW_METRIC,
     AI_TOOL_EXPORT_REPORT,
@@ -221,7 +224,6 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_OPTIMIZE,
     AI_TOOL_REGRESSION_EXPLAIN,
     AI_TOOL_BOOKMARK_FINDING,
-    AI_TOOL_INVESTIGATION_REPLAY,
     AI_TOOL_WHAT_IF,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_ANALYZE_TRACES,
@@ -246,7 +248,6 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_BUILD_CAUSAL_CHAIN,
     AI_TOOL_GENERATE_EXPERIMENT_PLAN,
     AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
-    AI_TOOL_SCORE_INVESTIGATION,
     AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
     AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
     AI_TOOL_DECOMPOSE_RESPONSE_TIME,
@@ -580,6 +581,34 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                             "description": "Destination core name (e.g. Core_1).",
                         },
                     },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_OPEN_STATS_SECTION,
+                "description": (
+                    "Open the Statistics panel and scroll to one section so the "
+                    "engineer sees the numbers behind a claim. Does not change "
+                    "scope or cursors. Common ids: health, cores, exec, block, "
+                    "inter, response, dispatch, priority, sync, queue, "
+                    "preemption, migrations, switch_reason, sched_load, "
+                    "activation, ready_gap, idle, sync_level, wcet, tags, "
+                    "intervals, deadline, tasks; a page title also works."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "section": {
+                            "type": "string",
+                            "description": (
+                                "Statistics section id (e.g. \"sync\") or page "
+                                "title (e.g. \"Mutex Blocking\")."
+                            ),
+                        },
+                    },
+                    "required": ["section"],
                 },
             },
         },
@@ -1012,39 +1041,6 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         },
                     },
                     "required": ["time", "kind"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": AI_TOOL_INVESTIGATION_REPLAY,
-                "description": (
-                    "Build a structured investigation-replay card (steps, tools "
-                    "run, conclusion, evidence times) for UI / export."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "finding_id": {
-                            "type": "string",
-                            "description": "Finding id / index / title substring.",
-                        },
-                        "conclusion": {
-                            "type": "string",
-                            "description": "Short investigation conclusion text.",
-                        },
-                        "tools_run": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Tool names already executed.",
-                        },
-                        "evidence_times": {
-                            "type": "array",
-                            "items": {"type": "number"},
-                            "description": "Evidence timestamps for cursor replay.",
-                        },
-                    },
                 },
             },
         },
@@ -1566,32 +1562,6 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         "predicted": {"type": "string"},
                         "actual": {"type": "string"},
                         "quality": {"type": "string"},
-                    },
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": AI_TOOL_SCORE_INVESTIGATION,
-                "description": (
-                    "Score evidence efficiency, cost, false-confidence, "
-                    "falsification, scope accuracy, and stop efficiency."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "tools_run": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "conclusion": {"type": "string"},
-                        "confidence": {
-                            "type": "string",
-                            "enum": ["high", "medium", "low"],
-                            "description": "Confidence band: high | medium | low.",
-                        },
-                        "elapsed_s": {"type": "number"},
                     },
                 },
             },
@@ -2466,7 +2436,6 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_CHECK_BUDGET,
         AI_TOOL_OPTIMIZE,
         AI_TOOL_REGRESSION_EXPLAIN,
-        AI_TOOL_INVESTIGATION_REPLAY,
         AI_TOOL_WHAT_IF,
         AI_TOOL_OPTIMIZE_EXPERIMENT,
         AI_TOOL_ANALYZE_TRACES,
@@ -2490,7 +2459,6 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_BUILD_CAUSAL_CHAIN,
         AI_TOOL_GENERATE_EXPERIMENT_PLAN,
         AI_TOOL_RECORD_EXPERIMENT_OUTCOME,
-        AI_TOOL_SCORE_INVESTIGATION,
         AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY,
         AI_TOOL_BUILD_TASK_DEPENDENCY_GRAPH,
         AI_TOOL_DECOMPOSE_RESPONSE_TIME,
@@ -2518,6 +2486,7 @@ def tool_mutates_gui(name: str) -> bool:
         AI_TOOL_HIGHLIGHT_TASK,
         AI_TOOL_SET_VIEW_MODE,
         AI_TOOL_OPEN_CORRIDOR,
+        AI_TOOL_OPEN_STATS_SECTION,
         AI_TOOL_ADD_ANNOTATION,
         AI_TOOL_BOOKMARK_FINDING,
         AI_TOOL_CLEAR_MARKS,
@@ -2558,6 +2527,7 @@ def classify_viewer_tool(name: str) -> str:
     if is_navigation_tool(n) or n in (
         AI_TOOL_SET_VIEW_MODE,
         AI_TOOL_OPEN_CORRIDOR,
+        AI_TOOL_OPEN_STATS_SECTION,
         AI_TOOL_RESET_VIEW,
         AI_TOOL_SEARCH_TIMELINE,
         AI_TOOL_TRIGGER_COMPARE,
@@ -2635,6 +2605,11 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         src = str(a.get("core_from") or "").strip()
         dst = str(a.get("core_to") or "").strip()
         return {"core_from": src, "core_to": dst}, ""
+    if name == AI_TOOL_OPEN_STATS_SECTION:
+        section = str(a.get("section") or a.get("section_id") or "").strip()
+        if not section:
+            return None, "section must be a non-empty Statistics section id or title"
+        return {"section": section}, ""
     if name == AI_TOOL_ADD_ANNOTATION:
         t = _as_scalar_float(a.get("time"))
         if t is None:
@@ -3153,6 +3128,9 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         if src and dst:
             return f"Open corridor inspector {src} → {dst}"
         return "Open corridor inspector"
+    if name == AI_TOOL_OPEN_STATS_SECTION:
+        sec = str(a.get("section") or a.get("section_id") or "").strip() or "section"
+        return f"Open Statistics: {sec}"
     if name == AI_TOOL_ADD_ANNOTATION:
         note = str(a.get("note") or "").strip() or "annotation"
         try:

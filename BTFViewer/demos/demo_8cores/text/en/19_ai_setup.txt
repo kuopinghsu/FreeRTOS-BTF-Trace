@@ -1,11 +1,9 @@
-Step 9: set up AI, and use it only after Statistics and the timeline agree.
+Step 9: use AI after Statistics and the timeline have established the evidence.
 
-What the assistant sees. It does not read the raw BTF event stream. It works from Analysis Findings, summary statistics, timeline queries, and comparison results for the current scope. If the scope is wrong, the answer can be wrong too.
+The assistant works from BTFViewer's findings, statistics, timeline queries, and other evidence available for the current scope. The scope is important: evidence outside the selected cursor range should not be used to support a scoped conclusion.
 
-Connect a model. Open Settings, then AI. Turn on Enable AI Assistant. This demo uses Google Gemini with the Gemini 3.1 Flash-Lite model. Enter an API key, click Test connection, and save. A local Ollama model works too and needs no key.
+Open Settings, then AI, enable the assistant, choose the model, enter any required credentials, test the connection, and save. Local models can also be used when configured.
 
-Choose how much context to send. Compact sends only the top-ranked Findings, the relevant tools, and a short history, which lowers token use. Balanced is the default. Full evidence sends complete Findings, tools, and history for hard cases. Even Compact keeps the cursor window, task names, jump times, the key measurements, the confidence, and the What-if disclaimer. If the evidence looks thin, switch to Full evidence and run again.
+Choose the context level that fits the investigation. Compact reduces context, Balanced is the normal default, and Full Evidence provides more detail for difficult cases.
 
-Keep Auto-apply GUI actions off for this demo, so you can choose Apply or Skip on each action that changes the view. Export actions still open a save dialog.
-
-The AI tab has six stages: Triage, Scope, Investigate, Verify, Experiment, and Compare. An empty log shows Start Investigation. Language sets the reply language. Ask sends a question, Stop cancels the current request, and Clear removes the replies, resets the usage meter, and clears the current issues. Results vary with the model, the scope, and the trace, so treat this recording as an example, not a fixed script.
+The AI tab follows six stages: Triage, Scope, Investigate, Verify, Experiment, and Compare. Start Investigation provides the guided entry point. AI can organize and test explanations, but Statistics and the timeline remain the measurement reference.

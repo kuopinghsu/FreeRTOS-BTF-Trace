@@ -1,10 +1,8 @@
 # AI Assistant
 
-BTFViewer's AI Assistant helps you investigate RTOS traces.
+BTFViewer's **AI Assistant** helps you investigate RTOS traces. It organizes measured evidence, checks possible explanations, and guides you back to the relevant region on the timeline.
 
-It organizes measured evidence, tests possible explanations, and guides you back to the relevant timeline region.
-
-> **Scope:** AI works with BTFViewer Findings, Statistics, timeline queries, and Trace Compare results. It does not read firmware source or ELF files. `what_if` results are heuristic estimates. They are not RTOS scheduler simulations or measured trace data.
+> **Scope:** The AI works with BTFViewer Findings, Statistics, timeline queries, and Trace Compare results. It does not read firmware source or ELF files. `what_if` results are heuristic estimates. They are not RTOS scheduler simulations or measured trace data.
 
 ## Where to start
 
@@ -26,11 +24,11 @@ flowchart TD
   experiment --> compare["6. Compare<br/>Measure a new trace"]
 ```
 
-The key rule is simple: **do not jump from a finding directly to a mitigation**. Scope the incident, investigate the cause, verify the evidence, then experiment and compare.
+The key rule is simple: **do not move directly from a finding to a mitigation**. First define the scope, investigate the cause, and verify the evidence. Then test a change and compare the new trace.
 
 ### Beginner essentials
 
-The AI Assistant does not replace trace analysis. It helps you move through it in a consistent order. These terms are used throughout the panel and this guide:
+The AI Assistant does not replace trace analysis. It helps you follow a consistent investigation process. These terms are used throughout the panel and this guide:
 
 | Term | Meaning |
 | --- | --- |
@@ -38,8 +36,8 @@ The AI Assistant does not replace trace analysis. It helps you move through it i
 | **Scope** | The trace region used for Statistics, Findings, and AI evidence. It may be the full trace or the C1–Cn cursor range. |
 | **Filter** | A task, core, or migration restriction applied inside the current Scope. A visual highlight alone is not a Filter. |
 | **Evidence** | A measured value, trace event, timestamp, comparison row, or tool result that can be checked in BTFViewer. |
-| **Hypothesis** | A possible explanation. It remains unconfirmed until supporting evidence is checked and reasonable alternatives are tested. |
-| **Tool action** | A request from the AI to query evidence or operate the viewer. Read-only queries run immediately; viewer-changing actions wait for **Apply** by default. |
+| **Hypothesis** | A possible explanation. It is not confirmed until the supporting evidence is checked and reasonable alternatives are tested. |
+| **Tool action** | An AI request to query evidence or operate the viewer. Read-only queries run immediately; viewer-changing actions wait for **Apply** by default. |
 | **Baseline / Candidate** | Comparable traces captured before and after a change. Trace Compare measures their differences. |
 | **What-if / Optimize** | Heuristic estimates used to choose an experiment. They are not measured results. |
 
@@ -79,7 +77,7 @@ Context-sensitive Help can use the same fragments in both language versions: `#a
 
 ## Overview
 
-This section explains what the AI Assistant does, what evidence it uses, and where its responsibility ends.
+This section explains what the AI Assistant does, which evidence it uses, and its limits.
 
 ### Data flow and responsibility
 
@@ -106,7 +104,7 @@ When more detail is needed, it requests scoped evidence through the [GUI tools](
 
 The AI still does not read the raw `.btf` file directly.
 
-AI can explain evidence, find correlations, rank possible causes, challenge assumptions, and make estimates.
+The AI can explain evidence, identify correlations, rank possible causes, test assumptions, and provide estimates.
 
 **Deterministic Statistics and the timeline remain the source of truth.**
 
@@ -126,7 +124,7 @@ AI can explain evidence, find correlations, rank possible causes, challenge assu
 - Completed read-only evidence-query tool batches collapse to **Evidence queries · N completed**; pending Apply, failures, and viewer-mutating cards stay expanded. Other viewer-changing actions appear as tool cards labelled **Navigation / Scope / Filter / Annotation / Export / Calculation** and wait for **Apply** or **Skip** unless **Auto-apply GUI actions** is enabled. Tool cards sit below the written reply (amber Calculation card), not as the last line of the assistant bubble. **Undo** restores cursors, viewport, highlight, annotations, **Scope (Limit to C1–Cn)**, and **Filters**.
 - What-if / Optimize results show: `Simulation / estimate — not measured RTOS behavior.`
 
-Toolbar **Compare** becomes available when at least two traces are open. **Query with AI…** sends the Trace Compare tables rather than the current Findings. **Save as baseline** and **Score vs baseline** use the same stored profile as `baseline_score`. **Ctrl+K** provides quick access to Analysis, AI, Compare, workspace presets, and Inspect task.
+Toolbar **Compare** becomes available when at least two traces are open. **Query with AI…** sends the Trace Compare tables rather than the current Findings. **Save baseline** and **Score vs baseline** use the same stored profile as `baseline_score`. **Ctrl+K** provides quick access to Analysis, AI, Compare, workspace presets, and Inspect task.
 
 <a id="ai-topic-scope" name="ai-topic-scope">&#x200B;</a>
 
@@ -157,9 +155,7 @@ This section explains how the AI supports common investigations. For symptom-to-
 
 ### First investigation
 
-Do not start by choosing individual tools.
-
-Start with the main user actions. Let **Investigate** select deeper evidence tools when they are needed.
+Start with the main user actions instead of choosing individual tools. **Investigate** can select deeper evidence tools when they are needed.
 
 | Step | Action | Expected result | Check before continuing |
 | --- | --- | --- | --- |
@@ -195,9 +191,9 @@ flowchart TD
 ```
 
 
-Do not ask for a fix before the timeline supports the finding.
+Do not ask for a mitigation until the timeline supports the finding.
 
-Empty Statistics or the wrong scope can produce an answer that sounds confident but has weak evidence.
+Missing Statistics data or an incorrect scope can produce a confident-looking answer with weak evidence.
 
 Prefer built-in templates. They already use the expected metrics and units.
 
@@ -258,7 +254,7 @@ Use these workflows after you have selected the task, finding, or time window to
 | 8    | `find_related_findings` / `compare_tasks`                               | Adjacent findings; side-by-side task deltas                                                                              |
 | 9    | `set_cursors` / `zoom_to_range` / `highlight_task` / `bookmark_finding` | Narrow the timeline (Apply cursors unless auto-apply is on); click `range:LO/HI` / `btfrange:` on critical-path evidence |
 | 10   | Evidence & Validation panel                                             | Status, direct-evidence table, checks, missing evidence; **[Run]** on ▶ Next check sends a host next-check prompt. Conversation **[Run]** requires `nextstep:{action}` |
-| 11   | `investigation_replay` / `generate_report` / `export_investigation`     | Structured close-out; optional `export_report`                                                                           |
+| 11   | `generate_report` / `close_investigation` / `export_investigation`      | Structured close-out; optional `export_report`                                                                           |
 
 
 **Root cause** walks deadline/WCET → preemption → blocking → mutex → inheritance → migration for the top finding. Use it when triage already named a suspect task.
@@ -592,7 +588,7 @@ Live `ai-test` defaults to Full evidence. Use **`--compare-context`** to measure
 
 ## AI tools reference
 
-The current implementation exposes 60 tools. Evidence queries, investigation-state tools, and exports run immediately. The nine viewer-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on: `set_cursors`, `zoom_to_range`, `highlight_task`, `set_view_mode`, `open_corridor_inspector`, `add_annotation`, `bookmark_finding`, `clear_marks`, and `reset_view`. Names and parameters are in [Complete tool reference](#complete-gui-tool-reference) below.
+The current implementation exposes 59 tools. Evidence queries, investigation-state tools, and exports run immediately. The ten viewer-changing tools wait for **Apply** unless **Auto-apply GUI actions** is on: `set_cursors`, `zoom_to_range`, `highlight_task`, `set_view_mode`, `open_corridor_inspector`, `open_statistics_section`, `add_annotation`, `bookmark_finding`, `clear_marks`, and `reset_view`. Names and parameters are in [Complete tool reference](#complete-gui-tool-reference) below.
 
 It is easier to understand the AI tools by **purpose** than by function name.
 
@@ -624,7 +620,7 @@ Pending viewer actions appear on an Apply card. Each line is prefixed with its c
 | **Evidence queries / Calculation** | Run immediately and return measured or derived evidence without changing the timeline view | `query_raw_metric`, `search_timeline`, `investigate`, `correlate_events`, `find_critical_path`, `verify_claim` |
 | **Investigation state and export** | Run immediately; may update hypotheses, memory, experiment records, or save a file | `manage_hypotheses`, `record_experiment_outcome`, `investigation_memory`, `close_investigation`, `export_report`, `export_investigation` |
 | **Navigation** | Auto-apply when the batch is navigation-only | `set_cursors`, `zoom_to_range`, `highlight_task` |
-| **Viewer-changing (other)** | With **Auto-apply GUI actions** off (default), wait for **Apply** or **Skip** | `set_view_mode`, `open_corridor_inspector`, `add_annotation`, `bookmark_finding`, `clear_marks`, `reset_view` |
+| **Viewer-changing (other)** | With **Auto-apply GUI actions** off (default), wait for **Apply** or **Skip** | `set_view_mode`, `open_corridor_inspector`, `open_statistics_section`, `add_annotation`, `bookmark_finding`, `clear_marks`, `reset_view` |
 
 Several viewer-changing calls may arrive in one model turn and are applied as one batch. **Undo last actions** restores zoom, view mode, highlight, inspector state, cursors, marks, **Scope (Limit to C1–Cn)**, and **task/core Filters**. Export tools use the normal file-saving behavior and do not require **Apply**.
 
@@ -639,6 +635,7 @@ Use these tools to turn an answer into a visible timeline location.
 | Focus a task                 | `highlight_task`                     | Lock-highlights the task on the timeline                |
 | Change perspective           | `set_view_mode`                      | Task/Core and horizontal/vertical view                  |
 | Inspect a migration corridor | `open_corridor_inspector`            | Opens the Migration & Corridor Inspector                |
+| Show the numbers behind a claim | `open_statistics_section`         | Opens Statistics and scrolls to a section (no scope change) |
 | Preserve evidence            | `bookmark_finding`, `add_annotation` | Adds semantic or free-text timeline marks               |
 | Clean up                     | `clear_marks`, `reset_view`          | Clears investigation clutter or restores full-span view |
 
@@ -705,7 +702,6 @@ flowchart TD
 | Force alternative explanations                   | `challenge_conclusion`        |
 | Track hypothesis state                           | `manage_hypotheses`           |
 | Inspect priority-inversion evidence              | `detect_priority_inversion`   |
-| Evaluate investigation quality                   | `score_investigation` |
 
 
 The Evidence & Validation panel complements these tools with status, a direct-evidence table, checks, missing evidence, next action, and investigation details (quality, cost, trees).
@@ -769,7 +765,7 @@ flowchart TD
 | Generate structured engineering text | `generate_report`                                         |
 | Save a diagnostic report             | `export_report` (HTML summary first; transcript in appendix) |
 | Save a complete Investigation Case   | `export_investigation`                                    |
-| Replay/summarize the investigation   | `investigation_replay`, `summarize_investigation_context` |
+| Summarize the investigation          | `summarize_investigation_context`                         |
 | Remember similar cases               | `investigation_memory`, `find_similar_investigations`     |
 | Finish the Case                      | `close_investigation`                                     |
 
@@ -790,8 +786,9 @@ The table below is the exhaustive schema reference. Use it when implementing, de
 | `highlight_task` | `task_name_or_id` (display name, numeric id, or merge key)                                                                         | Lock-highlight a task row. Unknown names are ignored so the timeline is not dimmed. Empty string clears.                                                                                                                                                                                                                             |
 | `set_view_mode` | `mode` (`task` / `core`); optional `orientation`                                                                                   | Switch Task or Core view; horizontal or vertical                                                                                                                                                                                                                                                                                     |
 | `open_corridor_inspector` | optional `core_from` / `core_to` (`Core_0`, `0`, `c0`, `Core 0`)                                                                   | Open Migration Inspector; aliases resolve the same way                                                                                                                                                                                                                                                                               |
+| `open_statistics_section` | `section` (id such as `sync`, `block`, `activation`, or a page title such as `Mutex Blocking`)                                     | GUI: open the Statistics panel and scroll to one section; does not change scope or cursors (Apply required)                                                                                                                                                                                                                            |
 | `add_annotation` | `time`, `note` (≤240 chars)                                                                                                        | Pin an orange timeline note at a timestamp (stays on the current right-panel tab)                                                                                                                                                                                                                                                    |
-| `query_raw_metric` | `task`, `metric` (`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`)                               | Read-only: return the per-task series for the current Statistics scope (up to 40 rows)                                                                                                                                                                                                                                               |
+| `query_raw_metric` | `task`, `metric` (`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`, `activation`, `ready_gap`, `switch_reason`) | Read-only: return the per-task series (or aggregate for `activation` / `ready_gap` / `switch_reason`) for the current Statistics scope (up to 40 rows)                                                                                                                                                                    |
 | `export_report` | optional `format` (`html` / `csv` / `json`), optional `mode` (`summary` / `technical` / `full`) | HTML diagnostic report: executive summary, coverage, ranked findings, in-scope evidence, next action; conversation/GUI/rejected evidence in `<details>` appendix. Runs immediately (no Apply). Mid-flight exports still download and mark **Analysis incomplete** in the HTML. Strips all tool-usage cards (Calculation / Evidence queries / Apply) from the transcript. `json` saves a full investigation package (see `export_investigation`). |
 | `clear_marks` | optional `what` (`annotations` / `cursors` / `bookmarks` / `all` / `everything`)                                                   | Clear AI clutter. `all` (default) drops annotations + cursors; `everything` also clears bookmarks                                                                                                                                                                                                                                    |
 | `reset_view` | (none)                                                                                                                             | Fit the timeline to the full span and clear the task highlight (marks stay)                                                                                                                                                                                                                                                          |
@@ -807,7 +804,6 @@ The table below is the exhaustive schema reference. Use it when implementing, de
 | `optimize` | optional `limit` (default 5)                                                                                                       | Read-only: evidence-backed mitigation ideas (estimate disclaimer)                                                                                                                                                                                                                                                                    |
 | `regression_explain` | optional `tab_a` / `tab_b`                                                                                                         | Read-only: compare two tabs then narrate the primary regression; includes the same `regression_type` classification                                                                                                                                                                                                                  |
 | `bookmark_finding` | `time`, `kind` (`root_cause` / `evidence` / `correlated` / `reference`); optional `note`                                           | GUI: pin a semantic investigation annotation (Apply required)                                                                                                                                                                                                                                                                        |
-| `investigation_replay` | optional `finding_id`, `conclusion`, `tools_run`, `evidence_times`                                                                 | Read-only: structured investigation replay card                                                                                                                                                                                                                                                                                      |
 | `what_if` | `change`; optional `task`                                                                                                          | Read-only: heuristic slice-replay what-if (migrations / blocking / load balance; not an RTOS kernel)                                                                                                                                                                                                                                 |
 | `optimize_experiment` | optional `task`, `limit` (1–12, default 5)                                                                                         | Read-only: run ranked automatic pin/priority/contention/migration experiments                                                                                                                                                                                                                                                        |
 | `analyze_traces` | (none)                                                                                                                             | Read-only: rank all loaded tabs by scheduling behavior                                                                                                                                                                                                                                                                               |
@@ -832,7 +828,6 @@ The table below is the exhaustive schema reference. Use it when implementing, de
 | `build_causal_chain` | (none)                                                                                                                             | Read-only: causal / correlated / temporal edges (never silent causation)                                                                                                                                                                                                                                                             |
 | `generate_experiment_plan` | optional `task`, `limit`                                                                                                           | Read-only: ranked firmware / what-if experiments                                                                                                                                                                                                                                                                                     |
 | `record_experiment_outcome` | optional `change`, `predicted`, `actual`, `quality`                                                                                | Immediate: store an experiment outcome for later similar-case matching                                                                                                                                                                                                                                                               |
-| `score_investigation` | optional `tools_run`, `conclusion`, `confidence`, `elapsed_s`                                                                      | Read-only: evidence efficiency, cost, false-confidence, falsification, scope, stop                                                                                                                                                                                                                                                   |
 | `analyze_temporal_causality` | optional `task`                                                                                                                    | Read-only: happens-before chain from Findings times                                                                                                                                                                                                                                                                                  |
 | `build_task_dependency_graph` | optional `task`                                                                                                                    | Read-only: BTF wait/preempt/migrate/PI graph; 2-hop neighborhood + upstream tasks                                                                                                                                                                                                                                                    |
 | `decompose_response_time` | optional `task`                                                                                                                    | Read-only: relative delay-component shares                                                                                                                                                                                                                                                                                           |
@@ -1294,7 +1289,7 @@ flowchart TD
 | `build_causal_chain`          | Edges tagged causal / correlated / temporal; disclaimer required                                                                                                                                                |
 | `generate_experiment_plan`    | Ranked pin / contention / priority experiments                                                                                                                                                                  |
 | `record_experiment_outcome`   | Persist an outcome in the viewer's investigation storage                                                                                                                                                         |
-| `score_investigation`         | Phase 3 extras: `evidence_efficiency`, `investigation_cost`, `false_confidence`, `falsification_quality`, `scope_accuracy`, `stop_efficiency` (also spread into `score_benchmark_case`, with adversarial rates) |
+| `score_investigation_metrics` | Host-computed on close (no longer a model-facing tool): Phase 3 extras `evidence_efficiency`, `investigation_cost`, `false_confidence`, `falsification_quality`, `scope_accuracy`, `stop_efficiency` (also spread into `score_benchmark_case`, with adversarial rates) |
 
 
 Do **not** add chat templates after `auto_investigate`.
@@ -1384,7 +1379,7 @@ flowchart TD
 ```
 
 
-The shipped loop stays **Triage → Investigate → Verify → Correlate → Critical Path → Dependency Graph → Temporal Causality → Rank → Challenge → What-if → Report**. Improve access to Statistics evidence; do not grow the tool list. User-facing page map: [README → BTF analysis pages](README.md#btf-analysis-pages).
+The shipped loop stays **Triage → Investigate → Verify → Correlate → Critical Path → Dependency Graph → Temporal Causality → Rank → Challenge → What-if → Report**. Improve access to Statistics evidence (that is what `open_statistics_section` is for); prefer trimming the tool list over growing it — `score_investigation` and `investigation_replay` were folded into host-side close-out. User-facing page map: [README → BTF analysis pages](README.md#btf-analysis-pages).
 
 ### Shared Case / Evidence engines
 

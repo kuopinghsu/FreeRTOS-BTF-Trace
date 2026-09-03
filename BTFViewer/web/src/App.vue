@@ -1577,6 +1577,7 @@ import {
   AI_TOOL_ANALYZE_PERIODICITY,
   AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
   AI_TOOL_OPEN_CORRIDOR,
+  AI_TOOL_OPEN_STATS_SECTION,
   AI_TOOL_OPTIMIZE,
   AI_TOOL_OPTIMIZE_EXPERIMENT,
   AI_TOOL_QUERY_RAW_METRIC,
@@ -4550,6 +4551,11 @@ function dispatchAiTool(name, args) {
     if (src && dst) onOpenPairHeatmap({ fromCore: src, toCore: dst })
     else onOpenHeatmap()
     return 'Opened corridor inspector'
+  }
+  if (name === AI_TOOL_OPEN_STATS_SECTION) {
+    const section = String(args.section || args.section_id || '').trim()
+    onAiOpenStats(section)
+    return section ? `Opened Statistics section ${section}` : 'Opened Statistics'
   }
   if (name === AI_TOOL_ADD_ANNOTATION) {
     const ns = Math.trunc(Number(args.time))

@@ -89,6 +89,7 @@ from .ai_tools import (
     AI_TOOL_ANALYZE_PERIODICITY,
     AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
     AI_TOOL_OPEN_CORRIDOR,
+    AI_TOOL_OPEN_STATS_SECTION,
     AI_TOOL_OPTIMIZE,
     AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_QUERY_RAW_METRIC,
@@ -8875,6 +8876,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             else:
                 self._open_corridor_inspector("heatmap")
             return "Opened corridor inspector"
+        if name == AI_TOOL_OPEN_STATS_SECTION:
+            section = str(args.get("section") or args.get("section_id") or "").strip()
+            self._ai_open_stats_section(section)
+            return f"Opened Statistics section {section}" if section else "Opened Statistics"
         if name == AI_TOOL_ADD_ANNOTATION:
             ns = int(float(args["time"]))
             note = str(args.get("note") or "")

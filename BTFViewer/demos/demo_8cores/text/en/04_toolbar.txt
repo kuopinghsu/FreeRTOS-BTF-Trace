@@ -1,5 +1,5 @@
-Most toolbar buttons are icons. Hover an icon to see its name. Switch between Horizontal and Vertical layout. Use Zoom In, one to one, or Fit to size the timeline. Switch between Task View and Core View. Load draws CPU utilization below the timeline.
+Most toolbar controls use icons. Hover over an icon to see its name. You can switch between Horizontal and Vertical layouts, zoom the timeline, use one-to-one view, or click Fit to show the visible trace clearly. Task View groups activity by task, while Core View groups it by CPU core. Load adds CPU utilization below the timeline.
 
-The left edge is the activity rail. It holds Migration Heatmap, Analysis, Compare, Save Image, Help, and Settings. Analysis opens a short triage card. Migration Heatmap opens the core-migration view, which we cover later. Compare becomes active when at least two traces are open.
+The activity rail on the left contains Migration Heatmap, Analysis, Compare, Save Image, Help, and Settings. Analysis opens the current findings. Migration Heatmap opens the migration view. Compare becomes available when at least two traces are open.
 
-The right side is the panel dock: Statistics, Marks, Find, Legend, and AI, each on its own tab. Start with Statistics. Open AI only after Statistics and the timeline show the same evidence.
+The panel dock on the right contains Statistics, Marks, Find, Legend, and AI. We begin with Statistics. Use AI after the measurements and timeline have established the evidence.
