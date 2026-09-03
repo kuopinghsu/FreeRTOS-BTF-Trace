@@ -20564,8 +20564,17 @@ class _SettingsDialog(QDialog):
         self._sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         _item_h = max(36, int(ui_font_size * 2.6))   # scale row height with font
+        self._sidebar.setIconSize(QSize(16, 16))
+        _nav_ic_col = "#9E9E9E" if is_dark else "#6B6B6B"
+        _nav_icons = {
+            "Appearance": _IC_SET_APPEARANCE,
+            "Display": _IC_SET_DISPLAY,
+            "Layout": _IC_SET_LAYOUT,
+            "AI": _IC_SET_AI,
+        }
         for _name in ("Appearance", "Display", "Layout", "AI"):
             _item = QListWidgetItem(_name)
+            _item.setIcon(_svg_icon(_nav_icons[_name], _nav_ic_col, 16))
             _item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             _item.setSizeHint(QSize(140, _item_h))
             self._sidebar.addItem(_item)
