@@ -215,6 +215,13 @@ class AiToolsTests(unittest.TestCase):
         ]))
         self.assertEqual(normalize_raw_metric("L/M/H inversion"), "")
         self.assertEqual(normalize_raw_metric("priority-inheritance"), AI_RAW_METRIC_PRIORITY)
+        # New Statistics sections exposed through query_raw_metric (A1/A3/A4).
+        self.assertEqual(normalize_raw_metric("activation"), "activation")
+        self.assertEqual(normalize_raw_metric("release jitter"), "activation")
+        self.assertEqual(normalize_raw_metric("starvation"), "ready_gap")
+        self.assertEqual(normalize_raw_metric("ready-gap"), "ready_gap")
+        self.assertEqual(normalize_raw_metric("switch reason"), "switch_reason")
+        self.assertEqual(normalize_raw_metric("voluntary"), "switch_reason")
 
     def test_validate_clear_search_reset_compare(self) -> None:
         args, err = validate_tool_call(AI_TOOL_CLEAR_MARKS, {})
@@ -739,6 +746,32 @@ class AiToolsTests(unittest.TestCase):
         self.assertEqual(exec_out["data"]["count"], 1)
         miss = query_raw_metric(trace, "NoSuch", "execution")
         self.assertFalse(miss["ok"])
+
+    def test_query_raw_metric_new_sections_on_demo_trace(self) -> None:
+        """activation / ready_gap / switch_reason resolve against a real trace."""
+        from btf_viewer_pkg._bootstrap import install  # noqa: WPS433
+        install()
+        from btf_viewer_pkg.parser import _parse_btf  # noqa: WPS433
+
+        btf = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.btf.gz"
+        if not btf.is_file():
+            self.skipTest(f"missing demo trace: {btf}")
+        trace = _parse_btf(str(btf))
+
+        for metric in ("switch_reason", "ready_gap", "activation"):
+            out = query_raw_metric(trace, "CS[18]", metric)
+            self.assertTrue(out["ok"], f"{metric}: {out}")
+            self.assertEqual(out["data"]["metric"], metric)
+            self.assertTrue(out["data"].get("aggregate"))
+
+        # A forced-preemption-heavy worker has a non-zero involuntary switch rate.
+        sr = query_raw_metric(trace, "CS[18]", "switch_reason")["data"]
+        self.assertIn("preempted", sr)
+        self.assertIn("preempt_rate_per_s", sr)
+        self.assertGreaterEqual(sr["total"], sr["preempted"])
+
+        # Unknown task still errors the same way as the other metrics.
+        self.assertFalse(query_raw_metric(trace, "NoSuch", "ready_gap")["ok"])
 
     def test_build_ai_report_csv_and_html(self) -> None:
         csv_text = build_ai_report_csv(

@@ -531,6 +531,37 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertIn("Response", labels)
         self.assertIn("Mutex", labels)
 
+    def test_compare_dialog_query_with_ai_passes_selected_section(self):
+        from types import SimpleNamespace
+
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from btf_viewer_pkg.stats import _TraceCompareDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        called = []
+        win = SimpleNamespace(_tabs=[
+            SimpleNamespace(path="/tmp/a.btf", trace=None),
+            SimpleNamespace(path="/tmp/b.btf", trace=None),
+        ])
+        dlg = _TraceCompareDialog(
+            win, ai_enabled=True,
+            on_query_ai=lambda enabled, a, b, section="": called.append(
+                (enabled, a, b, section)),
+            on_validate_experiment=lambda *a: None,
+        )
+        sync_idx = next(
+            i for i in range(dlg._pages.count())
+            if dlg._pages.tabText(i) == "Sync"
+        )
+        dlg._pages.setCurrentIndex(sync_idx)
+        ai_btn = next(
+            b for b in dlg.findChildren(QPushButton)
+            if "Ask AI about this" in b.text().replace("&", "")
+        )
+        ai_btn.click()
+        self.assertEqual(called, [(True, 0, 1, "Sync")])
+
     def test_compare_dialog_validate_experiment_button(self):
         from types import SimpleNamespace
 

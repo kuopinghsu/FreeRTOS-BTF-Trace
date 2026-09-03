@@ -711,6 +711,7 @@ import {
   aiPresetSignInUrl,
   buildAiSystemPrompt,
   buildAiUserMessage,
+  compareSectionPrompt,
   cursorRegionBounds,
   extractJumpTimes,
   isLocalAiHost,
@@ -2233,11 +2234,11 @@ async function confirmComparePick() {
   }
 }
 
-async function buildCompareCtx(idA, idB) {
+async function buildCompareCtx(idA, idB, section = '') {
   if (!props.buildCompareContext) {
     throw new Error('Trace Compare is not available.')
   }
-  return Promise.resolve(props.buildCompareContext(idA, idB))
+  return Promise.resolve(props.buildCompareContext(idA, idB, section))
 }
 
 async function ask(prompt) {
@@ -2269,11 +2270,10 @@ async function askCompare(idA, idB, sectionLabel = '') {
     status.value = 'Choose two different traces.'
     return
   }
-  const prompt = sectionLabel
-    ? `${base}\n\nFocus your analysis on the "${sectionLabel}" section of the comparison.`
-    : base
+  const sec = String(sectionLabel || '').trim()
+  const prompt = compareSectionPrompt(base, sec)
   try {
-    const ctx = normalizeAiContext(await buildCompareCtx(idA, idB))
+    const ctx = normalizeAiContext(await buildCompareCtx(idA, idB, sec))
     if (!(ctx.findingsText || '').trim()) {
       status.value = 'Could not build Trace Compare tables.'
       return

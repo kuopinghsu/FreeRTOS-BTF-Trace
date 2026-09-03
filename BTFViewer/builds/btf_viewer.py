@@ -26069,6 +26069,12 @@ AVAILABLE_STATISTICS_PAGES: Tuple[str, ...] = (
     "Preemption Matrix",
     "Mutex Blocking",
     "Core Utilization Over Time",
+    "Switch Reason Breakdown",
+    "Scheduling Load Over Time",
+    "Activation Latency",
+    "Ready-Gap (Starvation)",
+    "Idle Analysis",
+    "Queue Backlog / Semaphore Level",
 )
 STATS_UX_PAGE_ALIASES: Dict[str, Tuple[str, ...]] = {
     "timeline anomalies": ("timeline anomalies", "timeline anomaly"),
@@ -26085,6 +26091,22 @@ STATS_UX_PAGE_ALIASES: Dict[str, Tuple[str, ...]] = {
     "mutex blocking": ("mutex blocking", "mutex-blocking"),
     "core utilization over time": (
         "core utilization over time", "core utilisation over time",
+    ),
+    "switch reason breakdown": (
+        "switch reason breakdown", "switch reason", "switch-reason",
+    ),
+    "scheduling load over time": (
+        "scheduling load over time", "scheduling load",
+    ),
+    "activation latency": (
+        "activation latency", "activation-latency", "release latency",
+    ),
+    "ready gap (starvation)": (
+        "ready-gap (starvation)", "ready gap", "ready-gap", "starvation",
+    ),
+    "idle analysis": ("idle analysis",),
+    "queue backlog semaphore level": (
+        "queue backlog / semaphore level", "queue backlog", "semaphore level",
     ),
 }
 
@@ -35238,6 +35260,9 @@ AI_RAW_METRIC_MIGRATIONS = "migrations"
 AI_RAW_METRIC_BLOCKING = "blocking"
 AI_RAW_METRIC_SYNC = "sync"
 AI_RAW_METRIC_FINDINGS = "findings"
+AI_RAW_METRIC_ACTIVATION = "activation"
+AI_RAW_METRIC_READY_GAP = "ready_gap"
+AI_RAW_METRIC_SWITCH_REASON = "switch_reason"
 AI_RAW_METRIC_NAMES: Tuple[str, ...] = (
     AI_RAW_METRIC_PRIORITY,
     AI_RAW_METRIC_EXECUTION,
@@ -35245,6 +35270,9 @@ AI_RAW_METRIC_NAMES: Tuple[str, ...] = (
     AI_RAW_METRIC_BLOCKING,
     AI_RAW_METRIC_SYNC,
     AI_RAW_METRIC_FINDINGS,
+    AI_RAW_METRIC_ACTIVATION,
+    AI_RAW_METRIC_READY_GAP,
+    AI_RAW_METRIC_SWITCH_REASON,
 )
 _RAW_METRIC_ALIASES = {
     "priority_inheritance": AI_RAW_METRIC_PRIORITY,
@@ -35272,6 +35300,20 @@ _RAW_METRIC_ALIASES = {
     "findings": AI_RAW_METRIC_FINDINGS,
     "finding": AI_RAW_METRIC_FINDINGS,
     "analysis": AI_RAW_METRIC_FINDINGS,
+    "activation": AI_RAW_METRIC_ACTIVATION,
+    "activation_latency": AI_RAW_METRIC_ACTIVATION,
+    "release": AI_RAW_METRIC_ACTIVATION,
+    "release_jitter": AI_RAW_METRIC_ACTIVATION,
+    "ready_gap": AI_RAW_METRIC_READY_GAP,
+    "ready-gap": AI_RAW_METRIC_READY_GAP,
+    "readygap": AI_RAW_METRIC_READY_GAP,
+    "starvation": AI_RAW_METRIC_READY_GAP,
+    "starved": AI_RAW_METRIC_READY_GAP,
+    "switch_reason": AI_RAW_METRIC_SWITCH_REASON,
+    "switch-reason": AI_RAW_METRIC_SWITCH_REASON,
+    "switchreason": AI_RAW_METRIC_SWITCH_REASON,
+    "preempted": AI_RAW_METRIC_SWITCH_REASON,
+    "voluntary": AI_RAW_METRIC_SWITCH_REASON,
 }
 _MAX_RAW_METRIC_ROWS = 40
 _MAX_SEARCH_HITS = 40
@@ -35556,7 +35598,10 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "Statistics scope (cursor range when Limit to C1–Cn is on). "
                     "Returns JSON samples — not a GUI change. Metrics: "
                     "priority_inheritance, execution, migrations, blocking, "
-                    "sync, findings."
+                    "sync, findings, activation (release latency vs the ideal "
+                    "periodic grid), ready_gap (time ready but not running — "
+                    "starvation), switch_reason (voluntary vs forced off-CPU "
+                    "switch counts)."
                 ),
                 "parameters": {
                     "type": "object",
@@ -39421,6 +39466,102 @@ def query_raw_metric(
         msg = f"{len(gaps)} blocking gap(s) for {label}"
         return tool_result_payload(True, msg, data=data)
 
+    if metric_id == AI_RAW_METRIC_ACTIVATION:
+        # Release latency vs a fitted ideal periodic grid (Activation Latency,
+        # review item A3) — the per-task summary the section shows, raw ns.
+        _nearest_rank_index = globals().get("_nearest_rank_index")
+        _sample_variability = globals().get("_sample_variability")
+        analyze_task_periods = globals().get("analyze_task_periods")
+        harvest_ux_events = globals().get("harvest_ux_events")
+        evs = harvest_ux_events(trace, lo, hi)
+        period = 0
+        for prow in analyze_task_periods(evs, 3):
+            if str(prow.get("mk") or "") == mk:
+                period = int(prow.get("expected_ns") or 0)
+                break
+        starts = sorted(
+            int(ev.get("start") or 0)
+            for ev in evs
+            if isinstance(ev, dict) and ev.get("kind") == "inter"
+            and str(ev.get("mk") or ev.get("task") or "") == mk
+            and (lo is None or hi is None
+                 or lo <= int(ev.get("start") or 0) <= hi)
+        )
+        if period <= 0 or len(starts) < 3:
+            data.update({"count": len(starts), "aggregate": True,
+                         "note": "needs >= 3 activations and a detected period"})
+            return tool_result_payload(
+                True, f"no periodic activation grid for {label}", data=data)
+        anchor = starts[0]
+        errs = sorted(
+            abs(t - (anchor + round((t - anchor) / period) * period))
+            for t in starts
+        )
+        n = len(errs)
+        jitter, sigma_f, p50, p99 = _sample_variability(errs)
+        data.update({
+            "aggregate": True,
+            "count": n,
+            "min": errs[0],
+            "avg": int(round(sum(errs) / n)),
+            "max": errs[-1],
+            "jitter": int(jitter),
+            "sigma": int(round(sigma_f)),
+            "p50": int(p50),
+            "p95": errs[_nearest_rank_index(n, 0.95)],
+            "p99": int(p99),
+        })
+        return tool_result_payload(
+            True, f"activation latency grid for {label} ({n} activations)",
+            data=data)
+
+    if metric_id == AI_RAW_METRIC_READY_GAP:
+        # Time the task was arguably able to run but did not (Ready-Gap /
+        # starvation, review item A4).
+        _ready_gap_rows = globals().get("_ready_gap_rows")
+        row = next((r for r in _ready_gap_rows(trace, lo, hi) if r[0] == mk), None)
+        if row is None:
+            data.update({"count": 0, "aggregate": True})
+            return tool_result_payload(
+                True, f"no ready-gap for {label} in scope", data=data)
+        _mk, _name, count, longest, total, avg, p95, preempt_pct = row
+        data.update({
+            "aggregate": True,
+            "count": count,
+            "longest": longest,
+            "total": total,
+            "avg": avg,
+            "p95": p95,
+            "preempt_pct": round(float(preempt_pct), 1),
+        })
+        return tool_result_payload(
+            True, f"{count} ready-gap(s) for {label}", data=data)
+
+    if metric_id == AI_RAW_METRIC_SWITCH_REASON:
+        # Voluntary vs forced off-CPU switch counts (Switch Reason Breakdown,
+        # review item A1).
+        _switch_reason_rows = globals().get("_switch_reason_rows")
+        row = next(
+            (r for r in _switch_reason_rows(trace, lo, hi) if r[0] == mk), None)
+        if row is None:
+            data.update({"total": 0, "aggregate": True})
+            return tool_result_payload(
+                True, f"no off-CPU switches for {label} in scope", data=data)
+        (_mk, _name, preempted, blocked, suspended, period_wait, unknown,
+         total, preempt_rate) = row
+        data.update({
+            "aggregate": True,
+            "preempted": preempted,
+            "blocked": blocked,
+            "suspended": suspended,
+            "period_wait": period_wait,
+            "unknown": unknown,
+            "total": total,
+            "preempt_rate_per_s": round(float(preempt_rate), 3),
+        })
+        return tool_result_payload(
+            True, f"{total} off-CPU switch(es) for {label}", data=data)
+
     # sync STI events whose note mentions the task
     sti = getattr(trace, "sti_events", None) or getattr(trace, "stiEvents", None) or []
     aliases = [a.lower() for a in task_lookup_keys(task) + task_lookup_keys(label) if a]
@@ -41696,7 +41837,9 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Trace Compare",
         "Compare Trace A vs Trace B using the Trace Compare tables in the "
         "context. Classify each major delta as Regression, Improvement, or "
-        "Neutral (CPU, migrations, latency, tick health, sync). State which "
+        "Neutral (CPU, migrations, latency, tick health, sync); use the "
+        "Shape Δ (KS) column for distribution-shape changes, not just mean "
+        "shifts. State which "
         "side is worse for each concern, the likely cause with confidence, "
         "and which Statistics section or Trace Compare page to open next. "
         "Mention the regression result on the Compare Summary tab when "
@@ -41724,7 +41867,8 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "magnitudes, not cycle-accurate milliseconds. Name Period / Jitter, "
         "Unified Jitter, Response Time, Task Health, and Task × Core when they "
         "apply. Tell the engineer they "
-        "can click Execution / Blocking / Inter-arrival p95 or p99 to jump. "
+        "can click Execution / Blocking / Inter-arrival p95 or p99 to jump; "
+        "Interval and Tag Analysis now carry σ / p50 / p99 as well. "
         "End with a short "
         "assessment checklist (normal / warning) and one Ask-next question.",
     ),
@@ -41765,7 +41909,9 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "or blocking tail. Preferred tools: analyze_distribution for the "
         "relevant metric; decompose_response_time when response data exists; "
         "query_raw_metric for missing samples. Distinguish response, dispatch, "
-        "execution, and blocking. Output: Task; Tail evidence; Leading "
+        "execution, and blocking. Open Activation Latency for release jitter "
+        "versus the ideal periodic grid and Ready-Gap (Starvation) for time "
+        "spent ready but not running. Output: Task; Tail evidence; Leading "
         "explanation; One relevant next check.",
     ),
     (
@@ -41776,7 +41922,8 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "task and cite p50 / p99 / CV, not only Max. Open Timeline Anomalies, "
         "Worst Events, Response Time, Period / Jitter, Unified Jitter, and "
         "Task Health. Click Execution Max / "
-        "p95 / p99 to jump. Recommend whether to "
+        "p95 / p99 to jump. Check Idle Analysis for spare CPU headroom. "
+        "Recommend whether to "
         "affinity-pin, reduce fan-out, or inspect preemption.",
     ),
     (
@@ -41785,14 +41932,17 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Is there core thrashing, ping-pong, or short dwell? Cite migration rate, ping-pong, "
         "dwell, and any synchronization handoff heuristic (not a measured cache-line transfer). "
         "Do not automatically filter the timeline or change cursors unless the user selects a viewer action. "
-        "Open Task × Core, Core Utilization Over Time, and Timeline Anomalies migration bursts.",
+        "Open Task × Core, Core Utilization Over Time, Switch Reason Breakdown "
+        "(voluntary versus forced switches), and Timeline Anomalies migration bursts.",
     ),
     (
         "balance",
         "Core balance",
         "Is SMP load balance healthy? Interpret Load Balance Score / σ and "
         "whether Concurrent Core Active or Switch Overhead needs attention. "
-        "Open Task × Core for per-task per-core share of the scoped span.",
+        "Open Scheduling Load Over Time for the per-core load series, Idle "
+        "Analysis for spare headroom, and Task × Core for per-task per-core "
+        "share of the scoped span.",
     ),
     (
         "tick",
@@ -41802,15 +41952,18 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Call analyze_periodicity (source auto or tick) and report expected "
         "vs p50/p99/max, RMS jitter, and kind. Do not conflate this with "
         "Period / Jitter — that page is task inter-arrival, not the tick "
-        "source.",
+        "source. Open Idle Analysis to confirm whether the long gaps are "
+        "just tickless idle.",
     ),
     (
         "priority",
         "Priority inversion",
         "Is there priority inversion or L/M/H geometry? Explain any inherit "
-        "episodes and what to verify next. If mutex handoff is in play, open "
-        "Waiter × Owner (heuristic next-acquirer × previous-holder, not a "
-        "kernel wait queue).",
+        "episodes and what to verify next. Read the Invert (worst) / Invert "
+        "(total) columns on Priority Inheritance for measured inversion "
+        "duration, and Queue Backlog / Semaphore Level for a starved waiter. "
+        "If mutex handoff is in play, open Waiter × Owner (heuristic "
+        "next-acquirer × previous-holder, not a kernel wait queue).",
     ),
     (
         "deadlines",
@@ -41855,6 +42008,29 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "focus_evidence.",
     ),
 )
+
+
+def compare_section_prompt(base_prompt: str, section_label: str = "") -> str:
+    """Focus a Trace Compare template on one section of the comparison.
+
+    An empty label or ``"Summary"`` keeps the full multi-concern sweep; any
+    other section (Sync, Blocking, Execution, …) appends a scope override so the
+    model reports only that section's Trace A vs B deltas.  Keep in sync with
+    ``compareSectionPrompt`` in ``web/src/utils/aiClient.js``.
+    """
+    base = str(base_prompt or "")
+    sec = str(section_label or "").strip()
+    if not sec or sec.lower() == "summary":
+        return base
+    return (
+        f'{base}\n\nScope override: analyse ONLY the "{sec}" section of the '
+        f"comparison. Report every Trace A vs B delta in {sec}, classify each "
+        "as Regression, Improvement, or Neutral, and give the likely cause "
+        "with confidence and a jump:TIME when available. Reference another "
+        f"section only when it directly explains a {sec} delta; do not sweep "
+        "the other sections."
+    )
+
 
 # Dynamic template chips shown next to the More… button (Start Investigation is
 # separate). Keep in sync with web/src/utils/aiClient.js.
@@ -48458,12 +48634,9 @@ def create_ai_assistant_panel(
             if not prompt:
                 return
             sec = str(section or "").strip()
-            if sec:
-                prompt = (
-                    f'{prompt}\n\nFocus your analysis on the "{sec}" section '
-                    "of the comparison."
-                )
-            self._run_compare_template(prompt, idx_a=idx_a, idx_b=idx_b)
+            prompt = compare_section_prompt(prompt, sec)
+            self._run_compare_template(
+                prompt, idx_a=idx_a, idx_b=idx_b, section=sec)
 
         def query_validate_experiment(self, idx_a: int, idx_b: int) -> None:
             """Ask the model to call validate_experiment for two chosen tabs."""
@@ -49243,6 +49416,7 @@ def create_ai_assistant_panel(
             prompt: str,
             idx_a: Optional[int] = None,
             idx_b: Optional[int] = None,
+            section: str = "",
         ) -> None:
             tabs = self._loaded_tabs()
             if len(tabs) < 2:
@@ -49269,7 +49443,10 @@ def create_ai_assistant_panel(
                 self._set_status("Trace Compare is not available.")
                 return
             try:
-                ctx = dict(build_compare_context(idx_a, idx_b) or {})
+                try:
+                    ctx = dict(build_compare_context(idx_a, idx_b, section) or {})
+                except TypeError:
+                    ctx = dict(build_compare_context(idx_a, idx_b) or {})
             except Exception as exc:
                 self._set_status(f"Compare context error: {exc}")
                 return
@@ -89907,8 +90084,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             out.append({"index": i, "name": name})
         return out
 
-    def _ai_build_compare_context(self, idx_a: int, idx_b: int) -> dict:
-        """Build Trace Compare CSV context for AI (cursor scope on, like the dialog)."""
+    def _ai_build_compare_context(
+        self, idx_a: int, idx_b: int, section: str = "",
+    ) -> dict:
+        """Build Trace Compare CSV context for AI (cursor scope on, like the dialog).
+
+        *section* is the label of the page selected in the dialog's left rail;
+        when it is a real section (not empty / "Summary") the CSV is prefixed
+        with a one-line pointer so the model leads with it.
+        """
         tabs = self._tabs
         if not (0 <= idx_a < len(tabs) and 0 <= idx_b < len(tabs)):
             raise ValueError("Invalid tab index for Trace Compare")
@@ -89936,7 +90120,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         csv_text = _build_compare_csv(name_a, name_b, scope_enabled, tables)
         if len(csv_text) > 60000:
             csv_text = csv_text[:60000] + "\n… (truncated for AI context)"
+        sec = str(section or "").strip()
+        focus_line = (
+            f'AI focus: the engineer selected the "{sec}" section — lead your '
+            "analysis with it.\n"
+            if sec and sec.lower() != "summary" else ""
+        )
         findings = (
+            f"{focus_line}"
             f"Trace Compare tables (CSV) for {name_a} vs {name_b}.\n"
             f"Cursor scope per tab: yes (when 2+ cursors placed).\n\n"
             f"{csv_text}"

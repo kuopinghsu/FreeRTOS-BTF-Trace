@@ -7650,8 +7650,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             out.append({"index": i, "name": name})
         return out
 
-    def _ai_build_compare_context(self, idx_a: int, idx_b: int) -> dict:
-        """Build Trace Compare CSV context for AI (cursor scope on, like the dialog)."""
+    def _ai_build_compare_context(
+        self, idx_a: int, idx_b: int, section: str = "",
+    ) -> dict:
+        """Build Trace Compare CSV context for AI (cursor scope on, like the dialog).
+
+        *section* is the label of the page selected in the dialog's left rail;
+        when it is a real section (not empty / "Summary") the CSV is prefixed
+        with a one-line pointer so the model leads with it.
+        """
         tabs = self._tabs
         if not (0 <= idx_a < len(tabs) and 0 <= idx_b < len(tabs)):
             raise ValueError("Invalid tab index for Trace Compare")
@@ -7679,7 +7686,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         csv_text = _build_compare_csv(name_a, name_b, scope_enabled, tables)
         if len(csv_text) > 60000:
             csv_text = csv_text[:60000] + "\n… (truncated for AI context)"
+        sec = str(section or "").strip()
+        focus_line = (
+            f'AI focus: the engineer selected the "{sec}" section — lead your '
+            "analysis with it.\n"
+            if sec and sec.lower() != "summary" else ""
+        )
         findings = (
+            f"{focus_line}"
             f"Trace Compare tables (CSV) for {name_a} vs {name_b}.\n"
             f"Cursor scope per tab: yes (when 2+ cursors placed).\n\n"
             f"{csv_text}"

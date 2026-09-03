@@ -3038,6 +3038,12 @@ export const AVAILABLE_STATISTICS_PAGES = [
   'Preemption Matrix',
   'Mutex Blocking',
   'Core Utilization Over Time',
+  'Switch Reason Breakdown',
+  'Scheduling Load Over Time',
+  'Activation Latency',
+  'Ready-Gap (Starvation)',
+  'Idle Analysis',
+  'Queue Backlog / Semaphore Level',
 ]
 
 export const STATS_UX_PAGE_ALIASES = {
@@ -3055,6 +3061,22 @@ export const STATS_UX_PAGE_ALIASES = {
   'mutex blocking': ['mutex blocking', 'mutex-blocking'],
   'core utilization over time': [
     'core utilization over time', 'core utilisation over time',
+  ],
+  'switch reason breakdown': [
+    'switch reason breakdown', 'switch reason', 'switch-reason',
+  ],
+  'scheduling load over time': [
+    'scheduling load over time', 'scheduling load',
+  ],
+  'activation latency': [
+    'activation latency', 'activation-latency', 'release latency',
+  ],
+  'ready gap (starvation)': [
+    'ready-gap (starvation)', 'ready gap', 'ready-gap', 'starvation',
+  ],
+  'idle analysis': ['idle analysis'],
+  'queue backlog semaphore level': [
+    'queue backlog / semaphore level', 'queue backlog', 'semaphore level',
   ],
 }
 

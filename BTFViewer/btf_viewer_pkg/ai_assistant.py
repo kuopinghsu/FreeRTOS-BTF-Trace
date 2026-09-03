@@ -468,7 +468,9 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Trace Compare",
         "Compare Trace A vs Trace B using the Trace Compare tables in the "
         "context. Classify each major delta as Regression, Improvement, or "
-        "Neutral (CPU, migrations, latency, tick health, sync). State which "
+        "Neutral (CPU, migrations, latency, tick health, sync); use the "
+        "Shape Δ (KS) column for distribution-shape changes, not just mean "
+        "shifts. State which "
         "side is worse for each concern, the likely cause with confidence, "
         "and which Statistics section or Trace Compare page to open next. "
         "Mention the regression result on the Compare Summary tab when "
@@ -496,7 +498,8 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "magnitudes, not cycle-accurate milliseconds. Name Period / Jitter, "
         "Unified Jitter, Response Time, Task Health, and Task × Core when they "
         "apply. Tell the engineer they "
-        "can click Execution / Blocking / Inter-arrival p95 or p99 to jump. "
+        "can click Execution / Blocking / Inter-arrival p95 or p99 to jump; "
+        "Interval and Tag Analysis now carry σ / p50 / p99 as well. "
         "End with a short "
         "assessment checklist (normal / warning) and one Ask-next question.",
     ),
@@ -537,7 +540,9 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "or blocking tail. Preferred tools: analyze_distribution for the "
         "relevant metric; decompose_response_time when response data exists; "
         "query_raw_metric for missing samples. Distinguish response, dispatch, "
-        "execution, and blocking. Output: Task; Tail evidence; Leading "
+        "execution, and blocking. Open Activation Latency for release jitter "
+        "versus the ideal periodic grid and Ready-Gap (Starvation) for time "
+        "spent ready but not running. Output: Task; Tail evidence; Leading "
         "explanation; One relevant next check.",
     ),
     (
@@ -548,7 +553,8 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "task and cite p50 / p99 / CV, not only Max. Open Timeline Anomalies, "
         "Worst Events, Response Time, Period / Jitter, Unified Jitter, and "
         "Task Health. Click Execution Max / "
-        "p95 / p99 to jump. Recommend whether to "
+        "p95 / p99 to jump. Check Idle Analysis for spare CPU headroom. "
+        "Recommend whether to "
         "affinity-pin, reduce fan-out, or inspect preemption.",
     ),
     (
@@ -557,14 +563,17 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Is there core thrashing, ping-pong, or short dwell? Cite migration rate, ping-pong, "
         "dwell, and any synchronization handoff heuristic (not a measured cache-line transfer). "
         "Do not automatically filter the timeline or change cursors unless the user selects a viewer action. "
-        "Open Task × Core, Core Utilization Over Time, and Timeline Anomalies migration bursts.",
+        "Open Task × Core, Core Utilization Over Time, Switch Reason Breakdown "
+        "(voluntary versus forced switches), and Timeline Anomalies migration bursts.",
     ),
     (
         "balance",
         "Core balance",
         "Is SMP load balance healthy? Interpret Load Balance Score / σ and "
         "whether Concurrent Core Active or Switch Overhead needs attention. "
-        "Open Task × Core for per-task per-core share of the scoped span.",
+        "Open Scheduling Load Over Time for the per-core load series, Idle "
+        "Analysis for spare headroom, and Task × Core for per-task per-core "
+        "share of the scoped span.",
     ),
     (
         "tick",
@@ -574,15 +583,18 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "Call analyze_periodicity (source auto or tick) and report expected "
         "vs p50/p99/max, RMS jitter, and kind. Do not conflate this with "
         "Period / Jitter — that page is task inter-arrival, not the tick "
-        "source.",
+        "source. Open Idle Analysis to confirm whether the long gaps are "
+        "just tickless idle.",
     ),
     (
         "priority",
         "Priority inversion",
         "Is there priority inversion or L/M/H geometry? Explain any inherit "
-        "episodes and what to verify next. If mutex handoff is in play, open "
-        "Waiter × Owner (heuristic next-acquirer × previous-holder, not a "
-        "kernel wait queue).",
+        "episodes and what to verify next. Read the Invert (worst) / Invert "
+        "(total) columns on Priority Inheritance for measured inversion "
+        "duration, and Queue Backlog / Semaphore Level for a starved waiter. "
+        "If mutex handoff is in play, open Waiter × Owner (heuristic "
+        "next-acquirer × previous-holder, not a kernel wait queue).",
     ),
     (
         "deadlines",
@@ -627,6 +639,29 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "focus_evidence.",
     ),
 )
+
+
+def compare_section_prompt(base_prompt: str, section_label: str = "") -> str:
+    """Focus a Trace Compare template on one section of the comparison.
+
+    An empty label or ``"Summary"`` keeps the full multi-concern sweep; any
+    other section (Sync, Blocking, Execution, …) appends a scope override so the
+    model reports only that section's Trace A vs B deltas.  Keep in sync with
+    ``compareSectionPrompt`` in ``web/src/utils/aiClient.js``.
+    """
+    base = str(base_prompt or "")
+    sec = str(section_label or "").strip()
+    if not sec or sec.lower() == "summary":
+        return base
+    return (
+        f'{base}\n\nScope override: analyse ONLY the "{sec}" section of the '
+        f"comparison. Report every Trace A vs B delta in {sec}, classify each "
+        "as Regression, Improvement, or Neutral, and give the likely cause "
+        "with confidence and a jump:TIME when available. Reference another "
+        f"section only when it directly explains a {sec} delta; do not sweep "
+        "the other sections."
+    )
+
 
 # Dynamic template chips shown next to the More… button (Start Investigation is
 # separate). Keep in sync with web/src/utils/aiClient.js.
@@ -7230,12 +7265,9 @@ def create_ai_assistant_panel(
             if not prompt:
                 return
             sec = str(section or "").strip()
-            if sec:
-                prompt = (
-                    f'{prompt}\n\nFocus your analysis on the "{sec}" section '
-                    "of the comparison."
-                )
-            self._run_compare_template(prompt, idx_a=idx_a, idx_b=idx_b)
+            prompt = compare_section_prompt(prompt, sec)
+            self._run_compare_template(
+                prompt, idx_a=idx_a, idx_b=idx_b, section=sec)
 
         def query_validate_experiment(self, idx_a: int, idx_b: int) -> None:
             """Ask the model to call validate_experiment for two chosen tabs."""
@@ -8015,6 +8047,7 @@ def create_ai_assistant_panel(
             prompt: str,
             idx_a: Optional[int] = None,
             idx_b: Optional[int] = None,
+            section: str = "",
         ) -> None:
             tabs = self._loaded_tabs()
             if len(tabs) < 2:
@@ -8041,7 +8074,10 @@ def create_ai_assistant_panel(
                 self._set_status("Trace Compare is not available.")
                 return
             try:
-                ctx = dict(build_compare_context(idx_a, idx_b) or {})
+                try:
+                    ctx = dict(build_compare_context(idx_a, idx_b, section) or {})
+                except TypeError:
+                    ctx = dict(build_compare_context(idx_a, idx_b) or {})
             except Exception as exc:
                 self._set_status(f"Compare context error: {exc}")
                 return

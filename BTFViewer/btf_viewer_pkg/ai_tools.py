@@ -279,6 +279,9 @@ AI_RAW_METRIC_MIGRATIONS = "migrations"
 AI_RAW_METRIC_BLOCKING = "blocking"
 AI_RAW_METRIC_SYNC = "sync"
 AI_RAW_METRIC_FINDINGS = "findings"
+AI_RAW_METRIC_ACTIVATION = "activation"
+AI_RAW_METRIC_READY_GAP = "ready_gap"
+AI_RAW_METRIC_SWITCH_REASON = "switch_reason"
 AI_RAW_METRIC_NAMES: Tuple[str, ...] = (
     AI_RAW_METRIC_PRIORITY,
     AI_RAW_METRIC_EXECUTION,
@@ -286,6 +289,9 @@ AI_RAW_METRIC_NAMES: Tuple[str, ...] = (
     AI_RAW_METRIC_BLOCKING,
     AI_RAW_METRIC_SYNC,
     AI_RAW_METRIC_FINDINGS,
+    AI_RAW_METRIC_ACTIVATION,
+    AI_RAW_METRIC_READY_GAP,
+    AI_RAW_METRIC_SWITCH_REASON,
 )
 _RAW_METRIC_ALIASES = {
     "priority_inheritance": AI_RAW_METRIC_PRIORITY,
@@ -313,6 +319,20 @@ _RAW_METRIC_ALIASES = {
     "findings": AI_RAW_METRIC_FINDINGS,
     "finding": AI_RAW_METRIC_FINDINGS,
     "analysis": AI_RAW_METRIC_FINDINGS,
+    "activation": AI_RAW_METRIC_ACTIVATION,
+    "activation_latency": AI_RAW_METRIC_ACTIVATION,
+    "release": AI_RAW_METRIC_ACTIVATION,
+    "release_jitter": AI_RAW_METRIC_ACTIVATION,
+    "ready_gap": AI_RAW_METRIC_READY_GAP,
+    "ready-gap": AI_RAW_METRIC_READY_GAP,
+    "readygap": AI_RAW_METRIC_READY_GAP,
+    "starvation": AI_RAW_METRIC_READY_GAP,
+    "starved": AI_RAW_METRIC_READY_GAP,
+    "switch_reason": AI_RAW_METRIC_SWITCH_REASON,
+    "switch-reason": AI_RAW_METRIC_SWITCH_REASON,
+    "switchreason": AI_RAW_METRIC_SWITCH_REASON,
+    "preempted": AI_RAW_METRIC_SWITCH_REASON,
+    "voluntary": AI_RAW_METRIC_SWITCH_REASON,
 }
 _MAX_RAW_METRIC_ROWS = 40
 _MAX_SEARCH_HITS = 40
@@ -597,7 +617,10 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "Statistics scope (cursor range when Limit to C1–Cn is on). "
                     "Returns JSON samples — not a GUI change. Metrics: "
                     "priority_inheritance, execution, migrations, blocking, "
-                    "sync, findings."
+                    "sync, findings, activation (release latency vs the ideal "
+                    "periodic grid), ready_gap (time ready but not running — "
+                    "starvation), switch_reason (voluntary vs forced off-CPU "
+                    "switch counts)."
                 ),
                 "parameters": {
                     "type": "object",
@@ -4461,6 +4484,100 @@ def query_raw_metric(
         })
         msg = f"{len(gaps)} blocking gap(s) for {label}"
         return tool_result_payload(True, msg, data=data)
+
+    if metric_id == AI_RAW_METRIC_ACTIVATION:
+        # Release latency vs a fitted ideal periodic grid (Activation Latency,
+        # review item A3) — the per-task summary the section shows, raw ns.
+        from .parser import _nearest_rank_index, _sample_variability
+        from .ux_explore import analyze_task_periods, harvest_ux_events
+        evs = harvest_ux_events(trace, lo, hi)
+        period = 0
+        for prow in analyze_task_periods(evs, 3):
+            if str(prow.get("mk") or "") == mk:
+                period = int(prow.get("expected_ns") or 0)
+                break
+        starts = sorted(
+            int(ev.get("start") or 0)
+            for ev in evs
+            if isinstance(ev, dict) and ev.get("kind") == "inter"
+            and str(ev.get("mk") or ev.get("task") or "") == mk
+            and (lo is None or hi is None
+                 or lo <= int(ev.get("start") or 0) <= hi)
+        )
+        if period <= 0 or len(starts) < 3:
+            data.update({"count": len(starts), "aggregate": True,
+                         "note": "needs >= 3 activations and a detected period"})
+            return tool_result_payload(
+                True, f"no periodic activation grid for {label}", data=data)
+        anchor = starts[0]
+        errs = sorted(
+            abs(t - (anchor + round((t - anchor) / period) * period))
+            for t in starts
+        )
+        n = len(errs)
+        jitter, sigma_f, p50, p99 = _sample_variability(errs)
+        data.update({
+            "aggregate": True,
+            "count": n,
+            "min": errs[0],
+            "avg": int(round(sum(errs) / n)),
+            "max": errs[-1],
+            "jitter": int(jitter),
+            "sigma": int(round(sigma_f)),
+            "p50": int(p50),
+            "p95": errs[_nearest_rank_index(n, 0.95)],
+            "p99": int(p99),
+        })
+        return tool_result_payload(
+            True, f"activation latency grid for {label} ({n} activations)",
+            data=data)
+
+    if metric_id == AI_RAW_METRIC_READY_GAP:
+        # Time the task was arguably able to run but did not (Ready-Gap /
+        # starvation, review item A4).
+        from .parser import _ready_gap_rows
+        row = next((r for r in _ready_gap_rows(trace, lo, hi) if r[0] == mk), None)
+        if row is None:
+            data.update({"count": 0, "aggregate": True})
+            return tool_result_payload(
+                True, f"no ready-gap for {label} in scope", data=data)
+        _mk, _name, count, longest, total, avg, p95, preempt_pct = row
+        data.update({
+            "aggregate": True,
+            "count": count,
+            "longest": longest,
+            "total": total,
+            "avg": avg,
+            "p95": p95,
+            "preempt_pct": round(float(preempt_pct), 1),
+        })
+        return tool_result_payload(
+            True, f"{count} ready-gap(s) for {label}", data=data)
+
+    if metric_id == AI_RAW_METRIC_SWITCH_REASON:
+        # Voluntary vs forced off-CPU switch counts (Switch Reason Breakdown,
+        # review item A1).
+        from .parser import _switch_reason_rows
+        row = next(
+            (r for r in _switch_reason_rows(trace, lo, hi) if r[0] == mk), None)
+        if row is None:
+            data.update({"total": 0, "aggregate": True})
+            return tool_result_payload(
+                True, f"no off-CPU switches for {label} in scope", data=data)
+        (_mk, _name, preempted, blocked, suspended, period_wait, unknown,
+         total, preempt_rate) = row
+        data.update({
+            "aggregate": True,
+            "preempted": preempted,
+            "blocked": blocked,
+            "suspended": suspended,
+            "period_wait": period_wait,
+            "unknown": unknown,
+            "total": total,
+            "preempt_rate_per_s": round(float(preempt_rate), 3),
+        })
+        return tool_result_payload(
+            True, f"{total} off-CPU switch(es) for {label}", data=data)
 
     # sync STI events whose note mentions the task
     sti = getattr(trace, "sti_events", None) or getattr(trace, "stiEvents", None) or []

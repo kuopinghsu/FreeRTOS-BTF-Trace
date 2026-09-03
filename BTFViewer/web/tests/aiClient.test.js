@@ -25,6 +25,7 @@ import {
   aiAuthStatus,
   aiPresetSignInUrl,
   buildAiSystemPrompt,
+  compareSectionPrompt,
   defaultAiAuthMode,
   formatAiHttpError,
   summarizeAiHttpErrorDetail,
@@ -174,6 +175,18 @@ describe('AI endpoint helpers', () => {
       withAiLanguageReminder('Summarize now.', 'Traditional Chinese (繁體中文)'),
       /REPLY LANGUAGE \(mandatory\)/,
     )
+  })
+
+  it('compareSectionPrompt focuses Trace Compare on the selected section', () => {
+    // Summary / empty keep the base template unchanged.
+    assert.equal(compareSectionPrompt('BASE', ''), 'BASE')
+    assert.equal(compareSectionPrompt('BASE', 'Summary'), 'BASE')
+    assert.equal(compareSectionPrompt('BASE', 'summary'), 'BASE')
+    // Any other section appends a scope override naming that section.
+    const sync = compareSectionPrompt('BASE', 'Sync')
+    assert.match(sync, /^BASE\n\nScope override: analyse ONLY the "Sync" section/)
+    assert.match(sync, /do not sweep the other sections\.$/)
+    assert.match(compareSectionPrompt('BASE', 'Blocking'), /ONLY the "Blocking" section/)
   })
 
   it('normalizeAiPreset keeps the known presets', () => {

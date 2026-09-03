@@ -4237,7 +4237,7 @@ function listAiLoadedTabs() {
     .map(t => ({ id: t.id, name: t.name || `Tab ${t.id}` }))
 }
 
-function buildAiCompareContext(idA, idB) {
+function buildAiCompareContext(idA, idB, section = '') {
   const tabA = tabs.value.find(t => t.id === idA)
   const tabB = tabs.value.find(t => t.id === idB)
   if (!tabA?.trace || !tabB?.trace) {
@@ -4257,8 +4257,13 @@ function buildAiCompareContext(idA, idB) {
   if (csvText.length > 60000) {
     csvText = `${csvText.slice(0, 60000)}\n… (truncated for AI context)`
   }
+  const sec = String(section || '').trim()
+  const focusLine = sec && sec.toLowerCase() !== 'summary'
+    ? `AI focus: the engineer selected the "${sec}" section — lead your analysis with it.\n`
+    : ''
   return {
     findingsText: (
+      focusLine +
       `Trace Compare tables (CSV) for ${nameA} vs ${nameB}.\n` +
       'Cursor scope per tab: yes (when 2+ cursors placed).\n\n' +
       csvText

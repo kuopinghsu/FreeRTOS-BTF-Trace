@@ -351,7 +351,9 @@ export const AI_TEMPLATE_QUESTIONS = [
     prompt:
       'Compare Trace A vs Trace B using the Trace Compare tables in the ' +
       'context. Classify each major delta as Regression, Improvement, or ' +
-      'Neutral (CPU, migrations, latency, tick health, sync). State which ' +
+      'Neutral (CPU, migrations, latency, tick health, sync); use the ' +
+      'Shape Δ (KS) column for distribution-shape changes, not just mean ' +
+      'shifts. State which ' +
       'side is worse for each concern, the likely cause with confidence, ' +
       'and which Statistics section or Trace Compare page to open next. ' +
       'Mention the regression result on the Compare Summary tab when ' +
@@ -381,7 +383,8 @@ export const AI_TEMPLATE_QUESTIONS = [
       'magnitudes, not cycle-accurate milliseconds. Name Period / Jitter, ' +
       'Unified Jitter, Response Time, Task Health, and Task × Core when they ' +
       'apply. Tell the engineer they ' +
-      'can click Execution / Blocking / Inter-arrival p95 or p99 to jump. ' +
+      'can click Execution / Blocking / Inter-arrival p95 or p99 to jump; ' +
+      'Interval and Tag Analysis now carry σ / p50 / p99 as well. ' +
       'End with a short ' +
       'assessment checklist (normal / warning) and one Ask-next question.',
   },
@@ -426,7 +429,9 @@ export const AI_TEMPLATE_QUESTIONS = [
       'or blocking tail. Preferred tools: analyze_distribution for the ' +
       'relevant metric; decompose_response_time when response data exists; ' +
       'query_raw_metric for missing samples. Distinguish response, dispatch, ' +
-      'execution, and blocking. Output: Task; Tail evidence; Leading ' +
+      'execution, and blocking. Open Activation Latency for release jitter ' +
+      'versus the ideal periodic grid and Ready-Gap (Starvation) for time ' +
+      'spent ready but not running. Output: Task; Tail evidence; Leading ' +
       'explanation; One relevant next check.',
   },
   {
@@ -438,7 +443,8 @@ export const AI_TEMPLATE_QUESTIONS = [
       'task and cite p50 / p99 / CV, not only Max. Open Timeline Anomalies, ' +
       'Worst Events, Response Time, Period / Jitter, Unified Jitter, and ' +
       'Task Health. Click Execution Max / ' +
-      'p95 / p99 to jump. Recommend whether to ' +
+      'p95 / p99 to jump. Check Idle Analysis for spare CPU headroom. ' +
+      'Recommend whether to ' +
       'affinity-pin, reduce fan-out, or inspect preemption.',
   },
   {
@@ -448,7 +454,8 @@ export const AI_TEMPLATE_QUESTIONS = [
       'Is there core thrashing, ping-pong, or short dwell? Cite migration rate, ping-pong, ' +
       'dwell, and any synchronization handoff heuristic (not a measured cache-line transfer). ' +
       'Do not automatically filter the timeline or change cursors unless the user selects a viewer action. ' +
-      'Open Task × Core, Core Utilization Over Time, and Timeline Anomalies migration bursts.',
+      'Open Task × Core, Core Utilization Over Time, Switch Reason Breakdown ' +
+      '(voluntary versus forced switches), and Timeline Anomalies migration bursts.',
   },
   {
     id: 'balance',
@@ -456,7 +463,9 @@ export const AI_TEMPLATE_QUESTIONS = [
     prompt:
       'Is SMP load balance healthy? Interpret Load Balance Score / σ and ' +
       'whether Concurrent Core Active or Switch Overhead needs attention. ' +
-      'Open Task × Core for per-task per-core share of the scoped span.',
+      'Open Scheduling Load Over Time for the per-core load series, Idle ' +
+      'Analysis for spare headroom, and Task × Core for per-task per-core ' +
+      'share of the scoped span.',
   },
   {
     id: 'tick',
@@ -467,16 +476,19 @@ export const AI_TEMPLATE_QUESTIONS = [
       'Call analyze_periodicity (source auto or tick) and report expected ' +
       'vs p50/p99/max, RMS jitter, and kind. Do not conflate this with ' +
       'Period / Jitter — that page is task inter-arrival, not the tick ' +
-      'source.',
+      'source. Open Idle Analysis to confirm whether the long gaps are ' +
+      'just tickless idle.',
   },
   {
     id: 'priority',
     label: 'Priority inversion',
     prompt:
       'Is there priority inversion or L/M/H geometry? Explain any inherit ' +
-      'episodes and what to verify next. If mutex handoff is in play, open ' +
-      'Waiter × Owner (heuristic next-acquirer × previous-holder, not a ' +
-      'kernel wait queue).',
+      'episodes and what to verify next. Read the Invert (worst) / Invert ' +
+      '(total) columns on Priority Inheritance for measured inversion ' +
+      'duration, and Queue Backlog / Semaphore Level for a starved waiter. ' +
+      'If mutex handoff is in play, open Waiter × Owner (heuristic ' +
+      'next-acquirer × previous-holder, not a kernel wait queue).',
   },
   {
     id: 'deadlines',
@@ -554,6 +566,25 @@ export function composeAskEventPrompt(event = {}) {
     .replace('{time}', timeVal)
     .replace('{start}', num('start'))
     .replace('{stop}', num('stop'))
+}
+
+/**
+ * Focus a Trace Compare template on one section of the comparison. An empty
+ * label or 'Summary' keeps the full multi-concern sweep; any other section
+ * (Sync, Blocking, Execution, …) appends a scope override so the model reports
+ * only that section's Trace A vs B deltas. Keep in sync with
+ * compare_section_prompt in btf_viewer_pkg/ai_assistant.py.
+ */
+export function compareSectionPrompt(basePrompt, sectionLabel = '') {
+  const base = String(basePrompt || '')
+  const sec = String(sectionLabel || '').trim()
+  if (!sec || sec.toLowerCase() === 'summary') return base
+  return `${base}\n\nScope override: analyse ONLY the "${sec}" section of the `
+    + `comparison. Report every Trace A vs B delta in ${sec}, classify each `
+    + 'as Regression, Improvement, or Neutral, and give the likely cause '
+    + 'with confidence and a jump:TIME when available. Reference another '
+    + `section only when it directly explains a ${sec} delta; do not sweep `
+    + 'the other sections.'
 }
 
 // Every provider is reached over its OpenAI-compatible /chat/completions API,

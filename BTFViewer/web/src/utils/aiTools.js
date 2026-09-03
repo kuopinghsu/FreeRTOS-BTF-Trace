@@ -5,6 +5,9 @@
 import { taskDisplayName, taskMergeKey, taskReprGet } from './colors.js'
 import { migrationsInRange } from './migrationAnalysis.js'
 import { preemptionChainRows } from './statsAnalysis.js'
+import { activationLatencyRows, readyGapRows } from './timingLatency.js'
+import { switchReasonRows } from './schedulingLoad.js'
+import { harvestUxEvents } from './uxExplore.js'
 import { computeFindHits } from './findAnalysis.js'
 import {
   btfHtmlReportDocument,
@@ -274,6 +277,9 @@ export const AI_RAW_METRIC_MIGRATIONS = 'migrations'
 export const AI_RAW_METRIC_BLOCKING = 'blocking'
 export const AI_RAW_METRIC_SYNC = 'sync'
 export const AI_RAW_METRIC_FINDINGS = 'findings'
+export const AI_RAW_METRIC_ACTIVATION = 'activation'
+export const AI_RAW_METRIC_READY_GAP = 'ready_gap'
+export const AI_RAW_METRIC_SWITCH_REASON = 'switch_reason'
 export const AI_RAW_METRIC_NAMES = [
   AI_RAW_METRIC_PRIORITY,
   AI_RAW_METRIC_EXECUTION,
@@ -281,6 +287,9 @@ export const AI_RAW_METRIC_NAMES = [
   AI_RAW_METRIC_BLOCKING,
   AI_RAW_METRIC_SYNC,
   AI_RAW_METRIC_FINDINGS,
+  AI_RAW_METRIC_ACTIVATION,
+  AI_RAW_METRIC_READY_GAP,
+  AI_RAW_METRIC_SWITCH_REASON,
 ]
 const RAW_METRIC_ALIASES = {
   priority_inheritance: AI_RAW_METRIC_PRIORITY,
@@ -308,6 +317,20 @@ const RAW_METRIC_ALIASES = {
   findings: AI_RAW_METRIC_FINDINGS,
   finding: AI_RAW_METRIC_FINDINGS,
   analysis: AI_RAW_METRIC_FINDINGS,
+  activation: AI_RAW_METRIC_ACTIVATION,
+  activation_latency: AI_RAW_METRIC_ACTIVATION,
+  release: AI_RAW_METRIC_ACTIVATION,
+  release_jitter: AI_RAW_METRIC_ACTIVATION,
+  ready_gap: AI_RAW_METRIC_READY_GAP,
+  'ready-gap': AI_RAW_METRIC_READY_GAP,
+  readygap: AI_RAW_METRIC_READY_GAP,
+  starvation: AI_RAW_METRIC_READY_GAP,
+  starved: AI_RAW_METRIC_READY_GAP,
+  switch_reason: AI_RAW_METRIC_SWITCH_REASON,
+  'switch-reason': AI_RAW_METRIC_SWITCH_REASON,
+  switchreason: AI_RAW_METRIC_SWITCH_REASON,
+  preempted: AI_RAW_METRIC_SWITCH_REASON,
+  voluntary: AI_RAW_METRIC_SWITCH_REASON,
 }
 const MAX_RAW_METRIC_ROWS = 40
 export const MAX_SEARCH_HITS = 40
@@ -558,7 +581,10 @@ export function aiViewerTools() {
           + 'Statistics scope (cursor range when Limit to C1–Cn is on). '
           + 'Returns JSON samples — not a GUI change. Metrics: '
           + 'priority_inheritance, execution, migrations, blocking, '
-          + 'sync, findings.',
+          + 'sync, findings, activation (release latency vs the ideal '
+          + 'periodic grid), ready_gap (time ready but not running — '
+          + 'starvation), switch_reason (voluntary vs forced off-CPU '
+          + 'switch counts).',
         parameters: {
           type: 'object',
           properties: {
@@ -4055,6 +4081,70 @@ export function queryRawMetric(trace, task, metric, {
     data.gaps = gaps.slice(0, MAX_RAW_METRIC_ROWS)
     data.truncated = gaps.length > MAX_RAW_METRIC_ROWS
     return { ok: true, message: `${gaps.length} blocking gap(s) for ${label}`, data }
+  }
+
+  if (metricId === AI_RAW_METRIC_ACTIVATION) {
+    // Release latency vs a fitted ideal periodic grid (Activation Latency, A3).
+    const evs = harvestUxEvents(trace, lo, hi)
+    const row = activationLatencyRows(trace, evs, lo, hi).find(r => r.mk === mk)
+    if (!row) {
+      data.aggregate = true
+      data.count = 0
+      data.note = 'needs >= 3 activations and a detected period'
+      return { ok: true, message: `no periodic activation grid for ${label}`, data }
+    }
+    data.aggregate = true
+    data.count = row.count
+    data.min = row.minNs
+    data.avg = row.avgNs
+    data.max = row.maxNs
+    data.jitter = row.jitterNs
+    data.sigma = row.sigmaNs
+    data.p50 = row.p50Ns
+    data.p95 = row.p95Ns
+    data.p99 = row.p99Ns
+    return {
+      ok: true,
+      message: `activation latency grid for ${label} (${row.count} activations)`,
+      data,
+    }
+  }
+
+  if (metricId === AI_RAW_METRIC_READY_GAP) {
+    // Time the task was arguably able to run but did not (Ready-Gap, A4).
+    const row = readyGapRows(trace, lo, hi).find(r => r.mk === mk)
+    if (!row) {
+      data.aggregate = true
+      data.count = 0
+      return { ok: true, message: `no ready-gap for ${label} in scope`, data }
+    }
+    data.aggregate = true
+    data.count = row.count
+    data.longest = row.longestNs
+    data.total = row.totalNs
+    data.avg = row.avgNs
+    data.p95 = row.p95Ns
+    data.preempt_pct = Math.round(Number(row.preemptPct) * 10) / 10
+    return { ok: true, message: `${row.count} ready-gap(s) for ${label}`, data }
+  }
+
+  if (metricId === AI_RAW_METRIC_SWITCH_REASON) {
+    // Voluntary vs forced off-CPU switch counts (Switch Reason Breakdown, A1).
+    const row = switchReasonRows(trace, lo, hi).find(r => r.mk === mk)
+    if (!row) {
+      data.aggregate = true
+      data.total = 0
+      return { ok: true, message: `no off-CPU switches for ${label} in scope`, data }
+    }
+    data.aggregate = true
+    data.preempted = row.preempted
+    data.blocked = row.blocked
+    data.suspended = row.suspended
+    data.period_wait = row.periodWait
+    data.unknown = row.unknown
+    data.total = row.total
+    data.preempt_rate_per_s = Math.round(Number(row.preemptRate) * 1000) / 1000
+    return { ok: true, message: `${row.total} off-CPU switch(es) for ${label}`, data }
   }
 
   const aliases = [...lookupAliases(task), ...lookupAliases(label)].map(a => String(a).toLowerCase())

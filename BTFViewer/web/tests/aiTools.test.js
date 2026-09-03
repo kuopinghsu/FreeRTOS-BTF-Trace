@@ -128,6 +128,13 @@ describe('aiTools', () => {
       { name: 'query_raw_metric' }, { name: 'add_annotation' },
     ]), false)
     assert.equal(normalizeRawMetric('priority-inheritance'), AI_RAW_METRIC_PRIORITY)
+    // New Statistics sections exposed through query_raw_metric (A1/A3/A4).
+    assert.equal(normalizeRawMetric('activation'), 'activation')
+    assert.equal(normalizeRawMetric('release jitter'), 'activation')
+    assert.equal(normalizeRawMetric('starvation'), 'ready_gap')
+    assert.equal(normalizeRawMetric('ready-gap'), 'ready_gap')
+    assert.equal(normalizeRawMetric('switch reason'), 'switch_reason')
+    assert.equal(normalizeRawMetric('voluntary'), 'switch_reason')
   })
 
   it('validates clear_marks, reset_view, search_timeline, trigger_compare', () => {
@@ -262,6 +269,20 @@ describe('aiTools', () => {
     assert.equal(execOut.data.count, 1)
     const miss = queryRawMetric(trace, 'NoSuch', 'execution')
     assert.equal(miss.ok, false)
+
+    // New A1/A3/A4 metrics are recognized (not "metric must be one of …") and
+    // take the same unknown-task path as the others.
+    for (const metric of ['activation', 'ready_gap', 'switch_reason']) {
+      const r = queryRawMetric(trace, 'NoSuch', metric)
+      assert.equal(r.ok, false, metric)
+      assert.match(r.message, /Unknown task/, metric)
+    }
+    // A resolvable task with no gap/activation data still succeeds with an
+    // empty aggregate rather than throwing.
+    const sr = queryRawMetric(trace, 'Low[266]', 'switch_reason')
+    assert.equal(sr.ok, true)
+    assert.equal(sr.data.metric, 'switch_reason')
+    assert.ok(sr.data.aggregate)
   })
 
   it('distributionTraceContext harvests tick gaps and execution slices', () => {

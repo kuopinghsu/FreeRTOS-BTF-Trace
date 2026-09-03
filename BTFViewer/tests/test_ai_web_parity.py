@@ -801,6 +801,9 @@ class AiWebParityTests(unittest.TestCase):
             "Response Time", "Critical Path", "Unified Jitter",
             "Recurring Patterns", "Preemption Matrix", "Mutex Blocking",
             "Core Utilization Over Time",
+            "Switch Reason Breakdown", "Scheduling Load Over Time",
+            "Activation Latency", "Ready-Gap (Starvation)", "Idle Analysis",
+            "Queue Backlog / Semaphore Level",
         )
         self.assertIn("available_statistics_pages", by_id["diagnostic_report"])
         self.assertIn("generate_report", by_id["diagnostic_report"])
@@ -823,6 +826,21 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Task Health", by_id["deadlines"])
         self.assertIn("Do not conflate this with Period / Jitter", by_id["tick"])
         self.assertIn("Compare Summary tab", by_id["compare"])
+
+        # New Statistics sections (review A1–A9 / B10–B12) named in the
+        # templates that most benefit from them.
+        self.assertIn("Activation Latency", by_id["latency"])
+        self.assertIn("Ready-Gap (Starvation)", by_id["latency"])
+        self.assertIn("Scheduling Load Over Time", by_id["balance"])
+        self.assertIn("Idle Analysis", by_id["balance"])
+        self.assertIn("Switch Reason Breakdown", by_id["migrations"])
+        self.assertIn("Invert (worst) / Invert (total)", by_id["priority"])
+        self.assertIn("Queue Backlog / Semaphore Level", by_id["priority"])
+        self.assertIn("Idle Analysis", by_id["tick"])
+        self.assertIn("Idle Analysis", by_id["wcet"])
+        self.assertIn("Shape Δ (KS)", by_id["compare"])
+        self.assertIn("Interval and Tag Analysis now carry σ / p50 / p99",
+                      by_id["task_profile"])
         self.assertIn("set_cursors", by_id["auto_investigate"])
         self.assertIn("Remaining findings", by_id["auto_investigate"])
         self.assertIn("nextstep:{action}", by_id["auto_investigate"])
@@ -2470,6 +2488,7 @@ console.log(JSON.stringify({
             AI_TEMPLATE_QUESTIONS,
             DEFAULT_AI_RESPONSE_LANGUAGE,
             build_ai_system_prompt,
+            compare_section_prompt,
             compose_ask_event_prompt,
         )
         from btf_viewer_pkg.ai_case import (
@@ -2489,7 +2508,7 @@ console.log(JSON.stringify({
             "  AI_DEFAULT_TEMPLATE_ORDER, AI_TEMPLATE_MENU_GROUPS,\n"
             "  AI_TEMPLATE_INTENT_GROUPS, AI_SMP_ONLY_TEMPLATE_IDS,\n"
             "  AI_RESPONSE_LANGUAGES, DEFAULT_AI_RESPONSE_LANGUAGE,\n"
-            "  ASK_EVENT_PROMPT, composeAskEventPrompt,\n"
+            "  ASK_EVENT_PROMPT, composeAskEventPrompt, compareSectionPrompt,\n"
             "} from './src/utils/aiClient.js'\n"
             "import { AI_TOOL_PROMPT, AI_TOOL_SYSTEM_ADDENDUM, AI_MALFORMED_FUNCTION_CALL_NUDGE, aiViewerTools } from './src/utils/aiTools.js'\n"
             "import {\n"
@@ -2518,6 +2537,9 @@ console.log(JSON.stringify({
             "  defLang: DEFAULT_AI_RESPONSE_LANGUAGE,\n"
             "  ask: ASK_EVENT_PROMPT,\n"
             "  ask_compose: composeAskEventPrompt(event),\n"
+            "  cmp_sync: compareSectionPrompt('BASE', 'Sync'),\n"
+            "  cmp_summary: compareSectionPrompt('BASE', 'Summary'),\n"
+            "  cmp_empty: compareSectionPrompt('BASE', ''),\n"
             "  validate: VALIDATE_EXPERIMENT_PROMPT,\n"
             "  irp: interpretedRunPrompt('test question'),\n"
             "  itp: investigationTemplatePrompt('investigate'),\n"
@@ -2548,6 +2570,13 @@ console.log(JSON.stringify({
                 "start": 3087000, "end": 3087200,
             }),
         )
+        self.assertEqual(web["cmp_sync"], compare_section_prompt("BASE", "Sync"))
+        self.assertEqual(web["cmp_summary"], compare_section_prompt("BASE", "Summary"))
+        self.assertEqual(web["cmp_empty"], compare_section_prompt("BASE", ""))
+        # Summary / empty keep the base; a real section appends the override.
+        self.assertEqual(compare_section_prompt("BASE", "Summary"), "BASE")
+        self.assertEqual(compare_section_prompt("BASE", ""), "BASE")
+        self.assertIn('ONLY the "Sync" section', compare_section_prompt("BASE", "Sync"))
         self.assertEqual(web["validate"], VALIDATE_EXPERIMENT_PROMPT)
         self.assertEqual(web["irp"], interpreted_run_prompt("test question"))
         self.assertEqual(web["itp"], investigation_template_prompt("investigate"))
