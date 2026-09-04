@@ -3,6 +3,9 @@
   "version": "1.4.0",
   "description": "Web-based RTOS BTF Viewer",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "build": "node scripts/embed-wasm.mjs && vite build",
