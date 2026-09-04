@@ -60,7 +60,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Unit tests
         run: npm test
@@ -81,5 +81,5 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Documentation links, EN/zh-TW parity, PDF/HTML/bundle freshness
+      - name: Documentation links, EN/zh-TW parity, PDF freshness
         run: make -C BTFViewer check-docs

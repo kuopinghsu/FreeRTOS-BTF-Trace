@@ -5,8 +5,8 @@
 #   make -C BTFViewer web          # web only
 #   make -C BTFViewer demo         # guided demo (demo_8cores)
 #   make -C BTFViewer check-bundle # desktop generated-build freshness (CI)
-#   make -C BTFViewer check-web    # web generated-build freshness (CI)
-#   make -C BTFViewer check-docs   # links, EN/zh-TW parity, PDF/HTML freshness
+#   make -C BTFViewer check-web    # web build freshness (local cmp; CI build-only)
+#   make -C BTFViewer check-docs   # links, EN/zh-TW parity, PDF freshness
 #   make -C BTFViewer ci-gate      # tests + generated builds + docs gate
 #   make -C BTFViewer ai-test      # offline AI benchmark (tests/ai)
 #   make -C BTFViewer ai-test-live # live suite XML → AI_BENCHMARK.md (AI_CONFIG)
@@ -54,8 +54,8 @@ help:
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Fail if builds/btf_viewer.py ≠ fresh bundle from sources"
-	@echo "  make check-web    Fail if builds/btf_viewer.html ≠ fresh web build (pinned date)"
-	@echo "  make check-docs   Links, EN/zh-TW heading parity, PDF/HTML/bundle freshness"
+	@echo "  make check-web    Rebuild web HTML (local: fail if artifact drifts; CI: build only)"
+	@echo "  make check-docs   Links, EN/zh-TW heading parity + section IDs, PDF freshness"
 	@echo "  make check-builds check-bundle + check-web"
 	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (+ zh-TW) → docs/*.pdf"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
@@ -149,27 +149,35 @@ ai-prompts:
 	PYTHONPATH=. $(PYTHON) scripts/export_ai_prompts.py -o $(BUILDS)/ai_prompts_review.txt
 
 # Pin About-panel date from the current HTML so a no-op rebuild stays identical.
-# Compares a fresh build to the existing artifact (not git HEAD), so a local
-# `make web` followed by `make check-web` passes before you commit.
+# Locally: compare a fresh build to the existing artifact (not git HEAD).
+# On GitHub Actions: only require that the web build succeeds — Vite single-file
+# output is not reliably byte-identical across runners (chunk hashes differ),
+# so cmp against the committed HTML is not a valid CI gate.
 check-web:
 	@test -f builds/btf_viewer.html || { echo "error: builds/btf_viewer.html missing — run: make -C BTFViewer web" >&2; exit 1; }
 	@DATE="$${BTF_BUILD_DATE:-$$($(PYTHON) scripts/ci_gate.py --print-html-build-date)}"; \
 	if [ -z "$$DATE" ]; then DATE=$$(date -u +%F); fi; \
-	prev=$$(mktemp $(BUILDS)/btf_viewer.html.prev.XXXXXX); \
-	cp builds/btf_viewer.html "$$prev"; \
 	echo "check-web: rebuilding with BTF_BUILD_DATE=$$DATE"; \
-	if ! BTF_BUILD_DATE="$$DATE" $(MAKE) -C web build; then rm -f "$$prev"; exit 1; fi; \
-	if ! cmp -s "$$prev" builds/btf_viewer.html; then \
+	if [ "$${GITHUB_ACTIONS}" = "true" ]; then \
+	  BTF_BUILD_DATE="$$DATE" $(MAKE) -C web build; \
+	  echo "OK: web build succeeded (CI skips byte-compare; not cross-runner reproducible)"; \
+	else \
+	  prev=$$(mktemp $(BUILDS)/btf_viewer.html.prev.XXXXXX); \
+	  cp builds/btf_viewer.html "$$prev"; \
+	  if ! BTF_BUILD_DATE="$$DATE" $(MAKE) -C web build; then rm -f "$$prev"; exit 1; fi; \
+	  if ! cmp -s "$$prev" builds/btf_viewer.html; then \
+	    rm -f "$$prev"; \
+	    echo "error: builds/btf_viewer.html was stale relative to web sources." >&2; \
+	    echo "It has been regenerated — re-run: make -C BTFViewer check-web" >&2; \
+	    exit 1; \
+	  fi; \
 	  rm -f "$$prev"; \
-	  echo "error: builds/btf_viewer.html was stale relative to web sources." >&2; \
-	  echo "It has been regenerated — re-run: make -C BTFViewer check-web" >&2; \
-	  exit 1; \
-	fi; \
-	rm -f "$$prev"; \
-	echo "OK: builds/btf_viewer.html matches web sources"
+	  echo "OK: builds/btf_viewer.html matches web sources"; \
+	fi
 
+# Docs gate only (links / EN↔zh-TW / PDFs). Build freshness is check-builds.
 check-docs:
-	$(PYTHON) scripts/ci_gate.py --all
+	$(PYTHON) scripts/ci_gate.py --links --parity --pdf
 
 check-builds: check-bundle check-web
 
