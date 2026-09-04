@@ -94,3 +94,40 @@ export function readyGapRows(trace, lo = null, hi = null) {
   rows.sort((a, b) => b.longestNs - a.longestNs || b.totalNs - a.totalNs || a.name.localeCompare(b.name))
   return rows
 }
+
+/** `(resumeNs, gapNs)` points for ready-gap kinds — parity with `_ready_gap_plot_points`. */
+export function readyGapPlotPoints(trace, mk, lo = null, hi = null) {
+  const gaps = classifyOffCpuGaps(trace, lo, hi).get(mk) || []
+  return gaps
+    .filter(([, k]) => READY_GAP_KINDS.has(k))
+    .map(([gap, , at]) => ({ xNs: Math.trunc(at), yValue: Math.trunc(gap), payload: null }))
+    .filter(p => p.yValue > 0)
+}
+
+/** Activation-error scatter points — parity with `_activation_latency_plot_points`. */
+export function activationLatencyPlotPoints(trace, mk, events, lo = null, hi = null) {
+  let period = 0
+  for (const prow of analyzeTaskPeriods(events, 3)) {
+    if (String(prow.mk || '') === mk) {
+      period = Math.trunc(prow.expected_ns || 0)
+      break
+    }
+  }
+  if (period <= 0) return []
+  const starts = []
+  for (const ev of events || []) {
+    if (!ev || ev.kind !== 'inter') continue
+    if (String(ev.mk || ev.task || '') !== mk) continue
+    const s = Math.trunc(ev.start || 0)
+    if (lo != null && hi != null && !(s >= lo && s <= hi)) continue
+    starts.push(s)
+  }
+  if (starts.length < 3) return []
+  starts.sort((a, b) => a - b)
+  const anchor = starts[0]
+  return starts.map(t => ({
+    xNs: t,
+    yValue: Math.abs(t - (anchor + Math.round((t - anchor) / period) * period)),
+    payload: null,
+  }))
+}

@@ -54,6 +54,8 @@ describe('syncLevelRows', () => {
     assert.equal(rows[0].maxLevel, 2)
     assert.equal(rows[0].endLevel, 0)
     assert.equal(rows[0].starved, 1)
+    assert.equal(rows[0].peakStartNs, 20)
+    assert.equal(rows[0].firstStarveNs, 50)
   })
 
   it('empty without queue/sem events', () => {

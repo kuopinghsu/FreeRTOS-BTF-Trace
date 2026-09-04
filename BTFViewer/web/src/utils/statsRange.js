@@ -37,8 +37,9 @@ export function getStatsRange(cursors, scopeEnabled) {
   return { lo, hi, nCursors: placed.length }
 }
 
-export function scopeSuffix(range) {
-  return range ? ' (cursor range)' : ''
+/** Section/plot title append — empty when ranged; C1–Cn is shown via badge/chip. */
+export function scopeSuffix(_range) {
+  return ''
 }
 
 /** Map lookup — parser uses Map; some paths may yield plain objects. */

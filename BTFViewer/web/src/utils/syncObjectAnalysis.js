@@ -415,3 +415,35 @@ export function syncObjectHoldDetailRows(trace, lo, hi, limit = 150) {
   rows.sort((a, b) => b.durationNs - a.durationNs || a.startNs - b.startNs)
   return limit > 0 ? rows.slice(0, limit) : rows
 }
+
+/** Hold-duration scatter for one sync object — parity with `_sync_hold_plot_points`. */
+export function syncHoldPlotPoints(trace, objKey, lo = null, hi = null) {
+  if (!trace?.hasSyncObjectInstrumentation || !objKey) return []
+  const obj = trace.syncObjects?.get?.(objKey)
+  if (!obj) return []
+  const pts = []
+  for (const h of obj.holds || []) {
+    const start = Math.trunc(h.startNs || 0)
+    const stop = Math.trunc(h.stopNs || 0)
+    if (stop <= start) continue
+    if (lo != null && hi != null && !(stop > lo && start < hi)) continue
+    pts.push({ xNs: start, yValue: stop - start, payload: h })
+  }
+  return pts
+}
+
+/** Mutex-wait scatter for waiter×object — parity with `_mutex_wait_plot_points`. */
+export function mutexWaitPlotPoints(waits, waiterMk, objKey) {
+  const wk = String(waiterMk || '')
+  const obj = String(objKey || '')
+  if (!wk || !obj) return []
+  const pts = []
+  for (const w of waits || []) {
+    if (!w || String(w.waiter_mk || '') !== wk) continue
+    if (String(w.object || '') !== obj) continue
+    const dur = Math.trunc(w.duration || 0)
+    if (dur <= 0) continue
+    pts.push({ xNs: Math.trunc(w.start || 0), yValue: dur, payload: w })
+  }
+  return pts
+}

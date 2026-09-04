@@ -72,9 +72,25 @@ export function idleAnalysisRows(trace, lo = null, hi = null) {
   return { rows, allIdleSpanNs, allIdleStartNs }
 }
 
+/** Idle fragment scatter points — parity with `_idle_fragment_plot_points`. */
+export function idleFragmentPlotPoints(trace, core, lo = null, hi = null) {
+  const effLo = lo != null ? lo : (trace?.timeMin ?? 0)
+  const effHi = hi != null ? hi : (trace?.timeMax ?? 0)
+  const pts = []
+  for (const seg of (trace?.coreSegs?.get?.(core) || [])) {
+    const slo = Math.max(Math.trunc(seg.start), effLo)
+    const shi = Math.min(Math.trunc(seg.end), effHi)
+    if (slo >= shi) continue
+    if (!isIdleTaskName(parseTaskName(seg.task).name)) continue
+    pts.push({ xNs: slo, yValue: shi - slo, payload: null })
+  }
+  return pts
+}
+
 /** Running fill level of every queue / semaphore — parity with
  * `_sync_level_rows` (A8).
- * @returns {Array<{key,kind,ptr,label,maxLevel,timeAtMaxNs,endLevel,starved}>}
+ * @returns {Array<{key,kind,ptr,label,maxLevel,timeAtMaxNs,endLevel,starved,
+ *   peakStartNs,firstStarveNs}>}
  */
 export function syncLevelRows(trace, lo = null, hi = null) {
   const byTgt = trace?.stiEventsByTarget
@@ -100,24 +116,37 @@ export function syncLevelRows(trace, lo = null, hi = null) {
     let lvl = 0
     let maxLevel = 0
     let starved = 0
-    for (const [, d] of evts) {
+    let firstStarveNs = null
+    for (const [t, d] of evts) {
       if (d === 0) lvl = 0
-      else if (d < 0 && lvl === 0) starved += 1
-      else { lvl = Math.max(0, lvl + d); maxLevel = Math.max(maxLevel, lvl) }
+      else if (d < 0 && lvl === 0) {
+        starved += 1
+        if (firstStarveNs == null) firstStarveNs = t
+      } else {
+        lvl = Math.max(0, lvl + d)
+        maxLevel = Math.max(maxLevel, lvl)
+      }
     }
     lvl = 0
     let timeAtMaxNs = 0
     let lastT = evts[0][0]
+    let peakStartNs = null
     for (const [t, d] of evts) {
       if (t > lastT && lvl === maxLevel && maxLevel > 0) timeAtMaxNs += t - lastT
       lastT = t
       if (d === 0) lvl = 0
       else if (d < 0 && lvl === 0) { /* starved: level unchanged */ }
-      else lvl = Math.max(0, lvl + d)
+      else {
+        lvl = Math.max(0, lvl + d)
+        if (maxLevel > 0 && lvl === maxLevel && peakStartNs == null) peakStartNs = t
+      }
     }
     if (effHi > lastT && lvl === maxLevel && maxLevel > 0) timeAtMaxNs += effHi - lastT
     const [kind, ptr] = meta.get(key)
-    rows.push({ key, kind, ptr, label: `${kind} ${ptr}`, maxLevel, timeAtMaxNs, endLevel: lvl, starved })
+    rows.push({
+      key, kind, ptr, label: `${kind} ${ptr}`, maxLevel, timeAtMaxNs,
+      endLevel: lvl, starved, peakStartNs, firstStarveNs,
+    })
   }
   rows.sort((a, b) => b.maxLevel - a.maxLevel || b.starved - a.starved || a.label.localeCompare(b.label))
   return rows

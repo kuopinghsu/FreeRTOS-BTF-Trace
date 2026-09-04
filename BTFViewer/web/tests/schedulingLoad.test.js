@@ -24,7 +24,7 @@ function fakeTrace() {
 describe('classifyOffCpuGaps', () => {
   it('labels IDLE-filled gaps as period_wait', () => {
     const byMk = classifyOffCpuGaps(fakeTrace())
-    assert.deepEqual(byMk.get('w'), [[30, 'period_wait'], [30, 'period_wait']])
+    assert.deepEqual(byMk.get('w'), [[30, 'period_wait', 40], [30, 'period_wait', 80]])
   })
   it('only emits known kinds', () => {
     const byMk = classifyOffCpuGaps(fakeTrace())

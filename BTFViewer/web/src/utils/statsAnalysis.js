@@ -633,7 +633,7 @@ export function classifyOffCpuGaps(trace, lo, hi) {
       else if (hasSyncCause(st, sc, g0, core, OFFCPU_STI_WINDOW)) kind = 'blocked'
       else if (idle >= 0.8 * gap) kind = 'period_wait'
       else kind = 'unknown'
-      gaps.push([gap, kind])
+      gaps.push([gap, kind, g1])
     }
     if (gaps.length) out.set(mk, gaps)
   }

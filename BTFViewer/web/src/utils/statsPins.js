@@ -160,6 +160,87 @@ export const STATS_PINNABLE_SECTIONS = Object.freeze([
   'deadline',
 ])
 
+/**
+ * Section id → StatisticsPanel header title (no scope suffix).
+ * Keep lockstep with btf_viewer_pkg/config.py STATS_SECTION_TITLES.
+ */
+export const STATS_SECTION_TITLES = Object.freeze({
+  cores: 'Core Utilisation (excl. IDLE/TICK)',
+  health: 'Trace Health (TICK)',
+  task_health: 'Task Health',
+  anomalies: 'Timeline Anomalies',
+  worst: 'Worst Events',
+  patterns: 'Recurring Patterns',
+  response: 'Response Time',
+  exec: 'Execution Time Per Slice',
+  dispatch: 'Dispatch / Scheduling Latency',
+  block: 'Blocking Time (off-CPU gap)',
+  crit_path: 'Critical Path',
+  period: 'Period / Jitter',
+  jitter: 'Unified Jitter',
+  inter: 'Inter-Arrival Time',
+  activation: 'Activation Latency',
+  ready_gap: 'Ready-Gap (Starvation)',
+  task_core: 'Task × Core',
+  core_time: 'Core Utilization Over Time',
+  migrations: 'Core Migrations',
+  core_pairs: 'Core-Pair Migration Summary',
+  affinity: 'Core Affinity',
+  preempt_matrix: 'Preemption Matrix',
+  preemption: 'Preemption Chain Analysis',
+  priority: 'Priority Inheritance',
+  concurrency: 'Concurrent Core Active Distribution',
+  switch_reason: 'Switch Reason Breakdown',
+  sched_load: 'Scheduling Load Over Time',
+  mutex_block: 'Mutex Blocking',
+  wait_owner: 'Waiter × Owner',
+  sync: 'Mutex / Semaphore',
+  queue: 'Queue',
+  sync_level: 'Queue Backlog / Semaphore Level',
+  core_breakdown: 'Core Time Breakdown',
+  idle: 'Idle Analysis',
+  switch_overhead: 'Kernel Switch Overhead',
+  tasks: 'Top Tasks by CPU (excl. IDLE/TICK)',
+  distrib: 'Distribution Explorer',
+  intervals: 'Interval Analysis',
+  tags: 'Tag Analysis',
+  lifecycle: 'Task Lifecycle',
+  deadline: 'Deadlines / CPU budget',
+})
+
+/** @param {string} sectionId @returns {string} */
+export function statsSectionTitle(sectionId) {
+  const sid = String(sectionId || '').trim()
+  return STATS_SECTION_TITLES[sid] || sid
+}
+
+/**
+ * Filter pinnable section ids whose title contains *query* (case-insensitive).
+ * @param {string} query
+ * @returns {{ id: string, title: string }[]}
+ */
+export function findStatsSections(query) {
+  const q = String(query || '').trim().toLowerCase()
+  if (!q) return []
+  const out = []
+  for (const id of STATS_PINNABLE_SECTIONS) {
+    const title = statsSectionTitle(id)
+    if (title.toLowerCase().includes(q) || id.toLowerCase().includes(q)) {
+      out.push({ id, title })
+    }
+  }
+  return out
+}
+
+/** Synthetic command-palette rows: ``stats-section:<id>`` → ``Stats: <title>``.
+ *  @returns {[string, string][]} */
+export function commandPaletteStatsSectionActions() {
+  return STATS_PINNABLE_SECTIONS.map((sid) => [
+    `stats-section:${sid}`,
+    `Stats: ${statsSectionTitle(sid)}`,
+  ])
+}
+
 /** Per-core util above this counts as meaningful SMP-active activity. */
 export const STATS_SMP_ACTIVE_MIN_UTIL_PCT = 0.01
 

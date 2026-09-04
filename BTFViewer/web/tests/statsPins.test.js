@@ -6,12 +6,15 @@ import {
   STATS_PINNABLE_SECTIONS,
   STATS_SECTION_CATEGORIES,
   STATS_SECTION_CATEGORY,
+  STATS_SECTION_TITLES,
   defaultSectionCollapsed,
   defaultStatsPresentation,
+  findStatsSections,
   mergeSectionCollapsed,
   normalizeStatsPins,
   normalizeStatsSectionOrder,
   statsCategoryBadgeColors,
+  statsSectionTitle,
   statsTraceIsSmpActive,
   toggleStatsPin,
 } from '../src/utils/statsPins.js'
@@ -130,5 +133,27 @@ describe('statsPins', () => {
     assert.deepEqual(out.slice(0, 2), ['tags', 'cores'])
     assert.equal(out.length, STATS_PINNABLE_SECTIONS.length)
     assert.deepEqual([...out].sort(), [...STATS_PINNABLE_SECTIONS].sort())
+  })
+
+  it('STATS_SECTION_TITLES covers every pinnable section', () => {
+    assert.equal(
+      Object.keys(STATS_SECTION_TITLES).length,
+      STATS_PINNABLE_SECTIONS.length,
+    )
+    for (const sid of STATS_PINNABLE_SECTIONS) {
+      assert.ok(STATS_SECTION_TITLES[sid], sid)
+      assert.equal(statsSectionTitle(sid), STATS_SECTION_TITLES[sid])
+    }
+    assert.equal(STATS_SECTION_TITLES.ready_gap, 'Ready-Gap (Starvation)')
+    assert.equal(
+      STATS_SECTION_TITLES.sync_level,
+      'Queue Backlog / Semaphore Level',
+    )
+  })
+
+  it('findStatsSections matches title substrings', () => {
+    const hits = findStatsSections('starvation')
+    assert.ok(hits.some(h => h.id === 'ready_gap'))
+    assert.deepEqual(findStatsSections(''), [])
   })
 })
