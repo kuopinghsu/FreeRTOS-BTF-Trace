@@ -178,13 +178,15 @@ flowchart TD
 
 發現項目涵蓋負載平衡、主要 CPU 使用工作、已觀察執行時間最大值、離開 CPU 間隔、頻繁核心遷移、截止時間、TICK 健康狀態與同步問題。負載平衡良好或中等時仍可能顯示資訊，讓使用者可查看負載平衡分數、母體標準差與 Gini 係數。
 
-### Analysis Context strip
+<a id="analysis-context-strip" name="analysis-context-strip"></a>
+### 分析脈絡列（Analysis Context strip）
 
 Findings、AI 與 Compare 會顯示完整的 **Analysis Context** 列（追蹤名稱、**Scope**、**Filters**、樣本數）。Statistics 面板在標頭保留 Scope 與 Filters；若已放置游標但未開啟 **Limit to C1–Cn**，則只顯示簡短提示：**Not limited to cursors**。**Clear filters** 仍可使用。Selection 與 Highlight 不會列為分析條件。
 
 當結果計算後 Scope 或 Filters 再變更時，Findings 與 AI 可能將內容標為 **stale**，並提供 **Recalculate with current context**。Statistics 面板在 Scope 或 Filters 變更時會自動重算（與 Desktop 相同）。
 
-### Symptom shortcuts
+<a id="symptom-shortcuts" name="symptom-shortcuts"></a>
+### 症狀捷徑（Symptom shortcuts）
 
 **Where should I start?** 是 Statistics 工具列上的選用導引（Desktop 與 Web）。預設關閉，讓熟悉的使用者直接看到表格。開啟後可選症狀卡片（未知問題、延遲工作、尖峰、派送延遲、阻塞、抖動、負載不均、遷移、同步、截止時間）；每一張會跳到第一個建議指標。當 Findings 對應到某症狀時，會出現 **Recommended from Findings**。
 

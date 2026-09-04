@@ -4,7 +4,8 @@
 Checks (no pandoc / no Qt / no npm required unless regenerating builds):
 
 * Markdown relative links and in-document anchors
-* EN ↔ zh-TW heading-count parity for the shipped manuals
+* EN ↔ zh-TW heading-count / level parity for the shipped manuals
+* Stable section-ID mappings (shared ``<a id>`` + translated zh-TW titles)
 * PDF freshness vs matching Markdown (git history + dirty tree)
 * Web HTML freshness vs web sources (git history + dirty tree)
 
@@ -19,7 +20,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent  # FreeRTOS-BTF-Trace
@@ -53,6 +54,66 @@ LINK_SCAN_FILES: Sequence[str] = (
     "WORKFLOWS_zh-TW.md",
     "examples/ai/README.md",
 )
+
+
+class SectionMapping(NamedTuple):
+    """EN/zh-TW section locked by a shared stable HTML id."""
+
+    section_id: str
+    en_file: str
+    zh_file: str
+    en_title: str  # exact heading text after strip_md_inline
+    zh_title_must_contain: str  # CJK (or bilingual) marker required in zh heading
+
+
+# Explicit cross-language section map. Extends parity beyond heading counts:
+# both manuals must expose the same ``<a id>``, and the zh-TW title must be
+# translated (contain the CJK marker, not copy the English title verbatim).
+SECTION_MAPPINGS: Sequence[SectionMapping] = (
+    SectionMapping(
+        "analysis-context-strip",
+        "STATISTICS.md",
+        "STATISTICS_zh-TW.md",
+        "Analysis Context strip",
+        "分析脈絡列",
+    ),
+    SectionMapping(
+        "symptom-shortcuts",
+        "STATISTICS.md",
+        "STATISTICS_zh-TW.md",
+        "Symptom shortcuts",
+        "症狀捷徑",
+    ),
+    SectionMapping(
+        "trace-quality",
+        "WORKFLOWS.md",
+        "WORKFLOWS_zh-TW.md",
+        "Trace quality banner",
+        "追蹤品質橫幅",
+    ),
+    SectionMapping(
+        "guided-first-review",
+        "WORKFLOWS.md",
+        "WORKFLOWS_zh-TW.md",
+        "Guided first review",
+        "引導式首次檢視",
+    ),
+)
+
+# Shared ``<a id>`` prefixes that must appear in both EN and zh-TW of a pair
+# (order-independent set equality of matching ids).
+SHARED_ID_PREFIXES: Sequence[Tuple[str, str, str]] = (
+    # (en_file, zh_file, id_prefix)
+    ("STATISTICS.md", "STATISTICS_zh-TW.md", "statistics-"),
+    ("WORKFLOWS.md", "WORKFLOWS_zh-TW.md", "workflow-step-"),
+    ("README.md", "README_zh-TW.md", "ai-api-keys"),
+    ("README.md", "README_zh-TW.md", "investigation-case"),
+    ("README.md", "README_zh-TW.md", "investigation-planner"),
+    ("README.md", "README_zh-TW.md", "btf-analysis-pages"),
+    ("README.md", "README_zh-TW.md", "headless-cli-desktop-only"),
+)
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 HTML_ARTIFACT = "builds/btf_viewer.html"
 HTML_SOURCE_PATHS: Sequence[str] = (
@@ -259,6 +320,33 @@ def check_links() -> List[str]:
     return errors
 
 
+def collect_explicit_ids(path: Path) -> Set[str]:
+    """HTML id/name attributes only (not heading-derived slugs)."""
+    text = path.read_text(encoding="utf-8")
+    ids: Set[str] = set()
+    for is_code, chunk in iter_markdown_chunks(text):
+        if is_code:
+            continue
+        for match in _HTML_ID_RE.finditer(chunk):
+            ids.add(match.group(1))
+    return ids
+
+
+def heading_after_id(path: Path, section_id: str) -> Optional[str]:
+    """Return the next markdown heading title after ``<a id=section_id>``."""
+    text = path.read_text(encoding="utf-8")
+    # Match explicit anchor, then the following heading (allowing blank lines).
+    pattern = re.compile(
+        rf"""<(?:a|span|div)\b[^>]*\bid\s*=\s*["']{re.escape(section_id)}["'][^>]*>"""
+        rf""".*?\n+(#{{1,6}})\s+(.+?)\s*$""",
+        re.I | re.S | re.M,
+    )
+    match = pattern.search(text)
+    if not match:
+        return None
+    return strip_md_inline(match.group(2))
+
+
 def check_heading_parity() -> List[str]:
     errors: List[str] = []
     for en_rel, zh_rel in MANUAL_PAIRS:
@@ -281,6 +369,100 @@ def check_heading_parity() -> List[str]:
                     f"{en_rel} {le} vs {zh_rel} {lz}"
                 )
                 break
+    return errors
+
+
+def check_section_mappings() -> List[str]:
+    """Stable section IDs + translated zh-TW titles (not English copies)."""
+    errors: List[str] = []
+
+    for mapping in SECTION_MAPPINGS:
+        en = ROOT / mapping.en_file
+        zh = ROOT / mapping.zh_file
+        if not en.is_file() or not zh.is_file():
+            errors.append(
+                f"section: missing {mapping.en_file} or {mapping.zh_file} "
+                f"for #{mapping.section_id}"
+            )
+            continue
+        en_ids = collect_explicit_ids(en)
+        zh_ids = collect_explicit_ids(zh)
+        if mapping.section_id not in en_ids:
+            errors.append(
+                f"section: {mapping.en_file} missing <a id=\"{mapping.section_id}\">"
+            )
+        if mapping.section_id not in zh_ids:
+            errors.append(
+                f"section: {mapping.zh_file} missing <a id=\"{mapping.section_id}\">"
+            )
+        en_title = heading_after_id(en, mapping.section_id)
+        zh_title = heading_after_id(zh, mapping.section_id)
+        if en_title is None:
+            errors.append(
+                f"section: {mapping.en_file}#{mapping.section_id} has no following heading"
+            )
+        elif en_title != mapping.en_title:
+            errors.append(
+                f"section: {mapping.en_file}#{mapping.section_id} title "
+                f"{en_title!r} != {mapping.en_title!r}"
+            )
+        if zh_title is None:
+            errors.append(
+                f"section: {mapping.zh_file}#{mapping.section_id} has no following heading"
+            )
+        else:
+            if zh_title == mapping.en_title:
+                errors.append(
+                    f"section: {mapping.zh_file}#{mapping.section_id} still uses "
+                    f"English title {zh_title!r}"
+                )
+            if mapping.zh_title_must_contain not in zh_title:
+                errors.append(
+                    f"section: {mapping.zh_file}#{mapping.section_id} title "
+                    f"{zh_title!r} missing {mapping.zh_title_must_contain!r}"
+                )
+            if not _CJK_RE.search(zh_title):
+                errors.append(
+                    f"section: {mapping.zh_file}#{mapping.section_id} title "
+                    f"has no CJK characters: {zh_title!r}"
+                )
+
+    # Shared id-prefix sets (Help links / workflow steps) must match EN ↔ zh-TW.
+    grouped: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+    for en_rel, zh_rel, prefix in SHARED_ID_PREFIXES:
+        grouped[(en_rel, zh_rel)].append(prefix)
+
+    for (en_rel, zh_rel), prefixes in grouped.items():
+        en = ROOT / en_rel
+        zh = ROOT / zh_rel
+        if not en.is_file() or not zh.is_file():
+            continue
+        en_ids = collect_explicit_ids(en)
+        zh_ids = collect_explicit_ids(zh)
+        for prefix in prefixes:
+            en_set = {i for i in en_ids if i.startswith(prefix) or i == prefix}
+            zh_set = {i for i in zh_ids if i.startswith(prefix) or i == prefix}
+            if not en_set and not zh_set:
+                # Exact README anchors: require presence in both.
+                if prefix in {
+                    "ai-api-keys",
+                    "investigation-case",
+                    "investigation-planner",
+                    "btf-analysis-pages",
+                    "headless-cli-desktop-only",
+                }:
+                    errors.append(
+                        f"section: shared id {prefix!r} missing from both "
+                        f"{en_rel} and {zh_rel}"
+                    )
+                continue
+            only_en = sorted(en_set - zh_set)
+            only_zh = sorted(zh_set - en_set)
+            if only_en or only_zh:
+                errors.append(
+                    f"section: id prefix {prefix!r} mismatch "
+                    f"{en_rel}↔{zh_rel}: only_en={only_en} only_zh={only_zh}"
+                )
     return errors
 
 
@@ -376,6 +558,7 @@ def run_selected(args: argparse.Namespace) -> int:
         selected.append(("documentation links", check_links))
     if args.all or args.parity:
         selected.append(("heading parity", check_heading_parity))
+        selected.append(("section mappings", check_section_mappings))
     if args.all or args.pdf:
         selected.append(("PDF freshness", check_pdf_freshness))
     if args.all or args.html:
@@ -387,6 +570,7 @@ def run_selected(args: argparse.Namespace) -> int:
         selected = [
             ("documentation links", check_links),
             ("heading parity", check_heading_parity),
+            ("section mappings", check_section_mappings),
             ("PDF freshness", check_pdf_freshness),
             ("HTML freshness", check_html_freshness),
             ("bundle freshness", check_py_freshness),
@@ -413,7 +597,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--all", action="store_true", help="Run every check (default)")
     parser.add_argument("--links", action="store_true", help="Markdown link/anchor check")
-    parser.add_argument("--parity", action="store_true", help="EN/zh-TW heading parity")
+    parser.add_argument(
+        "--parity",
+        action="store_true",
+        help="EN/zh-TW heading parity + stable section-ID mappings",
+    )
     parser.add_argument("--pdf", action="store_true", help="PDF freshness vs Markdown")
     parser.add_argument("--html", action="store_true", help="Web HTML freshness")
     parser.add_argument("--bundle", action="store_true", help="Desktop bundle freshness")

@@ -236,12 +236,12 @@ flowchart TD
 你已選出一個需要回到時間軸檢查的量測樣本或重複型態。
 
 <a id="trace-quality" name="trace-quality"></a>
-## Trace quality banner
+## 追蹤品質橫幅（Trace quality banner）
 
 當擷取中繼資料回報溢位、截斷或缺少追蹤事件時，會出現 **trace-quality banner**，並提供 **Review details**、**Continue with limitations** 與 **Open capture guidance**（WORKFLOWS）。分組細節會列出受影響的 Statistics 與 AI 結論。
 
 <a id="guided-first-review" name="guided-first-review"></a>
-## Guided first review
+## 引導式首次檢視（Guided first review）
 
 導覽示範（工具列或 Help）會帶你完整走一遍範例追蹤資料。
 

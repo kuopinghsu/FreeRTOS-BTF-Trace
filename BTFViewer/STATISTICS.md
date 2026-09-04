@@ -177,12 +177,14 @@ Toolbar **Analysis** provides a heuristic inbox for the current Scope. It stays 
 - Severity ranks attention; it does not assign failure probability.
 - Each finding shows an **evidence-strength** label (Direct / Derived / Estimated / Configured) with tooltips where applicable.
 
+<a id="analysis-context-strip" name="analysis-context-strip"></a>
 ### Analysis Context strip
 
 Findings, AI, and Compare show the full **Analysis Context** strip (trace name, **Scope**, **Filters**, sample count). The Statistics panel keeps Scope and Filters in its header; when cursors are placed but **Limit to C1–Cn** is off, it shows only a short note: **Not limited to cursors**. **Clear filters** remains available. Selection and Highlight are never listed as analysis constraints.
 
 When Scope or Filters change after results were calculated, Findings and AI may mark content **stale** and offer **Recalculate with current context**. The Statistics panel recalculates automatically when Scope or Filters change (same as Desktop).
 
+<a id="symptom-shortcuts" name="symptom-shortcuts"></a>
 ### Symptom shortcuts
 
 **Where should I start?** is an optional guide on the Statistics toolbar (Desktop and Web). It stays closed by default so familiar users see tables immediately. Open it to pick a symptom card (unknown issue, late task, spike, dispatch delay, blocking, jitter, load imbalance, migration, sync, deadline); each jumps to the first recommended metric. **Recommended from Findings** appears when a finding maps to a symptom.
