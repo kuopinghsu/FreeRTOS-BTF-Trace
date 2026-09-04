@@ -184,7 +184,10 @@ from .mvvm import (
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 from .trace_quality import trace_quality_summary
 from .perfetto_export import export_perfetto
-from .ux_explore import best_finding_scope, harvest_ux_events, finding_overlay_times, task_inspector_line
+from .ux_explore import (
+    best_finding_scope, harvest_ux_events, finding_overlay_times,
+    merge_incident_overlay_times, task_inspector_line,
+)
 from .evidence_nav import resolve_finding_evidence
 
 class _CpuLoadScrollArea(QScrollArea):
@@ -2197,6 +2200,7 @@ class _CommandPaletteDialog(QDialog):
         self._edit.textChanged.connect(self._filter)
         self._list.itemActivated.connect(self._accept_item)
         self._list.itemClicked.connect(self._accept_item)
+        self._edit.installEventFilter(self)
         self._filter("")
 
     def _availability(self, aid: str) -> Tuple[bool, str]:
@@ -2210,8 +2214,12 @@ class _CommandPaletteDialog(QDialog):
 
     def _filter(self, text: str) -> None:
         self._list.clear()
+        actions = list(COMMAND_PALETTE_ACTIONS)
+        q = str(text or "").strip()
+        if q:
+            actions.extend(command_palette_stats_section_actions())
         rows = command_palette_rank(
-            COMMAND_PALETTE_ACTIONS,
+            actions,
             text,
             recent_ids=self._recent,
             frequent_counts=self._frequent,
@@ -2251,6 +2259,22 @@ class _CommandPaletteDialog(QDialog):
         if self._list.count():
             self._list.setCurrentRow(0)
 
+    def _move_selection(self, delta: int) -> bool:
+        """Move list highlight (Web ``onPaletteKeydown`` clamp, not wrap)."""
+        n = self._list.count()
+        if n <= 0:
+            return False
+        row = self._list.currentRow()
+        if row < 0:
+            row = 0
+        else:
+            row = max(0, min(n - 1, row + delta))
+        self._list.setCurrentRow(row)
+        item = self._list.item(row)
+        if item is not None:
+            self._list.scrollToItem(item)
+        return True
+
     def _accept_item(self, item: QListWidgetItem) -> None:
         if item is None:
             return
@@ -2261,8 +2285,39 @@ class _CommandPaletteDialog(QDialog):
         self.chosen = str(item.data(Qt.ItemDataRole.UserRole) or "")
         self.accept()
 
+    def eventFilter(self, obj, event):  # noqa: N802
+        # MainWindow binds bare arrows as ApplicationShortcut (timeline pan);
+        # claim the override so Up/Down move the palette list while typing.
+        if obj is self._edit:
+            if event.type() == QEvent.Type.ShortcutOverride:
+                if event.key() in (
+                    Qt.Key.Key_Up, Qt.Key.Key_Down,
+                    Qt.Key.Key_Return, Qt.Key.Key_Enter,
+                ):
+                    event.accept()
+                    return True
+            if event.type() == QEvent.Type.KeyPress:
+                key = event.key()
+                if key == Qt.Key.Key_Down:
+                    self._move_selection(1)
+                    return True
+                if key == Qt.Key.Key_Up:
+                    self._move_selection(-1)
+                    return True
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    self._accept_item(self._list.currentItem())
+                    return True
+        return super().eventFilter(obj, event)
+
     def keyPressEvent(self, event) -> None:
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+        key = event.key()
+        if key == Qt.Key.Key_Down:
+            self._move_selection(1)
+            return
+        if key == Qt.Key.Key_Up:
+            self._move_selection(-1)
+            return
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self._accept_item(self._list.currentItem())
             return
         super().keyPressEvent(event)
@@ -3695,6 +3750,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if self._tab_switch_guard:
             return
         prev = self._previous_tab_index
+        linked_rel = None
+        if (getattr(self, "_link_compare_viewports", False)
+                and len(self._tabs) >= 2
+                and 0 <= prev < len(self._tabs)
+                and prev != index):
+            prev_view = self._tabs[prev].view
+            prev_tr = getattr(self._tabs[prev], "trace", None)
+            if prev_tr is not None:
+                try:
+                    vp_lo, vp_hi = prev_view._visible_time_ns_range()
+                    span = max(1, int(prev_tr.time_max) - int(prev_tr.time_min))
+                    tmin = int(prev_tr.time_min)
+                    linked_rel = (
+                        (vp_lo - tmin) / span,
+                        (vp_hi - tmin) / span,
+                    )
+                except Exception:
+                    linked_rel = None
         if 0 <= prev < len(self._tabs) and prev != index:
             prev_tab = self._tabs[prev]
             self._capture_legend_filters_to_scene(prev_tab.view._scene)
@@ -3716,6 +3789,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 tab.trace, tab.plot_mk, tab.plot_kind, tab.plot_open,
                 preemptor=tab.plot_preemptor,
                 interval_id=tab.plot_interval_id)
+            if linked_rel is not None and tab.trace is not None:
+                span = max(1, int(tab.trace.time_max) - int(tab.trace.time_min))
+                tmin = int(tab.trace.time_min)
+                lo = int(tmin + linked_rel[0] * span)
+                hi = int(tmin + linked_rel[1] * span)
+                if hi > lo:
+                    view = tab.view
+                    scene = view._scene
+                    view.begin_programmatic_viewport()
+                    try:
+                        view._fit_mode = False
+                        vp = view.viewport().rect()
+                        vp_px = max(vp.width() if scene._horizontal else vp.height(), 100)
+                        scene.zoom_to_range(lo, hi, vp_px)
+                        view.scroll_to_ns((lo + hi) // 2)
+                        view.zoom_changed.emit(scene.timescale_per_px)
+                    finally:
+                        view.end_programmatic_viewport()
         else:
             self._vm.set_active_index(-1)
             self._update_tab_actions()
@@ -3723,6 +3814,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._update_trace_quality_banner()
         self._update_cursor_scope_banner()
         self._sync_ai_compare_template()
+        self._refresh_finding_overlays()
 
     def _close_trace_tab(self, index: int) -> None:
         if index < 0 or index >= len(self._tabs):
@@ -4131,6 +4223,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         if not self._restoring_settings:
             self._apply_dock_visibility_from_prefs()
+        self._refresh_finding_overlays()
 
     def _restore_settings(self) -> None:
         """Apply all values from btf_viewer.rc after the UI has been built."""
@@ -9976,6 +10069,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _palette_is_available(self, action_id: str) -> Tuple[bool, str]:
         aid = str(action_id or "")
+        if aid.startswith("stats-section:"):
+            if self._trace is None:
+                return False, "Open a trace first"
+            return True, ""
         meta = COMMAND_PALETTE_META.get(aid) or {}
         req = str(meta.get("requires") or "none")
         disabled = str(meta.get("disabled") or "Unavailable")
@@ -10047,6 +10144,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 4000)
         elif str(aid).startswith("preset-"):
             self._apply_workspace_preset(aid)
+        elif aid.startswith("stats-section:"):
+            sid = aid[len("stats-section:"):].strip()
+            self._focus_statistics_panel(force=True)
+            panel = getattr(self, "_stats_panel", None)
+            if panel is not None and hasattr(panel, "scroll_to_section"):
+                QTimer.singleShot(0, lambda s=sid: panel.scroll_to_section(s))
 
     def _apply_workspace_preset(self, preset_id: str) -> None:
         if preset_id == "preset-compare":
@@ -10072,10 +10175,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel = getattr(self, "_stats_panel", None)
         if scene is None:
             return
+        if not getattr(self, "_show_incident_overlay", False):
+            scene.set_finding_overlays([])
+            return
         findings = []
         if panel is not None and hasattr(panel, "build_analysis_findings"):
             findings, _scope = panel.build_analysis_findings()
-        scene.set_finding_overlays(finding_overlay_times(findings))
+        finding_times = finding_overlay_times(findings)
+        lo = hi = None
+        if panel is not None and getattr(panel, "_scope_to_cursors", False):
+            times = list(getattr(panel, "_cursor_times", None) or [])
+            if len(times) >= 2:
+                lo, hi = min(times), max(times)
+        ux = harvest_ux_events(self._trace, lo, hi) if self._trace is not None else []
+        scene.set_finding_overlays(merge_incident_overlay_times(
+            ux, finding_times, include_anomalies=True, limit=120))
 
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
@@ -10566,8 +10680,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if lock_task_key:
             self._on_legend_task_clicked(lock_task_key)
         if hasattr(self, "_stats_panel"):
-            self._stats_panel.set_cursor_times(
-                view._scene.cursor_times(), refresh_stats=False)
+            panel = self._stats_panel
+            panel._scope_to_cursors = True
+            cb = getattr(panel, "_scope_cb", None)
+            if cb is not None:
+                cb.blockSignals(True)
+                cb.setChecked(True)
+                cb.blockSignals(False)
+            panel.set_cursor_times(
+                view._scene.cursor_times(), refresh_stats=True)
+            self._focus_statistics_panel(force=True)
+            panel.scroll_to_section("core_pairs")
         self.statusBar().showMessage(
             f"Jumped to hotspot "
             f"{_format_time(bin_lo, self._trace.time_scale)}–"
@@ -11143,14 +11266,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._view.scroll_to_ns(ns)
 
     def _on_stats_core_clicked(self, core: str) -> None:
-        """Core Time Breakdown row click: switch to Core View and expand *core*."""
-        if self._trace is None:
+        """Core Time Breakdown row click: Core View + expand + scroll (web parity)."""
+        if self._trace is None or not core:
             return
-        if self._view_mode != "core":
-            self._set_view_mode("core")
-        sc = self._view._scene
-        sc.set_core_expanded(core, True)
-        self._cpu_load_graph.set_core_expanded(core, True)
+        self._ai_highlight_task(str(core))
 
     def _on_explore_range(self, spec) -> None:
         """Zoom, place C1–C2, highlight, and scroll the matching Statistics section."""
@@ -12101,6 +12220,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     self._apply_saved_cpu_splitter(self._active_tab, force=True)
                 else:
                     self._autofit_cpu_load_height()
+        if vals.get("show_incident_overlay", getattr(self, "_show_incident_overlay", False)) != getattr(self, "_show_incident_overlay", False):
+            self._vm.settings._model.show_incident_overlay = bool(vals["show_incident_overlay"])
+            self._refresh_finding_overlays()
+        if vals.get("link_compare_viewports", getattr(self, "_link_compare_viewports", False)) != getattr(self, "_link_compare_viewports", False):
+            self._vm.settings._model.link_compare_viewports = bool(vals["link_compare_viewports"])
         if vals["show_hover_highlight"] != self._hover_highlight_val:
             self._hover_highlight_val = vals["show_hover_highlight"]
             self._view._scene.set_hover_highlight(self._hover_highlight_val)
@@ -12171,6 +12295,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             updates["show_ai"] = str(self._show_ai).lower()
         if snap.get("show_cpu_load", self._show_cpu_load) != self._show_cpu_load:
             updates["show_cpu_load"] = str(self._show_cpu_load).lower()
+        if snap.get("show_incident_overlay", getattr(self, "_show_incident_overlay", False)) != getattr(self, "_show_incident_overlay", False):
+            updates["show_incident_overlay"] = str(self._show_incident_overlay).lower()
+        if snap.get("link_compare_viewports", getattr(self, "_link_compare_viewports", False)) != getattr(self, "_link_compare_viewports", False):
+            updates["link_compare_viewports"] = str(self._link_compare_viewports).lower()
         if snap["show_hover_highlight"] != self._hover_highlight_val:
             updates["hover_highlight"] = str(self._hover_highlight_val).lower()
         if snap.get("time_decimals", self._time_decimals_val) != self._time_decimals_val:
@@ -12268,6 +12396,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "show_ai":                  getattr(self, "_show_ai", True),
             "show_cpu_load":            self._show_cpu_load,
             "show_hover_highlight":     self._hover_highlight_val,
+            "show_incident_overlay":    getattr(self, "_show_incident_overlay", False),
+            "link_compare_viewports":   getattr(self, "_link_compare_viewports", False),
             "colorblind_safe":          self._colorblind_val,
             "label_width":              self._label_width_val,
             "row_height":               self._row_height_val,
@@ -12295,6 +12425,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             show_find=self._show_find,
             show_ai=getattr(self, "_show_ai", True),
             cpu_load=self._show_cpu_load,
+            show_incident_overlay=getattr(self, "_show_incident_overlay", False),
+            link_compare_viewports=getattr(self, "_link_compare_viewports", False),
             label_width=self._label_width_val,
             row_height=self._row_height_val,
             row_gap=self._row_gap_val,
@@ -12349,6 +12481,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "show_ai":                  dlg.show_ai,
             "show_cpu_load":            dlg.cpu_load,
             "show_hover_highlight":     dlg.show_hover_highlight,
+            "show_incident_overlay":    dlg.show_incident_overlay,
+            "link_compare_viewports":   dlg.link_compare_viewports,
             "colorblind_safe":          dlg.colorblind_safe,
             "label_width":              dlg.label_width,
             "row_height":               dlg.row_height,

@@ -12,6 +12,8 @@ SETTINGS_ATTR_MAP: dict[str, str] = {
     "_show_cpu_load": "show_cpu_load",
     "_show_marks": "show_marks",
     "_show_find": "show_find",
+    "_show_incident_overlay": "show_incident_overlay",
+    "_link_compare_viewports": "link_compare_viewports",
     "_cpu_splitter_user_sized": "cpu_splitter_user_sized",
     "_cpu_splitter_bottom_h": "cpu_splitter_bottom_h",
     "_font_size_val": "font_size",

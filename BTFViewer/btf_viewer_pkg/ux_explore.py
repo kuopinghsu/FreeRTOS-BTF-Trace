@@ -479,6 +479,47 @@ def finding_overlay_times(findings: Optional[Sequence[dict]], limit: int = 80) -
     return times[:limit]
 
 
+def merge_incident_overlay_times(
+    ux_events: Optional[Sequence[Any]],
+    finding_times: Optional[Sequence[float]],
+    *,
+    include_anomalies: bool = True,
+    limit: int = 120,
+) -> List[float]:
+    """Merge Findings timestamps with UX anomaly starts (Web incidentOverlay.js)."""
+    lim = max(1, int(limit or 120))
+    out: List[float] = []
+    seen = set()
+    for t in finding_times or []:
+        try:
+            n = float(t)
+        except (TypeError, ValueError):
+            continue
+        if n in seen:
+            continue
+        seen.add(n)
+        out.append(n)
+        if len(out) >= lim:
+            return out
+    if not include_anomalies:
+        return out
+    for ev in ux_events or []:
+        if not isinstance(ev, dict):
+            continue
+        raw = ev.get("jump_ns", ev.get("start", ev.get("time")))
+        try:
+            n = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if n in seen:
+            continue
+        seen.add(n)
+        out.append(n)
+        if len(out) >= lim:
+            break
+    return out
+
+
 def task_inspector_line(
     task: Any = "",
     quality_warnings: Optional[Sequence[str]] = None,

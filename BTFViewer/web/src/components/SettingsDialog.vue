@@ -156,6 +156,20 @@
               >
               CPU load graph
             </label>
+            <label class="settings-check indent">
+              <input
+                v-model="draft.showIncidentOverlay"
+                type="checkbox"
+              >
+              Timeline incident markers (findings + anomalies)
+            </label>
+            <label class="settings-check indent">
+              <input
+                v-model="draft.linkCompareViewports"
+                type="checkbox"
+              >
+              Link A/B timeline zoom when switching compare tabs
+            </label>
 
             <h3 class="settings-section">Timeline overlays</h3>
             <label class="settings-check indent">

@@ -60,6 +60,8 @@ class AppSettingsModel:
     show_cpu_load: bool = True
     show_marks: bool = True
     show_find: bool = True
+    show_incident_overlay: bool = False
+    link_compare_viewports: bool = False
     cpu_splitter_user_sized: bool = False
     cpu_splitter_bottom_h: Optional[int] = None
     font_size: int = 0

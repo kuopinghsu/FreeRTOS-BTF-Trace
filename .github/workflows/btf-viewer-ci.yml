@@ -14,10 +14,12 @@ on:
 
 jobs:
   desktop:
-    name: Desktop tests + bundle check
+    name: Desktop tests + bundle freshness
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -35,20 +37,22 @@ jobs:
             libxcb-cursor0 \
             libxkbcommon0
 
-      - name: Desktop unit tests
+      - name: Desktop unit tests (includes Desktop↔Web parity)
         run: make -C BTFViewer test
 
-      - name: Verify bundled builds/btf_viewer.py matches package
+      - name: Generated desktop bundle freshness
         run: make -C BTFViewer check-bundle
 
   web:
-    name: Web tests + build
+    name: Web tests + HTML freshness
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: BTFViewer/web
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -60,5 +64,21 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      - name: Production build
-        run: npm run build
+      - name: Generated web HTML freshness
+        working-directory: BTFViewer
+        run: make check-web
+
+  docs-gate:
+    name: Docs links, parity, PDF freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Documentation links, EN/zh-TW parity, PDF/HTML/bundle freshness
+        run: make -C BTFViewer check-docs

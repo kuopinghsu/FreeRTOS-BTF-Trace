@@ -213,10 +213,22 @@ export const COMMAND_PALETTE_META = Object.freeze({
   },
 })
 export const COMMAND_PALETTE_RECENT_MAX = 8
+/** Sections expanded by Ctrl+K workspace presets (others stay collapsed).
+ *  Keep lockstep with btf_viewer_pkg/config.py WORKSPACE_PRESETS. */
 export const WORKSPACE_PRESETS = {
-  'preset-triage': ['health', 'anomalies', 'worst', 'task_health'],
-  'preset-latency': ['exec', 'response', 'jitter', 'period', 'dispatch'],
-  'preset-smp': ['migrations', 'core_pairs', 'affinity', 'task_core', 'cores'],
+  // Health overview + full TRIAGE category (incl. Recurring Patterns).
+  'preset-triage': [
+    'health', 'task_health', 'anomalies', 'worst', 'patterns',
+  ],
+  // Timing / latency path (response, execution, ready, period).
+  'preset-latency': [
+    'response', 'exec', 'dispatch', 'block',
+    'period', 'jitter', 'activation', 'ready_gap', 'crit_path',
+  ],
+  // Multicore / migration focus.
+  'preset-smp': [
+    'cores', 'migrations', 'core_pairs', 'affinity', 'task_core', 'core_time',
+  ],
   'preset-compare': [],
 }
 
@@ -363,10 +375,10 @@ export const STATS_SECTION_HELP = Object.freeze({
   concurrency: "How much of the scoped span had 0, 1, 2, … cores running a user task at once. Click a row to open the concurrency plot.",
   switch_reason: "Why each task went off-CPU: preempted (another task ran on its core), blocked (sync take/recv), suspended, or waiting for its next period. Heuristic from slice overlap and STI events.",
   sched_load: "Context-switch rate and load-balance spread (util σ, score) per equal time bin, so an imbalance or a switching burst can be placed in time. Click a bin to jump the timeline there.",
-  activation: "How far each task activation lands from a fitted ideal periodic clock (phi + k·T, T = p50 inter-arrival). Large values are release jitter against the schedule, not just against the previous release. Click a row to highlight the task.",
-  ready_gap: "Per task, off-CPU time it spent arguably able to run: gaps where another task ran (preempted), it waited on a lock (blocked), or the cause is unknown. Sleeping and period-waiting are excluded. Longest and total rank starvation. Click a row to highlight the task.",
-  idle: "Per core: total IDLE time, the longest single idle stretch, how many idle fragments, and p95. The note gives the longest window where every core was idle at once — headroom, or a stall if work was pending.",
-  sync_level: "Running fill level of every queue and semaphore (+1 on give/send, -1 on take/recv). Peak level, time spent at the peak, level at end of scope, and starved take/recv attempts on an empty object.",
+  activation: "How far each task activation lands from a fitted ideal periodic clock (phi + k·T, T = p50 inter-arrival). Large values are release jitter against the schedule, not just against the previous release. Click a row to open the activation-latency distribution chart.",
+  ready_gap: "Per task, off-CPU time it spent arguably able to run: gaps where another task ran (preempted), it waited on a lock (blocked), or the cause is unknown. Sleeping and period-waiting are excluded. Longest and total rank starvation. Click a row to open the ready-gap distribution chart.",
+  idle: "Per core: total IDLE time, the longest single idle stretch, how many idle fragments, and p95. The note gives the longest window where every core was idle at once — headroom, or a stall if work was pending. Click a core to open the idle-fragment distribution chart.",
+  sync_level: "Running fill level of every queue and semaphore (+1 on give/send, -1 on take/recv). Peak level, time spent at the peak, level at end of scope, and starved take/recv attempts on an empty object. Click a row to jump to peak onset (or the first starve if there is no peak).",
   switch_overhead: "Time from one task leaving a core to the next task running (kernel switch gap). Click a core to open the switch-overhead plot.",
   tasks: "Top user tasks by CPU share of the scoped span, excluding IDLE and TICK. Click a name to highlight that task on the timeline.",
   migrations: "Tasks that ran on more than one core: count, rate, dwell, ping-pong, and STI proximity. Click a row to open the migration plot.",
@@ -392,10 +404,10 @@ export const STATS_SECTION_HELP = Object.freeze({
   preemption: "Victim × preemptor pairs while the victim is off-CPU on the same core. Click a row to open the preemption plot for that pair.",
   preempt_matrix: "Victim × preemptor overlap during off-CPU gaps on the same core. Click a ranking row or matrix cell to jump to the longest overlap.",
   priority: "Tasks boosted above their create priority by set_priority STI events. Orange bands = boost; red = classic L/M/H pattern (medium-priority task between base and peak).",
-  sync: "Pairs take/give STI events by object pointer (0x........). Flags orphan gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end (deadlock risk).",
+  sync: "Pairs take/give STI events by object pointer (0x........). Flags orphan gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end (deadlock risk). Click an object to open the hold-duration distribution chart.",
   wait_owner: "Heuristic mutex handoff matrix: the next distinct acquirer is treated as the waiter for the previous hold. Not a kernel wait queue. Click a cell to zoom the longest handoff.",
-  mutex_block: "Per-task mutex wait totals from heuristic handoffs (next distinct acquirer × previous holder). Not a kernel wait queue. Click a row to jump to the longest wait.",
-  queue: "Pairs send/recv STI events by queue pointer (0x........).",
+  mutex_block: "Per-task mutex wait totals from heuristic handoffs (next distinct acquirer × previous holder). Not a kernel wait queue. Click a row to open the mutex-wait distribution chart.",
+  queue: "Pairs send/recv STI events by queue pointer (0x........). Click an object to open the hold-duration distribution chart.",
   intervals: "Paired interval_start / interval_stop STI events. Click a row to open the interval plot.",
   tags: "tag0_event … tag7_event STI sample values. Click a row to open the tag plot.",
 })

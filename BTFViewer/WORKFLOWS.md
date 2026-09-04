@@ -508,7 +508,7 @@ Do not move from a Finding directly to a fix. Make a change only after the evide
 4. Apply the change to the real system.
 5. Capture the same workload again with equivalent instrumentation.
 6. Open the original trace as **Baseline** and the new trace as **Candidate**.
-7. Select equivalent workload phases and cursor ranges.
+7. Select equivalent workload phases and cursor ranges. Optionally enable **Settings → Display → Link A/B timeline zoom when switching compare tabs** so flipping between Baseline and Candidate timeline tabs keeps the same relative phase in view (relative fraction of each trace’s span; not live dual-scroll sync).
 8. Repeat the same Statistics used in the original investigation.
 9. Use **Compare** to review normalized totals, tail values, notable changes, and side effects.
 10. Return to both timelines and inspect the samples behind the difference.

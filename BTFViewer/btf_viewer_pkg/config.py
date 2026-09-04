@@ -376,10 +376,22 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
     },
 }
 COMMAND_PALETTE_RECENT_MAX = 8
+# Sections expanded by Ctrl+K workspace presets (others stay collapsed).
+# Keep lockstep with web/src/config.js WORKSPACE_PRESETS.
 WORKSPACE_PRESETS = {
-    "preset-triage": ("health", "anomalies", "worst", "task_health"),
-    "preset-latency": ("exec", "response", "jitter", "period", "dispatch"),
-    "preset-smp": ("migrations", "core_pairs", "affinity", "task_core", "cores"),
+    # Health overview + full TRIAGE category (incl. Recurring Patterns).
+    "preset-triage": (
+        "health", "task_health", "anomalies", "worst", "patterns",
+    ),
+    # Timing / latency path (response, execution, ready, period).
+    "preset-latency": (
+        "response", "exec", "dispatch", "block",
+        "period", "jitter", "activation", "ready_gap", "crit_path",
+    ),
+    # Multicore / migration focus.
+    "preset-smp": (
+        "cores", "migrations", "core_pairs", "affinity", "task_core", "core_time",
+    ),
     "preset-compare": (),
 }
 
@@ -727,6 +739,78 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "deadline",
 )
 
+# Section id → StatisticsPanel header title (no scope suffix).
+# Keep lockstep with web/src/utils/statsPins.js STATS_SECTION_TITLES.
+STATS_SECTION_TITLES: Dict[str, str] = {
+    "cores": "Core Utilisation (excl. IDLE/TICK)",
+    "health": "Trace Health (TICK)",
+    "task_health": "Task Health",
+    "anomalies": "Timeline Anomalies",
+    "worst": "Worst Events",
+    "patterns": "Recurring Patterns",
+    "response": "Response Time",
+    "exec": "Execution Time Per Slice",
+    "dispatch": "Dispatch / Scheduling Latency",
+    "block": "Blocking Time (off-CPU gap)",
+    "crit_path": "Critical Path",
+    "period": "Period / Jitter",
+    "jitter": "Unified Jitter",
+    "inter": "Inter-Arrival Time",
+    "activation": "Activation Latency",
+    "ready_gap": "Ready-Gap (Starvation)",
+    "task_core": "Task × Core",
+    "core_time": "Core Utilization Over Time",
+    "migrations": "Core Migrations",
+    "core_pairs": "Core-Pair Migration Summary",
+    "affinity": "Core Affinity",
+    "preempt_matrix": "Preemption Matrix",
+    "preemption": "Preemption Chain Analysis",
+    "priority": "Priority Inheritance",
+    "concurrency": "Concurrent Core Active Distribution",
+    "switch_reason": "Switch Reason Breakdown",
+    "sched_load": "Scheduling Load Over Time",
+    "mutex_block": "Mutex Blocking",
+    "wait_owner": "Waiter × Owner",
+    "sync": "Mutex / Semaphore",
+    "queue": "Queue",
+    "sync_level": "Queue Backlog / Semaphore Level",
+    "core_breakdown": "Core Time Breakdown",
+    "idle": "Idle Analysis",
+    "switch_overhead": "Kernel Switch Overhead",
+    "tasks": "Top Tasks by CPU (excl. IDLE/TICK)",
+    "distrib": "Distribution Explorer",
+    "intervals": "Interval Analysis",
+    "tags": "Tag Analysis",
+    "lifecycle": "Task Lifecycle",
+    "deadline": "Deadlines / CPU budget",
+}
+
+
+def stats_section_title(section_id: str) -> str:
+    sid = str(section_id or "").strip()
+    return STATS_SECTION_TITLES.get(sid) or sid
+
+
+def find_stats_sections(query: str) -> List[Tuple[str, str]]:
+    """Return ``(id, title)`` pairs whose title/id contains *query*."""
+    q = str(query or "").strip().lower()
+    if not q:
+        return []
+    out: List[Tuple[str, str]] = []
+    for sid in STATS_PINNABLE_SECTIONS:
+        title = stats_section_title(sid)
+        if q in title.lower() or q in sid.lower():
+            out.append((sid, title))
+    return out
+
+
+def command_palette_stats_section_actions() -> List[Tuple[str, str]]:
+    """Synthetic palette rows: ``stats-section:<id>`` → ``Stats: <title>``."""
+    return [
+        (f"stats-section:{sid}", f"Stats: {stats_section_title(sid)}")
+        for sid in STATS_PINNABLE_SECTIONS
+    ]
+
 # Section id → category label (exactly one primary category each).
 STATS_SECTION_CATEGORY: Dict[str, str] = {
     "cores": "OVERVIEW",
@@ -922,23 +1006,26 @@ STATS_SECTION_HELP: dict[str, str] = {
         "How far each task activation lands from a fitted ideal periodic clock "
         "(phi + k·T, T = p50 inter-arrival). Large values are release jitter "
         "against the schedule, not just against the previous release. Click a "
-        "row to highlight the task."
+        "row to open the activation-latency distribution chart."
     ),
     "ready_gap": (
         "Per task, off-CPU time it spent arguably able to run: gaps where "
         "another task ran (preempted), it waited on a lock (blocked), or the "
         "cause is unknown. Sleeping and period-waiting are excluded. Longest "
-        "and total rank starvation. Click a row to highlight the task."
+        "and total rank starvation. Click a row to open the ready-gap "
+        "distribution chart."
     ),
     "idle": (
         "Per core: total IDLE time, the longest single idle stretch, how many "
         "idle fragments, and p95. The note gives the longest window where every "
-        "core was idle at once — headroom, or a stall if work was pending."
+        "core was idle at once — headroom, or a stall if work was pending. "
+        "Click a core to open the idle-fragment distribution chart."
     ),
     "sync_level": (
         "Running fill level of every queue and semaphore (+1 on give/send, -1 "
         "on take/recv). Peak level, time spent at the peak, level at end of "
-        "scope, and starved take/recv attempts on an empty object."
+        "scope, and starved take/recv attempts on an empty object. Click a row "
+        "to jump to peak onset (or the first starve if there is no peak)."
     ),
     "switch_overhead": (
         "Time from one task leaving a core to the next task running (kernel "
@@ -1055,7 +1142,8 @@ STATS_SECTION_HELP: dict[str, str] = {
     "sync": (
         "Pairs take/give STI events by object pointer (0x........). Flags "
         "orphan gives, unmatched takes, delete-while-held, and multi-mutex "
-        "hold at trace end (deadlock risk)."
+        "hold at trace end (deadlock risk). Click an object to open the "
+        "hold-duration distribution chart."
     ),
     "wait_owner": (
         "Heuristic mutex handoff matrix: the next distinct acquirer is treated "
@@ -1065,10 +1153,11 @@ STATS_SECTION_HELP: dict[str, str] = {
     "mutex_block": (
         "Per-task mutex wait totals from heuristic handoffs (next distinct "
         "acquirer × previous holder). Not a kernel wait queue. Click a row to "
-        "jump to the longest wait."
+        "open the mutex-wait distribution chart."
     ),
     "queue": (
-        "Pairs send/recv STI events by queue pointer (0x........)."
+        "Pairs send/recv STI events by queue pointer (0x........). Click an "
+        "object to open the hold-duration distribution chart."
     ),
     "intervals": (
         "Paired interval_start / interval_stop STI events. Click a row to "

@@ -4,7 +4,10 @@
 #   make -C BTFViewer bundle       # desktop only
 #   make -C BTFViewer web          # web only
 #   make -C BTFViewer demo         # guided demo (demo_8cores)
-#   make -C BTFViewer check-bundle # desktop parity check (CI)
+#   make -C BTFViewer check-bundle # desktop generated-build freshness (CI)
+#   make -C BTFViewer check-web    # web generated-build freshness (CI)
+#   make -C BTFViewer check-docs   # links, EN/zh-TW parity, PDF/HTML freshness
+#   make -C BTFViewer ci-gate      # tests + generated builds + docs gate
 #   make -C BTFViewer ai-test      # offline AI benchmark (tests/ai)
 #   make -C BTFViewer ai-test-live # live suite XML → AI_BENCHMARK.md (AI_CONFIG)
 #   make -C BTFViewer ai-prompts   # on-demand AI prompt dump → builds/ai_prompts_review.txt
@@ -40,7 +43,9 @@ AI_CASES ?=
 AI_CONTEXT ?=
 AI_REPLACE ?=
 
-.PHONY: all help web bundle check-bundle test test-web test-all ai-test ai-test-live ai-test-context ai-prompts ci doc update-images demo demo-voice demo-pack
+.PHONY: all help web bundle check-bundle check-web check-docs check-builds \
+	test test-web test-all ai-test ai-test-live ai-test-context ai-prompts \
+	ci ci-gate doc update-images demo demo-voice demo-pack
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -48,7 +53,10 @@ help:
 	@echo "  make              Build web + desktop (default)"
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
-	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
+	@echo "  make check-bundle Fail if builds/btf_viewer.py ≠ fresh bundle from sources"
+	@echo "  make check-web    Fail if builds/btf_viewer.html ≠ fresh web build (pinned date)"
+	@echo "  make check-docs   Links, EN/zh-TW heading parity, PDF/HTML/bundle freshness"
+	@echo "  make check-builds check-bundle + check-web"
 	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (+ zh-TW) → docs/*.pdf"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
 	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, DEMO_LANG)"
@@ -66,7 +74,8 @@ help:
 	@echo "                      A run restricted this way merges into an existing AI_BENCHMARK.md"
 	@echo "                      instead of overwriting it; AI_REPLACE=1 forces a full overwrite"
 	@echo "  make ai-prompts   Export AI prompts for review → builds/ai_prompts_review.txt (on demand)"
-	@echo "  make ci           test-all + check-bundle (local CI parity)"
+	@echo "  make ci-gate      test-all + check-builds + check-docs (lightweight CI gate)"
+	@echo "  make ci           Alias for ci-gate"
 	@echo "  make help         Show this help"
 	@echo ""
 	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  MARP=$(MARP)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  DEMO_LANGS=$(DEMO_LANGS)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)  AI_CASES=$(AI_CASES)  AI_CONTEXT=$(AI_CONTEXT)  AI_REPLACE=$(AI_REPLACE)"
@@ -139,7 +148,34 @@ ai-prompts:
 	mkdir -p $(BUILDS)
 	PYTHONPATH=. $(PYTHON) scripts/export_ai_prompts.py -o $(BUILDS)/ai_prompts_review.txt
 
-ci: test-all check-bundle
+# Pin About-panel date from the current HTML so a no-op rebuild stays identical.
+# Compares a fresh build to the existing artifact (not git HEAD), so a local
+# `make web` followed by `make check-web` passes before you commit.
+check-web:
+	@test -f builds/btf_viewer.html || { echo "error: builds/btf_viewer.html missing — run: make -C BTFViewer web" >&2; exit 1; }
+	@DATE="$${BTF_BUILD_DATE:-$$($(PYTHON) scripts/ci_gate.py --print-html-build-date)}"; \
+	if [ -z "$$DATE" ]; then DATE=$$(date -u +%F); fi; \
+	prev=$$(mktemp $(BUILDS)/btf_viewer.html.prev.XXXXXX); \
+	cp builds/btf_viewer.html "$$prev"; \
+	echo "check-web: rebuilding with BTF_BUILD_DATE=$$DATE"; \
+	if ! BTF_BUILD_DATE="$$DATE" $(MAKE) -C web build; then rm -f "$$prev"; exit 1; fi; \
+	if ! cmp -s "$$prev" builds/btf_viewer.html; then \
+	  rm -f "$$prev"; \
+	  echo "error: builds/btf_viewer.html was stale relative to web sources." >&2; \
+	  echo "It has been regenerated — re-run: make -C BTFViewer check-web" >&2; \
+	  exit 1; \
+	fi; \
+	rm -f "$$prev"; \
+	echo "OK: builds/btf_viewer.html matches web sources"
+
+check-docs:
+	$(PYTHON) scripts/ci_gate.py --all
+
+check-builds: check-bundle check-web
+
+ci-gate: test-all check-builds check-docs
+
+ci: ci-gate
 
 DOC_PDFS := \
 	$(DOCS)/README.pdf $(DOCS)/STATISTICS.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf \
@@ -286,8 +322,21 @@ $(DOCS)/WORKFLOWS_zh-TW.pdf: WORKFLOWS_zh-TW.md $(DOC_LUA) $(DOC_TEX) scripts/cj
 	$(PANDOC) $(PANDOC_PDF_FLAGS_ZHTW) -M title="BTF Viewer — Analysis Workflows（繁體中文）" $< -o $@
 
 # Fail if builds/btf_viewer.py drifts from package sources (CI / pre-commit).
-check-bundle: bundle
-	git diff --exit-code $(OUT)
+# Compares a fresh bundle to the existing artifact (not git HEAD), so a local
+# `make bundle` followed by `make check-bundle` passes before you commit.
+check-bundle:
+	mkdir -p $(BUILDS)
+	@test -f $(OUT) || { echo "error: $(OUT) missing — run: make -C BTFViewer bundle" >&2; exit 1; }
+	@tmp=$$(mktemp $(BUILDS)/btf_viewer.py.check.XXXXXX); \
+	$(PYTHON) scripts/bundle_viewer.py -o "$$tmp"; \
+	$(PYTHON) -m py_compile "$$tmp"; \
+	if ! cmp -s "$$tmp" $(OUT); then \
+	  echo "error: $(OUT) is out of date with package sources." >&2; \
+	  echo "Run: make -C BTFViewer bundle" >&2; \
+	  rm -f "$$tmp"; exit 1; \
+	fi; \
+	rm -f "$$tmp"; \
+	echo "OK: $(OUT) matches package sources"
 
 # Regenerate the statistics distribution plots + task-priority timeline crop
 # used as illustrations in README.md / WORKFLOWS.md, headlessly via the desktop

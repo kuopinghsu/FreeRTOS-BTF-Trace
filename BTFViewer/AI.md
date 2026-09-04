@@ -514,13 +514,14 @@ A local Ollama endpoint normally needs no key. For a custom endpoint, enter its 
 
 ✓ reliable · △ inconsistent — works sometimes but often skips native tool calls, hallucinates numbers, or truncates on long context; always verify against the timeline before trusting a result.
 
-The recommendations below are based on the 17-case run recorded on 2026-08-19. Scores and latency can change with the endpoint, hardware, model build, and dataset.
+The recommendations below are based on the 17-case run recorded on 2026-09-04 ([AI_BENCHMARK.md](AI_BENCHMARK.md)). Scores and latency can change with the endpoint, hardware, model build, and dataset.
 
 | If you… | Use |
 | --- | --- |
 | Want the practical local default without an API key | `qwen3.5:9b` with **Balanced**. It passed 15/17 cases at 14.5s/case. **Full evidence** produced its highest Overall score, 88, but passed 14/17 cases at 16.2s/case. |
-| Want a fast cloud response | `gemini-3.5-flash-lite` with **Full evidence**. It scored 83, passed 13/17 cases, and averaged 2.6s/case. |
-| Want the best result from the shipped Gemini models | `gemini-3.7-flash` with **Full evidence**. It scored 85 and passed 14/17 cases at 25.0s/case. |
+| Want a fast cloud response | `gemini-3.5-flash-lite` with **Full evidence**. It scored 86, passed 14/17 cases, and averaged 3.0s/case. Compact is faster (2.3s/case) at Overall 82. |
+| Want the best result from the shipped Gemini models | `gemini-3.7-flash` with **Full evidence**. It scored 86 and passed 15/17 cases at 6.1s/case. |
+| Want the newer Gemini Flash id | `gemini-3.8-flash` with **Balanced** or **Full evidence** (Overall 85, 14/17 PASS, 8.2–9.1s/case). Avoid **Compact** for this model: Overall 68 with thin final answers. |
 | Want a second local comparison and can accept high latency | `qwen3.8:27b` with **Balanced**. It scored 88 and passed 13/17 cases, but averaged 325.2s/case. It did not provide a consistent quality advantage over `qwen3.5:9b`. |
 | Can use an optional cloud model outside the shipped suite | `gpt-5.6-sol` with **Compact** produced the highest recorded result: Overall 90, 16/17 PASS, and 10.4s/case. It is not included in the shipped benchmark configuration. |
 | Handle confidential traces | Use local Ollama. The raw trace and extracted evidence remain on the local machine. |
@@ -576,7 +577,7 @@ Prefer local Ollama for confidential traces. Redact sensitive task names in anno
 
 Compact still keeps the cursor region window, real task names, `jump:TIME` / `range:LO/HI`, measurements with units, confidence / evidence quality, what-if disclaimers, and at least one alternative or falsification. If Compact omits a relevant finding, ask for a specific finding id or select a larger mode.
 
-More context did not consistently improve the benchmark result. `qwen3.5:9b` had its best pass count in Balanced, while `gpt-5.6-sol` had its best score in Compact. `qwen3.8:27b` and `claude-sonnet-5` also scored lower in Full evidence than in Balanced. Treat Balanced as the general starting point, then use **`--compare-context`** on the intended model and workload. Select Full evidence when the investigation actually needs the additional findings, tool catalog, or history; do not assume it is always more accurate or faster.
+More context did not consistently improve the benchmark result. `qwen3.5:9b` had its best pass count in Balanced, while `gpt-5.6-sol` had its best score in Compact. `qwen3.8:27b` and `claude-sonnet-5` also scored lower in Full evidence than in Balanced. `gemini-3.8-flash` recovered from Overall 68 in Compact to 85 in Balanced/Full. Treat Balanced as the general starting point, then use **`--compare-context`** on the intended model and workload. Select Full evidence when the investigation actually needs the additional findings, tool catalog, or history; do not assume it is always more accurate or faster.
 
 Live `ai-test` defaults to Full evidence. Use **`--compare-context`** to measure all three modes, or **`--context-mode compact`** (or `balanced`) for a single mode. Settings → Context does not apply to the CLI scorer.
 
@@ -1005,8 +1006,9 @@ Do **not** pick local models only because they are newest or largest. Measure mo
 
 **Gemini** (configurable; newer ids can be added without changing the runner):
 
-- **Gemini 3.7 Flash** (`gemini-3.7-flash`) — higher-scoring shipped Gemini reference. Full evidence reached Overall 85 with 14/17 PASS.
-- **Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`) — latency-focused cloud reference. Full evidence reached Overall 83 at 2.6s/case.
+- **Gemini 3.7 Flash** (`gemini-3.7-flash`) — highest pass-rate shipped Gemini reference. Full evidence reached Overall 86 with 15/17 PASS at 6.1s/case.
+- **Gemini 3.8 Flash** (`gemini-3.8-flash`) — newer Flash id. Balanced/Full evidence reached Overall 85 with 14/17 PASS at 8.2–9.1s/case; Compact scored poorly (Overall 68).
+- **Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`) — latency-focused cloud reference. Full evidence reached Overall 86 at 3.0s/case.
 
 ```text
 Shipped live suite
@@ -1016,6 +1018,7 @@ Shipped live suite
 │   └── Qwen3.8 27B
 │
 └── Gemini
+    ├── Gemini 3.8 Flash
     ├── Gemini 3.7 Flash
     └── Gemini 3.5 Flash-Lite
 ```
@@ -1037,6 +1040,11 @@ Do not hard-code the model list into the runner. Copy [examples/ai/benchmark.xml
   <models>
     <model id="qwen3.5:9b"/>
     <model id="qwen3.8:27b"/>
+    <model id="gemini-3.8-flash" preset="gemini">
+      <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
+      <tls-verify>true</tls-verify>
+      <api-key env="GEMINI_API_KEY"/>
+    </model>
     <model id="gemini-3.7-flash" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
       <tls-verify>true</tls-verify>
@@ -1173,14 +1181,15 @@ For local runs, memory and latency are first-class. A slightly more accurate mod
 
 ### Model matrix
 
-Same suite against the shipped Gemini and local Ollama models. Recorded 2026-08-19 (17-case dataset); full case tables and Compact/Balanced numbers: [AI_BENCHMARK.md](AI_BENCHMARK.md). Scores below are the **Full evidence** context mode (the live-scoring default).
+Same suite against the shipped Gemini and local Ollama models. Recorded 2026-09-04 (17-case dataset); full case tables and Compact/Balanced numbers: [AI_BENCHMARK.md](AI_BENCHMARK.md). Scores below are the **Full evidence** context mode (the live-scoring default).
 
 | Model                    | Category              | Finding | Evidence | Root cause | Calibration | Notes                                                      |
 | ------------------------ | --------------------- | ------- | -------- | ---------- | ----------- | ---------------------------------------------------------- |
 | `qwen3.5:9b`             | Local / practical     | 85      | **93**   | **82**     | 80          | overall **88**, 16.2s/case, 14/17 PASS                     |
-| `qwen3.8:27b`            | Local / high-latency  | **88**  | **94**   | 65         | 80          | overall **86**, 332s/case, 13/17 PASS                      |
-| `gemini-3.5-flash-lite`  | Cloud / fast          | 82      | 90       | 71         | 80          | overall **83**, 2.6s/case, 13/17 PASS                      |
-| `gemini-3.7-flash`       | Cloud                 | 82      | **94**   | 59         | 80          | overall **85**, 25.0s/case, 14/17 PASS                     |
+| `qwen3.8:27b`            | Local / high-latency  | 88      | **94**   | 65         | 80          | overall **86**, 332s/case, 13/17 PASS                      |
+| `gemini-3.5-flash-lite`  | Cloud / fast          | 82      | **94**   | 65         | 80          | overall **86**, 3.0s/case, 14/17 PASS                      |
+| `gemini-3.7-flash`       | Cloud                 | **91**  | 91       | 59         | 80          | overall **86**, 6.1s/case, 15/17 PASS                      |
+| `gemini-3.8-flash`       | Cloud                 | 88      | 91       | 59         | 80          | overall **85**, 9.1s/case, 14/17 PASS                      |
 
 [AI_BENCHMARK.md](AI_BENCHMARK.md) also carries two cloud models run outside the shipped suite (`--models` against a private config), for reference only — they are not in `examples/ai/benchmark.xml` and are not part of the "Recommended models" guidance below:
 
@@ -1195,8 +1204,9 @@ Live `--config` runs a tool-result follow-up when the first turn is tools-only (
 The results support these practical conclusions:
 
 - **Best practical local setup:** `qwen3.5:9b` with Balanced for the highest pass count, or Full evidence for the highest Overall score.
-- **Fastest measured cloud setup:** `gemini-3.5-flash-lite` with Compact at 2.3s/case; Full evidence improved its score to 83 at 2.6s/case.
-- **Best shipped Gemini result:** `gemini-3.7-flash` with Full evidence, Overall 85 and 14/17 PASS.
+- **Fastest measured cloud setup:** `gemini-3.5-flash-lite` with Compact at 2.3s/case; Full evidence reached Overall 86 at 3.0s/case.
+- **Best shipped Gemini result:** `gemini-3.7-flash` with Full evidence, Overall 86 and 15/17 PASS at 6.1s/case.
+- **Gemini 3.8 Flash:** Balanced/Full evidence Overall 85; avoid Compact (Overall 68).
 - **Highest result in the complete report:** optional `gpt-5.6-sol` with Compact, Overall 90 and 16/17 PASS.
 - **More context is not automatically better:** the best mode depends on the model. Compare all three modes before choosing a deployment default.
 

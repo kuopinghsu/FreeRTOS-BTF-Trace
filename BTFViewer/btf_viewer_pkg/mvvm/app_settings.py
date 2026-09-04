@@ -51,6 +51,8 @@ class AppSettingsViewModel(ViewModelBase):
         m.show_cpu_load = True
         m.show_marks = True
         m.show_find = True
+        m.show_incident_overlay = False
+        m.link_compare_viewports = False
         m.cpu_splitter_user_sized = False
         m.cpu_splitter_bottom_h = None
         m.font_size = FONT_SIZE
@@ -137,6 +139,22 @@ class AppSettingsViewModel(ViewModelBase):
     @show_cpu_load.setter
     def show_cpu_load(self, value: bool) -> None:
         self._assign("show_cpu_load", bool(value))
+
+    @property
+    def show_incident_overlay(self) -> bool:
+        return self._model.show_incident_overlay
+
+    @show_incident_overlay.setter
+    def show_incident_overlay(self, value: bool) -> None:
+        self._assign("show_incident_overlay", bool(value))
+
+    @property
+    def link_compare_viewports(self) -> bool:
+        return self._model.link_compare_viewports
+
+    @link_compare_viewports.setter
+    def link_compare_viewports(self, value: bool) -> None:
+        self._assign("link_compare_viewports", bool(value))
 
     @property
     def show_marks(self) -> bool:
@@ -324,6 +342,8 @@ class AppSettingsViewModel(ViewModelBase):
         m.show_stats = rc.get_bool("view", "show_stats", True)
         m.show_marks = rc.get_bool("view", "show_marks", True)
         m.show_find = rc.get_bool("view", "show_find", True)
+        m.show_incident_overlay = rc.get_bool("view", "show_incident_overlay", False)
+        m.link_compare_viewports = rc.get_bool("view", "link_compare_viewports", False)
         m.time_decimals = rc.get_int("view", "time_decimals", _DEFAULT_TIME_DECIMALS)
         self.settings_changed.emit()
         self.changed.emit()

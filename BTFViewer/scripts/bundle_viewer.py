@@ -185,7 +185,7 @@ from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsOpacityEffect,
     QGraphicsPolygonItem, QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
-    QProgressDialog,
+    QProgressDialog, QCompleter,
     QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,

@@ -180,7 +180,7 @@ class TestSchedulingLoadSections(unittest.TestCase):
     def test_classify_offcpu_gaps_kinds(self) -> None:
         by_mk = P._classify_offcpu_gaps(self.trace)
         self.assertTrue(by_mk)
-        kinds = {k for gaps in by_mk.values() for _g, k in gaps}
+        kinds = {k for gaps in by_mk.values() for _g, k, _at in gaps}
         self.assertTrue(kinds <= set(P._OFFCPU_GAP_KINDS))
         # an SMP demo trace has at least some involuntary preemption
         self.assertIn("preempted", kinds)
@@ -198,7 +198,7 @@ class TestSchedulingLoadSections(unittest.TestCase):
             task_repr = {"w": "W[1]"}
             sti_events_by_target: dict = {}
         gaps = P._classify_offcpu_gaps(_T())["w"]
-        self.assertEqual(gaps, [(40, "period_wait")])
+        self.assertEqual(gaps, [(40, "period_wait", 50)])
 
     def test_switch_reason_rows_shape(self) -> None:
         rows = P._switch_reason_rows(self.trace)
@@ -470,13 +470,17 @@ class TestIdleSyncLevelSections(unittest.TestCase):
 
     def test_sync_level_rows_shape(self) -> None:
         rows = P._sync_level_rows(self.trace)
-        for key, kind, ptr, label, peak, tam, endl, starv in rows:
+        for key, kind, ptr, label, peak, tam, endl, starv, pstart, fstarve in rows:
             self.assertEqual(
-                len((key, kind, ptr, label, peak, tam, endl, starv)), 8)
+                len((key, kind, ptr, label, peak, tam, endl, starv, pstart, fstarve)), 10)
             self.assertIn(kind, ("queue", "sem"))
             self.assertGreaterEqual(peak, 0)
             self.assertGreaterEqual(tam, 0)
             self.assertGreaterEqual(starv, 0)
+            if peak > 0:
+                self.assertIsNotNone(pstart)
+            if starv > 0:
+                self.assertIsNotNone(fstarve)
         if len(rows) >= 2:
             self.assertGreaterEqual(rows[0][4], rows[-1][4])   # peak desc
 
@@ -495,8 +499,10 @@ class TestIdleSyncLevelSections(unittest.TestCase):
             ]}
         rows = P._sync_level_rows(_T())
         self.assertEqual(len(rows), 1)
-        _k, kind, _p, _l, peak, _tam, endl, starv = rows[0]
+        _k, kind, _p, _l, peak, _tam, endl, starv, pstart, fstarve = rows[0]
         self.assertEqual((kind, peak, endl, starv), ("sem", 2, 0, 1))
+        self.assertEqual(pstart, 20)
+        self.assertEqual(fstarve, 50)
 
 
 if __name__ == "__main__":

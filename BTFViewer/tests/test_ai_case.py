@@ -793,7 +793,7 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertEqual(
             ids,
             ["qwen3.5:9b", "qwen3.8:27b",
-             "gemini-3.7-flash", "gemini-3.5-flash-lite"],
+             "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite"],
         )
         local = next(m for m in suite["models"] if m["base_url"].startswith("http://"))
         self.assertFalse(local["tls_verify"])
@@ -802,7 +802,9 @@ class InvestigationCaseTests(unittest.TestCase):
             m["id"] for m in suite["models"] if m.get("api_key_env") == "GEMINI_API_KEY"
         ]
         self.assertEqual(
-            gemini_ids, ["gemini-3.7-flash", "gemini-3.5-flash-lite"])
+            gemini_ids,
+            ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite"],
+        )
         self.assertFalse(any(m.get("optional") for m in suite["models"]))
         default_ids = [m["id"] for m in select_benchmark_suite_models(suite, "")]
         self.assertEqual(default_ids, ids)

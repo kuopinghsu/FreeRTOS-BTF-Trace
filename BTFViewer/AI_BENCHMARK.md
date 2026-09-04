@@ -1,13 +1,13 @@
 # AI Benchmark results
 
-Generated: 2026-08-19 22:38 UTC
+Generated: 2026-09-04 00:19 UTC
 Dataset: `tests/ai`
 
 Live `--config` suite XML scores a real endpoint. Offline rows score the canned `response` fields in `dataset.json` and gate the scorer, not a model.
 
 ## Offline fixture scorer
 
-Run `2026-08-19-223109` — no live model.
+Run `2026-09-04-001253` — no live model.
 
 | Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
@@ -37,22 +37,25 @@ Run `2026-08-19-223109` — no live model.
 |---|---|---|---:|---:|---:|---:|
 | `qwen3.5:9b` | Compact | Local / practical | 78 | 8/17 | 76928 | 10.8s |
 | `qwen3.5:9b` | Balanced | Local / practical | 86 | 15/17 | 85597 | 14.5s |
-| `qwen3.5:9b` | Full evidence | Local / practical | 88 | 14/17 | 91755 | 16.2s |
+| `qwen3.5:9b` | Full Evidence | Local / practical | 88 | 14/17 | 91755 | 16.2s |
 | `qwen3.8:27b` | Compact | Local / high-quality | 78 | 9/17 | 82008 | 185.9s |
 | `qwen3.8:27b` | Balanced | Local / high-quality | 88 | 13/17 | 103761 | 325.2s |
-| `qwen3.8:27b` | Full evidence | Local / high-quality | 86 | 13/17 | 104804 | 332.4s |
-| `gemini-3.5-flash-lite` | Compact | Cloud / fast | 82 | 12/17 | 71718 | 2.3s |
-| `gemini-3.5-flash-lite` | Balanced | Cloud / fast | 80 | 11/17 | 74648 | 2.9s |
-| `gemini-3.5-flash-lite` | Full evidence | Cloud / fast | 83 | 13/17 | 75486 | 2.6s |
-| `gemini-3.7-flash` | Compact | Cloud | 83 | 12/17 | 71453 | 39.4s |
-| `gemini-3.7-flash` | Balanced | Cloud | 83 | 13/17 | 78856 | 53.7s |
-| `gemini-3.7-flash` | Full evidence | Cloud | 85 | 14/17 | 81855 | 25.0s |
+| `qwen3.8:27b` | Full Evidence | Local / high-quality | 86 | 13/17 | 104804 | 332.4s |
+| `gemini-3.5-flash-lite` | Compact | Cloud / fast | 82 | 13/17 | 59217 | 2.3s |
+| `gemini-3.5-flash-lite` | Balanced | Cloud / fast | 88 | 15/17 | 66611 | 2.7s |
+| `gemini-3.5-flash-lite` | Full Evidence | Cloud / fast | 86 | 14/17 | 71284 | 3.0s |
+| `gemini-3.7-flash` | Compact | Cloud | 82 | 11/17 | 63260 | 3.9s |
+| `gemini-3.7-flash` | Balanced | Cloud | 83 | 14/17 | 73076 | 6.3s |
+| `gemini-3.7-flash` | Full Evidence | Cloud | 86 | 15/17 | 81032 | 6.1s |
 | `claude-sonnet-5` | Compact | Cloud | 85 | 13/17 | 134649 | 10.3s |
 | `claude-sonnet-5` | Balanced | Cloud | 87 | 13/17 | 143486 | 14.1s |
-| `claude-sonnet-5` | Full evidence | Cloud | 82 | 12/17 | 149873 | 15.9s |
+| `claude-sonnet-5` | Full Evidence | Cloud | 82 | 12/17 | 149873 | 15.9s |
 | `gpt-5.6-sol` | Compact | Cloud | 90 | 16/17 | 66382 | 10.4s |
 | `gpt-5.6-sol` | Balanced | Cloud | 84 | 14/17 | 66953 | 9.4s |
-| `gpt-5.6-sol` | Full evidence | Cloud | 88 | 15/17 | 68195 | 9.6s |
+| `gpt-5.6-sol` | Full Evidence | Cloud | 88 | 15/17 | 68195 | 9.6s |
+| `gemini-3.8-flash` | Compact | Cloud | 68 | 8/17 | 61442 | 4.6s |
+| `gemini-3.8-flash` | Balanced | Cloud | 85 | 14/17 | 76587 | 8.2s |
+| `gemini-3.8-flash` | Full Evidence | Cloud | 85 | 14/17 | 84182 | 9.1s |
 
 ## Context mode comparison
 
@@ -64,7 +67,7 @@ Same model and dataset; Compact / Balanced / Full evidence packing.
 |---|---:|---:|---:|---:|---:|---:|
 | Compact | 78 | 8/17 | 64379 | 12549 | 76928 | 10.8s |
 | Balanced | 86 | 15/17 | 66971 | 18626 | 85597 | 14.5s |
-| Full evidence | 88 | 14/17 | 70813 | 20942 | 91755 | 16.2s |
+| Full Evidence | 88 | 14/17 | 70813 | 20942 | 91755 | 16.2s |
 
 ### `qwen3.8:27b`
 
@@ -72,23 +75,23 @@ Same model and dataset; Compact / Balanced / Full evidence packing.
 |---|---:|---:|---:|---:|---:|---:|
 | Compact | 78 | 9/17 | 69052 | 12956 | 82008 | 185.9s |
 | Balanced | 88 | 13/17 | 72254 | 31507 | 103761 | 325.2s |
-| Full evidence | 86 | 13/17 | 72460 | 32344 | 104804 | 332.4s |
+| Full Evidence | 86 | 13/17 | 72460 | 32344 | 104804 | 332.4s |
 
 ### `gemini-3.5-flash-lite`
 
 | Context | Overall | Pass | Prompt tok | Completion tok | Total tok | Mean latency |
 |---|---:|---:|---:|---:|---:|---:|
-| Compact | 82 | 12/17 | 65588 | 6130 | 71718 | 2.3s |
-| Balanced | 80 | 11/17 | 66410 | 8238 | 74648 | 2.9s |
-| Full evidence | 83 | 13/17 | 67853 | 7633 | 75486 | 2.6s |
+| Compact | 82 | 13/17 | 54611 | 4606 | 59217 | 2.3s |
+| Balanced | 88 | 15/17 | 59951 | 6660 | 66611 | 2.7s |
+| Full Evidence | 86 | 14/17 | 63194 | 8090 | 71284 | 3.0s |
 
 ### `gemini-3.7-flash`
 
 | Context | Overall | Pass | Prompt tok | Completion tok | Total tok | Mean latency |
 |---|---:|---:|---:|---:|---:|---:|
-| Compact | 83 | 12/17 | 66366 | 5087 | 71453 | 39.4s |
-| Balanced | 83 | 13/17 | 71424 | 7432 | 78856 | 53.7s |
-| Full evidence | 85 | 14/17 | 73474 | 8381 | 81855 | 25.0s |
+| Compact | 82 | 11/17 | 58650 | 4610 | 63260 | 3.9s |
+| Balanced | 83 | 14/17 | 63020 | 10056 | 73076 | 6.3s |
+| Full Evidence | 86 | 15/17 | 68074 | 12958 | 81032 | 6.1s |
 
 ### `claude-sonnet-5`
 
@@ -96,7 +99,7 @@ Same model and dataset; Compact / Balanced / Full evidence packing.
 |---|---:|---:|---:|---:|---:|---:|
 | Compact | 85 | 13/17 | 120816 | 13833 | 134649 | 10.3s |
 | Balanced | 87 | 13/17 | 123211 | 20275 | 143486 | 14.1s |
-| Full evidence | 82 | 12/17 | 126777 | 23096 | 149873 | 15.9s |
+| Full Evidence | 82 | 12/17 | 126777 | 23096 | 149873 | 15.9s |
 
 ### `gpt-5.6-sol`
 
@@ -104,29 +107,40 @@ Same model and dataset; Compact / Balanced / Full evidence packing.
 |---|---:|---:|---:|---:|---:|---:|
 | Compact | 90 | 16/17 | 60608 | 5774 | 66382 | 10.4s |
 | Balanced | 84 | 14/17 | 60911 | 6042 | 66953 | 9.4s |
-| Full evidence | 88 | 15/17 | 62116 | 6079 | 68195 | 9.6s |
+| Full Evidence | 88 | 15/17 | 62116 | 6079 | 68195 | 9.6s |
+
+### `gemini-3.8-flash`
+
+| Context | Overall | Pass | Prompt tok | Completion tok | Total tok | Mean latency |
+|---|---:|---:|---:|---:|---:|---:|
+| Compact | 68 | 8/17 | 59538 | 1904 | 61442 | 4.6s |
+| Balanced | 85 | 14/17 | 63267 | 13320 | 76587 | 8.2s |
+| Full Evidence | 85 | 14/17 | 67311 | 16871 | 84182 | 9.1s |
 
 
 | Model | Finding | Evidence | Tool use | Root cause | Calibration | Safety |
 |---|---:|---:|---:|---:|---:|---:|
 | `qwen3.5:9b (Compact)` | 71 | 79 | 88 | 65 | 80 | 91 |
 | `qwen3.5:9b (Balanced)` | 88 | 93 | 90 | 71 | 80 | 96 |
-| `qwen3.5:9b (Full evidence)` | 85 | 93 | 97 | 82 | 80 | 89 |
+| `qwen3.5:9b (Full Evidence)` | 85 | 93 | 97 | 82 | 80 | 89 |
 | `qwen3.8:27b (Compact)` | 79 | 71 | 100 | 53 | 80 | 98 |
 | `qwen3.8:27b (Balanced)` | 88 | 94 | 103 | 71 | 80 | 93 |
-| `qwen3.8:27b (Full evidence)` | 88 | 94 | 91 | 65 | 80 | 96 |
-| `gemini-3.5-flash-lite (Compact)` | 82 | 90 | 70 | 71 | 80 | 99 |
-| `gemini-3.5-flash-lite (Balanced)` | 82 | 90 | 56 | 71 | 80 | 99 |
-| `gemini-3.5-flash-lite (Full evidence)` | 82 | 90 | 77 | 71 | 80 | 99 |
-| `gemini-3.7-flash (Compact)` | 82 | 82 | 94 | 65 | 80 | 98 |
+| `qwen3.8:27b (Full Evidence)` | 88 | 94 | 91 | 65 | 80 | 96 |
+| `gemini-3.5-flash-lite (Compact)` | 76 | 84 | 94 | 65 | 80 | 99 |
+| `gemini-3.5-flash-lite (Balanced)` | 85 | 94 | 100 | 71 | 80 | 99 |
+| `gemini-3.5-flash-lite (Full Evidence)` | 82 | 94 | 100 | 65 | 80 | 99 |
+| `gemini-3.7-flash (Compact)` | 76 | 82 | 94 | 65 | 80 | 99 |
 | `gemini-3.7-flash (Balanced)` | 82 | 91 | 100 | 53 | 80 | 99 |
-| `gemini-3.7-flash (Full evidence)` | 82 | 94 | 100 | 59 | 80 | 99 |
+| `gemini-3.7-flash (Full Evidence)` | 91 | 91 | 100 | 59 | 80 | 99 |
 | `claude-sonnet-5 (Compact)` | 82 | 85 | 91 | 76 | 80 | 99 |
 | `claude-sonnet-5 (Balanced)` | 91 | 93 | 94 | 76 | 80 | 86 |
-| `claude-sonnet-5 (Full evidence)` | 85 | 94 | 81 | 59 | 80 | 95 |
+| `claude-sonnet-5 (Full Evidence)` | 85 | 94 | 81 | 59 | 80 | 95 |
 | `gpt-5.6-sol (Compact)` | 88 | 93 | 101 | 76 | 80 | 99 |
 | `gpt-5.6-sol (Balanced)` | 82 | 84 | 94 | 71 | 80 | 99 |
-| `gpt-5.6-sol (Full evidence)` | 91 | 90 | 94 | 76 | 80 | 99 |
+| `gpt-5.6-sol (Full Evidence)` | 91 | 90 | 94 | 76 | 80 | 99 |
+| `gemini-3.8-flash (Compact)` | 56 | 50 | 94 | 47 | 80 | 100 |
+| `gemini-3.8-flash (Balanced)` | 85 | 91 | 100 | 59 | 80 | 99 |
+| `gemini-3.8-flash (Full Evidence)` | 88 | 91 | 100 | 59 | 80 | 99 |
 
 ## Live models
 
@@ -190,7 +204,7 @@ Mean latency: **14.5s** / case.
 
 Tokens: **66971** prompt + **18626** completion = **85597** total.
 
-### `qwen3.5:9b` — Full evidence
+### `qwen3.5:9b` — Full Evidence
 
 Local / practical. Run `2026-08-18-141210`.
 
@@ -280,7 +294,7 @@ Mean latency: **325.2s** / case.
 
 Tokens: **72254** prompt + **31507** completion = **103761** total.
 
-### `qwen3.8:27b` — Full evidence
+### `qwen3.8:27b` — Full Evidence
 
 Local / high-quality. Run `2026-08-18-141210`.
 
@@ -312,161 +326,131 @@ Tokens: **72460** prompt + **32344** completion = **104804** total.
 
 ### `gemini-3.5-flash-lite` — Compact
 
-Cloud / fast. Run `2026-08-19-003934`.
+Cloud / fast. Run `2026-09-04-001253`.
 
 | Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 88 | 100 | 100 | 33 | 100 | 80 | 100 | PASS |
+| migration_thrash | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
 | mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| priority_inversion | 87 | 100 | 100 | 25 | 100 | 80 | 100 | PASS |
-| deadline_miss | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| priority_inversion | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
 | load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
 | trace_regression | 63 | 50 | 50 | 0 | 100 | 80 | 100 | FAIL |
-| explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| explain_region | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
 | adversarial_mutex_vs_starvation | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
 | adversarial_exec_vs_preemption | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| adversarial_correlation_not_cause | 63 | 0 | 100 | 0 | 100 | 80 | 100 | FAIL |
-| adversarial_out_of_scope_time | 88 | 100 | 100 | 50 | 100 | 80 | 80 | FAIL |
+| adversarial_correlation_not_cause | 78 | 0 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_out_of_scope_time | 95 | 100 | 100 | 100 | 100 | 80 | 80 | FAIL |
 | period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| waiter_owner_handoff | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| stats_page_next_check | 93 | 100 | 75 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 68 | 50 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| stats_page_next_check | 83 | 50 | 75 | 100 | 100 | 80 | 100 | PASS |
 | response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| preempt_matrix_vs_chain | 90 | 100 | 100 | 50 | 100 | 80 | 100 | PASS |
-| mutex_block_vs_wait_queue | 88 | 100 | 100 | 33 | 100 | 80 | 100 | PASS |
+| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
 
 **Overall 82**
 
 Mean latency: **2.3s** / case.
 
-Tokens: **65588** prompt + **6130** completion = **71718** total.
+Tokens: **54611** prompt + **4606** completion = **59217** total.
 
 ### `gemini-3.5-flash-lite` — Balanced
 
-Cloud / fast. Run `2026-08-19-003934`.
+Cloud / fast. Run `2026-09-04-001253`.
 
 | Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 78 | 100 | 50 | 33 | 100 | 80 | 100 | PASS |
-| mutex_contention | 88 | 100 | 100 | 33 | 100 | 80 | 100 | PASS |
-| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| deadline_miss | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
-| load_imbalance | 68 | 100 | 100 | 33 | 0 | 80 | 100 | FAIL |
-| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
-| explain_region | 48 | 50 | 50 | 33 | 0 | 80 | 100 | FAIL |
-| adversarial_mutex_vs_starvation | 68 | 100 | 100 | 33 | 0 | 80 | 100 | FAIL |
-| adversarial_exec_vs_preemption | 88 | 100 | 100 | 33 | 100 | 80 | 100 | PASS |
-| adversarial_correlation_not_cause | 78 | 0 | 100 | 100 | 100 | 80 | 100 | PASS |
-| adversarial_out_of_scope_time | 90 | 100 | 100 | 67 | 100 | 80 | 80 | FAIL |
-| period_jitter | 88 | 100 | 100 | 33 | 100 | 80 | 100 | PASS |
-| waiter_owner_handoff | 88 | 100 | 100 | 33 | 100 | 80 | 100 | PASS |
-| stats_page_next_check | 83 | 50 | 75 | 100 | 100 | 80 | 100 | PASS |
-| response_vs_blocking | 68 | 100 | 100 | 33 | 0 | 80 | 100 | FAIL |
-| preempt_matrix_vs_chain | 90 | 100 | 100 | 50 | 100 | 80 | 100 | PASS |
-| mutex_block_vs_wait_queue | 68 | 100 | 100 | 33 | 0 | 80 | 100 | FAIL |
-
-**Overall 80**
-
-Mean latency: **2.9s** / case.
-
-Tokens: **66410** prompt + **8238** completion = **74648** total.
-
-### `gemini-3.5-flash-lite` — Full evidence
-
-Cloud / fast. Run `2026-08-19-003934`.
-
-| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 88 | 100 | 100 | 33 | 100 | 80 | 100 | PASS |
-| mutex_contention | 88 | 100 | 100 | 33 | 100 | 80 | 100 | PASS |
+| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | priority_inversion | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
 | deadline_miss | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
 | load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
 | trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
-| explain_region | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| explain_region | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
 | adversarial_mutex_vs_starvation | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
 | adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| adversarial_correlation_not_cause | 70 | 0 | 100 | 50 | 100 | 80 | 100 | PASS |
-| adversarial_out_of_scope_time | 95 | 100 | 100 | 100 | 100 | 80 | 80 | FAIL |
-| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| waiter_owner_handoff | 68 | 100 | 100 | 33 | 0 | 80 | 100 | FAIL |
-| stats_page_next_check | 83 | 50 | 75 | 100 | 100 | 80 | 100 | PASS |
-| response_vs_blocking | 68 | 100 | 100 | 33 | 0 | 80 | 100 | FAIL |
-| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| mutex_block_vs_wait_queue | 88 | 100 | 100 | 33 | 100 | 80 | 100 | PASS |
-
-**Overall 83**
-
-Mean latency: **2.6s** / case.
-
-Tokens: **67853** prompt + **7633** completion = **75486** total.
-
-### `gemini-3.7-flash` — Compact
-
-Cloud. Run `2026-08-19-043257`.
-
-| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| deadline_miss | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
-| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| trace_regression | 63 | 50 | 50 | 0 | 100 | 80 | 100 | FAIL |
-| explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
-| adversarial_mutex_vs_starvation | 45 | 0 | 50 | 100 | 0 | 80 | 80 | FAIL |
-| adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| adversarial_correlation_not_cause | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| adversarial_out_of_scope_time | 75 | 100 | 100 | 100 | 0 | 80 | 80 | FAIL |
-| period_jitter | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
-| waiter_owner_handoff | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| mutex_block_vs_wait_queue | 68 | 100 | 50 | 100 | 0 | 80 | 100 | FAIL |
-
-**Overall 83**
-
-Mean latency: **39.4s** / case.
-
-Tokens: **66366** prompt + **5087** completion = **71453** total.
-
-### `gemini-3.7-flash` — Balanced
-
-Cloud. Run `2026-08-19-043257`.
-
-| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| deadline_miss | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
-| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
-| explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
-| adversarial_mutex_vs_starvation | 68 | 50 | 100 | 100 | 0 | 80 | 100 | FAIL |
-| adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | adversarial_correlation_not_cause | 58 | 0 | 100 | 100 | 0 | 80 | 100 | FAIL |
-| adversarial_out_of_scope_time | 75 | 100 | 100 | 100 | 0 | 80 | 80 | FAIL |
+| adversarial_out_of_scope_time | 95 | 100 | 100 | 100 | 100 | 80 | 80 | FAIL |
 | period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | waiter_owner_handoff | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
 | stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
 | preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
-| mutex_block_vs_wait_queue | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 
-**Overall 83**
+**Overall 88**
 
-Mean latency: **53.7s** / case.
+Mean latency: **2.7s** / case.
 
-Tokens: **71424** prompt + **7432** completion = **78856** total.
+Tokens: **59951** prompt + **6660** completion = **66611** total.
 
-### `gemini-3.7-flash` — Full evidence
+### `gemini-3.5-flash-lite` — Full Evidence
 
-Cloud. Run `2026-08-19-223109`.
+Cloud / fast. Run `2026-09-04-001253`.
 
 | Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| migration_thrash | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| explain_region | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_mutex_vs_starvation | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 58 | 0 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_out_of_scope_time | 95 | 100 | 100 | 100 | 100 | 80 | 80 | FAIL |
+| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 68 | 50 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+
+**Overall 86**
+
+Mean latency: **3.0s** / case.
+
+Tokens: **63194** prompt + **8090** completion = **71284** total.
+
+### `gemini-3.7-flash` — Compact
+
+Cloud. Run `2026-09-04-001253`.
+
+| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| migration_thrash | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| trace_regression | 63 | 50 | 50 | 0 | 100 | 80 | 100 | FAIL |
+| explain_region | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_mutex_vs_starvation | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 78 | 0 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_out_of_scope_time | 95 | 100 | 100 | 100 | 100 | 80 | 80 | FAIL |
+| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 68 | 50 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| preempt_matrix_vs_chain | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
+
+**Overall 82**
+
+Mean latency: **3.9s** / case.
+
+Tokens: **58650** prompt + **4610** completion = **63260** total.
+
+### `gemini-3.7-flash` — Balanced
+
+Cloud. Run `2026-09-04-001253`.
+
+| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| migration_thrash | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
 | mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | deadline_miss | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
@@ -474,7 +458,7 @@ Cloud. Run `2026-08-19-223109`.
 | trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
 | explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
 | adversarial_mutex_vs_starvation | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
-| adversarial_exec_vs_preemption | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_exec_vs_preemption | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
 | adversarial_correlation_not_cause | 58 | 0 | 100 | 100 | 0 | 80 | 100 | FAIL |
 | adversarial_out_of_scope_time | 95 | 100 | 100 | 100 | 100 | 80 | 80 | FAIL |
 | period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
@@ -484,11 +468,41 @@ Cloud. Run `2026-08-19-223109`.
 | preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
 | mutex_block_vs_wait_queue | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
 
-**Overall 85**
+**Overall 83**
 
-Mean latency: **25.0s** / case.
+Mean latency: **6.3s** / case.
 
-Tokens: **73474** prompt + **8381** completion = **81855** total.
+Tokens: **63020** prompt + **10056** completion = **73076** total.
+
+### `gemini-3.7-flash` — Full Evidence
+
+Cloud. Run `2026-09-04-001253`.
+
+| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| migration_thrash | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| trace_regression | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_mutex_vs_starvation | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| adversarial_exec_vs_preemption | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_out_of_scope_time | 95 | 100 | 100 | 100 | 100 | 80 | 80 | FAIL |
+| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+
+**Overall 86**
+
+Mean latency: **6.1s** / case.
+
+Tokens: **68074** prompt + **12958** completion = **81032** total.
 
 ### `claude-sonnet-5` — Compact
 
@@ -550,7 +564,7 @@ Mean latency: **14.1s** / case.
 
 Tokens: **123211** prompt + **20275** completion = **143486** total.
 
-### `claude-sonnet-5` — Full evidence
+### `claude-sonnet-5` — Full Evidence
 
 Cloud. Run `2026-08-19-035307`.
 
@@ -640,7 +654,7 @@ Mean latency: **9.4s** / case.
 
 Tokens: **60911** prompt + **6042** completion = **66953** total.
 
-### `gpt-5.6-sol` — Full evidence
+### `gpt-5.6-sol` — Full Evidence
 
 Cloud. Run `2026-08-19-035307`.
 
@@ -669,3 +683,93 @@ Cloud. Run `2026-08-19-035307`.
 Mean latency: **9.6s** / case.
 
 Tokens: **62116** prompt + **6079** completion = **68195** total.
+
+### `gemini-3.8-flash` — Compact
+
+Cloud. Run `2026-09-03-235612`.
+
+| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| migration_thrash | 68 | 100 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| priority_inversion | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| trace_regression | 53 | 50 | 0 | 0 | 100 | 80 | 100 | FAIL |
+| explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_mutex_vs_starvation | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_exec_vs_preemption | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_correlation_not_cause | 58 | 0 | 100 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_out_of_scope_time | 38 | 0 | 0 | 100 | 0 | 80 | 100 | FAIL |
+| period_jitter | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 38 | 0 | 0 | 100 | 0 | 80 | 100 | FAIL |
+| stats_page_next_check | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| response_vs_blocking | 88 | 100 | 50 | 100 | 100 | 80 | 100 | PASS |
+| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 38 | 0 | 0 | 100 | 0 | 80 | 100 | FAIL |
+
+**Overall 68**
+
+Mean latency: **4.6s** / case.
+
+Tokens: **59538** prompt + **1904** completion = **61442** total.
+
+### `gemini-3.8-flash` — Balanced
+
+Cloud. Run `2026-09-03-235612`.
+
+| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 88 | 50 | 100 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| explain_region | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_mutex_vs_starvation | 68 | 100 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_exec_vs_preemption | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 78 | 0 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_out_of_scope_time | 95 | 100 | 100 | 100 | 100 | 80 | 80 | FAIL |
+| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+
+**Overall 85**
+
+Mean latency: **8.2s** / case.
+
+Tokens: **63267** prompt + **13320** completion = **76587** total.
+
+### `gemini-3.8-flash` — Full Evidence
+
+Cloud. Run `2026-09-03-235612`.
+
+| Case | Overall | Finding | Evidence | Tool use | Root cause | Calibration | Safety | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| migration_thrash | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_contention | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| priority_inversion | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| deadline_miss | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| load_imbalance | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| trace_regression | 78 | 50 | 50 | 100 | 100 | 80 | 100 | PASS |
+| explain_region | 48 | 0 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_mutex_vs_starvation | 58 | 50 | 50 | 100 | 0 | 80 | 100 | FAIL |
+| adversarial_exec_vs_preemption | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| adversarial_correlation_not_cause | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| adversarial_out_of_scope_time | 95 | 100 | 100 | 100 | 100 | 80 | 80 | FAIL |
+| period_jitter | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| waiter_owner_handoff | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| stats_page_next_check | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| response_vs_blocking | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+| preempt_matrix_vs_chain | 98 | 100 | 100 | 100 | 100 | 80 | 100 | PASS |
+| mutex_block_vs_wait_queue | 78 | 100 | 100 | 100 | 0 | 80 | 100 | PASS |
+
+**Overall 85**
+
+Mean latency: **9.1s** / case.
+
+Tokens: **67311** prompt + **16871** completion = **84182** total.

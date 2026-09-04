@@ -679,6 +679,7 @@
                   @clear-bookmarks="onClearBookmarks"
                   @clear-annotations="onClearAnnotations"
                   @export-session="onExportSession"
+                  @export-evidence-pack="onExportEvidencePack"
                   @import-session="onImportSession"
                   @select-mark="timelineOptions.selectedMarkId = $event"
                 />
@@ -767,6 +768,8 @@
                 @filter-timeline="onStatsFilterTimeline"
                 @open-settings="openSettingsDialog"
                 @query-ai="queryAnalysisWithAi"
+                @clear-scope="onStatsScopeChange(false)"
+                @clear-filter="clearAllActiveFilters"
               />
             </div>
           </div>
@@ -1657,6 +1660,7 @@ import {
 import { detectAnomalies, parseWhatIfChange, snapshotFromSummary, updateBaselineProfile, scoreAgainstBaseline } from './utils/aiInvestigation.js'
 import { formatAnalysisStory } from './utils/aiPlanner.js'
 import { bestFindingScope, harvestUxEvents, findingOverlayTimes, taskInspectorLine } from './utils/uxExplore.js'
+import { mergeIncidentOverlayTimes } from './utils/incidentOverlay.js'
 import { resolveFindingEvidence } from './utils/evidenceNav.js'
 import {
   formatLoadingMessage,
@@ -1693,7 +1697,7 @@ import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, n
 import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
 import { collectTraceAnalysisFindings, formatAnalysisFindingsText, FINDING_SECTION_MAP } from './utils/workflowAnalysis.js'
-import { getPlacedCursors, getStatsRange, scopeSuffix } from './utils/statsRange.js'
+import { getPlacedCursors, getStatsRange } from './utils/statsRange.js'
 import { buildAllCompareTables, buildCompareCsv, cursorRangeForCursors, traceSummarySnapshot } from './utils/traceCompare.js'
 import {
   cpuLoadPreferredPaneHeight, cpuLoadPaneDefaultH, cpuLoadPaneMaxH,
@@ -1702,6 +1706,8 @@ import {
 import { selectedTaskFromHighlight } from './utils/highlightLock.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
 import { loadSession, saveSession, buildSessionSnapshot, isRestorableViewport, applySavedLayout, applyTabState, mergeLegacyTabFilters } from './utils/sessionStore.js'
+import { saveSessionOpfs, loadSessionOpfs } from './utils/sessionOpfs.js'
+import { buildEvidencePackZip, downloadBlob } from './utils/evidencePack.js'
 import { defaultTriageState, normalizeTriageState } from './utils/findingsTriage.js'
 import { putTrace, getTrace, pruneTraces } from './utils/traceCache.js'
 import { computeCursorRangeStats, formatStatusRangeLine } from './utils/rangeStats.js'
@@ -1720,6 +1726,7 @@ import {
   mergeSectionCollapsed,
   normalizeStatsPins,
   normalizeStatsSectionOrder,
+  commandPaletteStatsSectionActions,
 } from './utils/statsPins.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import {
@@ -1876,6 +1883,16 @@ function bumpPaletteUsage(id) {
 }
 
 function paletteIsAvailable(aid) {
+  const id = String(aid || '')
+  if (id.startsWith('stats-section:')) {
+    const ctx = buildPrerequisiteContext({
+      trace: trace.value,
+      compareTabCount: compareTabs.value.length,
+      cursorCount: getPlacedCursors(cursors.value).length,
+      aiConfigured: appSettings.aiEnabled !== false,
+    })
+    return checkPrerequisite('trace', ctx, 'Open a trace first')
+  }
   const meta = COMMAND_PALETTE_META[aid] || {}
   const ctx = buildPrerequisiteContext({
     trace: trace.value,
@@ -3167,6 +3184,19 @@ watch(marks, (m) => {
 }, { deep: true })
 
 watch(activeTabId, (newId, oldId) => {
+  let linkedRel = null
+  if (oldId != null && appSettings.linkCompareViewports && tabs.value.length >= 2) {
+    const leaving = tabs.value.find(t => t.id === oldId)
+    const trLeave = leaving?.trace
+    const vp = leaving?.timelineViewport
+    if (trLeave && vp && Number.isFinite(vp.t0) && Number.isFinite(vp.t1)) {
+      const span = Math.max(1, trLeave.timeMax - trLeave.timeMin)
+      linkedRel = {
+        lo: (vp.t0 - trLeave.timeMin) / span,
+        hi: (vp.t1 - trLeave.timeMin) / span,
+      }
+    }
+  }
   if (oldId != null) {
     inspectorOpen.value = false
     inspectorFocusPair.value = null
@@ -3185,7 +3215,16 @@ watch(activeTabId, (newId, oldId) => {
   syncFiltersFromTab(tab)
   _navCache = tab ? getNavCache(tab) : null
   nextTick(() => {
-    applyTimelineViewport()
+    if (linkedRel && tab?.trace) {
+      const span = Math.max(1, tab.trace.timeMax - tab.trace.timeMin)
+      const lo = tab.trace.timeMin + linkedRel.lo * span
+      const hi = tab.trace.timeMin + linkedRel.hi * span
+      if (hi > lo) {
+        timelinePanelRef.value?.zoomToTimeRange(lo, hi, 0, { programmatic: true })
+      }
+    } else {
+      applyTimelineViewport()
+    }
     timelineOptions.layoutRev += 1
     scheduleRender()
     autofitCpuLoadPaneHeight()
@@ -3268,11 +3307,24 @@ const analysisFindings = computed(() => {
 const analysisScopeLabel = computed(() => {
   const scopeOn = activeTab.value?.scopeToCursors !== false
   const range = getStatsRange(cursors.value, scopeOn)
-  return scopeSuffix(range) || ''
+  return range ? ` (C1–C${range.nCursors})` : ''
 })
 
 const analysisQuality = computed(() => collectTraceQualityWarnings(trace.value))
-const findingHits = computed(() => findingOverlayTimes(analysisFindings.value || []))
+const findingHits = computed(() => {
+  if (!appSettings.showIncidentOverlay) return []
+  const fromFindings = findingOverlayTimes(analysisFindings.value || [])
+  let ux = []
+  if (trace.value) {
+    const scopeOn = activeTab.value?.scopeToCursors !== false
+    const range = getStatsRange(cursors.value, scopeOn)
+    ux = harvestUxEvents(trace.value, range?.lo ?? null, range?.hi ?? null)
+  }
+  return mergeIncidentOverlayTimes(ux, fromFindings, {
+    includeAnomalies: true,
+    limit: 120,
+  })
+})
 const taskInspectorText = computed(() => taskInspectorLine(
   selectedTaskFromHighlight({
     highlightSegment: highlightSegment.value,
@@ -3280,13 +3332,19 @@ const taskInspectorText = computed(() => taskInspectorLine(
   }) || '',
   analysisQuality.value,
 ))
-const paletteHits = computed(() => commandPaletteRank(
-  COMMAND_PALETTE_ACTIONS,
-  paletteQuery.value,
-  paletteRecent.value,
-  paletteFrequent.value,
-  paletteIsAvailable,
-))
+const paletteHits = computed(() => {
+  const q = String(paletteQuery.value || '').trim()
+  const actions = [...COMMAND_PALETTE_ACTIONS]
+  // Synthetic Stats section jumps — only when filtering so idle list stays short.
+  if (q) actions.push(...commandPaletteStatsSectionActions())
+  return commandPaletteRank(
+    actions,
+    paletteQuery.value,
+    paletteRecent.value,
+    paletteFrequent.value,
+    paletteIsAvailable,
+  )
+})
 watch(paletteQuery, () => { paletteIndex.value = 0 })
 
 const cursorRangeStats = computed(() =>
@@ -3667,6 +3725,17 @@ function runPaletteAction(id) {
     showToast(taskInspectorText.value, 'info')
   } else if (String(aid).startsWith('preset-')) {
     applyWorkspacePreset(aid)
+  } else if (aid.startsWith('stats-section:')) {
+    const sid = aid.slice('stats-section:'.length).trim()
+    rightPanelTab.value = 'stats'
+    nextTick(() => {
+      statsPanelRef.value?.applyDemoSections?.({
+        id: sid,
+        expand: true,
+        scroll: sid,
+        collapse_others: false,
+      })
+    })
   }
 }
 
@@ -4215,12 +4284,12 @@ function buildAiContext() {
     range?.hi ?? null,
     appSettings,
   )
-  const scopeLabel = scopeSuffix(range) || ''
+  const scopeLabel = range ? ` (C1–C${range.nCursors})` : ''
   const span = formatTime(tr.timeMax - tr.timeMin, tr.timeScale, appSettings.timeDecimals)
   return {
     findingsText: formatAnalysisFindingsText(findings, scopeLabel),
     findings,
-    scope: scopeLabel || 'full trace',
+    scope: range ? `C1–C${range.nCursors}` : 'full trace',
     span,
     cores: tr.coreNames?.length ?? tr.cores?.length ?? 0,
     cursors: (cursors.value || []).filter(c => c != null),
@@ -5814,11 +5883,17 @@ function onCorridorJump(payload) {
   c[0] = payload.binLo
   c[1] = payload.binHi
   cursors.value = c
+  // Evidence loop: Scope stats to the corridor bin and open Core-Pair Summary.
+  onStatsScopeChange(true)
   if (payload.enableCpuLoad !== false) timelineOptions.showCpuLoad = true
   nextTick(() => {
     timelinePanelRef.value?.zoomToTimeRange(payload.binLo, payload.binHi, 0.05, { programmatic: true })
     if (payload.lockTaskKey) onHighlightClick(payload.lockTaskKey)
     autofitCpuLoadPaneHeight()
+    rightPanelTab.value = 'stats'
+    statsPanelRef.value?.applyDemoSections?.({
+      id: 'core_pairs', expand: true, scroll: 'core_pairs', collapse_others: false,
+    })
   })
   showToast(
     `Jumped to hotspot ${payload.pairLabel || ''}`.trim(),
@@ -5838,6 +5913,7 @@ function onCorridorSpotlight(payload) {
   c[0] = payload.binLo
   c[1] = payload.binHi
   cursors.value = c
+  onStatsScopeChange(true)
 
   highlightSegment.value = null
   timelineOptions.highlightSegment = null
@@ -5857,6 +5933,10 @@ function onCorridorSpotlight(payload) {
       scheduleRender()
     }
     autofitCpuLoadPaneHeight()
+    rightPanelTab.value = 'stats'
+    statsPanelRef.value?.applyDemoSections?.({
+      id: 'migrations', expand: true, scroll: 'migrations', collapse_others: false,
+    })
   })
 
   const n = payload.mergeKeys?.length || 0
@@ -6338,7 +6418,11 @@ async function restoreSessionTabs(saved) {
 
 onMounted(async () => {
   applyAppSettings(loadSettings(), { silent: true })
-  const saved = loadSession()
+  let saved = loadSession()
+  if (!saved?.openTabNames?.length) {
+    const fromOpfs = await loadSessionOpfs()
+    if (fromOpfs?.openTabNames?.length) saved = fromOpfs
+  }
   _savedTabStateByTraceName = mergeLegacyTabFilters(
     saved?.tabStateByTraceName,
     saved?.tabFiltersByTraceName,
@@ -6519,6 +6603,7 @@ function scheduleSessionSave() {
     })
     _savedTabStateByTraceName = snapshot.tabStateByTraceName ?? {}
     saveSession(snapshot)
+    saveSessionOpfs(snapshot).catch(() => {})
   }, 400)
 }
 
@@ -6585,6 +6670,43 @@ function onExportSession() {
   const base = (activeTab.value.name || 'trace').replace(/\.btf$/i, '')
   downloadPortableSession(payload, `${base}-session.json`)
   showToast('Session exported', 'info')
+}
+
+async function onExportEvidencePack() {
+  if (!activeTab.value || !trace.value) {
+    showToast('Open a trace first', 'info')
+    return
+  }
+  saveFiltersToActiveTab()
+  const session = buildPortableSession({
+    traceName: activeTab.value.name,
+    cursors: cursors.value,
+    marks: marks.value,
+    markNextId: activeTab.value.markNextId,
+    timelineViewport: { ...timelineViewport.value },
+    timelineOptions,
+    tabFilters: activeTab.value,
+    findQuery: findQuery.value,
+    findMode: findMode.value,
+    pinnedHighlightKey: pinnedHighlightKey.value,
+    scopeToCursors: activeTab.value.scopeToCursors !== false,
+    openPlot: activeTab.value.openPlot ?? null,
+    statsSectionCollapsed: appSettings.statsSectionCollapsed ?? null,
+  })
+  const findingsText = formatAnalysisFindingsText(
+    analysisFindings.value || [],
+    analysisScopeLabel.value,
+  )
+  const base = (activeTab.value.name || 'trace').replace(/\.btf(\.gz)?$/i, '')
+  const { filename, blob } = buildEvidencePackZip({
+    baseName: base,
+    findingsText,
+    sessionJson: JSON.stringify(session, null, 2),
+    notes: `Trace: ${activeTab.value.name}\nScope: ${analysisScopeLabel.value || 'full trace'}\n`
+      + 'Re-open the .btf in BTFViewer and Import Session to restore cursors/marks.\n',
+  })
+  downloadBlob(blob, filename)
+  showToast('Evidence pack downloaded', 'info')
 }
 
 async function onImportSession(file) {

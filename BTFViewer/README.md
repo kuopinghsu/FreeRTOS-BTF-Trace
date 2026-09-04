@@ -262,6 +262,10 @@ Each trace opens in a separate tab and keeps its own zoom, cursors, marks, and F
 - `Ctrl+Shift+Tab`: previous tab
 - `Ctrl+W`: close the current tab
 
+**Link A/B timeline zoom** (optional, off by default) is under **Settings → Display**. When enabled and two or more traces are open, switching tabs remaps the leaving tab’s visible window as a **fraction of that trace’s full span** onto the same relative window of the tab you switch to. Example: looking at roughly the middle 20% of Baseline A shows roughly the middle 20% of Candidate B after the switch, even when the traces have different lengths or absolute timestamps.
+
+It remaps zoom only on tab switch. It does not keep both timelines scrolling live in sync, and it does not copy cursors, marks, Filters, or absolute nanosecond times. With the setting off, each tab restores its own saved zoom as usual.
+
 Desktop can reopen files from their original paths. Web restoration depends on browser storage and may be unavailable in private browsing mode or after site data is cleared.
 
 <a id="basic-analysis-workflow" name="basic-analysis-workflow">&#x200B;</a>
@@ -305,6 +309,10 @@ BTFViewer calculates all results from recorded BTF events. It does not inspect s
 | Lock or queue issue | **Mutex / Semaphore / Queue** | Blocking and migrations |
 
 Detailed metric definitions and formulas are in [STATISTICS.md](STATISTICS.md).
+
+<a id="btf-analysis-pages" name="btf-analysis-pages">&#x200B;</a>
+
+The Statistics panel is organized as **OVERVIEW → TRIAGE → TIMING → SCHED → SYNC → DETAIL**. Use the table above for a first check; full definitions and formulas are in [STATISTICS.md](STATISTICS.md).
 
 ### Analysis Findings
 
@@ -385,7 +393,7 @@ The **Summary** tab identifies the **Baseline** (reference trace) and **Candidat
 | 7 | **Change chart and metrics table** | Engineering-significant deltas as a diverging bar chart (improved ↔ regressed), with the full **All summary metrics** table (Metric / Baseline A / Candidate B / Change) below it. |
 | 8 | **Footer** | **Export HTML**, **Save baseline** / **Score vs baseline**, **Validate experiment…**, or **Ask AI about this**. |
 
-This is an optional comparison tool. It is not required by the basic investigation workflow. When you use it, compare equivalent workload phases and measurement ranges.
+This is an optional comparison tool. It is not required by the basic investigation workflow. When you use it, compare equivalent workload phases and measurement ranges. To keep the same relative phase in view while flipping between Baseline and Candidate timeline tabs, enable **Settings → Display → Link A/B timeline zoom when switching compare tabs** (see [Multiple traces](#multiple-traces)).
 
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 
@@ -419,6 +427,15 @@ Select text in a reply and right-click **Ask AI (preview…)** to send that snip
 Available context levels are **Compact**, **Balanced**, and **Full Evidence**. Compact is fast triage; Balanced is the default investigation depth; Full Evidence adds relevant findings and investigation history. Confidence comes from evidence, not from the mode. Configure the model, service endpoint, authentication, context, privacy, and reply language in **Settings → AI**.
 
 Import `examples/ai/presets.json` for example Ollama, OpenAI, Gemini, DeepSeek, and Grok configurations. Local Ollama does not require an API key. Cloud services may send trace evidence to an external provider; use the anonymization and sensitive-trace settings when appropriate.
+
+<a id="ai-api-keys" name="ai-api-keys">&#x200B;</a>
+
+API keys: enter a key per preset in **Settings → AI**, or rely on `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` when the host exposes them. Live `ai-test` XML may use `<api-key env="VAR">`. Complete examples are in [examples/ai](examples/ai/README.md) and [AI.md](AI.md).
+
+<a id="investigation-case" name="investigation-case">&#x200B;</a>
+<a id="investigation-planner" name="investigation-planner">&#x200B;</a>
+
+**Investigation Case** holds the question, Scope, hypotheses, evidence, and conclusion for the current investigation. **Start Investigation** and the guided stepper run the host-side **Investigation planner** (cheapest evidence first). Details: [AI.md → Investigation Case](AI.md#investigation-case) and [Investigation planner](AI.md#investigation-planner).
 
 See [AI.md](AI.md) for setup, privacy, model options, tools, troubleshooting, CLI testing, and evaluation details.
 
@@ -458,6 +475,7 @@ Press `Ctrl+S` (or the activity-rail camera) to capture the current timeline vie
 `?` opens the keyboard-shortcuts panel. `Esc` peels back one step at a time — close a panel, deselect the shape, then return to the Select tool — it never closes the editor.
 
 <a id="desktop-command-line" name="desktop-command-line">&#x200B;</a>
+<a id="headless-cli-desktop-only" name="headless-cli-desktop-only">&#x200B;</a>
 
 ## Desktop command line
 
@@ -496,7 +514,7 @@ Open **Settings** from the toolbar or press `Ctrl+,`.
 | Area | Options |
 |---|---|
 | **Appearance** | Theme, fonts, and colorblind-safe palette |
-| **Display** | Panels, timeline overlays, CPU budget, and task deadlines |
+| **Display** | Panels, timeline overlays (including optional incident markers), **Link A/B timeline zoom** when switching compare tabs, CPU budget, and task deadlines |
 | **Layout** | Label width, row height, zoom density, cursor limit, time precision, and chart sizes |
 | **AI** | Enablement, context level, privacy, provider, model, authentication, and reply language |
 
@@ -555,6 +573,7 @@ Most users can ignore this section.
 | Run Desktop tests | `make -C BTFViewer test` |
 | Run Web tests | `make -C BTFViewer test-web` |
 | Run all tests | `make -C BTFViewer test-all` |
+| Lightweight CI gate (tests + builds + docs) | `make -C BTFViewer ci-gate` |
 | Build documentation PDFs | `make -C BTFViewer doc` |
 | Run from source | `python -m btf_viewer_pkg trace.btf` from `BTFViewer/` |
 

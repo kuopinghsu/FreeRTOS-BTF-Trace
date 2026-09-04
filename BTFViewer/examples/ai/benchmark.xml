@@ -33,6 +33,12 @@
 
     <!-- Gemini: same provider, two ids. They share URL and GEMINI_API_KEY.
          Both:  -m gemini-3.7-flash,gemini-3.5-flash-lite -->
+    <model id="gemini-3.8-flash" preset="gemini">
+      <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
+      <tls-verify>true</tls-verify>
+      <timeout-s>300</timeout-s>
+      <api-key env="GEMINI_API_KEY"/>
+    </model>
     <model id="gemini-3.7-flash" preset="gemini">
       <base-url>https://generativelanguage.googleapis.com/v1beta/openai</base-url>
       <tls-verify>true</tls-verify>

@@ -3703,9 +3703,10 @@ def _classify_offcpu_gaps(
     trace: "BtfTrace",
     lo: Optional[int] = None,
     hi: Optional[int] = None,
-) -> "Dict[str, List[Tuple[int, str]]]":
-    """Per task (merge key) → list of ``(gap_ns, kind)`` for every off-CPU gap
-    between consecutive slices.  ``kind`` is one of ``_OFFCPU_GAP_KINDS``:
+) -> "Dict[str, List[Tuple[int, str, int]]]":
+    """Per task (merge key) → list of ``(gap_ns, kind, at_ns)`` for every off-CPU
+    gap between consecutive slices.  ``at_ns`` is the resume time (next slice
+    start).  ``kind`` is one of ``_OFFCPU_GAP_KINDS``:
 
     - ``preempted``  — a higher-or-equal task actually ran on the victim's core
       during the gap (involuntary),
@@ -3745,7 +3746,7 @@ def _classify_offcpu_gaps(
     for lst in suspend_by_mk.values():
         lst.sort()
 
-    out: Dict[str, List[Tuple[int, str]]] = {}
+    out: Dict[str, List[Tuple[int, str, int]]] = {}
     for mk, segs in trace.seg_map_by_merge_key.items():
         if len(segs) < 2:
             continue
@@ -3754,7 +3755,7 @@ def _classify_offcpu_gaps(
         if _is_idle_task_name(tname) or tname == "TICK":
             continue
         ordered = sorted(segs, key=lambda s: s.start)
-        gaps: List[Tuple[int, str]] = []
+        gaps: List[Tuple[int, str, int]] = []
         susp = suspend_by_mk.get(mk, [])
         for i in range(1, len(ordered)):
             prev, nxt = ordered[i - 1], ordered[i]
@@ -3803,7 +3804,7 @@ def _classify_offcpu_gaps(
                 kind = "period_wait"
             else:
                 kind = "unknown"
-            gaps.append((gap, kind))
+            gaps.append((gap, kind, g1))
         if gaps:
             out[mk] = gaps
     return out
@@ -3845,7 +3846,7 @@ def _switch_reason_rows(
     rows: List[tuple] = []
     for mk, gaps in by_mk.items():
         counts = {k: 0 for k in _OFFCPU_GAP_KINDS}
-        for _g, kind in gaps:
+        for _g, kind, _at in gaps:
             counts[kind] += 1
         total = len(gaps)
         name = _task_display_name(trace.task_repr.get(mk, mk))
@@ -3998,10 +3999,10 @@ def _ready_gap_rows(
     by_mk = _classify_offcpu_gaps(trace, lo, hi)
     rows: List[tuple] = []
     for mk, gaps in by_mk.items():
-        ready = sorted(g for g, k in gaps if k in _READY_GAP_KINDS)
+        ready = sorted(g for g, k, _at in gaps if k in _READY_GAP_KINDS)
         if not ready:
             continue
-        preempt_sum = sum(g for g, k in gaps if k == "preempted")
+        preempt_sum = sum(g for g, k, _at in gaps if k == "preempted")
         n = len(ready)
         total = sum(ready)
         avg = int(round(total / n))
@@ -4067,6 +4068,131 @@ def _idle_analysis_rows(
     return rows, all_span, all_start
 
 
+def _activation_latency_plot_points(
+    trace: "BtfTrace",
+    mk: str,
+    events: "Sequence[dict]",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """``(activation_ns, abs_error_ns, None)`` vs ideal ``phi + k*T`` grid."""
+    period_fn = globals().get("analyze_task_periods")
+    if period_fn is None:
+        from .ux_explore import analyze_task_periods as period_fn
+    period = 0
+    for prow in period_fn(events, 3):
+        if str(prow.get("mk") or "") == mk:
+            period = int(prow.get("expected_ns") or 0)
+            break
+    if period <= 0:
+        return []
+    starts: List[int] = []
+    for ev in events or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "inter":
+            continue
+        if str(ev.get("mk") or ev.get("task") or "") != mk:
+            continue
+        s = int(ev.get("start") or 0)
+        if lo is not None and hi is not None and not (lo <= s <= hi):
+            continue
+        starts.append(s)
+    if len(starts) < 3:
+        return []
+    starts.sort()
+    anchor = starts[0]
+    return [
+        (t, abs(t - (anchor + round((t - anchor) / period) * period)), None)
+        for t in starts
+    ]
+
+
+def _ready_gap_plot_points(
+    trace: "BtfTrace",
+    mk: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """``(resume_ns, gap_ns, None)`` for ready-gap kinds (preempted/blocked/unknown)."""
+    gaps = (_classify_offcpu_gaps(trace, lo, hi).get(mk) or [])
+    return [
+        (int(at), int(gap), None)
+        for gap, kind, at in gaps
+        if kind in _READY_GAP_KINDS and int(gap) > 0
+    ]
+
+
+def _idle_fragment_plot_points(
+    trace: "BtfTrace",
+    core: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """``(idle_start_ns, duration_ns, None)`` per IDLE fragment on *core*."""
+    eff_lo = lo if lo is not None else trace.time_min
+    eff_hi = hi if hi is not None else trace.time_max
+    pts: List[tuple] = []
+    for seg in trace.core_segs.get(core, ()):
+        slo = max(int(seg.start), eff_lo)
+        shi = min(int(seg.end), eff_hi)
+        if slo >= shi:
+            continue
+        if not _is_idle_task_name(_parse_task_name(seg.task)[2]):
+            continue
+        pts.append((slo, shi - slo, None))
+    return pts
+
+
+def _sync_hold_plot_points(
+    trace: "BtfTrace",
+    obj_key: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """``(hold_start_ns, duration_ns, hold_dict)`` for one sync object."""
+    if not getattr(trace, "has_sync_object_instrumentation", False):
+        return []
+    obj = (trace.sync_objects or {}).get(obj_key)
+    if not isinstance(obj, dict):
+        return []
+    pts: List[tuple] = []
+    for h in obj.get("holds") or []:
+        if not isinstance(h, dict):
+            continue
+        start = int(h.get("start_ns") or 0)
+        stop = int(h.get("stop_ns") or 0)
+        if stop <= start:
+            continue
+        if lo is not None and hi is not None and not (stop > lo and start < hi):
+            continue
+        pts.append((start, stop - start, h))
+    return pts
+
+
+def _mutex_wait_plot_points(
+    waits: "Sequence[dict]",
+    waiter_mk: str,
+    obj_key: str,
+) -> List[tuple]:
+    """``(wait_start_ns, duration_ns, wait_dict)`` for one waiter×object pair."""
+    wk = str(waiter_mk or "")
+    obj = str(obj_key or "")
+    if not wk or not obj:
+        return []
+    pts: List[tuple] = []
+    for w in waits or []:
+        if not isinstance(w, dict):
+            continue
+        if str(w.get("waiter_mk") or "") != wk:
+            continue
+        if str(w.get("object") or "") != obj:
+            continue
+        dur = int(w.get("duration") or 0)
+        if dur <= 0:
+            continue
+        pts.append((int(w.get("start") or 0), dur, w))
+    return pts
+
+
 def _sync_level_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
@@ -4076,8 +4202,11 @@ def _sync_level_rows(
 
     ``+1`` on give/send, ``-1`` on take/recv, floored at 0; ``create`` resets to
     0.  Row: ``(key, kind, ptr, label, max_level, time_at_max_ns, end_level,
-    starved)`` where ``starved`` counts take/recv issued while the level was 0.
-    Highest peak first; empty without queue/semaphore instrumentation.
+    starved, peak_start_ns, first_starve_ns)`` where ``starved`` counts
+    take/recv issued while the level was 0, ``peak_start_ns`` is the first
+    time the level reached ``max_level`` (or ``None``), and ``first_starve_ns``
+    is the first starved take/recv (or ``None``). Highest peak first; empty
+    without queue/semaphore instrumentation.
     """
     seq: Dict[str, List[Tuple[int, int]]] = {}
     meta: Dict[str, Tuple[str, str]] = {}
@@ -4101,15 +4230,19 @@ def _sync_level_rows(
     for key, evts in seq.items():
         evts.sort()
         lvl = max_level = starved = 0
-        for _t, d in evts:
+        first_starve: Optional[int] = None
+        for t, d in evts:
             if d == 0:
                 lvl = 0
             elif d < 0 and lvl == 0:
                 starved += 1
+                if first_starve is None:
+                    first_starve = int(t)
             else:
                 lvl = max(0, lvl + d)
                 max_level = max(max_level, lvl)
         lvl, time_at_max, last_t = 0, 0, evts[0][0]
+        peak_start: Optional[int] = None
         for t, d in evts:
             if t > last_t and lvl == max_level and max_level > 0:
                 time_at_max += t - last_t
@@ -4120,11 +4253,13 @@ def _sync_level_rows(
                 pass
             else:
                 lvl = max(0, lvl + d)
+                if max_level > 0 and lvl == max_level and peak_start is None:
+                    peak_start = int(t)
         if eff_hi > last_t and lvl == max_level and max_level > 0:
             time_at_max += eff_hi - last_t
         tgt, ptr = meta[key]
         rows.append((key, tgt, ptr, f"{tgt} {ptr}", max_level, time_at_max,
-                     lvl, starved))
+                     lvl, starved, peak_start, first_starve))
     rows.sort(key=lambda r: (-r[4], -r[7], r[3]))
     return rows
 

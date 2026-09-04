@@ -95,6 +95,35 @@
         {{ pill.label }}
         <span class="stats-cat-count">{{ pill.count }}</span>
       </button>
+      <div class="stats-section-find">
+        <input
+          v-model="sectionFindQuery"
+          type="search"
+          class="stats-section-find-input"
+          placeholder="Find section…"
+          aria-label="Find statistics section"
+          autocomplete="off"
+          @keydown="onSectionFindKeydown"
+        >
+        <ul
+          v-if="sectionFindMatches.length"
+          class="stats-section-find-menu"
+          role="listbox"
+        >
+          <li
+            v-for="(hit, idx) in sectionFindMatches"
+            :key="hit.id"
+            role="option"
+            class="stats-section-find-item"
+            :class="{ active: idx === sectionFindActive }"
+            :aria-selected="idx === sectionFindActive"
+            @mousedown.prevent="goToStatsSection(hit.id)"
+            @mouseenter="sectionFindActive = idx"
+          >
+            {{ hit.title }}
+          </li>
+        </ul>
+      </div>
       <button
         v-if="categoryFilterActive"
         type="button"
@@ -554,11 +583,11 @@
                   v-for="row in sortedActivationStats"
                   :key="row.mk"
                   class="stats-table-row clickable"
-                  :title="`Highlight ${row.name} on the timeline`"
+                  :title="`Click to view activation-latency distribution for ${row.name}`"
                   tabindex="0"
-                  @click="emit('highlightTask', row.mk)"
-                  @keydown.enter.prevent="emit('highlightTask', row.mk)"
-                  @keydown.space.prevent="emit('highlightTask', row.mk)"
+                  @click="openTaskPlot(row.mk, 'activation')"
+                  @keydown.enter.prevent="openTaskPlot(row.mk, 'activation')"
+                  @keydown.space.prevent="openTaskPlot(row.mk, 'activation')"
                 >
                   <td class="task-col">{{ row.name }}</td>
                   <td>{{ row.count }}</td>
@@ -600,12 +629,12 @@
         Ready-Gap (Starvation){{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!readyGapCollapsed">
-        <div
+        <StatsEmptyHint
           v-if="readyGapStats.length === 0"
-          class="range-hint"
-        >
-          No ready-gaps in this scope
-        </div>
+          v-bind="readyGapEmpty"
+          @clear-scope="emit('clear-scope')"
+          @clear-filter="emit('clear-filter')"
+        />
         <div
           v-else
           class="stats-table-block"
@@ -632,11 +661,11 @@
                   v-for="row in sortedReadyGapStats"
                   :key="row.mk"
                   class="stats-table-row clickable"
-                  :title="`Highlight ${row.name} on the timeline`"
+                  :title="`Click to view ready-gap distribution for ${row.name}`"
                   tabindex="0"
-                  @click="emit('highlightTask', row.mk)"
-                  @keydown.enter.prevent="emit('highlightTask', row.mk)"
-                  @keydown.space.prevent="emit('highlightTask', row.mk)"
+                  @click="openTaskPlot(row.mk, 'ready_gap')"
+                  @keydown.enter.prevent="openTaskPlot(row.mk, 'ready_gap')"
+                  @keydown.space.prevent="openTaskPlot(row.mk, 'ready_gap')"
                 >
                   <td class="task-col">{{ row.name }}</td>
                   <td>{{ row.count }}</td>
@@ -708,11 +737,11 @@
                   v-for="row in sortedIdleStats"
                   :key="row.core"
                   class="stats-table-row clickable"
-                  :title="`Highlight ${row.core} on the timeline`"
+                  :title="`Click to view idle-fragment distribution for ${row.core}`"
                   tabindex="0"
-                  @click="emit('highlightTask', row.core)"
-                  @keydown.enter.prevent="emit('highlightTask', row.core)"
-                  @keydown.space.prevent="emit('highlightTask', row.core)"
+                  @click="openIdlePlot(row.core)"
+                  @keydown.enter.prevent="openIdlePlot(row.core)"
+                  @keydown.space.prevent="openIdlePlot(row.core)"
                 >
                   <td class="task-col">{{ row.core }}</td>
                   <td>{{ fmtTime(row.totalNs) }}</td>
@@ -750,12 +779,12 @@
         Queue Backlog / Semaphore Level{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!syncLevelCollapsed">
-        <div
+        <StatsEmptyHint
           v-if="sortedSyncLevelStats.length === 0"
-          class="range-hint"
-        >
-          No queue / semaphore events in this scope
-        </div>
+          v-bind="syncLevelEmpty"
+          @clear-scope="emit('clear-scope')"
+          @clear-filter="emit('clear-filter')"
+        />
         <div
           v-else
           class="stats-table-block"
@@ -779,6 +808,12 @@
                 <tr
                   v-for="row in sortedSyncLevelStats"
                   :key="row.key"
+                  class="stats-table-row clickable"
+                  :title="syncLevelRowTip(row)"
+                  tabindex="0"
+                  @click="onSyncLevelRowClick(row)"
+                  @keydown.enter.prevent="onSyncLevelRowClick(row)"
+                  @keydown.space.prevent="onSyncLevelRowClick(row)"
                 >
                   <td class="task-col">{{ row.label }}</td>
                   <td>{{ row.kind }}</td>
@@ -1087,12 +1122,12 @@
         Core Migrations{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!migrationCollapsed">
-        <div
+        <StatsEmptyHint
           v-if="migrationStats.length === 0"
-          class="range-hint"
-        >
-          {{ statsRange ? 'No migrated tasks in cursor range' : 'No tasks ran on multiple cores' }}
-        </div>
+          v-bind="migrationEmpty"
+          @clear-scope="emit('clear-scope')"
+          @clear-filter="emit('clear-filter')"
+        />
         <div
           v-else
           class="stats-table-block"
@@ -1389,6 +1424,9 @@
                   :key="'an-' + i + row.start"
                   class="stats-table-row clickable"
                   :title="'Zoom and place C1–C2 on this episode'"
+                  tabindex="0"
+                  @keydown.enter.prevent="onAnomalyRowClick(row)"
+                  @keydown.space.prevent="onAnomalyRowClick(row)"
                   @click="onAnomalyRowClick(row)"
                 >
                   <td class="extreme-col">{{ formatTime(row.start, timeScale) }}</td>
@@ -1455,6 +1493,9 @@
                   :key="'w-' + i + row.start"
                   class="stats-table-row clickable"
                   :title="'Zoom and place C1–C2 on this episode'"
+                  tabindex="0"
+                  @keydown.enter.prevent="onUxEventClick(row)"
+                  @keydown.space.prevent="onUxEventClick(row)"
                   @click="onUxEventClick(row)"
                 >
                   <td class="extreme-col">{{ formatTime(row.start, timeScale) }}</td>
@@ -1522,6 +1563,10 @@
                   v-for="(row, i) in sortedCritPathRows"
                   :key="'cp-' + i + row.start"
                   class="stats-table-row clickable"
+                  tabindex="0"
+                  title="Enter: zoom ready→completion window"
+                  @keydown.enter.prevent="onCritPathCellClick(row)"
+                  @keydown.space.prevent="onCritPathCellClick(row)"
                 >
                   <td
                     class="task-col extreme-col"
@@ -1593,6 +1638,9 @@
                   :key="'pat-' + i + row.kind"
                   class="stats-table-row clickable"
                   :title="'Jump to the worst instance'"
+                  tabindex="0"
+                  @keydown.enter.prevent="onUxEventClick(row)"
+                  @keydown.space.prevent="onUxEventClick(row)"
                   @click="onUxEventClick(row)"
                 >
                   <td class="task-col">{{ row.task }}</td>
@@ -1630,12 +1678,12 @@
         Execution Time Per Slice{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!execSliceCollapsed">
-        <div
+        <StatsEmptyHint
           v-if="execSliceStats.length === 0"
-          class="range-hint"
-        >
-          {{ statsRange ? 'No slices fully inside cursor range' : 'No user-task slices found' }}
-        </div>
+          v-bind="execEmpty"
+          @clear-scope="emit('clear-scope')"
+          @clear-filter="emit('clear-filter')"
+        />
         <div
           v-else
           class="stats-table-block"
@@ -1975,14 +2023,12 @@
         Dispatch / Scheduling Latency{{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!dispatchCollapsed">
-        <div
+        <StatsEmptyHint
           v-if="dispatchLatencyStats.length === 0"
-          class="range-hint"
-        >
-          {{ statsRange
-            ? 'No dispatch samples in cursor range (needs STI resume Name[id] or task create → first run)'
-            : 'No dispatch samples — needs STI task resume Name[id] (vTaskResume) or create→first-run pairs' }}
-        </div>
+          v-bind="dispatchEmpty"
+          @clear-scope="emit('clear-scope')"
+          @clear-filter="emit('clear-filter')"
+        />
         <div
           v-else
           class="stats-table-block"
@@ -2340,6 +2386,10 @@
                   v-for="row in sortedPeriodRows"
                   :key="'per-' + row.mk"
                   class="stats-table-row clickable"
+                  tabindex="0"
+                  title="Enter: open inter-arrival plot"
+                  @keydown.enter.prevent="onPeriodCellClick(row, 'plot')"
+                  @keydown.space.prevent="onPeriodCellClick(row, 'plot')"
                 >
                   <td
                     class="task-col extreme-col"
@@ -2424,6 +2474,10 @@
                   v-for="row in sortedResponseRows"
                   :key="'rt-' + row.mk"
                   class="stats-table-row clickable"
+                  tabindex="0"
+                  title="Enter: open response plot"
+                  @keydown.enter.prevent="onResponseCellClick(row, 'plot')"
+                  @keydown.space.prevent="onResponseCellClick(row, 'plot')"
                 >
                   <td
                     class="task-col extreme-col"
@@ -2507,6 +2561,10 @@
                   v-for="row in sortedJitterRows"
                   :key="'jit-' + row.mk"
                   class="stats-table-row clickable"
+                  tabindex="0"
+                  title="Enter: open execution plot"
+                  @keydown.enter.prevent="onJitterCellClick(row, 'exec')"
+                  @keydown.space.prevent="onJitterCellClick(row, 'exec')"
                 >
                   <td
                     class="task-col extreme-col"
@@ -2854,6 +2912,9 @@
                     :key="'pr-' + row.mk"
                     class="stats-table-row clickable"
                     :title="'Jump to the longest preemption of ' + row.task"
+                  tabindex="0"
+                  @keydown.enter.prevent="onUxEventClick(row.worst)"
+                  @keydown.space.prevent="onUxEventClick(row.worst)"
                     @click="onUxEventClick(row.worst)"
                   >
                     <td class="task-col">{{ row.task }}</td>
@@ -2893,6 +2954,10 @@
                   v-for="victim in sortedPreemptMatrixTasks"
                   :key="'pm-' + victim.mk"
                   class="stats-table-row clickable"
+                  tabindex="0"
+                  :title="'Enter: highlight ' + victim.task"
+                  @keydown.enter.prevent="emit('highlightTask', victim.mk)"
+                  @keydown.space.prevent="emit('highlightTask', victim.mk)"
                 >
                     <td class="task-col">{{ victim.task }}</td>
                     <td
@@ -3162,7 +3227,13 @@
                 <tr
                   v-for="row in sortedSyncStats"
                   :key="row.key"
+                  class="stats-table-row clickable"
                   :class="{ 'sync-issue-row': row.status !== 'ok' }"
+                  :title="`Click to view hold-duration distribution for ${row.label}`"
+                  tabindex="0"
+                  @click="openSyncHoldPlot(row.key)"
+                  @keydown.enter.prevent="openSyncHoldPlot(row.key)"
+                  @keydown.space.prevent="openSyncHoldPlot(row.key)"
                 >
                   <td class="task-col">{{ row.label }}</td>
                   <td>{{ row.kind }}</td>
@@ -3327,6 +3398,10 @@
                   v-for="waiter in sortedWaitOwnerTasks"
                   :key="'wo-' + waiter.mk"
                   class="stats-table-row clickable"
+                  tabindex="0"
+                  :title="'Enter: highlight ' + waiter.task"
+                  @keydown.enter.prevent="emit('highlightTask', waiter.mk)"
+                  @keydown.space.prevent="emit('highlightTask', waiter.mk)"
                 >
                   <td class="task-col">{{ waiter.task }}</td>
                   <td
@@ -3400,7 +3475,10 @@
                   v-for="(row, i) in sortedMutexBlockRows"
                   :key="'mb-' + i + row.mk"
                   class="stats-table-row clickable"
-                  :title="'Jump to the longest wait'"
+                  :title="'Click to view mutex-wait distribution chart'"
+                  tabindex="0"
+                  @keydown.enter.prevent="onMutexBlockClick(row)"
+                  @keydown.space.prevent="onMutexBlockClick(row)"
                   @click="onMutexBlockClick(row)"
                 >
                   <td class="task-col">{{ row.task }}</td>
@@ -3448,6 +3526,9 @@
                   v-for="row in sortedBlockerRows"
                   :key="'tb-' + row.mk"
                   class="stats-table-row clickable"
+                  tabindex="0"
+                  @keydown.enter.prevent="onUxEventClick({ ...(row.worst || row), mk: row.mk, task: row.task, section: 'mutex_block' })"
+                  @keydown.space.prevent="onUxEventClick({ ...(row.worst || row), mk: row.mk, task: row.task, section: 'mutex_block' })"
                   @click="onUxEventClick({ ...(row.worst || row), mk: row.mk, task: row.task, section: 'mutex_block' })"
                 >
                   <td class="task-col">{{ row.task }}</td>
@@ -3502,7 +3583,16 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in sortedQueueStats" :key="row.key">
+                <tr
+                  v-for="row in sortedQueueStats"
+                  :key="row.key"
+                  class="stats-table-row clickable"
+                  :title="`Click to view hold-duration distribution for ${row.label}`"
+                  tabindex="0"
+                  @click="openSyncHoldPlot(row.key)"
+                  @keydown.enter.prevent="openSyncHoldPlot(row.key)"
+                  @keydown.space.prevent="openSyncHoldPlot(row.key)"
+                >
                   <td class="task-col">{{ row.label }}</td>
                   <td>{{ row.kind }}</td>
                   <td>{{ row.holdCount }}</td>
@@ -3743,6 +3833,10 @@
                   v-for="row in sortedTaskCoreRows"
                   :key="'tc-' + row.mk"
                   class="stats-table-row clickable"
+                  tabindex="0"
+                  title="Enter: jump to first matching slice"
+                  @keydown.enter.prevent="onTaskCoreCellClick(row, null)"
+                  @keydown.space.prevent="onTaskCoreCellClick(row, null)"
                 >
                   <td
                     class="task-col extreme-col"
@@ -3818,6 +3912,9 @@
                   :key="'ct-' + row.index"
                   class="stats-table-row clickable"
                   :title="'Zoom this time bin'"
+                  tabindex="0"
+                  @keydown.enter.prevent="onCoreTimeClick(row)"
+                  @keydown.space.prevent="onCoreTimeClick(row)"
                   @click="onCoreTimeClick(row)"
                 >
                   <td class="extreme-col">{{ formatTime(row.start, timeScale) }}</td>
@@ -3979,6 +4076,10 @@
                   v-for="row in sortedTaskHealthRows"
                   :key="'th-' + row.mk"
                   class="stats-table-row clickable"
+                  tabindex="0"
+                  title="Enter: open related Statistics section"
+                  @keydown.enter.prevent="onTaskHealthClick(row, null)"
+                  @keydown.space.prevent="onTaskHealthClick(row, null)"
                 >
                   <td
                     class="task-col extreme-col"
@@ -4854,7 +4955,7 @@ import DomSelect from './DomSelect.vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
 import { formatTimeFixed } from '../utils/timeFormat.js'
-import { emptyStateMessage } from '../utils/emptyState.js'
+import { emptyStateMessage, emptyStateParts } from '../utils/emptyState.js'
 import { taskDisplayName, parseTaskName, taskMergeKey, isIdleTaskName, taskColor, taskReprGet, taskLabelForMergeKey, coreColor } from '../utils/colors.js'
 import {
   getPlacedCursors,
@@ -4888,8 +4989,8 @@ import {
   resolutionNote,
 } from '../utils/statsAnalysis.js'
 import { switchReasonRows, schedLoadOverTimeRows } from '../utils/schedulingLoad.js'
-import { activationLatencyRows, readyGapRows } from '../utils/timingLatency.js'
-import { idleAnalysisRows, syncLevelRows } from '../utils/idleSyncLevel.js'
+import { activationLatencyRows, readyGapRows, activationLatencyPlotPoints, readyGapPlotPoints } from '../utils/timingLatency.js'
+import { idleAnalysisRows, idleFragmentPlotPoints, syncLevelRows } from '../utils/idleSyncLevel.js'
 import {
   intervalStatsRows,
   intervalPlotPoints,
@@ -4911,6 +5012,8 @@ import {
   syncObjectHoldDetailRows,
   segmentAtCoreTime,
   syncIssueAnnotationNote,
+  syncHoldPlotPoints,
+  mutexWaitPlotPoints,
 } from '../utils/syncObjectAnalysis.js'
 import { buildTaskLifecycleRows, formatLifecycleSpan } from '../utils/lifecycleAnalysis.js'
 import { buildCoreAffinityRows } from '../utils/coreAffinityAnalysis.js'
@@ -4986,7 +5089,8 @@ import {
 import LoadBalanceGauge from './LoadBalanceGauge.vue'
 import StatsSectionHeader from './StatsSectionHeader.vue'
 import StatsSectionBlock from './StatsSectionBlock.vue'
-import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggleStatsPin, isDefaultStatsSectionOrder, defaultStatsSectionOrder, mergeSectionCollapsed, STATS_SECTION_CATEGORIES, STATS_SECTION_CATEGORY } from '../utils/statsPins.js'
+import StatsEmptyHint from './StatsEmptyHint.vue'
+import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggleStatsPin, isDefaultStatsSectionOrder, defaultStatsSectionOrder, mergeSectionCollapsed, STATS_SECTION_CATEGORIES, STATS_SECTION_CATEGORY, findStatsSections } from '../utils/statsPins.js'
 import { buildHistogramModel, histogramBarTooltip } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
@@ -5067,6 +5171,7 @@ const emit = defineEmits([
   'update:sectionOrder',
   'openPairHeatmap', 'openPairChord', 'openSettings',
   'exploreRange', 'query-ai', 'filterTimeline',
+  'clear-scope', 'clear-filter',
 ])
 
 const aiFeatureEnabled = computed(() => props.analysisSettings?.aiEnabled !== false)
@@ -5344,6 +5449,90 @@ async function applyDemoSections(payload = {}) {
   // Do not grow the tail here — scrollDemoSectionIntoView pins with forPin=true.
   await scrollDemoSectionIntoView(scroll, ids, expand)
   return { ids, expand, collapse_others: collapseOthers, scroll }
+}
+
+const sectionFindQuery = ref('')
+const sectionFindMatches = computed(() => findStatsSections(sectionFindQuery.value).slice(0, 12))
+const sectionFindActive = ref(0)
+
+watch(sectionFindMatches, (hits) => {
+  sectionFindActive.value = hits.length ? 0 : -1
+})
+
+function clearSectionFind() {
+  sectionFindQuery.value = ''
+  sectionFindActive.value = -1
+}
+
+function goToStatsSection(sid) {
+  // Lockstep Desktop scroll_to_section: expand, settle, pin header to top.
+  const id = String(sid || '').trim()
+  if (!id) return
+  clearSectionFind()
+  applyDemoSections({ id, expand: true, scroll: id, collapse_others: false })
+}
+
+function onSectionFindEnter() {
+  const hits = sectionFindMatches.value
+  if (!hits.length) return
+  const idx = Math.max(0, Math.min(sectionFindActive.value, hits.length - 1))
+  goToStatsSection(hits[idx].id)
+}
+
+function onSectionFindKeydown(e) {
+  const hits = sectionFindMatches.value
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    clearSectionFind()
+    return
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    onSectionFindEnter()
+    return
+  }
+  if (!hits.length) return
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    sectionFindActive.value = (sectionFindActive.value + 1 + hits.length) % hits.length
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    sectionFindActive.value = (sectionFindActive.value - 1 + hits.length) % hits.length
+  }
+}
+
+/** Resolve actionable empty-state for Statistics sections. */
+function resolveStatsEmpty({
+  scopedMessage = null,
+  fullMessage = null,
+  needsSti = false,
+  needsMulticore = false,
+} = {}) {
+  if (props.activeFilterLabel) {
+    return emptyStateParts('stats_filtered_empty')
+  }
+  if (needsSti) {
+    const p = emptyStateParts('stats_needs_sti')
+    return {
+      ...p,
+      message: scopedMessage || fullMessage || p.message,
+    }
+  }
+  if (needsMulticore && !statsRange.value) {
+    return emptyStateParts('stats_needs_multicore')
+  }
+  if (statsRange.value) {
+    const p = emptyStateParts('stats_scoped_empty')
+    return {
+      ...p,
+      message: scopedMessage || p.message,
+    }
+  }
+  return {
+    message: fullMessage || '',
+    hint: null,
+    action: null,
+  }
 }
 
 function applyCollapsedState(state) {
@@ -5733,6 +5922,29 @@ const placedCursorCount = computed(() => getPlacedCursors(props.cursors).length)
 
 const statsRange = computed(() => getStatsRange(props.cursors, scopeToCursorsModel.value))
 
+const migrationEmpty = computed(() => resolveStatsEmpty({
+  scopedMessage: 'No migrated tasks in cursor range',
+  fullMessage: 'No tasks ran on multiple cores',
+  needsMulticore: true,
+}))
+const execEmpty = computed(() => resolveStatsEmpty({
+  scopedMessage: 'No slices fully inside cursor range',
+  fullMessage: 'No user-task slices found',
+}))
+const readyGapEmpty = computed(() => resolveStatsEmpty({
+  scopedMessage: 'No ready-gaps in this scope',
+  fullMessage: 'No ready-gaps in this scope',
+}))
+const syncLevelEmpty = computed(() => resolveStatsEmpty({
+  scopedMessage: 'No queue / semaphore events in this scope',
+  fullMessage: 'No queue / semaphore events in this scope',
+}))
+const dispatchEmpty = computed(() => resolveStatsEmpty({
+  scopedMessage: 'No dispatch samples in cursor range (needs STI resume Name[id] or task create → first run)',
+  fullMessage: 'No dispatch samples — needs STI task resume Name[id] (vTaskResume) or create→first-run pairs',
+  needsSti: true,
+}))
+
 const symptomGuideOpen = ref(false)
 
 const showCursorsNotLimitingNote = computed(() =>
@@ -6092,6 +6304,12 @@ function onPreemptMatrixCellClick(cell) {
 
 function onMutexBlockClick(row) {
   if (!row) return
+  const mk = String(row.mk || row.worst?.waiter_mk || '')
+  const obj = String(row.object || '')
+  if (mk && obj) {
+    openMutexWaitPlot(mk, obj)
+    return
+  }
   const ev = row.worst || row
   onUxEventClick({
     ...ev,
@@ -6565,6 +6783,7 @@ const corePairSelectionLabel = computed(() => {
 function selectCorePair(row) {
   if (!row) return
   corePairSelection.value = row
+  openPairPlot(row.fromCore, row.toCore)
 }
 
 function onCorePairShowEvents() {
@@ -6696,6 +6915,28 @@ const syncLevelStats = computed(() => {
 })
 const sortedSyncLevelStats = computed(() =>
   sortStatsRows(syncLevelStats.value, tableSort.value.sync_level, SYNC_LEVEL_SORT_ACCESSORS))
+
+function syncLevelRowTip(row) {
+  if (row?.peakStartNs != null) return 'Click to jump to peak onset'
+  if (row?.firstStarveNs != null) return 'Click to jump to first starve'
+  return 'No peak or starve sample to jump to'
+}
+
+function onSyncLevelRowClick(row) {
+  if (!row) return
+  let jump = null
+  let note = ''
+  if (row.peakStartNs != null) {
+    jump = row.peakStartNs
+    note = `${row.label} — peak onset`
+  } else if (row.firstStarveNs != null) {
+    jump = row.firstStarveNs
+    note = `${row.label} — first starve`
+  } else {
+    return
+  }
+  emit('plotPointActivate', { ns: jump, note, segment: null })
+}
 
 function fmtRatePerS(rate) {
   if (rate == null) return '—'
@@ -7445,6 +7686,21 @@ const plotData = computed(() => {
   if (open.kind === 'concurrency') {
     return _buildConcurrencyPlot(props.trace, open.activeCores ?? open.mk, range)
   }
+  if (open.kind === 'activation') {
+    return _buildActivationPlot(props.trace, open.mk, range)
+  }
+  if (open.kind === 'ready_gap') {
+    return _buildReadyGapPlot(props.trace, open.mk, range)
+  }
+  if (open.kind === 'idle') {
+    return _buildIdlePlot(props.trace, open.core || open.mk, range)
+  }
+  if (open.kind === 'sync_hold') {
+    return _buildSyncHoldPlot(props.trace, open.mk, range)
+  }
+  if (open.kind === 'mutex_wait') {
+    return _buildMutexWaitPlot(props.trace, open.mk, open.object, range)
+  }
   return _buildInterPlot(props.trace, open.mk, range)
 })
 
@@ -7484,6 +7740,123 @@ function switchPlotTab(kind) {
   selectedPlotPoint.value = -1
 }
 
+
+function _buildActivationPlot(trace, mk, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const rawPoints = activationLatencyPlotPoints(trace, mk, uxEvents.value, lo, hi)
+  if (!rawPoints.length) return null
+  const repr = trace.taskRepr.get(mk) || mk
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: null,
+    label: `${taskDisplayName(repr)}: activation error ${formatTime(pt.yValue, trace.timeScale)} at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'activation',
+    mk,
+    title: `${taskDisplayName(repr)} — Activation Latency vs Ideal${suffix}`,
+    color: taskColor(mk, repr),
+    points,
+  }
+}
+
+function _buildReadyGapPlot(trace, mk, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const rawPoints = readyGapPlotPoints(trace, mk, lo, hi)
+  if (!rawPoints.length) return null
+  const repr = trace.taskRepr.get(mk) || mk
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: null,
+    label: `${taskDisplayName(repr)}: ready gap ${formatTime(pt.yValue, trace.timeScale)} at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'ready_gap',
+    mk,
+    title: `${taskDisplayName(repr)} — Ready-Gap Duration${suffix}`,
+    color: taskColor(mk, repr),
+    points,
+  }
+}
+
+function _buildIdlePlot(trace, core, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const rawPoints = idleFragmentPlotPoints(trace, core, lo, hi)
+  if (!rawPoints.length) return null
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: null,
+    label: `${core}: idle ${formatTime(pt.yValue, trace.timeScale)} at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'idle',
+    mk: core,
+    core,
+    title: `${core} — Idle Fragment Duration${suffix}`,
+    color: coreColor(core),
+    points,
+  }
+}
+
+function _buildSyncHoldPlot(trace, objKey, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const rawPoints = syncHoldPlotPoints(trace, objKey, lo, hi)
+  if (!rawPoints.length) return null
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `${objKey}: hold ${formatTime(pt.yValue, trace.timeScale)} at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'sync_hold',
+    mk: objKey,
+    title: `${objKey} — Hold Duration${suffix}`,
+    color: '#64B5F6',
+    points,
+  }
+}
+
+function _buildMutexWaitPlot(trace, mk, objKey, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const waits = pairMutexWaits(harvestMutexHolds(trace, lo, hi))
+  const rawPoints = mutexWaitPlotPoints(waits, mk, objKey)
+  if (!rawPoints.length) return null
+  const repr = trace.taskRepr.get(mk) || mk
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `${taskDisplayName(repr)} ← ${objKey}: wait ${formatTime(pt.yValue, trace.timeScale)} at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'mutex_wait',
+    mk,
+    object: objKey,
+    title: `${taskDisplayName(repr)} ← ${objKey} — Mutex Wait Duration${suffix}`,
+    color: taskColor(mk, repr),
+    points,
+  }
+}
+
 function openTaskPlot(mk, kind) {
   const range = statsRange.value
   let plot
@@ -7494,6 +7867,8 @@ function openTaskPlot(mk, kind) {
   else if (kind === 'mig_rate') plot = _buildMigRatePlot(props.trace, mk, range)
   else if (kind === 'mig_gap') plot = _buildMigGapPlot(props.trace, mk, range)
   else if (kind === 'dispatch') plot = _buildDispatchPlot(props.trace, mk, range)
+  else if (kind === 'activation') plot = _buildActivationPlot(props.trace, mk, range)
+  else if (kind === 'ready_gap') plot = _buildReadyGapPlot(props.trace, mk, range)
   else if (kind === 'preempt') {
     const rec = preemptorRanking(preemptionPairs(uxEvents.value), 16)
       .find(r => String(r.mk || '') === String(mk))
@@ -7516,6 +7891,30 @@ function openSwitchOverheadPlot(core) {
   const plot = _buildSwitchOverheadPlot(props.trace, core, range)
   if (!plot || plot.points.length === 0) return
   openPlotRef.value = { mk: core, core, kind: 'switch_overhead' }
+  selectedPlotPoint.value = -1
+}
+
+function openIdlePlot(core) {
+  const range = statsRange.value
+  const plot = _buildIdlePlot(props.trace, core, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { mk: core, core, kind: 'idle' }
+  selectedPlotPoint.value = -1
+}
+
+function openSyncHoldPlot(objKey) {
+  const range = statsRange.value
+  const plot = _buildSyncHoldPlot(props.trace, objKey, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { mk: objKey, kind: 'sync_hold' }
+  selectedPlotPoint.value = -1
+}
+
+function openMutexWaitPlot(mk, objKey) {
+  const range = statsRange.value
+  const plot = _buildMutexWaitPlot(props.trace, mk, objKey, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { mk, object: objKey, kind: 'mutex_wait' }
   selectedPlotPoint.value = -1
 }
 
@@ -9176,6 +9575,7 @@ defineExpose({
 .stats-cat-filter {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 5px;
   padding: 7px 10px;
   border-bottom: 1px solid var(--border);
@@ -9254,6 +9654,65 @@ defineExpose({
   gap: 2px;
   margin-left: auto;
   flex-shrink: 0;
+  align-items: center;
+}
+
+.stats-section-find {
+  position: relative;
+  flex: 1 1 12rem;
+  min-width: 10rem;
+  max-width: 22rem;
+  margin: 0;
+}
+
+.stats-section-find-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px 8px;
+  border: 1px solid var(--border, #555);
+  border-radius: 4px;
+  background: var(--panel-bg, transparent);
+  color: var(--fg);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.stats-section-find-input:focus {
+  outline: none;
+  border-color: var(--accent, #5B9BD5);
+}
+
+.stats-section-find-menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 40;
+  min-width: 100%;
+  max-width: 18rem;
+  max-height: 14rem;
+  overflow: auto;
+  margin: 0;
+  padding: 2px 0;
+  list-style: none;
+  background: var(--panel-bg, #1e1e1e);
+  border: 1px solid var(--border, #555);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.stats-section-find-item {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-section-find-item:hover,
+.stats-section-find-item.active {
+  background: var(--tb-btn-hover, rgba(255, 255, 255, 0.08));
 }
 
 .stats-icon-btn {
@@ -9786,7 +10245,8 @@ defineExpose({
 
 .stats-table-row.clickable:focus-visible,
 .stats-table tbody tr.clickable-row:focus-visible {
-  outline: none;
+  outline: 2px solid var(--accent, #4A9EFF);
+  outline-offset: -2px;
 }
 
 .stats-table td.extreme-col,

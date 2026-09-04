@@ -71,7 +71,11 @@ export default defineConfig({
   base: './',
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
-    __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
+    // BTF_BUILD_DATE pins the About-panel date for reproducible CI rebuilds
+    // (`make check-web`). Unset → today's UTC date for normal local builds.
+    __BUILD_DATE__: JSON.stringify(
+      process.env.BTF_BUILD_DATE || new Date().toISOString().slice(0, 10),
+    ),
   },
   server: {
     proxy: llmProxies,

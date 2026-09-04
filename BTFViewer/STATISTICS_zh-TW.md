@@ -125,7 +125,7 @@ Statistics 位於右側面板。標題會顯示 **Full Trace**或目前的**C1�
 
 支援互動的表格與圖表可直接導向相關證據：
 
-- 點選資料列或工作名稱，可標示工作或開啟分布圖。
+- 點選資料列或工作名稱，可標示工作或開啟散布／直方分布圖。
 - 點選 Min、Max、p50、p95 或 p99，可跳到對應的已擷取樣本。
 - 點選異常、最差事件或關鍵路徑，可縮放 **Timeline**並放置證據游標。
 - 點選同步問題，可跳到對應的 STI 事件。
@@ -178,7 +178,17 @@ flowchart TD
 
 發現項目涵蓋負載平衡、主要 CPU 使用工作、已觀察執行時間最大值、離開 CPU 間隔、頻繁核心遷移、截止時間、TICK 健康狀態與同步問題。負載平衡良好或中等時仍可能顯示資訊，讓使用者可查看負載平衡分數、母體標準差與 Gini 係數。
 
-應使用發現項目選擇下一個量測方向，不可直接當成結論。記錄根本原因前，仍需確認樣本數、相關分布及 **Timeline**事件順序。
+### Analysis Context strip
+
+Findings、AI 與 Compare 會顯示完整的 **Analysis Context** 列（追蹤名稱、**Scope**、**Filters**、樣本數）。Statistics 面板在標頭保留 Scope 與 Filters；若已放置游標但未開啟 **Limit to C1–Cn**，則只顯示簡短提示：**Not limited to cursors**。**Clear filters** 仍可使用。Selection 與 Highlight 不會列為分析條件。
+
+當結果計算後 Scope 或 Filters 再變更時，Findings 與 AI 可能將內容標為 **stale**，並提供 **Recalculate with current context**。Statistics 面板在 Scope 或 Filters 變更時會自動重算（與 Desktop 相同）。
+
+### Symptom shortcuts
+
+**Where should I start?** 是 Statistics 工具列上的選用導引（Desktop 與 Web）。預設關閉，讓熟悉的使用者直接看到表格。開啟後可選症狀卡片（未知問題、延遲工作、尖峰、派送延遲、阻塞、抖動、負載不均、遷移、同步、截止時間）；每一張會跳到第一個建議指標。當 Findings 對應到某症狀時，會出現 **Recommended from Findings**。
+
+應使用發現項目選擇下一個量測方向，不可直接當成結論。記錄根本原因前，仍需確認樣本數、相關分布及 **Timeline** 事件順序。
 
 ### 流程 A：第一次檢查不熟悉的追蹤資料
 
@@ -715,7 +725,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：**週期 `T` 取到達間隔的 p50（也就是**週期／抖動**中的「Expected」）。格線為 `anchor + k·T`，錨定在目前分析範圍內的第一次啟動。對啟動時刻 `t`，誤差為 `min_k |t − (anchor + k·T)|`，即到最近格線點的距離。Min／Avg／Max／Jitter／σ／p50／p95／p99 欄彙整此誤差分布，Max 最大者排在最前。每個工作至少需三次啟動。
 
-**如何使用：**接近零的列代表工作緊貼排程。Max 大而 p50 小是偶發滑移；p50 本身就大則是穩定的相位漂移——檢查該工作的釋放路徑與延誤它的低優先權工作。與 **Dispatch / Scheduling Latency**（就緒→執行）及 **Ready-Gap** 比較，判斷延遲釋放是工作本身還是排程器造成。點選列可在 **Timeline**上突顯該工作。
+**如何使用：**接近零的列代表工作緊貼排程。Max 大而 p50 小是偶發滑移；p50 本身就大則是穩定的相位漂移——檢查該工作的釋放路徑與延誤它的低優先權工作。與 **Dispatch / Scheduling Latency**（就緒→執行）及 **Ready-Gap** 比較，判斷延遲釋放是工作本身還是排程器造成。點選列可開啟啟動延遲分布圖，並在 **Timeline**上突顯該工作。
 
 <a id="statistics-ready_gap" name="statistics-ready_gap"></a>
 ### 就緒間隔（Ready-Gap / Starvation） ![](../images/readme/h4.svg)
@@ -726,7 +736,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：**建立在與 **Switch Reason Breakdown**相同的離開 CPU 間隔分類器之上。工作連續兩段之間的每個間隔會被標為 `preempted`（其他工作在其核心上執行）、`blocked`（該區段以 STI take/recv 結束）、`suspended`（STI suspend）、`period_wait`（整段只有 IDLE 執行）或 `unknown`。就緒間隔保留 `preempted` / `blocked` / `unknown`，捨棄 `suspended` / `period_wait`（工作自願離開 CPU）。欄位：間隔數、最長單一間隔、總計、平均、p95，以及**% preempt**——被搶佔部分佔總計的比例，用以區分排程飢餓（比例高）與鎖競爭（比例低）。依最長間隔排序。
 
-**如何使用：**依「最長」或「總計」排序。**% preempt**高指向優先權或親和性——對照**Preemption Chain Analysis**與工作優先權。**% preempt**低代表間隔多半是 `blocked`；追進**Mutex / Semaphore**與**Waiter × Owner**。此處的 `blocked` 是啟發式判斷（區段結尾附近的 STI take/recv），非核心記錄的等待。點選列可在 **Timeline**上突顯該工作。
+**如何使用：**依「最長」或「總計」排序。**% preempt**高指向優先權或親和性——對照**Preemption Chain Analysis**與工作優先權。**% preempt**低代表間隔多半是 `blocked`；追進**Mutex / Semaphore**與**Waiter × Owner**。此處的 `blocked` 是啟發式判斷（區段結尾附近的 STI take/recv），非核心記錄的等待。點選列可開啟就緒間隔分布圖，並在 **Timeline**上突顯該工作。
 
 ## 4. SCHED — 多核心排程與工作配置 ![](../images/readme/h3.svg)
 
@@ -808,7 +818,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：**每次遷移都會累加到對應的 `來源 → 目的` 核心對；反方向會分開計算。Bounce 用來描述雙向流量或短時間返回；平均間隔是遷移附近觀察到的時間，不是硬體資料搬移時間。
 
-**如何使用：**集中於少數核心對的遷移，可能來自親和性配置、負載不對稱，或工作在兩個核心間反覆交換。開啟核心對圖形並與各核心使用率比對。低頻且廣泛的遷移可能只是正常負載平衡。
+**如何使用：**集中於少數核心對的遷移，可能來自親和性配置、負載不對稱，或工作在兩個核心間反覆交換。點選列可開啟核心對圖形，並與各核心使用率比對。低頻且廣泛的遷移可能只是正常負載平衡。
 
 ![Core_5→Core_7 遷移後間隔](../images/stats/stats-pair-gap-c5-c7.svg)
 
@@ -930,7 +940,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：**依同步物件將完成的持有區段排序。不同工作在前一個持有者之後取得同一物件時，視為可能的交接，並依可觀察的持有與取得順序推估等待區間；結果再依可能的等待工作、物件與前一個持有者彙整。
 
-**如何使用：**Total 可找出累積競爭，Max 與尾端數值可找出嚴重事件。使用前應先檢查 **Mutex / Semaphore**配對品質，再搭配** 等待工作 × 持有者**、**優先權繼承**與 **Timeline**。這是資源競爭推估，不是精確的核心阻塞時間。
+**如何使用：**Total 可找出累積競爭，Max 與尾端數值可找出嚴重事件。使用前應先檢查 **Mutex / Semaphore**配對品質，再搭配** 等待工作 × 持有者**、**優先權繼承**與 **Timeline**。點選列可開啟等待時間分布圖。這是資源競爭推估，不是精確的核心阻塞時間。
 
 ![Mutex 阻塞表格](../images/stats/stats-mutex-block.svg)
 
@@ -958,7 +968,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：**依物件指標分組，按時間處理 take/give 事件。成功配對後形成持有時間樣本；目前持有者與持有物件狀態用來檢查孤立 give、未完成 take、持有中刪除及追蹤結束仍持有等問題。遞迴或巢狀使用的準確度取決於追蹤事件是否完整。
 
-**欄位：**除了 `Avg hold`，表格也提供 **p95 hold**/**p99 hold**——持有時間分布的尾端，即使平均值看起來正常，單一異常的長持有也會顯現。**Waiters**是在物件已被持有時仍取得該物件的不同工作數（一種扇入計數）；**MaxNest**是同時開啟的 take 最深疊層。兩者皆以整條追蹤計算，而非目前分析範圍。只有當擷取在前一位持有者 `give` 之前就記錄 `take` 時才會有數值——這發生於遞迴 mutex，或在阻塞嘗試時就記錄 `take` 的追蹤器；只在取得時記錄 `take` 的追蹤器，即使是高度競爭的鎖也會顯示 `0`。** 如何使用：**先處理配對品質，再信任持有或阻塞推估。依 **p99 hold**排序找出持有尾端最差的物件，接著非零的**Waiters**代表該尾端確實延誤了其他工作——追進**Mutex 阻塞**與** 等待工作 × 持有者**。**MaxNest** 大於 1 表示有鎖疊層；對照鎖取得順序與鎖階層以評估死結風險。長時間但無競爭（Waiters 為 0）的持有不一定有害。搭配優先權與 **Timeline**判讀。
+**欄位：**除了 `Avg hold`，表格也提供 **p95 hold**/**p99 hold**——持有時間分布的尾端，即使平均值看起來正常，單一異常的長持有也會顯現。**Waiters**是在物件已被持有時仍取得該物件的不同工作數（一種扇入計數）；**MaxNest**是同時開啟的 take 最深疊層。兩者皆以整條追蹤計算，而非目前分析範圍。只有當擷取在前一位持有者 `give` 之前就記錄 `take` 時才會有數值——這發生於遞迴 mutex，或在阻塞嘗試時就記錄 `take` 的追蹤器；只在取得時記錄 `take` 的追蹤器，即使是高度競爭的鎖也會顯示 `0`。** 如何使用：**先處理配對品質，再信任持有或阻塞推估。依 **p99 hold**排序找出持有尾端最差的物件，接著非零的**Waiters**代表該尾端確實延誤了其他工作——追進**Mutex 阻塞**與** 等待工作 × 持有者**。**MaxNest** 大於 1 表示有鎖疊層；對照鎖取得順序與鎖階層以評估死結風險。長時間但無競爭（Waiters 為 0）的持有不一定有害。點選列可開啟持有時間分布圖。搭配優先權與 **Timeline**判讀。
 
 <a id="statistics-queue" name="statistics-queue"></a>
 ### 佇列（Queue） ![](../images/readme/h4.svg)
@@ -971,7 +981,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：**依佇列指標將 send/receive 事件分組，並按記錄順序配對成完成區間。若沒有訊息 ID 或佇列內容快照，在多生產者／多消費者情況下，無法證明某次 receive 對應哪一筆應用程式訊息。
 
-**如何使用：**先檢查配對品質與事件頻率，再與**到達間隔**、**派送延遲**、佇列深度 Tag 與端到端 Interval 比對。send 到 receive 的長間隔也可能來自正常批次處理或消費者排程。
+**如何使用：**先檢查配對品質與事件頻率，再與**到達間隔**、**派送延遲**、佇列深度 Tag 與端到端 Interval 比對。點選列可開啟持有時間分布圖。send 到 receive 的長間隔也可能來自正常批次處理或消費者排程。
 
 <a id="statistics-sync_level" name="statistics-sync_level"></a>
 ### 佇列積壓／號誌水位（Queue Backlog / Semaphore Level） ![](../images/readme/h4.svg)
@@ -980,7 +990,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 由 STI 事件串流重建每個佇列與號誌在分析範圍內的即時水位。佇列的水位是訊息積壓量；計數號誌的水位是可用 token 數。Peak 偏高代表生產者跑贏消費者（或 token 洩漏）；End level 在多次執行間逐漸上升則是緩慢洩漏。
 
-**計算方式：**依物件指標，`give` / `send` 加 1、`take` / `recv` 減 1，水位下限為 0。**Peak**是到達過的最高水位，**Time at peak**是停在該水位的時間，**End level**是分析範圍結束時的水位。**Starved**計算在水位為 0 時發出的 `take` / `recv`——即會被阻塞的嘗試（真正的容量上限，或遺失的 `give`）。依 Peak、再依 Starved 排序。** 如何使用：**佇列的 Peak 高且 Time-at-peak 大，代表消費者跟不上——檢查消費者的 **Dispatch / Scheduling Latency**、優先權與 **Ready-Gap**。End level 非零且多次執行間增長即為洩漏。號誌頻繁出現 Starved 指向 token 池大小不當或缺少釋放路徑。此重建假設每次 `give`/`take` 都有記錄；未配對事件（見 **Mutex / Semaphore** 問題）會讓水位變成近似值。
+**計算方式：**依物件指標，`give` / `send` 加 1、`take` / `recv` 減 1，水位下限為 0。**Peak**是到達過的最高水位，**Time at peak**是停在該水位的時間，**End level**是分析範圍結束時的水位。**Starved**計算在水位為 0 時發出的 `take` / `recv`——即會被阻塞的嘗試（真正的容量上限，或遺失的 `give`）。依 Peak、再依 Starved 排序。** 如何使用：**佇列的 Peak 高且 Time-at-peak 大，代表消費者跟不上——檢查消費者的 **Dispatch / Scheduling Latency**、優先權與 **Ready-Gap**。End level 非零且多次執行間增長即為洩漏。號誌頻繁出現 Starved 指向 token 池大小不當或缺少釋放路徑。點選列可跳到 Peak 開始時刻（若 Peak 為 0 則跳到第一次 starve）。此重建假設每次 `give`/`take` 都有記錄；未配對事件（見 **Mutex / Semaphore** 問題）會讓水位變成近似值。
 
 ## 6. DETAIL — 輔助測量資料 ![](../images/readme/h3.svg)
 
@@ -1004,7 +1014,7 @@ Gap 可能包含排程開銷、中斷、臨界區段、追蹤資料缺口或解�
 
 **計算方式：**將各核心執行片段裁切至分析範圍，並分為 Active、Idle 與 Tick；未被這三類涵蓋的核心時間列為 Gap。追蹤解析度、捨入或小型重疊可能影響總和。
 
-**如何使用：**Active 表示一般工作負載，Idle 表示未使用能力，Tick 表示已記錄的 Tick 處理。Gap 偏高時應查看**核心切換開銷**、追蹤健康狀態與 **Timeline**。所有核心在相同時間出現 Gap，較可能是擷取缺口或全域事件。
+**如何使用：**Active 表示一般工作負載，Idle 表示未使用能力，Tick 表示已記錄的 Tick 處理。Gap 偏高時應查看**核心切換開銷**、追蹤健康狀態與 **Timeline**。所有核心在相同時間出現 Gap，較可能是擷取缺口或全域事件。點選核心可切換到 Core View、展開該核心並捲動到該列。
 
 <a id="statistics-idle" name="statistics-idle"></a>
 ### 閒置分析（Idle Analysis） ![](../images/readme/h4.svg)
@@ -1013,7 +1023,7 @@ Gap 可能包含排程開銷、中斷、臨界區段、追蹤資料缺口或解�
 
 針對每個核心，呈現 IDLE 時間的形狀：總計、最長的單一閒置片段、閒置片段數，以及 p95。總計大且最長片段也大，是真正的餘裕；總計大但被切成很多小片段，代表核心其實忙碌卻不斷等待。附註給出所有核心同時閒置的最長視窗。
 
-**計算方式：**將每個核心區段清單中的 IDLE 區段裁切至分析範圍。**Idle total**為其總和，**Longest**為最大的單一片段，**Frags**為數量，**p95**為第 95 百分位片段。所有核心同時閒置的視窗，是對所有核心閒置區間掃描出「每個核心同時涵蓋」的最長區段。依閒置總計排序，最閒置的核心在前。** 如何使用：**用總計對照**核心使用率**估算餘裕。所有核心同時閒置的長視窗，若當時沒有待處理工作就沒問題——用同一區間的 **Ready-Gap**與** 阻塞時間**確認不是全系統停滯。片段數多但最長片段小，通常是細碎阻塞；追進 **Switch Reason Breakdown**。點選列可在 **Timeline**上突顯該核心。
+**計算方式：**將每個核心區段清單中的 IDLE 區段裁切至分析範圍。**Idle total**為其總和，**Longest**為最大的單一片段，**Frags**為數量，**p95**為第 95 百分位片段。所有核心同時閒置的視窗，是對所有核心閒置區間掃描出「每個核心同時涵蓋」的最長區段。依閒置總計排序，最閒置的核心在前。** 如何使用：**用總計對照**核心使用率**估算餘裕。所有核心同時閒置的長視窗，若當時沒有待處理工作就沒問題——用同一區間的 **Ready-Gap**與** 阻塞時間**確認不是全系統停滯。片段數多但最長片段小，通常是細碎阻塞；追進 **Switch Reason Breakdown**。點選列可開啟閒置片段分布圖，並在 **Timeline**上突顯該核心。
 
 <a id="statistics-switch_overhead" name="statistics-switch_overhead"></a>
 ### 核心切換開銷（Kernel Switch Overhead） ![](../images/readme/h4.svg)

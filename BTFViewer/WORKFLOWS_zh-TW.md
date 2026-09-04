@@ -235,6 +235,16 @@ flowchart TD
 
 你已選出一個需要回到時間軸檢查的量測樣本或重複型態。
 
+<a id="trace-quality" name="trace-quality"></a>
+## Trace quality banner
+
+當擷取中繼資料回報溢位、截斷或缺少追蹤事件時，會出現 **trace-quality banner**，並提供 **Review details**、**Continue with limitations** 與 **Open capture guidance**（WORKFLOWS）。分組細節會列出受影響的 Statistics 與 AI 結論。
+
+<a id="guided-first-review" name="guided-first-review"></a>
+## Guided first review
+
+導覽示範（工具列或 Help）會帶你完整走一遍範例追蹤資料。
+
 <a id="workflow-step-6" name="workflow-step-6"></a>
 ## 步驟 6 — 使用 Analysis Findings 進行初步判斷
 
@@ -498,7 +508,7 @@ AI 的解釋與 Statistics、時間軸證據一致，或 AI 已指出需要重�
 4. 將修改套用到實際系統。
 5. 使用相同追蹤事件重新執行同一工作負載並擷取資料。
 6. 將原始追蹤資料設為 **Baseline**，新追蹤資料設為 **Candidate**。
-7. 選擇相同的工作負載階段與等效游標範圍。
+7. 選擇相同的工作負載階段與等效游標範圍。可選擇啟用 **Settings → Display → Link A/B timeline zoom when switching compare tabs**，讓 Baseline 與 Candidate 時間軸分頁切換時維持相同的相對階段視野（依各 trace 時間跨度的相對比例對應；不是雙時間軸即時連動捲動）。
 8. 重複原始調查使用的 Statistics 量測。
 9. 使用 **Compare** 檢查正規化總量、尾端數值、重要變化與副作用。
 10. 回到兩份時間軸，檢查造成差異的實際樣本。

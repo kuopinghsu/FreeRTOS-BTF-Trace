@@ -262,6 +262,10 @@ Marks 面板會列出游標、游標範圍、書籤及註解。可使用 **Expor
 - `Ctrl+Shift+Tab`：上一個分頁
 - `Ctrl+W`：關閉目前分頁
 
+**Link A/B timeline zoom**（選用，預設關閉）位於 **Settings → Display**。啟用後，若已開啟兩份以上的 trace，切換分頁時會把離開分頁的可見時間窗，依該 trace **完整時間跨度的相對比例**，對應到目標分頁上相同比例的區間。例如：在 Baseline A 看到大約中間 20% 的範圍，切到 Candidate B 後也會看到約中間 20%——即使兩份 trace 長度或絕對時間戳不同。
+
+此功能只在**切換分頁時**重新對應縮放；不會讓兩個時間軸即時連動捲動，也不會複製游標、標記、Filters 或絕對奈秒時間。關閉時，各分頁仍還原各自儲存的縮放比例。
+
 Desktop 可從原始路徑重新開啟檔案。Web 的還原功能依賴瀏覽器儲存空間；使用無痕模式或清除網站資料後，可能無法還原。
 
 <a id="basic-analysis-workflow" name="basic-analysis-workflow">&#x200B;</a>
@@ -304,6 +308,10 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 | 鎖或佇列問題 | **Mutex / Semaphore / Queue** | 阻塞及核心遷移 |
 
 統計指標的詳細定義與公式請參閱 [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md)。
+
+<a id="btf-analysis-pages" name="btf-analysis-pages">&#x200B;</a>
+
+Statistics 面板依 **OVERVIEW → TRIAGE → TIMING → SCHED → SYNC → DETAIL** 分類。第一次檢查可先用上表；完整定義與公式見 [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md)。
 
 ### 分析結果（Analysis Findings）
 
@@ -384,7 +392,7 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 | 7 | **變化圖與指標表** | 具工程意義的差異以雙向長條圖呈現（改善 ↔ 變差），下方為完整的 **All summary metrics** 表格（Metric / Baseline A / Candidate B / Change）。 |
 | 8 | **底部列** | **Export HTML**、**Save baseline** / **Score vs baseline**、**Validate experiment…**，或 **Ask AI about this**。 |
 
-這是選用的比較工具，不是基本分析流程的必要步驟。使用時，應比較相同的工作負載階段與量測範圍。
+這是選用的比較工具，不是基本分析流程的必要步驟。使用時，應比較相同的工作負載階段與量測範圍。若要在 Baseline 與 Candidate 時間軸分頁之間切換時維持相同的相對階段視野，請啟用 **Settings → Display → Link A/B timeline zoom when switching compare tabs**（詳見[多份 trace](#多份-trace)）。
 
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 
@@ -418,6 +426,15 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 可用的內容層級包括 **Compact**、**Balanced** 及 **Full Evidence**。Compact 用於快速分類；Balanced 是預設調查深度；Full Evidence 會加入相關 Findings 與調查歷程。信心程度來自證據，不是來自模式。可在 **Settings → AI** 中設定模型、服務端點（endpoint）、驗證方式、內容層級、隱私選項及回覆語言。
 
 匯入 `examples/ai/presets.json`，可取得 Ollama、OpenAI、Gemini、DeepSeek 及 Grok 的範例設定。使用本機 Ollama 不需要 API 金鑰（API key）。若使用雲端模型，BTFViewer 會將分析所需的統計摘要與證據傳送給對應的服務供應商；處理敏感資料時，請視需要啟用匿名化及敏感資料選項。
+
+<a id="ai-api-keys" name="ai-api-keys">&#x200B;</a>
+
+API 金鑰：在 **Settings → AI** 為各 preset 輸入金鑰，或在主機有提供時使用 `OPENAI_API_KEY`／`GEMINI_API_KEY`／`OLLAMA_API_KEY`。Live `ai-test` XML 可使用 `<api-key env="VAR">`。完整範例見 [examples/ai](examples/ai/README.md) 與 [AI_zh-TW.md](AI_zh-TW.md)。
+
+<a id="investigation-case" name="investigation-case">&#x200B;</a>
+<a id="investigation-planner" name="investigation-planner">&#x200B;</a>
+
+**Investigation Case** 保存目前調查的問題、Scope、假設、證據與結論。**Start Investigation** 與導引步驟列會執行主機端的 **Investigation planner**（先取成本最低的證據）。細節見 [AI_zh-TW.md → 調查案例](AI_zh-TW.md#investigation-case) 與 [調查規劃器](AI_zh-TW.md#investigation-planner)。
 
 設定、隱私、模型選項、工具、疑難排解、CLI 測試及評估方式的詳細說明，請參閱 [AI_zh-TW.md](AI_zh-TW.md)。
 
@@ -457,6 +474,7 @@ Statistics 與 Trace Compare 都使用單一的 **Export HTML** 功能。儲存�
 `?` 開啟鍵盤快捷鍵面板。`Esc` 會逐層退出——先關閉面板、再取消選取、最後回到 Select 工具——不會關閉編輯器本身。
 
 <a id="desktop-command-line" name="desktop-command-line">&#x200B;</a>
+<a id="headless-cli-desktop-only" name="headless-cli-desktop-only">&#x200B;</a>
 
 ## Desktop 命令列
 
@@ -495,7 +513,7 @@ python builds/btf_viewer.py slice trace.btf -o window.btf --lo 100000 --hi 50000
 | 區域 | 選項 |
 |---|---|
 | **Appearance** | 佈景主題、字型及色盲友善色盤 |
-| **Display** | 面板、時間軸疊加資訊、CPU 預算及工作截止期限 |
+| **Display** | 面板、時間軸疊加資訊（含選用的事件標記）、切換比較分頁時的 **Link A/B timeline zoom**、CPU 預算及工作截止期限 |
 | **Layout** | 標籤寬度、列高、縮放密度、游標數量上限、時間精度及圖表大小 |
 | **AI** | 啟用狀態、內容層級、隱私、服務供應商、模型、驗證方式及回覆語言 |
 
@@ -554,6 +572,7 @@ Desktop 將設定儲存在 BTFViewer 旁的 `btf_viewer.rc`；Web 則儲存在�
 | 執行 Desktop 測試 | `make -C BTFViewer test` |
 | 執行 Web 測試 | `make -C BTFViewer test-web` |
 | 執行所有測試 | `make -C BTFViewer test-all` |
+| 輕量 CI gate（測試 + 建置產物 + 文件） | `make -C BTFViewer ci-gate` |
 | 建置 PDF 文件 | `make -C BTFViewer doc` |
 | 從原始碼執行 | 在 `BTFViewer/` 中執行 `python -m btf_viewer_pkg trace.btf` |
 

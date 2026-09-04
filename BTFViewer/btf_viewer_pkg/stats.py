@@ -65,6 +65,7 @@ from .stats_html import (
     html_trace_metadata_card,
 )
 from .ai_planner import analysis_dashboard, format_analysis_story
+from .empty_state import empty_state_message, stats_empty_label
 from .evidence_nav import (
     EVIDENCE_GLYPH,
     EVIDENCE_TOOLTIP,
@@ -180,6 +181,11 @@ from .parser import (  # private symbols are not pulled in by import *
     _idle_analysis_rows,
     _sync_level_rows,
     _classify_offcpu_gaps,
+    _activation_latency_plot_points,
+    _ready_gap_plot_points,
+    _idle_fragment_plot_points,
+    _sync_hold_plot_points,
+    _mutex_wait_plot_points,
     _fmt_rate_per_s,
 )
 from .timeline_util import *  # noqa: F403,F401
@@ -799,6 +805,10 @@ class _FlowLayout(QLayout):
     Items flow left-to-right and wrap onto the next line when they no longer
     fit — the Qt equivalent of the web chip row's ``flex-wrap: wrap`` — so the
     trailing "All" button is never clipped on a narrow panel.
+
+    Widgets with an Expanding / MinimumExpanding horizontal size policy are
+    packed at their minimum width, then stretched to absorb leftover space on
+    their line (web ``flex: 1`` parity for Find section after Detail).
     """
 
     def __init__(self, parent=None, spacing: int = 4) -> None:
@@ -820,7 +830,7 @@ class _FlowLayout(QLayout):
         return self._items.pop(i) if 0 <= i < len(self._items) else None
 
     def expandingDirections(self):  # noqa: N802
-        return Qt.Orientation(0)
+        return Qt.Orientation.Horizontal
 
     def hasHeightForWidth(self) -> bool:  # noqa: N802
         return True
@@ -844,37 +854,133 @@ class _FlowLayout(QLayout):
             size = size.expandedTo(it.minimumSize())
         return size
 
+    @staticmethod
+    def _is_h_expanding(item) -> bool:
+        w = item.widget()
+        if w is None:
+            return False
+        pol = w.sizePolicy().horizontalPolicy()
+        return pol in (
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.MinimumExpanding,
+        )
+
+    def _pack_size(self, item) -> QSize:
+        """Size used while packing/wrapping; Expanding items use a small floor.
+
+        QLineEdit minimumSizeHint is often wide; ignore it so Find can sit on
+        the Detail row and stretch into leftover width.
+        """
+        hint = item.sizeHint()
+        if not self._is_h_expanding(item):
+            return QSize(hint)
+        return QSize(40, hint.height())
+
     def _do_layout(self, rect, test_only: bool) -> int:
         space = self.spacing()
         x = rect.x()
         y = rect.y()
-        line: list = []          # (item, hint, x) buffered for the current line
+        line: list = []  # (item, pack_size)
         line_h = 0
+        right = rect.x() + rect.width()
 
-        def flush() -> None:
-            # Vertically centre every item on the line against the tallest one.
-            for itm, h, ix in line:
-                off = (line_h - h.height()) // 2
-                itm.setGeometry(QRect(QPoint(ix, y + off), h))
-
+        visible: list = []
         for it in self._items:
             w = it.widget()
             if w is not None and w.isHidden():
                 continue
-            hint = it.sizeHint()
-            if x + hint.width() > rect.right() and line:
-                if not test_only:
+            visible.append(it)
+
+        def trailing_fixed_width(from_idx: int) -> int:
+            """Width of non-expanding widgets after *from_idx* (plus gaps)."""
+            total = 0
+            count = 0
+            for jt in visible[from_idx + 1:]:
+                if self._is_h_expanding(jt):
+                    break
+                total += self._pack_size(jt).width()
+                count += 1
+            if count:
+                total += space * count  # gap before each trailing fixed item
+            return total
+
+        def flush() -> None:
+            nonlocal x, y, line, line_h
+            if not line:
+                return
+            sizes = [QSize(sz) for _, sz in line]
+            used = sum(sz.width() for sz in sizes) + space * (len(line) - 1)
+            leftover = max(0, rect.width() - used)
+            expand_i = [
+                i for i, (itm, _) in enumerate(line) if self._is_h_expanding(itm)
+            ]
+            if expand_i and leftover > 0:
+                add = leftover // len(expand_i)
+                rem = leftover % len(expand_i)
+                for j, i in enumerate(expand_i):
+                    sizes[i].setWidth(
+                        sizes[i].width() + add + (1 if j < rem else 0))
+            if not test_only:
+                cx = rect.x()
+                for i, (itm, _) in enumerate(line):
+                    sz = sizes[i]
+                    off = (line_h - sz.height()) // 2
+                    itm.setGeometry(QRect(QPoint(cx, y + off), sz))
+                    cx += sz.width() + space
+            y += line_h + space
+            x = rect.x()
+            line = []
+            line_h = 0
+
+        for idx, it in enumerate(visible):
+            pack = self._pack_size(it)
+            if self._is_h_expanding(it):
+                # Stay on this row after Detail: take remaining width minus
+                # trailing fixed chips (e.g. Show all). Prefer same row over
+                # wrapping whenever any width remains after the pills.
+                trail = trailing_fixed_width(idx)
+                avail = right - x - trail
+                min_w = pack.width()
+                if line and avail > 0:
+                    pack = QSize(max(avail, 1), pack.height())
+                elif avail >= min_w:
+                    pack = QSize(avail, pack.height())
+                elif line:
                     flush()
-                x = rect.x()
-                y += line_h + space
-                line = []
-                line_h = 0
-            line.append((it, hint, x))
-            x += hint.width() + space
-            line_h = max(line_h, hint.height())
-        if line and not test_only:
-            flush()
-        return y + line_h - rect.y()
+                    trail = trailing_fixed_width(idx)
+                    avail = right - x - trail
+                    pack = QSize(max(avail, min_w) if avail > 0 else min_w,
+                                 pack.height())
+            elif x + pack.width() > right and line:
+                flush()
+            line.append((it, pack))
+            x += pack.width() + space
+            line_h = max(line_h, pack.height())
+
+        if line:
+            sizes = [QSize(sz) for _, sz in line]
+            used = sum(sz.width() for sz in sizes) + space * (len(line) - 1)
+            leftover = max(0, rect.width() - used)
+            expand_i = [
+                i for i, (itm, _) in enumerate(line) if self._is_h_expanding(itm)
+            ]
+            if expand_i and leftover > 0:
+                add = leftover // len(expand_i)
+                rem = leftover % len(expand_i)
+                for j, i in enumerate(expand_i):
+                    sizes[i].setWidth(
+                        sizes[i].width() + add + (1 if j < rem else 0))
+            if not test_only:
+                cx = rect.x()
+                for i, (itm, _) in enumerate(line):
+                    sz = sizes[i]
+                    off = (line_h - sz.height()) // 2
+                    itm.setGeometry(QRect(QPoint(cx, y + off), sz))
+                    cx += sz.width() + space
+            y += line_h
+        elif y > rect.y():
+            y -= space
+        return max(0, y - rect.y())
 
 
 class _CoreFilterChips(QWidget):
@@ -11006,6 +11112,7 @@ class _StatsPanel(QWidget):
         self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "preempt", "interval", "tag", "tick"
         self._plot_preemptor: Optional[str] = None
         self._plot_interval_id: Optional[str] = None
+        self._plot_mutex_object: Optional[str] = None
         self._ai_enabled: bool = True
         self._distrib_ai_btn: Optional[QPushButton] = None
         self._distrib_open_btn: Optional[QPushButton] = None
@@ -11146,7 +11253,7 @@ class _StatsPanel(QWidget):
         self._cat_filter_row = QWidget()
         self._cat_filter_row.setObjectName("stats_cat_filter")
         self._cat_filter_row.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         _cat_flow = _FlowLayout(self._cat_filter_row, spacing=5)
         for _cat in STATS_SECTION_CATEGORIES:
             _pill = QToolButton()
@@ -11161,6 +11268,37 @@ class _StatsPanel(QWidget):
                 lambda on, c=_cat: self._on_category_pill_toggled(c, on))
             _cat_flow.addWidget(_pill)
             self._cat_pills[_cat] = _pill
+        # Find section — same row, after Detail badge; Expanding so _FlowLayout
+        # stretches it into remaining panel width (web flex:1 parity).
+        # Custom popup (not QCompleter): Up/Down + reusable after each pick.
+        self._section_find = QLineEdit()
+        self._section_find.setObjectName("stats_section_find")
+        self._section_find.setPlaceholderText("Find section…")
+        self._section_find.setClearButtonEnabled(True)
+        # Allow FlowLayout to shrink this field so it stays on the Detail row;
+        # Expanding policy still grows it into leftover panel width.
+        self._section_find.setMinimumWidth(0)
+        self._section_find.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._section_find.setToolTip("Jump to a Statistics section by title")
+        self._section_find_hits: List[Tuple[str, str]] = []
+        # Child list (not Qt.Popup/Tool): Popup steals the keyboard grab so a
+        # second character / Up/Down never reach the line edit.
+        self._section_find_popup = QListWidget(self)
+        self._section_find_popup.setObjectName("stats_section_find_popup")
+        self._section_find_popup.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._section_find_popup.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._section_find_popup.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection)
+        self._section_find_popup.setMouseTracking(True)
+        self._section_find_popup.hide()
+        self._section_find.returnPressed.connect(self._on_section_find_return)
+        self._section_find.textChanged.connect(self._on_section_find_text)
+        self._section_find.installEventFilter(self)
+        self._section_find_popup.installEventFilter(self)
+        self._section_find_popup.viewport().installEventFilter(self)
+        _cat_flow.addWidget(self._section_find)
         self._cat_clear_btn = QToolButton()
         self._cat_clear_btn.setObjectName("stats_cat_clear")
         self._cat_clear_btn.setText("Show all")
@@ -11245,6 +11383,26 @@ class _StatsPanel(QWidget):
         self._scope_cb.setFont(font)
         self._export_anon_cb.setFont(font)
         self._scope_label.setStyleSheet(f"color:#888888; font-size:{ui_fs};")
+        find = getattr(self, "_section_find", None)
+        if find is not None:
+            find.setFont(font)
+            find.setStyleSheet(f"QLineEdit#stats_section_find {{ font-size:{ui_fs}; }}")
+        popup = getattr(self, "_section_find_popup", None)
+        if popup is not None:
+            popup.setFont(font)
+            bg = "#252526" if self._is_dark else "#ffffff"
+            fg = "#dddddd" if self._is_dark else "#222222"
+            border = "#3a4658" if self._is_dark else "#C0C0C0"
+            sel = "#2a4a6a" if self._is_dark else "#d0e4f7"
+            popup.setStyleSheet(
+                f"QListWidget#stats_section_find_popup {{"
+                f" background:{bg}; color:{fg}; border:1px solid {border};"
+                f" font-size:{ui_fs}; outline:none; }}"
+                f"QListWidget#stats_section_find_popup::item {{ padding:4px 8px; }}"
+                f"QListWidget#stats_section_find_popup::item:selected,"
+                f"QListWidget#stats_section_find_popup::item:hover {{"
+                f" background:{sel}; }}"
+            )
         guide = getattr(self, "_btn_stats_guide", None)
         if guide is not None:
             guide.setFont(font)
@@ -12411,6 +12569,183 @@ class _StatsPanel(QWidget):
     def _toggle_symptom_guide_panel(self) -> None:
         self._set_symptom_guide_open(not self._symptom_guide_open())
 
+    def _section_find_matches(self, text: str) -> List[Tuple[str, str]]:
+        return find_stats_sections(text)[:12]
+
+    def _hide_section_find_popup(self) -> None:
+        popup = getattr(self, "_section_find_popup", None)
+        if popup is None:
+            return
+        popup.hide()
+        popup.clear()
+        self._section_find_hits = []
+
+    def _clear_section_find(self) -> None:
+        find = getattr(self, "_section_find", None)
+        if find is None:
+            return
+        find.blockSignals(True)
+        find.clear()
+        find.blockSignals(False)
+        self._hide_section_find_popup()
+
+    def _jump_section_from_find(self, sid: str) -> None:
+        sid = str(sid or "").strip()
+        if not sid:
+            return
+        # Close the list first so scroll/expand cannot leave it stranded.
+        self._hide_section_find_popup()
+        find = getattr(self, "_section_find", None)
+        if find is not None:
+            find.blockSignals(True)
+            find.clear()
+            find.blockSignals(False)
+        self.scroll_to_section(sid)
+        # Belt-and-suspenders: hide again after layout/scroll settles.
+        QTimer.singleShot(0, self._hide_section_find_popup)
+
+    def _pick_section_from_find(self, text: str, *, require_unique: bool) -> None:
+        hits = self._section_find_matches(text)
+        if not hits:
+            return
+        if require_unique and len(hits) != 1:
+            return
+        sid, _title = hits[0]
+        self._jump_section_from_find(sid)
+
+    def _show_section_find_popup(self, hits: List[Tuple[str, str]]) -> None:
+        find = getattr(self, "_section_find", None)
+        popup = getattr(self, "_section_find_popup", None)
+        if find is None or popup is None:
+            return
+        self._section_find_hits = list(hits)
+        popup.clear()
+        for sid, title in hits:
+            item = QListWidgetItem(title)
+            item.setData(Qt.ItemDataRole.UserRole, sid)
+            popup.addItem(item)
+        if not hits:
+            self._hide_section_find_popup()
+            return
+        # Keep first row selected on each filter refresh (web parity).
+        popup.setCurrentRow(0)
+        # Position in this panel (child widget), under the field — web absolute menu.
+        w = max(find.width(), 200)
+        row_h = popup.sizeHintForRow(0) if popup.count() else 22
+        h = min(max(row_h, 1) * min(len(hits), 12) + 4, 280)
+        popup.setFixedSize(w, h)
+        # Reparent to the top-level window so the list is not clipped by the
+        # stats scroll/stack and does not steal keyboard focus.
+        host = self.window() if self.window() is not None else self
+        if popup.parent() is not host:
+            popup.setParent(host)
+        br = find.mapTo(host, find.rect().bottomLeft())
+        popup.move(br)
+        popup.show()
+        popup.raise_()
+        find.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _on_section_find_return(self) -> None:
+        popup = getattr(self, "_section_find_popup", None)
+        if popup is not None and popup.isVisible() and popup.currentItem() is not None:
+            sid = popup.currentItem().data(Qt.ItemDataRole.UserRole)
+            self._jump_section_from_find(str(sid or ""))
+            return
+        find = getattr(self, "_section_find", None)
+        text = find.text() if find is not None else ""
+        self._pick_section_from_find(text, require_unique=False)
+
+    def _on_section_find_text(self, text: str) -> None:
+        """Refresh the section list while typing (web dropdown parity)."""
+        t = str(text or "").strip()
+        if not t:
+            self._hide_section_find_popup()
+            return
+        self._show_section_find_popup(self._section_find_matches(t))
+
+    def _section_find_move(self, delta: int) -> bool:
+        popup = getattr(self, "_section_find_popup", None)
+        if popup is None or not popup.isVisible() or popup.count() <= 0:
+            return False
+        row = popup.currentRow()
+        if row < 0:
+            row = 0
+        else:
+            row = (row + delta) % popup.count()
+        popup.setCurrentRow(row)
+        item = popup.item(row)
+        if item is not None:
+            popup.scrollToItem(item)
+        return True
+
+    def _section_find_pick_at(self, pos) -> bool:
+        """Select list item under *pos* (viewport coords)."""
+        popup = getattr(self, "_section_find_popup", None)
+        if popup is None or not popup.isVisible():
+            return False
+        item = popup.itemAt(pos)
+        if item is None:
+            return False
+        sid = item.data(Qt.ItemDataRole.UserRole)
+        self._jump_section_from_find(str(sid or ""))
+        return True
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        find = getattr(self, "_section_find", None)
+        popup = getattr(self, "_section_find_popup", None)
+        # MainWindow binds bare arrows as ApplicationShortcut (timeline pan);
+        # claim the override so Up/Down reach this field while the list is open.
+        if (event.type() == QEvent.Type.ShortcutOverride and obj is find
+                and event.key() in (Qt.Key.Key_Down, Qt.Key.Key_Up)
+                and popup is not None and popup.isVisible()):
+            event.accept()
+            return True
+        if event.type() == QEvent.Type.KeyPress and obj is find:
+            key = event.key()
+            if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+                if self._section_find_move(1 if key == Qt.Key.Key_Down else -1):
+                    return True
+            elif key == Qt.Key.Key_Escape:
+                if popup is not None and popup.isVisible():
+                    self._hide_section_find_popup()
+                    return True
+                if find is not None and find.text():
+                    self._clear_section_find()
+                    return True
+        # Prefer press over itemClicked so the list closes even if focus shifts.
+        if (popup is not None
+                and event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton
+                and (obj is popup or obj is popup.viewport())):
+            vp = popup.viewport()
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            if obj is popup:
+                pos = vp.mapFrom(popup, pos)
+            if self._section_find_pick_at(pos):
+                return True
+        if event.type() == QEvent.Type.FocusOut and obj is find:
+            QTimer.singleShot(0, self._hide_section_find_popup_if_unfocused)
+        return super().eventFilter(obj, event)
+
+    def _hide_section_find_popup_if_unfocused(self) -> None:
+        find = getattr(self, "_section_find", None)
+        popup = getattr(self, "_section_find_popup", None)
+        if find is None or popup is None:
+            return
+        if not popup.isVisible():
+            return
+        # Keep open while the pointer is over the list (click in progress).
+        try:
+            gp = QCursor.pos()
+            if QRect(popup.mapToGlobal(QPoint(0, 0)), popup.size()).contains(gp):
+                return
+        except Exception:
+            pass
+        fw = QApplication.focusWidget()
+        if fw is find:
+            return
+        self._hide_section_find_popup()
+
     def _rebuild_symptom_guide_panel(self) -> None:
         from .stats_symptom_landing import (
             available_symptom_cards,
@@ -12452,7 +12787,8 @@ class _StatsPanel(QWidget):
             grid.addWidget(btn, r, c)
 
     def _scope_suffix(self) -> str:
-        return " (cursor range)" if self._stats_range() is not None else ""
+        # Empty when ranged — C1–Cn is shown via the section scope chip / plot banner.
+        return ""
 
     def _plot_scope_banner(self) -> Tuple[bool, str, str]:
         """Return (is_scoped, badge_label, detail_text) for metrics plot dialogs."""
@@ -12593,6 +12929,48 @@ class _StatsPanel(QWidget):
                 return None
             title = f"{n_active} Active Cores — Interval Duration{scope}"
             return title, pts, QColor("#64B5F6")
+        if kind == "idle":
+            pts = _idle_fragment_plot_points(trace, mk, lo, hi)
+            if not pts:
+                return None
+            title = f"{mk} — Idle Fragment Duration{scope}"
+            return title, pts, QColor(_core_color(mk))
+        if kind == "sync_hold":
+            pts = _sync_hold_plot_points(trace, mk, lo, hi)
+            if not pts:
+                return None
+            title = f"{mk} — Hold Duration{scope}"
+            return title, pts, QColor("#64B5F6")
+        if kind == "activation":
+            pts = _activation_latency_plot_points(
+                trace, mk, self._ux_events(trace, lo, hi), lo, hi)
+            if not pts:
+                return None
+            raw = trace.task_repr.get(mk, mk)
+            name = _task_display_name(raw)
+            color = _task_color(raw)
+            title = f"{name} — Activation Latency vs Ideal{scope}"
+            return title, pts, color
+        if kind == "ready_gap":
+            pts = _ready_gap_plot_points(trace, mk, lo, hi)
+            if not pts:
+                return None
+            raw = trace.task_repr.get(mk, mk)
+            name = _task_display_name(raw)
+            color = _task_color(raw)
+            title = f"{name} — Ready-Gap Duration{scope}"
+            return title, pts, color
+        if kind == "mutex_wait":
+            obj = self._plot_mutex_object or ""
+            waits = pair_mutex_waits(harvest_mutex_holds(trace, lo, hi))
+            pts = _mutex_wait_plot_points(waits, mk, obj)
+            if not pts:
+                return None
+            raw = trace.task_repr.get(mk, mk)
+            name = _task_display_name(raw)
+            color = _task_color(raw)
+            title = f"{name} ← {obj} — Mutex Wait Duration{scope}"
+            return title, pts, color
         segs = trace.seg_map_by_merge_key.get(mk, [])
         if not segs:
             return None
@@ -12668,6 +13046,7 @@ class _StatsPanel(QWidget):
         self._plot_kind = None
         self._plot_preemptor = None
         self._plot_interval_id = None
+        self._plot_mutex_object = None
 
     def set_ai_enabled(self, enabled: bool) -> None:
         """Gray out distribution / anomaly AI actions when Settings → AI is off."""
@@ -12827,10 +13206,12 @@ class _StatsPanel(QWidget):
 
     def _open_plot(self, trace, mk: str, kind: str,
                    preemptor: Optional[str] = None,
-                   interval_id: Optional[str] = None) -> None:
+                   interval_id: Optional[str] = None,
+                   mutex_object: Optional[str] = None) -> None:
         """Open a metrics distribution popup for the given task and metric kind."""
         self._plot_preemptor = preemptor
         self._plot_interval_id = interval_id
+        self._plot_mutex_object = mutex_object
         built = self._build_plot_points(trace, mk, kind)
         if built is None:
             return
@@ -12842,7 +13223,9 @@ class _StatsPanel(QWidget):
         self._plot_kind = kind
         y_as_time = kind not in ("tag",)
         show_variability = kind in (
-            "exec", "block", "inter", "response", "dispatch", "switch_overhead")
+            "exec", "block", "inter", "response", "dispatch", "switch_overhead",
+            "activation", "ready_gap", "idle", "sync_hold", "mutex_wait",
+            "concurrency")
         _on_click = self._on_plot_scatter_click
         if self._plot_dlg is not None:
             try:
@@ -14315,6 +14698,7 @@ class _StatsPanel(QWidget):
         self, rows: List[dict], headers: List[str], values_fn,
         ev_fn, ui_fs: str, empty_hint: str, section_id: str,
         trace: "BtfTrace", on_cell=None, keys_fn=None, on_row=None,
+        row_tip: Optional[str] = None,
     ) -> QWidget:
         host = QWidget()
         lay = QVBoxLayout(host)
@@ -14327,6 +14711,10 @@ class _StatsPanel(QWidget):
         table.setRowCount(len(rows))
         bg = QBrush(self._stats_table_colors()[0])
         link = QBrush(QColor("#88AAFF"))
+        tip = row_tip or (
+            "Click to view distribution chart"
+            if on_row is not None
+            else "Click to jump or open the matching plot")
         for r, row in enumerate(rows):
             vals = list(values_fn(row))
             keys = list(keys_fn(row)) if keys_fn is not None else [
@@ -14339,10 +14727,7 @@ class _StatsPanel(QWidget):
                 item.setData(Qt.ItemDataRole.UserRole, row)
                 if c == 0 or on_cell is not None:
                     item.setForeground(link)
-                    item.setToolTip(
-                        "Click to highlight the task on the timeline"
-                        if on_row is not None
-                        else "Click to jump or open the matching plot")
+                    item.setToolTip(tip)
                 table.setItem(r, c, item)
 
         def _cell_clicked(row: int, col: int) -> None:
@@ -14700,17 +15085,34 @@ class _StatsPanel(QWidget):
         return host
 
     def scroll_to_section(self, section_id: str) -> None:
+        """Expand *section_id* and pin its header to the top of the stats viewport.
+
+        Lockstep with Web ``applyDemoSections`` / ``scrollDemoSectionIntoView``:
+        expand, wait for layout settle marks (0/50/150/280 ms), then scroll so
+        the section header sits near the top (trailing pin pad as needed).
+        """
         sid = str(section_id or "").strip()
         if not sid:
             return
-        # Intentional Evidence/Investigate jump — skip scroll restore after rebuild.
+        # Intentional Evidence/Investigate/Find jump — skip scroll restore after rebuild.
         self._scroll_to_section_requested = True
         self._section_collapsed[sid] = False
         self._ensure_section_body(sid)
         self._update_section_header_icon(sid)
-        hdr = self._section_header_rows.get(sid)
-        if hdr is not None and hasattr(self, "_scroll"):
-            self._scroll.ensureWidgetVisible(hdr)
+        if sid not in self._section_header_rows:
+            return
+        app = QApplication.instance()
+        elapsed = 0
+        for mark in (0, 50, 150, 280):
+            delay = mark - elapsed
+            elapsed = mark
+            if app is not None and delay > 0:
+                loop = QEventLoop(self)
+                QTimer.singleShot(delay, loop.quit)
+                loop.exec()
+            elif app is not None:
+                app.processEvents()
+            self.scroll_section_into_view(sid, prefer_top=True)
 
     def set_active_filter_label(self, label: Optional[str]) -> None:
         """Step-1 item 6: show the active Filter next to the Statistics Scope."""
@@ -14870,7 +15272,7 @@ class _StatsPanel(QWidget):
         lo = hi = None
         if rng is not None:
             lo, hi, _n_cur = rng
-            scope_title = f" (cursor range C1–C{_n_cur})"
+            scope_title = f" (C1–C{_n_cur})"
         else:
             scope_title = ""
         core_rows = self._core_util_rows(trace, lo, hi)
@@ -15440,7 +15842,7 @@ class _StatsPanel(QWidget):
             f"<tr><td>{_esc(label)}</td><td>{_esc(kind)}</td><td>{peak}</td>"
             f"<td>{_esc(_format_time_trim(int(tam), ts))}</td>"
             f"<td>{endl}</td><td>{starv}</td></tr>"
-            for _k, kind, _p, label, peak, tam, endl, starv in lvl_rows_html
+            for _k, kind, _p, label, peak, tam, endl, starv, *_rest in lvl_rows_html
         ) or (
             '<tr><td colspan="6" class="empty">No queue / semaphore events '
             'in scope</td></tr>'
@@ -16142,7 +16544,7 @@ class _StatsPanel(QWidget):
             lo, hi, n_cur = rng
             total_ns = hi - lo
             span_str = _format_time(total_ns, trace.time_scale)
-            scope_suffix = f" (cursor range C1–C{n_cur})"
+            scope_suffix = f" (C1–C{n_cur})"
         else:
             total_ns = trace.time_max - trace.time_min
             span_str = _format_time(total_ns, trace.time_scale)
@@ -16986,7 +17388,7 @@ class _StatsPanel(QWidget):
             ])
             _lvl_csv = _sync_level_rows(trace, lo, hi)
             if _lvl_csv:
-                for _k, kind, _p, label, peak, tam, endl, starv in _lvl_csv:
+                for _k, kind, _p, label, peak, tam, endl, starv, *_rest in _lvl_csv:
                     writer.writerow([
                         label, kind, peak,
                         _us(_format_time(int(tam), trace.time_scale)),
@@ -17327,6 +17729,7 @@ class _StatsPanel(QWidget):
                         item.setBackground(_item_bg)
                         if c == 0:
                             item.setData(Qt.ItemDataRole.UserRole, core)
+                            item.setForeground(QBrush(QColor("#88AAFF")))
                             item.setToolTip(f"Click to show \u2018{core}\u2019 in Core View")
                         tbl.setItem(r, c, item)
                 tbl.setSortingEnabled(True)
@@ -17594,7 +17997,9 @@ class _StatsPanel(QWidget):
                 "idle",
                 trace,
                 on_row=lambda r: (
-                    self.task_clicked.emit(str(r[0])) if r and r[0] else None),
+                    self._open_plot(trace, str(r[0]), "idle")
+                    if r and r[0] else None),
+                row_tip="Click to view idle-fragment distribution chart",
                 keys_fn=lambda r: [
                     r[0].lower(), int(r[1]), int(r[2]), int(r[4]), int(r[5]),
                 ],
@@ -17742,8 +18147,13 @@ class _StatsPanel(QWidget):
         )
 
         # -- Core migrations ----------------------------------------------
-        empty_mig = ("No multi-core tasks in cursor range" if scope
-                     else "No tasks ran on more than one core")
+        if rng is not None:
+            empty_mig = stats_empty_label(
+                "stats_scoped_empty",
+                message="No multi-core tasks in cursor range",
+            )
+        else:
+            empty_mig = empty_state_message("stats_needs_multicore")
 
         def _on_mig_row(mk: str) -> None:
             self._open_plot(trace, mk, "mig_dwell")
@@ -17947,6 +18357,7 @@ class _StatsPanel(QWidget):
                     bnc = int(pair[3]) if len(pair) > 3 else 0
                     avg_gap = int(pair[4]) if len(pair) > 4 else 0
                     _set_pair(fc, tc, cnt, bnc, avg_gap)
+                    self._open_pair_plot(trace, fc, tc)
 
             tbl.cellClicked.connect(_on_pair_row)
             self._wire_stats_table_row_hover(tbl)
@@ -18079,8 +18490,13 @@ class _StatsPanel(QWidget):
         )
 
         # -- Execution time per slice -------------------------------------
-        empty_exec = ("No slices fully inside cursor range" if scope
-                      else "No user-task slices found")
+        if rng is not None:
+            empty_exec = stats_empty_label(
+                "stats_scoped_empty",
+                message="No slices fully inside cursor range",
+            )
+        else:
+            empty_exec = "No user-task slices found"
 
         def _populate_exec(blay: QVBoxLayout) -> None:
             _exec_rows = self._exec_slice_rows(trace, lo, hi)
@@ -18151,13 +18567,22 @@ class _StatsPanel(QWidget):
         )
 
         # -- Dispatch / scheduling latency (STI resume / create → run) ----
-        empty_dispatch = (
-            "No dispatch samples in cursor range (needs STI resume Name[id] "
-            "or task create → first run)"
-            if scope else
-            "No dispatch samples — needs STI task resume Name[id] "
-            "(vTaskResume) or create→first-run pairs"
-        )
+        if rng is not None:
+            empty_dispatch = stats_empty_label(
+                "stats_needs_sti",
+                message=(
+                    "No dispatch samples in cursor range (needs STI resume "
+                    "Name[id] or task create → first run)"
+                ),
+            )
+        else:
+            empty_dispatch = stats_empty_label(
+                "stats_needs_sti",
+                message=(
+                    "No dispatch samples — needs STI task resume Name[id] "
+                    "(vTaskResume) or create→first-run pairs"
+                ),
+            )
 
         def _populate_dispatch(blay: QVBoxLayout) -> None:
             _disp_rows_raw = self._dispatch_latency_rows(trace, lo, hi)
@@ -18233,7 +18658,7 @@ class _StatsPanel(QWidget):
                 count_header="Activations",
                 section_id="activation",
                 include_variability=True,
-                on_row_click=lambda mk: self.task_clicked.emit(str(mk)),
+                on_row_click=lambda mk: self._open_plot(trace, str(mk), "activation"),
             ))
 
         self._add_collapsible_section(
@@ -18261,12 +18686,19 @@ class _StatsPanel(QWidget):
                 ],
                 lambda r: None,
                 _fs,
-                "No ready-gaps in this scope",
+                (
+                    stats_empty_label(
+                        "stats_scoped_empty",
+                        message="No ready-gaps in this scope",
+                    )
+                    if rng is not None else "No ready-gaps in this scope"
+                ),
                 "ready_gap",
                 trace,
                 on_row=lambda r: (
-                    self.task_clicked.emit(str(r[0]))
+                    self._open_plot(trace, str(r[0]), "ready_gap")
                     if r and r[0] else None),
+                row_tip="Click to view ready-gap distribution chart",
                 keys_fn=lambda r: [
                     r[1].lower(), r[2], int(r[3]), int(r[4]), int(r[5]),
                     int(r[6]), float(r[7]),
@@ -18838,6 +19270,22 @@ class _StatsPanel(QWidget):
                                 item.setForeground(QBrush(QColor(color)))
                             table.setItem(ri, ci, item)
                     table.setSortingEnabled(True)
+
+                    def _on_sync_row(row: int, _col: int) -> None:
+                        item = table.item(row, 0)
+                        if item is None:
+                            return
+                        key = item.data(Qt.ItemDataRole.UserRole)
+                        if key:
+                            self._open_plot(trace, str(key), "sync_hold")
+
+                    table.cellClicked.connect(_on_sync_row)
+                    self._wire_stats_table_click_cursor(table)
+                    for r in range(table.rowCount()):
+                        it = table.item(r, 0)
+                        if it is not None:
+                            it.setToolTip("Click to view hold-duration distribution chart")
+                            it.setForeground(QBrush(QColor("#88AAFF")))
                     self._wire_stats_table_row_hover(table)
                     self._wrap_table_with_resizer(play, table, "sync")
                     _issues_display, _issues_cap_note = cap_stats_table_rows(
@@ -18995,6 +19443,10 @@ class _StatsPanel(QWidget):
                         item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                         item.setBackground(_item_bg)
                         item.setTextAlignment(_queue_align[ci] | Qt.AlignmentFlag.AlignVCenter)
+                        if ci == 0:
+                            item.setData(Qt.ItemDataRole.UserRole, _key)
+                            item.setForeground(QBrush(QColor("#88AAFF")))
+                            item.setToolTip("Click to view hold-duration distribution chart")
                         if ci == 4 and bounces > 0:
                             item.setForeground(QBrush(QColor("#F39C12")))
                         if ci == 5 and holds and bpct >= _WF_PAIR_BOUNCE_PCT:
@@ -19006,6 +19458,17 @@ class _StatsPanel(QWidget):
                             item.setForeground(QBrush(QColor(color)))
                         table.setItem(ri, ci, item)
                 table.setSortingEnabled(True)
+
+                def _on_queue_row(row: int, _col: int) -> None:
+                    item = table.item(row, 0)
+                    if item is None:
+                        return
+                    key = item.data(Qt.ItemDataRole.UserRole)
+                    if key:
+                        self._open_plot(trace, str(key), "sync_hold")
+
+                table.cellClicked.connect(_on_queue_row)
+                self._wire_stats_table_click_cursor(table)
                 self._wire_stats_table_row_hover(table)
                 self._wrap_table_with_resizer(blay, table, "queue")
 
@@ -19020,6 +19483,21 @@ class _StatsPanel(QWidget):
             def _populate_sync_level(blay: QVBoxLayout) -> None:
                 _rows = _sync_level_rows(trace, lo, hi)
                 scale = trace.time_scale
+
+                def _on_sync_level_row(row) -> None:
+                    if not row:
+                        return
+                    label = str(row[3])
+                    peak_start = row[8] if len(row) > 8 else None
+                    first_starve = row[9] if len(row) > 9 else None
+                    if peak_start is not None:
+                        jump, note = int(peak_start), f"{label} — peak onset"
+                    elif first_starve is not None:
+                        jump, note = int(first_starve), f"{label} — first starve"
+                    else:
+                        return
+                    self.plot_point_clicked.emit(None, jump, note)
+
                 blay.addWidget(self._build_click_rows_table(
                     _rows,
                     ["Object", "Kind", "Peak", "Time at peak", "End level",
@@ -19030,12 +19508,20 @@ class _StatsPanel(QWidget):
                     ],
                     lambda r: None,
                     _fs,
-                    "No queue / semaphore events in this scope",
+                    (
+                        stats_empty_label(
+                            "stats_scoped_empty",
+                            message="No queue / semaphore events in this scope",
+                        )
+                        if rng is not None else "No queue / semaphore events in this scope"
+                    ),
                     "sync_level",
                     trace,
                     keys_fn=lambda r: [
                         r[3].lower(), r[1], r[4], int(r[5]), r[6], r[7],
                     ],
+                    on_row=_on_sync_level_row,
+                    row_tip="Click to jump to peak onset (or first starve)",
                 ))
 
             self._add_collapsible_section(
@@ -19063,6 +19549,14 @@ class _StatsPanel(QWidget):
             waits = pair_mutex_waits(harvest_mutex_holds(trace, lo, hi))
             rows = mutex_blocking_table(waits)
             scale = trace.time_scale
+            def _on_mutex_block_row(r):
+                if not isinstance(r, dict):
+                    return
+                mk = str(r.get("mk") or "")
+                obj = str(r.get("object") or "")
+                if mk and obj:
+                    self._open_plot(trace, mk, "mutex_wait", mutex_object=obj)
+
             blay.addWidget(self._build_click_rows_table(
                 rows,
                 ["Task", "Object", "Owner", "Count", "Total", "Max"],
@@ -19082,6 +19576,8 @@ class _StatsPanel(QWidget):
                     "section": "mutex_block",
                 },
                 _fs, "No mutex waits in this scope", "mutex_block", trace,
+                on_row=_on_mutex_block_row,
+                row_tip="Click to view mutex-wait distribution chart",
                 keys_fn=lambda r: [
                     str(r.get("task") or "").lower(),
                     str(r.get("object") or "").lower(),
@@ -19707,6 +20203,8 @@ class _RcSettings:
             "show_marks":        "true",
             "show_find":         "true",
             "show_ai":           "true",
+            "show_incident_overlay": "false",
+            "link_compare_viewports": "false",
         },
         "zoom": {
             "timescale_per_px": "-1",
@@ -20502,6 +21000,8 @@ class _SettingsDialog(QDialog):
                  show_find: bool = True,
                  show_ai: bool = True,
                  show_hover_highlight: bool,
+                 show_incident_overlay: bool = False,
+                 link_compare_viewports: bool = False,
                  zoom_unit: str,
                  label_width: int, row_height: int, row_gap: int,
                  sti_row_h: int, sti_waveform_h: int, sti_line_style: str,
@@ -20705,6 +21205,14 @@ class _SettingsDialog(QDialog):
         self._cpu_load_cb = _switch("CPU load graph")
         self._cpu_load_cb.setChecked(cpu_load)
         v2.addWidget(self._indented(self._cpu_load_cb))
+        self._incident_overlay_cb = _switch(
+            "Timeline incident markers (findings + anomalies)")
+        self._incident_overlay_cb.setChecked(show_incident_overlay)
+        v2.addWidget(self._indented(self._incident_overlay_cb))
+        self._link_compare_cb = _switch(
+            "Link A/B timeline zoom when switching compare tabs")
+        self._link_compare_cb.setChecked(link_compare_viewports)
+        v2.addWidget(self._indented(self._link_compare_cb))
 
         v2.addWidget(self._section("Timeline overlays"))
         self._sti_cb = _switch("STI events")
@@ -21760,6 +22268,12 @@ class _SettingsDialog(QDialog):
     def show_grid(self) -> bool:          return self._grid_cb.isChecked()
     @property
     def cpu_load(self) -> bool:           return self._cpu_load_cb.isChecked()
+    @property
+    def show_incident_overlay(self) -> bool:
+        return self._incident_overlay_cb.isChecked()
+    @property
+    def link_compare_viewports(self) -> bool:
+        return self._link_compare_cb.isChecked()
     @property
     def show_legend(self) -> bool:        return self._legend_cb.isChecked()
     @property

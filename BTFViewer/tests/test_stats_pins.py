@@ -9,11 +9,15 @@ _bootstrap.install()
 
 from btf_viewer_pkg.config import (  # noqa: E402
     STATS_PINNABLE_SECTIONS,
+    STATS_SECTION_TITLES,
+    command_palette_stats_section_actions,
+    find_stats_sections,
     move_stats_section,
     normalize_stats_pins,
     normalize_stats_section_order,
     stats_pins_to_rc,
     stats_section_order_to_rc,
+    stats_section_title,
 )
 
 
@@ -33,6 +37,20 @@ class StatsPinsTest(unittest.TestCase):
                     "response", "crit_path", "jitter", "distrib", "patterns",
                     "preempt_matrix", "mutex_block", "core_time"):
             self.assertIn(sid, STATS_PINNABLE_SECTIONS)
+
+    def test_section_titles_cover_catalogue(self) -> None:
+        self.assertEqual(set(STATS_SECTION_TITLES), set(STATS_PINNABLE_SECTIONS))
+        self.assertEqual(
+            STATS_SECTION_TITLES["ready_gap"], "Ready-Gap (Starvation)")
+        self.assertEqual(
+            STATS_SECTION_TITLES["sync_level"],
+            "Queue Backlog / Semaphore Level")
+        hits = find_stats_sections("starvation")
+        self.assertTrue(any(sid == "ready_gap" for sid, _ in hits))
+        actions = command_palette_stats_section_actions()
+        self.assertEqual(len(actions), len(STATS_PINNABLE_SECTIONS))
+        self.assertTrue(all(a[0].startswith("stats-section:") for a in actions))
+        self.assertEqual(stats_section_title("exec"), "Execution Time Per Slice")
 
 
 class StatsSectionOrderTest(unittest.TestCase):

@@ -28,7 +28,7 @@ After import: review **Authentication**, paste a key or use **Sign in…** (open
 | `label` | Optional combo label for an extra preset (`DeepSeek`). Defaults to a title-cased id. |
 | `base_url` | OpenAI-compatible API root. A bare host gains `/v1`, and Ollama's native `/api` root is corrected automatically. |
 | `model` | Model id served by that endpoint. Refresh the **Model** list (dropdown) or **Test connection** to see what the endpoint serves. For Gemini prefer the rolling aliases (`gemini-flash-lite-latest`, `gemini-flash-latest`) — pinned versions differ per account and are retired over time. For Grok / DeepSeek, pick a served id after refresh. |
-| `api_key` | Optional. Leave empty (`""`) to use Settings or `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` (same order on Desktop and Web). Custom names such as `CURSOR_API_KEY` are not read in the GUI — paste that key on the preset. See [README → API keys](../README.md#ai-api-keys). |
+| `api_key` | Optional. Leave empty (`""`) to use Settings or `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` (same order on Desktop and Web). Custom names such as `CURSOR_API_KEY` are not read in the GUI — paste that key on the preset. See [README → API keys](../../README.md#ai-api-keys). |
 | `auth_mode` | Optional. `none` (local), `api_key`, or `browser` (`sign_in` / `oauth` also accepted). Controls Settings → **Authentication**. Use `none` for local Ollama, `api_key` to paste a provider key, `browser` when the user should **Sign in…** first. Example files include a `//` line comment above this field. |
 | `tls_verify` | Optional. `true` (default) verifies the HTTPS certificate. Set `false` (or `insecure_tls: true`) for a self-signed / private-CA gateway. Desktop then skips certificate checks; browsers still verify — trust the cert, use `http://`, or use the Desktop app. |
 | `response_language` | Optional reply language for the assistant. |
@@ -76,14 +76,14 @@ make ai-test-context
 | `<base-url>` | OpenAI-compatible API root (suite default or per `<model>`) |
 | `<model id="…">` | Live model id to score |
 | `<tls-verify>` | `false` (shipped default) skips checks for a self-signed / private-CA cert; `true` verifies the HTTPS certificate. CLI `--insecure` forces false. |
-| `<api-key env="VAR">` | Desktop `ai-test` only: read `VAR` from the environment; if unset, use the element text, then the three shared names. Leave the text empty and do not commit secrets. GUI chat does not use `env`. [README → API keys](../README.md#ai-api-keys). |
+| `<api-key env="VAR">` | Desktop `ai-test` only: read `VAR` from the environment; if unset, use the element text, then the three shared names. Leave the text empty and do not commit secrets. GUI chat does not use `env`. [README → API keys](../../README.md#ai-api-keys). |
 | `<timeout-s>` | Per-request timeout |
 | `<preset>` | Optional (`gemini` for Gemini OpenAI-compat) |
 
 | `--compare-context` | Run Compact, Balanced, and Full evidence; compare score, tokens, and latency |
 | `--context-mode` | Single mode: `compact`, `balanced`, or `full` (default `full`) |
 
-`--models id1,id2` (or `make ai-test-context AI_MODELS=id1,id2`) runs a subset of the XML list. A custom copy may mark models `optional="true"` so they are skipped when their key is missing unless you name them. `--only-cases id1,id2` (or `AI_CASES=id1,id2`) scores a subset of the dataset — useful for re-running a few cases that came back `ERROR`. When `-o` already exists, a narrowed run like this **merges** into it (only the rerun models/context-modes/cases change; everything else is untouched) — pass `--replace-report` (`AI_REPLACE=1`) to overwrite fully instead. Context-mode flags: [AI.md → Context mode benchmarking](../AI.md#context-mode-benchmarking). Full suite: [Benchmark / evaluation suite](../AI.md#benchmark-suite).
-Setup, tools, and troubleshooting: [AI.md](../AI.md).
+`--models id1,id2` (or `make ai-test-context AI_MODELS=id1,id2`) runs a subset of the XML list. A custom copy may mark models `optional="true"` so they are skipped when their key is missing unless you name them. `--only-cases id1,id2` (or `AI_CASES=id1,id2`) scores a subset of the dataset — useful for re-running a few cases that came back `ERROR`. When `-o` already exists, a narrowed run like this **merges** into it (only the rerun models/context-modes/cases change; everything else is untouched) — pass `--replace-report` (`AI_REPLACE=1`) to overwrite fully instead. Context-mode flags: [AI.md → Context mode benchmarking](../../AI.md#context-mode-benchmarking). Full suite: [Benchmark / evaluation suite](../../AI.md#benchmark-suite).
+Setup, tools, and troubleshooting: [AI.md](../../AI.md).
 
-Panel usage: [BTFViewer README → AI Assistant](../README.md#ai-assistant).
+Panel usage: [BTFViewer README → AI Assistant](../../README.md#ai-assistant).
