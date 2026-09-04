@@ -24,9 +24,9 @@ preview: $(RELEASE)
 	@echo "→ http://localhost:4173/btf_viewer.html"
 	cd $(BUILDS) && python3 -m http.server 4173
 
-## Install npm dependencies (runs only when package.json changes)
-node_modules: package.json
-	$(NPM) install
+## Install npm dependencies (runs only when package.json / lockfile change)
+node_modules: package.json package-lock.json
+	$(NPM) ci
 	@touch node_modules
 
 ## Remove build output

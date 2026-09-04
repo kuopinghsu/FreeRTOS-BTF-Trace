@@ -79,7 +79,6 @@ __pycache__
 # Web viewer build artifacts
 BTFViewer/web/node_modules/
 BTFViewer/web/dist/
-BTFViewer/web/package-lock.json
 BTFViewer/scripts/.monolith_doc_cache.py
 .vite/
 
