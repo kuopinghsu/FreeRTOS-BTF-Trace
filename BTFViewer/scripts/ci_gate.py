@@ -7,6 +7,7 @@ Checks (no pandoc / no Qt / no npm required unless regenerating builds):
 * EN ↔ zh-TW heading-count / level parity for the shipped manuals
 * Stable section-ID mappings (shared ``<a id>`` + translated zh-TW titles)
 * PDF freshness vs matching Markdown (git history + dirty tree)
+* Statistics Reference HTML freshness vs STATISTICS.md (git history + dirty tree)
 * Web HTML freshness vs web sources (git history + dirty tree)
 
 Exit codes: 0 = pass, 1 = failures printed to stderr.
@@ -130,6 +131,18 @@ PY_ARTIFACT = "builds/btf_viewer.py"
 PY_SOURCE_PATHS: Sequence[str] = (
     "btf_viewer_pkg",
     "scripts/bundle_viewer.py",
+)
+
+DOCS_HTML_ARTIFACTS: Sequence[str] = (
+    "builds/btf_viewer.hlp",
+    "web/src/generated/statistics-en.inline.html",
+)
+DOCS_HTML_SOURCE_PATHS: Sequence[str] = (
+    "STATISTICS.md",
+    "scripts/build_docs_html.py",
+    "scripts/render_math.mjs",
+    "scripts/package.json",
+    "scripts/package-lock.json",
 )
 
 _MD_LINK_RE = re.compile(
@@ -535,6 +548,38 @@ def check_py_freshness() -> List[str]:
     return errors
 
 
+def check_docs_html_freshness() -> List[str]:
+    """History/dirty freshness for the pre-rendered Statistics Reference HTML
+    (btf_viewer.hlp + statistics-en.inline.html) vs STATISTICS.md and the
+    build script. Same git-timestamp/dirty-tree approach as PDF freshness —
+    no pandoc/npm/mathjax rebuild needed in CI to catch a forgotten
+    ``python3 scripts/build_docs_html.py`` after editing STATISTICS.md."""
+    errors: List[str] = []
+    src_t = git_commit_time(*DOCS_HTML_SOURCE_PATHS)
+    src_dirty = any_dirty(DOCS_HTML_SOURCE_PATHS)
+    for artifact_rel in DOCS_HTML_ARTIFACTS:
+        artifact = ROOT / artifact_rel
+        if not artifact.is_file():
+            errors.append(
+                f"docs-html: missing {artifact_rel} "
+                f"(run: python3 scripts/build_docs_html.py)"
+            )
+            continue
+        art_t = git_commit_time(artifact_rel)
+        if src_t and art_t and src_t > art_t:
+            errors.append(
+                f"docs-html: {artifact_rel} is older than STATISTICS.md/build script "
+                f"(sources {src_t} > artifact {art_t}); "
+                f"run: python3 scripts/build_docs_html.py"
+            )
+        if src_dirty and not git_dirty(artifact_rel):
+            errors.append(
+                f"docs-html: STATISTICS.md or the build script has local edits but "
+                f"{artifact_rel} does not; run: python3 scripts/build_docs_html.py"
+            )
+    return errors
+
+
 def print_html_build_date() -> int:
     html = ROOT / HTML_ARTIFACT
     if not html.is_file():
@@ -561,6 +606,8 @@ def run_selected(args: argparse.Namespace) -> int:
         selected.append(("section mappings", check_section_mappings))
     if args.all or args.pdf:
         selected.append(("PDF freshness", check_pdf_freshness))
+    if args.all or args.docs_html:
+        selected.append(("docs-html freshness", check_docs_html_freshness))
     if args.all or args.html:
         selected.append(("HTML freshness", check_html_freshness))
     if args.all or args.bundle:
@@ -572,6 +619,7 @@ def run_selected(args: argparse.Namespace) -> int:
             ("heading parity", check_heading_parity),
             ("section mappings", check_section_mappings),
             ("PDF freshness", check_pdf_freshness),
+            ("docs-html freshness", check_docs_html_freshness),
             ("HTML freshness", check_html_freshness),
             ("bundle freshness", check_py_freshness),
         ]
@@ -603,6 +651,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="EN/zh-TW heading parity + stable section-ID mappings",
     )
     parser.add_argument("--pdf", action="store_true", help="PDF freshness vs Markdown")
+    parser.add_argument(
+        "--docs-html", dest="docs_html", action="store_true",
+        help="Statistics Reference HTML (btf_viewer.hlp / statistics-en.inline.html) freshness",
+    )
     parser.add_argument("--html", action="store_true", help="Web HTML freshness")
     parser.add_argument("--bundle", action="store_true", help="Desktop bundle freshness")
     parser.add_argument(

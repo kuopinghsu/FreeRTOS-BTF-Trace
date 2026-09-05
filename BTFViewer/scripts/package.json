@@ -1,0 +1,8 @@
+{
+  "name": "btfviewer-docgen-scripts",
+  "private": true,
+  "description": "Build-time Node dependencies for build_docs_html.py (STATISTICS.md math-block rendering). Not part of the shipped app.",
+  "dependencies": {
+    "mathjax-full": "^3.2.2"
+  }
+}

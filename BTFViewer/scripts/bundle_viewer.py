@@ -58,6 +58,7 @@ BUNDLE_MODULES: list[str] = [
     "findings_triage",
     "stats_symptom_landing",
     "stats",
+    "stats_reference",
     "mvvm/base",
     "mvvm/models",
     "mvvm/app_settings",
@@ -179,6 +180,12 @@ from PySide6.QtGui import (
     QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTextCharFormat, QTextCursor, QTextOption, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer
+# QtWebEngineWidgets must be imported before QApplication is constructed
+# (Qt.AA_ShareOpenGLContexts side effect) — see _imports.py for why.
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+except ImportError:
+    QWebEngineView = None
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,

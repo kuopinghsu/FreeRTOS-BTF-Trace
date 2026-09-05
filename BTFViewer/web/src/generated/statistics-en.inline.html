@@ -1,0 +1,1521 @@
+<!doctype html>
+<html data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>BTFViewer Statistics Reference</title>
+<style>
+:root {
+  --bg: #1E1E1E;
+  --panel-bg: #252526;
+  --border: #3C3C3C;
+  --fg: #D4D4D4;
+  --fg-dim: #858585;
+  --accent: #4F8BFF;
+  --code-bg: #2D2D2D;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+html[data-theme="light"] {
+  --bg: #FFFFFF;
+  --panel-bg: #F5F5F5;
+  --border: #DDDDDD;
+  --fg: #1E1E1E;
+  --fg-dim: #666666;
+  --accent: #0066CC;
+  --code-bg: #EEEEEE;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  line-height: 1.65;
+  padding: 28px 34px 80px;
+  max-width: 860px;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4 { color: var(--fg); font-weight: 700; line-height: 1.3; }
+h1 { font-size: 22px; margin: 0 0 14px; }
+h2 { font-size: 18px; margin: 40px 0 14px; padding-top: 18px; border-top: 1px solid var(--border); }
+h2:first-of-type { border-top: none; padding-top: 0; }
+h3 { font-size: 15.5px; margin: 30px 0 10px; }
+p { margin: 0 0 14px; color: #C7C7C7; }
+html[data-theme="light"] p { color: #333; }
+code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+pre { background: var(--code-bg); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 0 0 18px; font-size: 12.5px; }
+th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: var(--panel-bg); font-weight: 700; }
+.mermaid-diagram { margin: 0 0 18px; }
+.mermaid-diagram svg { max-width: 100%; height: auto; }
+.math-block { overflow-x: auto; margin: 0 0 18px; }
+mjx-container[jax="SVG"] { color: inherit; }
+blockquote {
+  margin: 0 0 14px;
+  padding: 6px 14px;
+  border-left: 3px solid var(--border);
+  color: var(--fg-dim);
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 30px 0; }
+</style>
+<style id="MJX-SVG-styles">
+mjx-container[jax="SVG"] {
+  direction: ltr;
+}
+
+mjx-container[jax="SVG"] > svg {
+  overflow: visible;
+  min-height: 1px;
+  min-width: 1px;
+}
+
+mjx-container[jax="SVG"] > svg a {
+  fill: blue;
+  stroke: blue;
+}
+
+mjx-container[jax="SVG"][display="true"] {
+  display: block;
+  text-align: center;
+  margin: 1em 0;
+}
+
+mjx-container[jax="SVG"][display="true"][width="full"] {
+  display: flex;
+}
+
+mjx-container[jax="SVG"][justify="left"] {
+  text-align: left;
+}
+
+mjx-container[jax="SVG"][justify="right"] {
+  text-align: right;
+}
+
+g[data-mml-node="merror"] > g {
+  fill: red;
+  stroke: red;
+}
+
+g[data-mml-node="merror"] > rect[data-background] {
+  fill: yellow;
+  stroke: none;
+}
+
+g[data-mml-node="mtable"] > line[data-line], svg[data-table] > g > line[data-line] {
+  stroke-width: 70px;
+  fill: none;
+}
+
+g[data-mml-node="mtable"] > rect[data-frame], svg[data-table] > g > rect[data-frame] {
+  stroke-width: 70px;
+  fill: none;
+}
+
+g[data-mml-node="mtable"] > .mjx-dashed, svg[data-table] > g > .mjx-dashed {
+  stroke-dasharray: 140;
+}
+
+g[data-mml-node="mtable"] > .mjx-dotted, svg[data-table] > g > .mjx-dotted {
+  stroke-linecap: round;
+  stroke-dasharray: 0,140;
+}
+
+g[data-mml-node="mtable"] > g > svg {
+  overflow: visible;
+}
+
+[jax="SVG"] mjx-tool {
+  display: inline-block;
+  position: relative;
+  width: 0;
+  height: 0;
+}
+
+[jax="SVG"] mjx-tool > mjx-tip {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+mjx-tool > mjx-tip {
+  display: inline-block;
+  padding: .2em;
+  border: 1px solid #888;
+  font-size: 70%;
+  background-color: #F8F8F8;
+  color: black;
+  box-shadow: 2px 2px 5px #AAAAAA;
+}
+
+g[data-mml-node="maction"][data-toggle] {
+  cursor: pointer;
+}
+
+mjx-status {
+  display: block;
+  position: fixed;
+  left: 1em;
+  bottom: 1em;
+  min-width: 25%;
+  padding: .2em .4em;
+  border: 1px solid #888;
+  font-size: 90%;
+  background-color: #F8F8F8;
+  color: black;
+}
+
+foreignObject[data-mjx-xml] {
+  font-family: initial;
+  line-height: normal;
+  overflow: visible;
+}
+
+mjx-container[jax="SVG"] path[data-c], mjx-container[jax="SVG"] use[data-c] {
+  stroke-width: 3;
+}
+</style>
+</head>
+<body>
+<svg aria-hidden="true" style="position:absolute;width:0;height:0" xmlns="http://www.w3.org/2000/svg"><defs><path id="MJX-TEX-I-1D447" d="M40 437Q21 437 21 445Q21 450 37 501T71 602L88 651Q93 669 101 677H569H659Q691 677 697 676T704 667Q704 661 687 553T668 444Q668 437 649 437Q640 437 637 437T631 442L629 445Q629 451 635 490T641 551Q641 586 628 604T573 629Q568 630 515 631Q469 631 457 630T439 622Q438 621 368 343T298 60Q298 48 386 46Q418 46 427 45T436 36Q436 31 433 22Q429 4 424 1L422 0Q419 0 415 0Q410 0 363 1T228 2Q99 2 64 0H49Q43 6 43 9T45 27Q49 40 55 46H83H94Q174 46 189 55Q190 56 191 56Q196 59 201 76T241 233Q258 301 269 344Q339 619 339 625Q339 630 310 630H279Q212 630 191 624Q146 614 121 583T67 467Q60 445 57 441T43 437H40Z"></path><path id="MJX-TEX-I-1D44F" d="M73 647Q73 657 77 670T89 683Q90 683 161 688T234 694Q246 694 246 685T212 542Q204 508 195 472T180 418L176 399Q176 396 182 402Q231 442 283 442Q345 442 383 396T422 280Q422 169 343 79T173 -11Q123 -11 82 27T40 150V159Q40 180 48 217T97 414Q147 611 147 623T109 637Q104 637 101 637H96Q86 637 83 637T76 640T73 647ZM336 325V331Q336 405 275 405Q258 405 240 397T207 376T181 352T163 330L157 322L136 236Q114 150 114 114Q114 66 138 42Q154 26 178 26Q211 26 245 58Q270 81 285 114T318 219Q336 291 336 325Z"></path><path id="MJX-TEX-I-1D45C" d="M201 -11Q126 -11 80 38T34 156Q34 221 64 279T146 380Q222 441 301 441Q333 441 341 440Q354 437 367 433T402 417T438 387T464 338T476 268Q476 161 390 75T201 -11ZM121 120Q121 70 147 48T206 26Q250 26 289 58T351 142Q360 163 374 216T388 308Q388 352 370 375Q346 405 306 405Q243 405 195 347Q158 303 140 230T121 120Z"></path><path id="MJX-TEX-I-1D460" d="M131 289Q131 321 147 354T203 415T300 442Q362 442 390 415T419 355Q419 323 402 308T364 292Q351 292 340 300T328 326Q328 342 337 354T354 372T367 378Q368 378 368 379Q368 382 361 388T336 399T297 405Q249 405 227 379T204 326Q204 301 223 291T278 274T330 259Q396 230 396 163Q396 135 385 107T352 51T289 7T195 -10Q118 -10 86 19T53 87Q53 126 74 143T118 160Q133 160 146 151T160 120Q160 94 142 76T111 58Q109 57 108 57T107 55Q108 52 115 47T146 34T201 27Q237 27 263 38T301 66T318 97T323 122Q323 150 302 164T254 181T195 196T148 231Q131 256 131 289Z"></path><path id="MJX-TEX-I-1D461" d="M26 385Q19 392 19 395Q19 399 22 411T27 425Q29 430 36 430T87 431H140L159 511Q162 522 166 540T173 566T179 586T187 603T197 615T211 624T229 626Q247 625 254 615T261 596Q261 589 252 549T232 470L222 433Q222 431 272 431H323Q330 424 330 420Q330 398 317 385H210L174 240Q135 80 135 68Q135 26 162 26Q197 26 230 60T283 144Q285 150 288 151T303 153H307Q322 153 322 145Q322 142 319 133Q314 117 301 95T267 48T216 6T155 -11Q125 -11 98 4T59 56Q57 64 57 83V101L92 241Q127 382 128 383Q128 385 77 385H26Z"></path><path id="MJX-TEX-I-1D452" d="M39 168Q39 225 58 272T107 350T174 402T244 433T307 442H310Q355 442 388 420T421 355Q421 265 310 237Q261 224 176 223Q139 223 138 221Q138 219 132 186T125 128Q125 81 146 54T209 26T302 45T394 111Q403 121 406 121Q410 121 419 112T429 98T420 82T390 55T344 24T281 -1T205 -11Q126 -11 83 42T39 168ZM373 353Q367 405 305 405Q272 405 244 391T199 357T170 316T154 280T149 261Q149 260 169 260Q282 260 327 284T373 353Z"></path><path id="MJX-TEX-I-1D451" d="M366 683Q367 683 438 688T511 694Q523 694 523 686Q523 679 450 384T375 83T374 68Q374 26 402 26Q411 27 422 35Q443 55 463 131Q469 151 473 152Q475 153 483 153H487H491Q506 153 506 145Q506 140 503 129Q490 79 473 48T445 8T417 -8Q409 -10 393 -10Q359 -10 336 5T306 36L300 51Q299 52 296 50Q294 48 292 46Q233 -10 172 -10Q117 -10 75 30T33 157Q33 205 53 255T101 341Q148 398 195 420T280 442Q336 442 364 400Q369 394 369 396Q370 400 396 505T424 616Q424 629 417 632T378 637H357Q351 643 351 645T353 664Q358 683 366 683ZM352 326Q329 405 277 405Q242 405 210 374T160 293Q131 214 119 129Q119 126 119 118T118 106Q118 61 136 44T179 26Q233 26 290 98L298 109L352 326Z"></path><path id="MJX-TEX-N-3D" d="M56 347Q56 360 70 367H707Q722 359 722 347Q722 336 708 328L390 327H72Q56 332 56 347ZM56 153Q56 168 72 173H708Q722 163 722 153Q722 140 707 133H70Q56 140 56 153Z"></path><path id="MJX-TEX-LO-2211" d="M60 948Q63 950 665 950H1267L1325 815Q1384 677 1388 669H1348L1341 683Q1320 724 1285 761Q1235 809 1174 838T1033 881T882 898T699 902H574H543H251L259 891Q722 258 724 252Q725 250 724 246Q721 243 460 -56L196 -356Q196 -357 407 -357Q459 -357 548 -357T676 -358Q812 -358 896 -353T1063 -332T1204 -283T1307 -196Q1328 -170 1348 -124H1388Q1388 -125 1381 -145T1356 -210T1325 -294L1267 -449L666 -450Q64 -450 61 -448Q55 -446 55 -439Q55 -437 57 -433L590 177Q590 178 557 222T452 366T322 544L56 909L55 924Q55 945 60 948Z"></path><path id="MJX-TEX-I-1D457" d="M297 596Q297 627 318 644T361 661Q378 661 389 651T403 623Q403 595 384 576T340 557Q322 557 310 567T297 596ZM288 376Q288 405 262 405Q240 405 220 393T185 362T161 325T144 293L137 279Q135 278 121 278H107Q101 284 101 286T105 299Q126 348 164 391T252 441Q253 441 260 441T272 442Q296 441 316 432Q341 418 354 401T367 348V332L318 133Q267 -67 264 -75Q246 -125 194 -164T75 -204Q25 -204 7 -183T-12 -137Q-12 -110 7 -91T53 -71Q70 -71 82 -81T95 -112Q95 -148 63 -167Q69 -168 77 -168Q111 -168 139 -140T182 -74L193 -32Q204 11 219 72T251 197T278 308T289 365Q289 372 288 376Z"></path><path id="MJX-TEX-N-28" d="M94 250Q94 319 104 381T127 488T164 576T202 643T244 695T277 729T302 750H315H319Q333 750 333 741Q333 738 316 720T275 667T226 581T184 443T167 250T184 58T225 -81T274 -167T316 -220T333 -241Q333 -250 318 -250H315H302L274 -226Q180 -141 137 -14T94 250Z"></path><path id="MJX-TEX-I-1D45B" d="M21 287Q22 293 24 303T36 341T56 388T89 425T135 442Q171 442 195 424T225 390T231 369Q231 367 232 367L243 378Q304 442 382 442Q436 442 469 415T503 336T465 179T427 52Q427 26 444 26Q450 26 453 27Q482 32 505 65T540 145Q542 153 560 153Q580 153 580 145Q580 144 576 130Q568 101 554 73T508 17T439 -10Q392 -10 371 17T350 73Q350 92 386 193T423 345Q423 404 379 404H374Q288 404 229 303L222 291L189 157Q156 26 151 16Q138 -11 108 -11Q95 -11 87 -5T76 7T74 17Q74 30 112 180T152 343Q153 348 153 366Q153 405 129 405Q91 405 66 305Q60 285 60 284Q58 278 41 278H27Q21 284 21 287Z"></path><path id="MJX-TEX-N-2C" d="M78 35T78 60T94 103T137 121Q165 121 187 96T210 8Q210 -27 201 -60T180 -117T154 -158T130 -185T117 -194Q113 -194 104 -185T95 -172Q95 -168 106 -156T131 -126T157 -76T173 -3V9L172 8Q170 7 167 6T161 3T152 1T140 0Q113 0 96 17Z"></path><path id="MJX-TEX-N-2212" d="M84 237T84 250T98 270H679Q694 262 694 250T679 230H98Q84 237 84 250Z"></path><path id="MJX-TEX-I-1D44E" d="M33 157Q33 258 109 349T280 441Q331 441 370 392Q386 422 416 422Q429 422 439 414T449 394Q449 381 412 234T374 68Q374 43 381 35T402 26Q411 27 422 35Q443 55 463 131Q469 151 473 152Q475 153 483 153H487Q506 153 506 144Q506 138 501 117T481 63T449 13Q436 0 417 -8Q409 -10 393 -10Q359 -10 336 5T306 36L300 51Q299 52 296 50Q294 48 292 46Q233 -10 172 -10Q117 -10 75 30T33 157ZM351 328Q351 334 346 350T323 385T277 405Q242 405 210 374T160 293Q131 214 119 129Q119 126 119 118T118 106Q118 61 136 44T179 26Q217 26 254 59T298 110Q300 114 325 217T351 328Z"></path><path id="MJX-TEX-I-1D45F" d="M21 287Q22 290 23 295T28 317T38 348T53 381T73 411T99 433T132 442Q161 442 183 430T214 408T225 388Q227 382 228 382T236 389Q284 441 347 441H350Q398 441 422 400Q430 381 430 363Q430 333 417 315T391 292T366 288Q346 288 334 299T322 328Q322 376 378 392Q356 405 342 405Q286 405 239 331Q229 315 224 298T190 165Q156 25 151 16Q138 -11 108 -11Q95 -11 87 -5T76 7T74 17Q74 30 114 189T154 366Q154 405 128 405Q107 405 92 377T68 316T57 280Q55 278 41 278H27Q21 284 21 287Z"></path><path id="MJX-TEX-N-29" d="M60 749L64 750Q69 750 74 750H86L114 726Q208 641 251 514T294 250Q294 182 284 119T261 12T224 -76T186 -143T145 -194T113 -227T90 -246Q87 -249 86 -250H74Q66 -250 63 -250T58 -247T55 -238Q56 -237 66 -225Q221 -64 221 250T66 725Q56 737 55 738Q55 746 60 749Z"></path><path id="MJX-TEX-I-1D434" d="M208 74Q208 50 254 46Q272 46 272 35Q272 34 270 22Q267 8 264 4T251 0Q249 0 239 0T205 1T141 2Q70 2 50 0H42Q35 7 35 11Q37 38 48 46H62Q132 49 164 96Q170 102 345 401T523 704Q530 716 547 716H555H572Q578 707 578 706L606 383Q634 60 636 57Q641 46 701 46Q726 46 726 36Q726 34 723 22Q720 7 718 4T704 0Q701 0 690 0T651 1T578 2Q484 2 455 0H443Q437 6 437 9T439 27Q443 40 445 43L449 46H469Q523 49 533 63L521 213H283L249 155Q208 86 208 74ZM516 260Q516 271 504 416T490 562L463 519Q447 492 400 412L310 260L413 259Q516 259 516 260Z"></path><path id="MJX-TEX-I-1D463" d="M173 380Q173 405 154 405Q130 405 104 376T61 287Q60 286 59 284T58 281T56 279T53 278T49 278T41 278H27Q21 284 21 287Q21 294 29 316T53 368T97 419T160 441Q202 441 225 417T249 361Q249 344 246 335Q246 329 231 291T200 202T182 113Q182 86 187 69Q200 26 250 26Q287 26 319 60T369 139T398 222T409 277Q409 300 401 317T383 343T365 361T357 383Q357 405 376 424T417 443Q436 443 451 425T467 367Q467 340 455 284T418 159T347 40T241 -11Q177 -11 139 22Q102 54 102 117Q102 148 110 181T151 298Q173 362 173 380Z"></path><path id="MJX-TEX-I-1D454" d="M311 43Q296 30 267 15T206 0Q143 0 105 45T66 160Q66 265 143 353T314 442Q361 442 401 394L404 398Q406 401 409 404T418 412T431 419T447 422Q461 422 470 413T480 394Q480 379 423 152T363 -80Q345 -134 286 -169T151 -205Q10 -205 10 -137Q10 -111 28 -91T74 -71Q89 -71 102 -80T116 -111Q116 -121 114 -130T107 -144T99 -154T92 -162L90 -164H91Q101 -167 151 -167Q189 -167 211 -155Q234 -144 254 -122T282 -75Q288 -56 298 -13Q311 35 311 43ZM384 328L380 339Q377 350 375 354T369 368T359 382T346 393T328 402T306 405Q262 405 221 352Q191 313 171 233T151 117Q151 38 213 38Q269 38 323 108L331 118L384 328Z"></path><path id="MJX-TEX-I-1D43B" d="M228 637Q194 637 192 641Q191 643 191 649Q191 673 202 682Q204 683 219 683Q260 681 355 681Q389 681 418 681T463 682T483 682Q499 682 499 672Q499 670 497 658Q492 641 487 638H485Q483 638 480 638T473 638T464 637T455 637Q416 636 405 634T387 623Q384 619 355 500Q348 474 340 442T328 395L324 380Q324 378 469 378H614L615 381Q615 384 646 504Q674 619 674 627T617 637Q594 637 587 639T580 648Q580 650 582 660Q586 677 588 679T604 682Q609 682 646 681T740 680Q802 680 835 681T871 682Q888 682 888 672Q888 645 876 638H874Q872 638 869 638T862 638T853 637T844 637Q805 636 794 634T776 623Q773 618 704 340T634 58Q634 51 638 51Q646 48 692 46H723Q729 38 729 37T726 19Q722 6 716 0H701Q664 2 567 2Q533 2 504 2T458 2T437 1Q420 1 420 10Q420 15 423 24Q428 43 433 45Q437 46 448 46H454Q481 46 514 49Q520 50 522 50T528 55T534 64T540 82T547 110T558 153Q565 181 569 198Q602 330 602 331T457 332H312L279 197Q245 63 245 58Q245 51 253 49T303 46H334Q340 38 340 37T337 19Q333 6 327 0H312Q275 2 178 2Q144 2 115 2T69 2T48 1Q31 1 31 10Q31 12 34 24Q39 43 44 45Q48 46 59 46H65Q92 46 125 49Q139 52 144 61Q147 65 216 339T285 628Q285 635 228 637Z"></path><path id="MJX-TEX-I-1D459" d="M117 59Q117 26 142 26Q179 26 205 131Q211 151 215 152Q217 153 225 153H229Q238 153 241 153T246 151T248 144Q247 138 245 128T234 90T214 43T183 6T137 -11Q101 -11 70 11T38 85Q38 97 39 102L104 360Q167 615 167 623Q167 626 166 628T162 632T157 634T149 635T141 636T132 637T122 637Q112 637 109 637T101 638T95 641T94 647Q94 649 96 661Q101 680 107 682T179 688Q194 689 213 690T243 693T254 694Q266 694 266 686Q266 675 193 386T118 83Q118 81 118 75T117 65V59Z"></path><path id="MJX-TEX-N-31" d="M213 578L200 573Q186 568 160 563T102 556H83V602H102Q149 604 189 617T245 641T273 663Q275 666 285 666Q294 666 302 660V361L303 61Q310 54 315 52T339 48T401 46H427V0H416Q395 3 257 3Q121 3 100 0H88V46H114Q136 46 152 46T177 47T193 50T201 52T207 57T213 61V578Z"></path><path id="MJX-TEX-I-1D441" d="M234 637Q231 637 226 637Q201 637 196 638T191 649Q191 676 202 682Q204 683 299 683Q376 683 387 683T401 677Q612 181 616 168L670 381Q723 592 723 606Q723 633 659 637Q635 637 635 648Q635 650 637 660Q641 676 643 679T653 683Q656 683 684 682T767 680Q817 680 843 681T873 682Q888 682 888 672Q888 650 880 642Q878 637 858 637Q787 633 769 597L620 7Q618 0 599 0Q585 0 582 2Q579 5 453 305L326 604L261 344Q196 88 196 79Q201 46 268 46H278Q284 41 284 38T282 19Q278 6 272 0H259Q228 2 151 2Q123 2 100 2T63 2T46 1Q31 1 31 10Q31 14 34 26T39 40Q41 46 62 46Q130 49 150 85Q154 91 221 362L289 634Q287 635 234 637Z"></path><path id="MJX-TEX-I-210E" d="M137 683Q138 683 209 688T282 694Q294 694 294 685Q294 674 258 534Q220 386 220 383Q220 381 227 388Q288 442 357 442Q411 442 444 415T478 336Q478 285 440 178T402 50Q403 36 407 31T422 26Q450 26 474 56T513 138Q516 149 519 151T535 153Q555 153 555 145Q555 144 551 130Q535 71 500 33Q466 -10 419 -10H414Q367 -10 346 17T325 74Q325 90 361 192T398 345Q398 404 354 404H349Q266 404 205 306L198 293L164 158Q132 28 127 16Q114 -11 83 -11Q69 -11 59 -2T48 16Q48 30 121 320L195 616Q195 629 188 632T149 637H128Q122 643 122 645T124 664Q129 683 137 683Z"></path><path id="MJX-TEX-I-1D70F" d="M39 284Q18 284 18 294Q18 301 45 338T99 398Q134 425 164 429Q170 431 332 431Q492 431 497 429Q517 424 517 402Q517 388 508 376T485 360Q479 358 389 358T299 356Q298 355 283 274T251 109T233 20Q228 5 215 -4T186 -13Q153 -13 153 20V30L203 192Q214 228 227 272T248 336L254 357Q254 358 208 358Q206 358 197 358T183 359Q105 359 61 295Q56 287 53 286T39 284Z"></path><path id="MJX-TEX-I-1D445" d="M230 637Q203 637 198 638T193 649Q193 676 204 682Q206 683 378 683Q550 682 564 680Q620 672 658 652T712 606T733 563T739 529Q739 484 710 445T643 385T576 351T538 338L545 333Q612 295 612 223Q612 212 607 162T602 80V71Q602 53 603 43T614 25T640 16Q668 16 686 38T712 85Q717 99 720 102T735 105Q755 105 755 93Q755 75 731 36Q693 -21 641 -21H632Q571 -21 531 4T487 82Q487 109 502 166T517 239Q517 290 474 313Q459 320 449 321T378 323H309L277 193Q244 61 244 59Q244 55 245 54T252 50T269 48T302 46H333Q339 38 339 37T336 19Q332 6 326 0H311Q275 2 180 2Q146 2 117 2T71 2T50 1Q33 1 33 10Q33 12 36 24Q41 43 46 45Q50 46 61 46H67Q94 46 127 49Q141 52 146 61Q149 65 218 339T287 628Q287 635 230 637ZM630 554Q630 586 609 608T523 636Q521 636 500 636T462 637H440Q393 637 386 627Q385 624 352 494T319 361Q319 360 388 360Q466 361 492 367Q556 377 592 426Q608 449 619 486T630 554Z"></path><path id="MJX-TEX-I-1D458" d="M121 647Q121 657 125 670T137 683Q138 683 209 688T282 694Q294 694 294 686Q294 679 244 477Q194 279 194 272Q213 282 223 291Q247 309 292 354T362 415Q402 442 438 442Q468 442 485 423T503 369Q503 344 496 327T477 302T456 291T438 288Q418 288 406 299T394 328Q394 353 410 369T442 390L458 393Q446 405 434 405H430Q398 402 367 380T294 316T228 255Q230 254 243 252T267 246T293 238T320 224T342 206T359 180T365 147Q365 130 360 106T354 66Q354 26 381 26Q429 26 459 145Q461 153 479 153H483Q499 153 499 144Q499 139 496 130Q455 -11 378 -11Q333 -11 305 15T277 90Q277 108 280 121T283 145Q283 167 269 183T234 206T200 217T182 220H180Q168 178 159 139T145 81T136 44T129 20T122 7T111 -2Q98 -11 83 -11Q66 -11 57 -1T48 16Q48 26 85 176T158 471L195 616Q196 629 188 632T149 637H144Q134 637 131 637T124 640T121 647Z"></path><path id="MJX-TEX-N-2B" d="M56 237T56 250T70 270H369V420L370 570Q380 583 389 583Q402 583 409 568V270H707Q722 262 722 250T707 230H409V-68Q401 -82 391 -82H389H387Q375 -82 369 -68V230H70Q56 237 56 250Z"></path><path id="MJX-TEX-I-1D43F" d="M228 637Q194 637 192 641Q191 643 191 649Q191 673 202 682Q204 683 217 683Q271 680 344 680Q485 680 506 683H518Q524 677 524 674T522 656Q517 641 513 637H475Q406 636 394 628Q387 624 380 600T313 336Q297 271 279 198T252 88L243 52Q243 48 252 48T311 46H328Q360 46 379 47T428 54T478 72T522 106T564 161Q580 191 594 228T611 270Q616 273 628 273H641Q647 264 647 262T627 203T583 83T557 9Q555 4 553 3T537 0T494 -1Q483 -1 418 -1T294 0H116Q32 0 32 10Q32 17 34 24Q39 43 44 45Q48 46 59 46H65Q92 46 125 49Q139 52 144 61Q147 65 216 339T285 628Q285 635 228 637Z"></path><path id="MJX-TEX-I-1D456" d="M184 600Q184 624 203 642T247 661Q265 661 277 649T290 619Q290 596 270 577T226 557Q211 557 198 567T184 600ZM21 287Q21 295 30 318T54 369T98 420T158 442Q197 442 223 419T250 357Q250 340 236 301T196 196T154 83Q149 61 149 51Q149 26 166 26Q175 26 185 29T208 43T235 78T260 137Q263 149 265 151T282 153Q302 153 302 143Q302 135 293 112T268 61T223 11T161 -11Q129 -11 102 10T74 74Q74 91 79 106T122 220Q160 321 166 341T173 380Q173 404 156 404H154Q124 404 99 371T61 287Q60 286 59 284T58 281T56 279T53 278T49 278T41 278H27Q21 284 21 287Z"></path><path id="MJX-TEX-I-1D45D" d="M23 287Q24 290 25 295T30 317T40 348T55 381T75 411T101 433T134 442Q209 442 230 378L240 387Q302 442 358 442Q423 442 460 395T497 281Q497 173 421 82T249 -10Q227 -10 210 -4Q199 1 187 11T168 28L161 36Q160 35 139 -51T118 -138Q118 -144 126 -145T163 -148H188Q194 -155 194 -157T191 -175Q188 -187 185 -190T172 -194Q170 -194 161 -194T127 -193T65 -192Q-5 -192 -24 -194H-32Q-39 -187 -39 -183Q-37 -156 -26 -148H-6Q28 -147 33 -136Q36 -130 94 103T155 350Q156 355 156 364Q156 405 131 405Q109 405 94 377T71 316T59 280Q57 278 43 278H29Q23 284 23 287ZM178 102Q200 26 252 26Q282 26 310 49T356 107Q374 141 392 215T411 325V331Q411 405 350 405Q339 405 328 402T306 393T286 380T269 365T254 350T243 336T235 326L232 322Q232 321 229 308T218 264T204 212Q178 106 178 102Z"></path><path id="MJX-TEX-I-1D450" d="M34 159Q34 268 120 355T306 442Q362 442 394 418T427 355Q427 326 408 306T360 285Q341 285 330 295T319 325T330 359T352 380T366 386H367Q367 388 361 392T340 400T306 404Q276 404 249 390Q228 381 206 359Q162 315 142 235T121 119Q121 73 147 50Q169 26 205 26H209Q321 26 394 111Q403 121 406 121Q410 121 419 112T429 98T420 83T391 55T346 25T282 0T202 -11Q127 -11 81 37T34 159Z"></path><path id="MJX-TEX-I-1D464" d="M580 385Q580 406 599 424T641 443Q659 443 674 425T690 368Q690 339 671 253Q656 197 644 161T609 80T554 12T482 -11Q438 -11 404 5T355 48Q354 47 352 44Q311 -11 252 -11Q226 -11 202 -5T155 14T118 53T104 116Q104 170 138 262T173 379Q173 380 173 381Q173 390 173 393T169 400T158 404H154Q131 404 112 385T82 344T65 302T57 280Q55 278 41 278H27Q21 284 21 287Q21 293 29 315T52 366T96 418T161 441Q204 441 227 416T250 358Q250 340 217 250T184 111Q184 65 205 46T258 26Q301 26 334 87L339 96V119Q339 122 339 128T340 136T341 143T342 152T345 165T348 182T354 206T362 238T373 281Q402 395 406 404Q419 431 449 431Q468 431 475 421T483 402Q483 389 454 274T422 142Q420 131 420 107V100Q420 85 423 71T442 42T487 26Q558 26 600 148Q609 171 620 213T632 273Q632 306 619 325T593 357T580 385Z"></path><path id="MJX-TEX-I-1D466" d="M21 287Q21 301 36 335T84 406T158 442Q199 442 224 419T250 355Q248 336 247 334Q247 331 231 288T198 191T182 105Q182 62 196 45T238 27Q261 27 281 38T312 61T339 94Q339 95 344 114T358 173T377 247Q415 397 419 404Q432 431 462 431Q475 431 483 424T494 412T496 403Q496 390 447 193T391 -23Q363 -106 294 -155T156 -205Q111 -205 77 -183T43 -117Q43 -95 50 -80T69 -58T89 -48T106 -45Q150 -45 150 -87Q150 -107 138 -122T115 -142T102 -147L99 -148Q101 -153 118 -160T152 -167H160Q177 -167 186 -165Q219 -156 247 -127T290 -65T313 -9T321 21L315 17Q309 13 296 6T270 -6Q250 -11 231 -11Q185 -11 150 11T104 82Q103 89 103 113Q103 170 138 262T173 379Q173 380 173 381Q173 390 173 393T169 400T158 404H154Q131 404 112 385T82 344T65 302T57 280Q55 278 41 278H27Q21 284 21 287Z"></path><path id="MJX-TEX-N-394" d="M51 0Q46 4 46 7Q46 9 215 357T388 709Q391 716 416 716Q439 716 444 709Q447 705 616 357T786 7Q786 4 781 0H51ZM507 344L384 596L137 92L383 91H630Q630 93 507 344Z"></path><path id="MJX-TEX-I-1D442" d="M740 435Q740 320 676 213T511 42T304 -22Q207 -22 138 35T51 201Q50 209 50 244Q50 346 98 438T227 601Q351 704 476 704Q514 704 524 703Q621 689 680 617T740 435ZM637 476Q637 565 591 615T476 665Q396 665 322 605Q242 542 200 428T157 216Q157 126 200 73T314 19Q404 19 485 98T608 313Q637 408 637 476Z"></path><path id="MJX-TEX-I-1D465" d="M52 289Q59 331 106 386T222 442Q257 442 286 424T329 379Q371 442 430 442Q467 442 494 420T522 361Q522 332 508 314T481 292T458 288Q439 288 427 299T415 328Q415 374 465 391Q454 404 425 404Q412 404 406 402Q368 386 350 336Q290 115 290 78Q290 50 306 38T341 26Q378 26 414 59T463 140Q466 150 469 151T485 153H489Q504 153 504 145Q504 144 502 134Q486 77 440 33T333 -11Q263 -11 227 52Q186 -10 133 -10H127Q78 -10 57 16T35 71Q35 103 54 123T99 143Q142 143 142 101Q142 81 130 66T107 46T94 41L91 40Q91 39 97 36T113 29T132 26Q168 26 194 71Q203 87 217 139T245 247T261 313Q266 340 266 352Q266 380 251 392T217 404Q177 404 142 372T93 290Q91 281 88 280T72 278H58Q52 284 52 289Z"></path><path id="MJX-TEX-N-A0" d=""></path><path id="MJX-TEX-I-1D462" d="M21 287Q21 295 30 318T55 370T99 420T158 442Q204 442 227 417T250 358Q250 340 216 246T182 105Q182 62 196 45T238 27T291 44T328 78L339 95Q341 99 377 247Q407 367 413 387T427 416Q444 431 463 431Q480 431 488 421T496 402L420 84Q419 79 419 68Q419 43 426 35T447 26Q469 29 482 57T512 145Q514 153 532 153Q551 153 551 144Q550 139 549 130T540 98T523 55T498 17T462 -8Q454 -10 438 -10Q372 -10 347 46Q345 45 336 36T318 21T296 6T267 -6T233 -11Q189 -11 155 7Q103 38 103 113Q103 170 138 262T173 379Q173 380 173 381Q173 390 173 393T169 400T158 404H154Q131 404 112 385T82 344T65 302T57 280Q55 278 41 278H27Q21 284 21 287Z"></path></defs></svg>
+<h1>BTFViewer Statistics Reference </h1>
+<p>This document is both a statistics reference and an analysis tutorial. It explains what BTFViewer measures, how each value is calculated, when to use it, which other statistics are required for confirmation, and what the result cannot prove. It focuses on analysis rather than implementation.</p>
+<p>Use <a href="README.md">README.md</a> for product operation, <a href="WORKFLOWS.md">WORKFLOWS.md</a> for step-by-step investigations, and <a href="AI.md">AI.md</a> for AI-assisted analysis.</p>
+<h2>How to use this reference</h2>
+<p>BTFViewer calculates statistics from the BTF/STI events present in a trace. A result describes the selected <strong>Scope</strong> and active filters, not necessarily the complete system run.</p>
+<p>Before interpreting a value:</p>
+<ol>
+<li>Confirm whether the Scope is <strong>Full Trace</strong> or a cursor range.</li>
+<li>Check active task, core, and migration filters.</li>
+<li>Compare <strong>Avg</strong> with tail values such as <strong>p95</strong>, <strong>p99</strong>, and <strong>Max</strong>.</li>
+<li>Return to the timeline to inspect the events behind an unusual value.</li>
+<li>Compare equivalent workload phases when using two traces.</li>
+</ol>
+<p>Some values are measured directly from recorded events. Others are marked as <strong>estimated</strong> or <strong>heuristic</strong>, meaning they are inferred from observable events because the trace does not contain an explicit kernel event. An estimate is useful evidence, but it is not a guarantee.</p>
+<p>The Statistics panel is most useful when it is treated as a path back to evidence. A table can identify a task, core, object, or time range that deserves attention. The timeline then shows what actually happened around that sample.</p>
+<h3>Basic terms</h3>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Task</strong></td>
+<td>A schedulable unit of work. Some RTOSes use the term <em>thread</em>.</td>
+</tr>
+<tr>
+<td><strong>Core</strong></td>
+<td>A processor core that can run one task at a time.</td>
+</tr>
+<tr>
+<td><strong>Slice</strong></td>
+<td>One continuous period during which a task runs on a core.</td>
+</tr>
+<tr>
+<td><strong>Off-CPU</strong></td>
+<td>Time when a task is not running. It may be ready, blocked, suspended, or waiting for its next activation.</td>
+</tr>
+<tr>
+<td><strong>STI event</strong></td>
+<td>Optional software trace instrumentation that records events such as task resume, mutex access, queue access, intervals, or tags.</td>
+</tr>
+<tr>
+<td><strong>p95 / p99</strong></td>
+<td>The value at or below which 95% / 99% of samples fall. These values describe the tail more reliably than the average alone.</td>
+</tr>
+<tr>
+<td><strong>Jitter</strong></td>
+<td>Variation in timing. BTFViewer commonly reports the observed range, <code>Max − Min</code>.</td>
+</tr>
+<tr>
+<td><strong>CV</strong></td>
+<td>Coefficient of variation, <code>standard deviation ÷ average</code>. It compares variation across metrics with different scales.</td>
+</tr>
+</tbody>
+</table>
+<h3>Measurement model</h3>
+<p>BTFViewer first reconstructs continuous task execution slices from the scheduling events in the trace. Most statistics are then derived from the start and end times of these slices, optional STI events, or both.</p>
+<p>For a task with slices <code>S1 ... Sn</code>, slice <code>Sk</code> has a start time <code>s_k</code>, end time <code>e_k</code>, duration <code>d_k = e_k - s_k</code>, and core <code>c_k</code>. These values form several related sample sets:</p>
+<table>
+<thead>
+<tr>
+<th>Sample set</th>
+<th>Calculation</th>
+<th>Main use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Execution</td>
+<td><code>d_k = e_k - s_k</code></td>
+<td>On-CPU work per scheduling slice</td>
+</tr>
+<tr>
+<td>Off-CPU gap</td>
+<td><code>g_k = s_(k+1) - e_k</code></td>
+<td>Time between consecutive slices</td>
+</tr>
+<tr>
+<td>Inter-arrival</td>
+<td><code>a_k = s_(k+1) - s_k</code></td>
+<td>Activation spacing and periodicity</td>
+</tr>
+<tr>
+<td>Migration</td>
+<td><code>c_(k+1) != c_k</code></td>
+<td>Core movement between slices</td>
+</tr>
+<tr>
+<td>Switch gap</td>
+<td>Next slice start on a core minus the previous slice end</td>
+<td>Unaccounted time around a switch</td>
+</tr>
+<tr>
+<td>Dispatch latency</td>
+<td>Next switch-in minus a recorded ready event</td>
+<td>Ready-to-run delay when a ready point exists</td>
+</tr>
+<tr>
+<td>Interval duration</td>
+<td><code>interval_stop - interval_start</code></td>
+<td>Instrumented application operation</td>
+</tr>
+</tbody>
+</table>
+<p>These sets are related but not interchangeable. For example, an off-CPU gap can contain preemption, blocking, suspension, or a normal wait until the next periodic activation. It should not automatically be called mutex blocking or scheduling latency.</p>
+<h3>Scope, filters, and sample boundaries</h3>
+<p>Every statistic is calculated from the current <strong>Scope</strong> and active filters.</p>
+<ul>
+<li><strong>Full Trace</strong> uses the complete captured time span.</li>
+<li><strong>C1–Cn</strong> uses the selected cursor range. Slices crossing a boundary may be clipped to the range for time accounting.</li>
+<li>A task filter limits the tasks included in the calculation.</li>
+<li>A core or migration filter limits the visible scheduling evidence.</li>
+</ul>
+<p>Always record the Scope when comparing results. A 10 ms start-up phase and a 10 s steady-state phase describe different workloads even if they come from the same trace.</p>
+<p>Boundary effects are especially important for gaps, intervals, mutex holds, queues, and lifecycle events. A start event may be outside the Scope while its matching end event is inside it. An unmatched event near a boundary may therefore indicate partial capture rather than an application error.</p>
+<h3>Common summary values</h3>
+<p>For samples <code>x_1 ... x_n</code>, BTFViewer uses the following concepts throughout the Statistics panel:</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Calculation or meaning</th>
+<th>How to use it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Count / Runs</strong></td>
+<td>Number of valid samples</td>
+<td>Check whether the result has enough evidence</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><code>sum(x_i)</code></td>
+<td>Understand accumulated cost in the Scope</td>
+</tr>
+<tr>
+<td><strong>Min / Max</strong></td>
+<td>Smallest / largest observed sample</td>
+<td>Locate extremes; not proven BCET or WCET</td>
+</tr>
+<tr>
+<td><strong>Avg</strong></td>
+<td><code>sum(x_i) / n</code></td>
+<td>Describe the centre when the distribution is not strongly skewed</td>
+</tr>
+<tr>
+<td><strong>Median / p50</strong></td>
+<td>Middle ordered sample</td>
+<td>Describe a typical sample with less sensitivity to outliers</td>
+</tr>
+<tr>
+<td><strong>p95 / p99 / p99.9</strong></td>
+<td>Ordered nearest-rank sample at index <code>ceil(n × p) − 1</code></td>
+<td>Describe increasingly rare tail delays</td>
+</tr>
+<tr>
+<td><strong>Jitter / Spread</strong></td>
+<td><code>Max - Min</code></td>
+<td>Show the absolute observed range</td>
+</tr>
+<tr>
+<td><strong>Standard deviation (σ)</strong></td>
+<td>Population standard deviation, dividing the squared-distance sum by <code>n</code></td>
+<td>Measure absolute dispersion around the average</td>
+</tr>
+<tr>
+<td><strong>CV</strong></td>
+<td><code>σ / Avg</code></td>
+<td>Compare relative variation across different scales</td>
+</tr>
+<tr>
+<td><strong>Rate</strong></td>
+<td>Count divided by a time or event base</td>
+<td>Compare traces of different lengths</td>
+</tr>
+</tbody>
+</table>
+<p>Samples are sorted before percentiles are selected. For example, p95 uses the sample at <code>ceil(n × 0.95) − 1</code>, with the index limited to the valid range. Percentiles require enough samples. With 10 samples, p99 is effectively the maximum and does not describe a stable one-percent tail. Always read the sample count before treating a high percentile as representative.</p>
+<p><strong>Trace resolution.</strong> Execution Time and Blocking Time show a note when a large share of samples are at or below one unit of the trace's display scale (<code>us</code> → 1 µs, <code>ms</code> → 1 ms) — the grid the exported timestamps sit on. When that share is high, percentiles near that value describe the timestamp grid rather than task behavior; use a finer capture clock or an instrumented Interval for those cases.</p>
+<p>In task tables, <strong>CPU%</strong> normally means <code>task on-CPU time ÷ Scope wall-clock duration × 100</code>. IDLE and TICK tasks are omitted from user-task rankings, but they are not subtracted from the denominator. On a multicore system, CPU% values across tasks can therefore add to more than 100%.</p>
+<h3>Direct, derived, estimated, and configured results</h3>
+<p>The confidence of a result depends on its source:</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Examples</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Direct</strong></td>
+<td>Slice start/end, core ID, STI tag value</td>
+<td>Recorded evidence</td>
+</tr>
+<tr>
+<td><strong>Derived</strong></td>
+<td>Execution time, CPU share, inter-arrival, migration count</td>
+<td>Deterministic calculation from recorded evidence</td>
+</tr>
+<tr>
+<td><strong>Estimated / heuristic</strong></td>
+<td>Response time, mutex waiter–owner handoff, task-health score</td>
+<td>Useful screening evidence with stated assumptions</td>
+</tr>
+<tr>
+<td><strong>Configured comparison</strong></td>
+<td>Deadline and CPU budget violations</td>
+<td>Valid only when the configured threshold matches the application requirement</td>
+</tr>
+</tbody>
+</table>
+<p>Do not combine metrics with different confidence levels as if they were equally exact. Use a heuristic to locate an episode, then confirm it with direct or instrumented evidence when possible.</p>
+<h2>Analysis workflows</h2>
+<p>The following workflows show how statistics should be combined. They are not rigid checklists; begin with the question you need to answer and follow the evidence.</p>
+<h3>Statistics panel scope and controls</h3>
+<p>The Statistics tab is available in the right-side panel. Its header shows <strong>Full Trace</strong> or the active <strong>C1–Cn</strong> cursor range. When a task, core, or migration filter is active, the panel shows a <strong>Filtered</strong> indicator. Scope and filters apply to the calculated samples, so they must be checked before any value is interpreted.</p>
+<p>Place at least two cursors and enable <strong>Limit to C1–Cn</strong> to recalculate Statistics and Analysis Findings for that time range. The toolbar <strong>C1–Cn</strong> chip (before the right-hand icons) uses the Statistics Scope colour when Limit is on and the muted Detail colour when it is off. Click it to toggle. Clear the cursor range to return to Full Trace. Restricting the range is useful for separating start-up, steady-state, overload, and recovery phases.</p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>+</strong></td>
+<td>Expand all sections</td>
+</tr>
+<tr>
+<td><strong>−</strong></td>
+<td>Collapse all sections; pinned sections remain open</td>
+</tr>
+<tr>
+<td>Reset order</td>
+<td>Restore <code>OVERVIEW → TRIAGE → TIMING → SCHED → SYNC → DETAIL</code></td>
+</tr>
+<tr>
+<td>Section title / chevron</td>
+<td>Expand or collapse one section</td>
+</tr>
+<tr>
+<td><strong>⠿</strong> grip</td>
+<td>Drag a section to another position</td>
+</tr>
+<tr>
+<td>Pin</td>
+<td>Keep a section open when Collapse All is used</td>
+</tr>
+</tbody>
+</table>
+<p>Section order, pins, expanded state, and table heights are retained across launches. Reordering changes presentation only; it does not change a section's category or calculation.</p>
+<h3>From a statistic back to evidence</h3>
+<p>Supported tables and charts provide direct navigation:</p>
+<ul>
+<li>Click a row or task name to highlight the related task or open its scatter/histogram distribution.</li>
+<li>Click Min, Max, p50, p95, or p99 to jump to the corresponding captured sample.</li>
+<li>Click an anomaly, worst event, or critical-path episode to zoom and place evidence cursors.</li>
+<li>Click a synchronization issue to jump to the related STI event.</li>
+<li>Click a core-time bin, migration pair, or matrix cell to inspect the matching time range.</li>
+</ul>
+<p>A navigation action does not make the selected event a root cause. It only connects the summary value to the evidence that produced it.</p>
+<h3>Exported statistics reports</h3>
+<p><strong>Export HTML</strong> uses the current Scope and creates a self-contained review report with search, sorting, Problems only, and Show all on each statistics table. The report includes:</p>
+<ul>
+<li>Analysis Scope, trace metadata, filters, and timestamp origin;</li>
+<li>diagnostic KPIs and Analysis Findings;</li>
+<li>the same Statistics tables, grouped table of contents, and section notes;</li>
+<li>search, sorting, Problems only, and Show all for each statistics table; and</li>
+<li>an SVG load-balance gauge under Core Utilisation.</li>
+</ul>
+<p>The HTML report can identify where to investigate, but it cannot preserve every interactive timeline action. Keep the source trace when another reviewer may need to verify an event.</p>
+<h3>Analysis flow</h3>
+<p>Use this flow to move from the full trace to a testable explanation. The categories narrow the problem; the timeline confirms the event order.</p>
+<div class="mermaid-diagram"><svg id="my-svg" width="100%" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" class="flowchart" style="max-width: 704.109px; background-color: transparent;" viewBox="0 0 704.109375 1435.109375" role="graphics-document document" aria-roledescription="flowchart-v2"><style>#my-svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;fill:#ccc;}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#my-svg .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#my-svg .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#my-svg .error-icon{fill:#a44141;}#my-svg .error-text{fill:#ddd;stroke:#ddd;}#my-svg .edge-thickness-normal{stroke-width:1px;}#my-svg .edge-thickness-thick{stroke-width:3.5px;}#my-svg .edge-pattern-solid{stroke-dasharray:0;}#my-svg .edge-thickness-invisible{stroke-width:0;fill:none;}#my-svg .edge-pattern-dashed{stroke-dasharray:3;}#my-svg .edge-pattern-dotted{stroke-dasharray:2;}#my-svg .marker{fill:lightgrey;stroke:lightgrey;}#my-svg .marker.cross{stroke:lightgrey;}#my-svg svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;}#my-svg p{margin:0;}#my-svg .label{font-family:"trebuchet ms",verdana,arial,sans-serif;color:#ccc;}#my-svg .cluster-label text{fill:#F9FFFE;}#my-svg .cluster-label span{color:#F9FFFE;}#my-svg .cluster-label span p{background-color:transparent;}#my-svg .label text,#my-svg span{fill:#ccc;color:#ccc;}#my-svg .node rect,#my-svg .node circle,#my-svg .node ellipse,#my-svg .node polygon,#my-svg .node path{fill:#1f2020;stroke:#ccc;stroke-width:1px;}#my-svg .rough-node .label text,#my-svg .node .label text,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-anchor:middle;}#my-svg .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#my-svg .rough-node .label,#my-svg .node .label,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-align:center;}#my-svg .node.clickable{cursor:pointer;}#my-svg .root .anchor path{fill:lightgrey!important;stroke-width:0;stroke:lightgrey;}#my-svg .arrowheadPath{fill:lightgrey;}#my-svg .edgePath .path{stroke:lightgrey;stroke-width:2.0px;}#my-svg .flowchart-link{stroke:lightgrey;fill:none;}#my-svg .edgeLabel{background-color:hsl(0, 0%, 34.4117647059%);text-align:center;}#my-svg .edgeLabel p{background-color:hsl(0, 0%, 34.4117647059%);}#my-svg .edgeLabel rect{opacity:0.5;background-color:hsl(0, 0%, 34.4117647059%);fill:hsl(0, 0%, 34.4117647059%);}#my-svg .labelBkg{background-color:rgba(87.75, 87.75, 87.75, 0.5);}#my-svg .cluster rect{fill:hsl(180, 1.5873015873%, 28.3529411765%);stroke:rgba(255, 255, 255, 0.25);stroke-width:1px;}#my-svg .cluster text{fill:#F9FFFE;}#my-svg .cluster span{color:#F9FFFE;}#my-svg div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:12px;background:hsl(20, 1.5873015873%, 12.3529411765%);border:1px solid rgba(255, 255, 255, 0.25);border-radius:2px;pointer-events:none;z-index:100;}#my-svg .flowchartTitleText{text-anchor:middle;font-size:18px;fill:#ccc;}#my-svg rect.text{fill:none;stroke-width:0;}#my-svg .icon-shape,#my-svg .image-shape{background-color:hsl(0, 0%, 34.4117647059%);text-align:center;}#my-svg .icon-shape p,#my-svg .image-shape p{background-color:hsl(0, 0%, 34.4117647059%);padding:2px;}#my-svg .icon-shape .label rect,#my-svg .image-shape .label rect{opacity:0.5;background-color:hsl(0, 0%, 34.4117647059%);fill:hsl(0, 0%, 34.4117647059%);}#my-svg .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#my-svg .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#my-svg :root{--mermaid-font-family:"trebuchet ms",verdana,arial,sans-serif;}</style><g><marker id="my-svg_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="4.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 5 L 10 10 L 10 0 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="11" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-1" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossEnd" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="12" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossStart" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="-1" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><g class="root"><g class="clusters"/><g class="edgePaths"><path d="M516.711,62L516.711,66.167C516.711,70.333,516.711,78.667,516.711,86.333C516.711,94,516.711,101,516.711,104.5L516.711,108" id="L_A_B_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_A_B_0" data-points="W3sieCI6NTE2LjcxMDkzNzUsInkiOjYyfSx7IngiOjUxNi43MTA5Mzc1LCJ5Ijo4N30seyJ4Ijo1MTYuNzEwOTM3NSwieSI6MTEyfV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M516.711,190L516.711,194.167C516.711,198.333,516.711,206.667,516.711,214.333C516.711,222,516.711,229,516.711,232.5L516.711,236" id="L_B_C_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_B_C_0" data-points="W3sieCI6NTE2LjcxMDkzNzUsInkiOjE5MH0seyJ4Ijo1MTYuNzEwOTM3NSwieSI6MjE1fSx7IngiOjUxNi43MTA5Mzc1LCJ5IjoyNDB9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M399.406,318L386.874,322.167C374.341,326.333,349.276,334.667,336.743,342.333C324.211,350,324.211,357,324.211,360.5L324.211,364" id="L_C_D_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_C_D_0" data-points="W3sieCI6Mzk5LjQwNjI1LCJ5IjozMTh9LHsieCI6MzI0LjIxMDkzNzUsInkiOjM0M30seyJ4IjozMjQuMjEwOTM3NSwieSI6MzY4fV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M255.927,544.56L231.273,564.107C206.618,583.655,157.309,622.749,132.655,649.796C108,676.844,108,691.844,108,699.344L108,706.844" id="L_D_E_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_D_E_0" data-points="W3sieCI6MjU1LjkyNzM3NzYxODgxMDEsInkiOjU0NC41NjAxOTAxMTg4MX0seyJ4IjoxMDgsInkiOjY2MS44NDM3NX0seyJ4IjoxMDgsInkiOjcxMC44NDM3NX1d" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M326.858,610.196L327.049,618.804C327.239,627.412,327.619,644.628,327.81,660.736C328,676.844,328,691.844,328,699.344L328,706.844" id="L_D_F_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_D_F_0" data-points="W3sieCI6MzI2Ljg1ODM5ODU2ODEzMjE1LCJ5Ijo2MTAuMTk2Mjg4OTMxODY3OH0seyJ4IjozMjgsInkiOjY2MS44NDM3NX0seyJ4IjozMjgsInkiOjcxMC44NDM3NX1d" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M393.533,543.522L419.277,563.242C445.022,582.963,496.511,622.403,522.255,649.623C548,676.844,548,691.844,548,699.344L548,706.844" id="L_D_G_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_D_G_0" data-points="W3sieCI6MzkzLjUzMjU5MzQ0NjY4NTksInkiOjU0My41MjIwOTQwNTMzMTR9LHsieCI6NTQ4LCJ5Ijo2NjEuODQzNzV9LHsieCI6NTQ4LCJ5Ijo3MTAuODQzNzV9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M108,764.844L108,771.01C108,777.177,108,789.51,125.221,801.626C142.442,813.742,176.883,825.64,194.104,831.589L211.325,837.538" id="L_E_H_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_E_H_0" data-points="W3sieCI6MTA4LCJ5Ijo3NjQuODQzNzV9LHsieCI6MTA4LCJ5Ijo4MDEuODQzNzV9LHsieCI6MjE1LjEwNTI2MzE1Nzg5NDc0LCJ5Ijo4MzguODQzNzV9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M328,764.844L328,771.01C328,777.177,328,789.51,328,801.177C328,812.844,328,823.844,328,829.344L328,834.844" id="L_F_H_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_F_H_0" data-points="W3sieCI6MzI4LCJ5Ijo3NjQuODQzNzV9LHsieCI6MzI4LCJ5Ijo4MDEuODQzNzV9LHsieCI6MzI4LCJ5Ijo4MzguODQzNzV9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M548,764.844L548,771.01C548,777.177,548,789.51,530.779,801.626C513.558,813.742,479.117,825.64,461.896,831.589L444.675,837.538" id="L_G_H_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_G_H_0" data-points="W3sieCI6NTQ4LCJ5Ijo3NjQuODQzNzV9LHsieCI6NTQ4LCJ5Ijo4MDEuODQzNzV9LHsieCI6NDQwLjg5NDczNjg0MjEwNTI2LCJ5Ijo4MzguODQzNzV9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M328,916.844L328,921.01C328,925.177,328,933.51,328,941.177C328,948.844,328,955.844,328,959.344L328,962.844" id="L_H_I_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_H_I_0" data-points="W3sieCI6MzI4LCJ5Ijo5MTYuODQzNzV9LHsieCI6MzI4LCJ5Ijo5NDEuODQzNzV9LHsieCI6MzI4LCJ5Ijo5NjYuODQzNzV9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M328,1044.844L328,1049.01C328,1053.177,328,1061.51,349.553,1078.826C371.106,1096.143,414.211,1122.441,435.764,1135.591L457.317,1148.74" id="L_I_J_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_I_J_0" data-points="W3sieCI6MzI4LCJ5IjoxMDQ0Ljg0Mzc1fSx7IngiOjMyOCwieSI6MTA2OS44NDM3NX0seyJ4Ijo0NjAuNzMxMzUwNzk5OTcxNywieSI6MTE1MC44MjMzMzY3MDAwMjgyfV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M570.449,1148.582L589.826,1135.459C609.203,1122.336,647.957,1096.09,667.334,1072.3C686.711,1048.51,686.711,1027.177,686.711,1005.844C686.711,984.51,686.711,963.177,686.711,941.844C686.711,920.51,686.711,899.177,686.711,875.844C686.711,852.51,686.711,827.177,686.711,803.844C686.711,780.51,686.711,759.177,686.711,735.844C686.711,712.51,686.711,687.177,686.711,645.94C686.711,604.703,686.711,547.563,686.711,494.422C686.711,441.281,686.711,392.141,676.267,363.639C665.823,335.136,644.936,327.273,634.492,323.341L624.048,319.409" id="L_J_C_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_J_C_0" data-points="W3sieCI6NTcwLjQ0OTMyNjk1NjY2NzYsInkiOjExNDguNTgyMTM5NDU2NjY3Nn0seyJ4Ijo2ODYuNzEwOTM3NSwieSI6MTA2OS44NDM3NX0seyJ4Ijo2ODYuNzEwOTM3NSwieSI6MTAwNS44NDM3NX0seyJ4Ijo2ODYuNzEwOTM3NSwieSI6OTQxLjg0Mzc1fSx7IngiOjY4Ni43MTA5Mzc1LCJ5Ijo4NzcuODQzNzV9LHsieCI6Njg2LjcxMDkzNzUsInkiOjgwMS44NDM3NX0seyJ4Ijo2ODYuNzEwOTM3NSwieSI6NzM3Ljg0Mzc1fSx7IngiOjY4Ni43MTA5Mzc1LCJ5Ijo2NjEuODQzNzV9LHsieCI6Njg2LjcxMDkzNzUsInkiOjQ5MC40MjE4NzV9LHsieCI6Njg2LjcxMDkzNzUsInkiOjM0M30seyJ4Ijo2MjAuMzA0Njg3NSwieSI6MzE4fV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M516.711,1275.109L516.711,1281.276C516.711,1287.443,516.711,1299.776,516.711,1311.443C516.711,1323.109,516.711,1334.109,516.711,1339.609L516.711,1345.109" id="L_J_K_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_J_K_0" data-points="W3sieCI6NTE2LjcxMDkzNzUsInkiOjEyNzUuMTA5Mzc1fSx7IngiOjUxNi43MTA5Mzc1LCJ5IjoxMzEyLjEwOTM3NX0seyJ4Ijo1MTYuNzEwOTM3NSwieSI6MTM0OS4xMDkzNzV9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/></g><g class="edgeLabels"><g class="edgeLabel"><g class="label" data-id="L_A_B_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_B_C_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_C_D_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(108, 661.84375)"><g class="label" data-id="L_D_E_0" transform="translate(-100, -24)"><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="edgeLabel"><p>Own CPU time or timing variation</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(328, 661.84375)"><g class="label" data-id="L_D_F_0" transform="translate(-100, -24)"><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="edgeLabel"><p>Preemption, placement, or migration</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(548, 661.84375)"><g class="label" data-id="L_D_G_0" transform="translate(-100, -24)"><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="edgeLabel"><p>Mutex, semaphore, or queue wait</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_E_H_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_F_H_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_G_H_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_H_I_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_I_J_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(686.7109375, 801.84375)"><g class="label" data-id="L_J_C_0" transform="translate(-9.3984375, -12)"><foreignObject width="18.796875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>No</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(516.7109375, 1312.109375)"><g class="label" data-id="L_J_K_0" transform="translate(-11.328125, -12)"><foreignObject width="22.65625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>Yes</p></span></div></foreignObject></g></g></g><g class="nodes"><g class="node default" id="flowchart-A-0" transform="translate(516.7109375, 35)"><rect class="basic label-container" style="" x="-104.046875" y="-27" width="208.09375" height="54"/><g class="label" style="" transform="translate(-74.046875, -12)"><rect/><foreignObject width="148.09375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Set Scope and filters</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-B-1" transform="translate(516.7109375, 151)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Check trace quality and overall load</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-C-3" transform="translate(516.7109375, 279)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Use triage to select an incident</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-D-5" transform="translate(324.2109375, 490.421875)"><polygon points="122.421875,0 244.84375,-122.421875 122.421875,-244.84375 0,-122.421875" class="label-container" transform="translate(-121.921875, 122.421875)"/><g class="label" style="" transform="translate(-95.421875, -12)"><rect/><foreignObject width="190.84375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>What evidence dominates?</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-E-7" transform="translate(108, 737.84375)"><rect class="basic label-container" style="" x="-85.5390625" y="-27" width="171.078125" height="54"/><g class="label" style="" transform="translate(-55.5390625, -12)"><rect/><foreignObject width="111.078125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>TIMING analysis</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-F-9" transform="translate(328, 737.84375)"><rect class="basic label-container" style="" x="-83.3125" y="-27" width="166.625" height="54"/><g class="label" style="" transform="translate(-53.3125, -12)"><rect/><foreignObject width="106.625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>SCHED analysis</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-G-11" transform="translate(548, 737.84375)"><rect class="basic label-container" style="" x="-78.5546875" y="-27" width="157.109375" height="54"/><g class="label" style="" transform="translate(-48.5546875, -12)"><rect/><foreignObject width="97.109375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>SYNC analysis</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-H-13" transform="translate(328, 877.84375)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Use DETAIL for supporting measurements</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-I-19" transform="translate(328, 1005.84375)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Confirm the event order on the timeline</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-J-21" transform="translate(516.7109375, 1184.9765625)"><polygon points="90.1328125,0 180.265625,-90.1328125 90.1328125,-180.265625 0,-90.1328125" class="label-container" transform="translate(-89.6328125, 90.1328125)"/><g class="label" style="" transform="translate(-63.1328125, -12)"><rect/><foreignObject width="126.265625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Enough evidence?</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-K-25" transform="translate(516.7109375, 1388.109375)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Record the finding and compare the change</p></span></div></foreignObject></g></g></g></g></g></svg></div>
+<p>The flow is intentionally iterative. If supporting data does not confirm the first explanation, return to triage and test the next plausible cause.</p>
+<h3>Using Analysis Findings</h3>
+<p>Toolbar <strong>Analysis</strong> provides a heuristic inbox for the current Scope. It stays open while the timeline remains interactive. Each finding separates the measured <strong>Evidence</strong> from the interpretation:</p>
+<ul>
+<li><strong>Investigate</strong> opens the related Statistics section without changing Scope or filters.</li>
+<li><strong>Show on timeline</strong> centers the timeline on the supporting timestamp and can highlight the related task. It never changes Scope or Filters.</li>
+<li>Severity ranks attention; it does not assign failure probability.</li>
+<li>Each finding shows an <strong>evidence-strength</strong> label (Direct / Derived / Estimated / Configured) with tooltips where applicable.</li>
+</ul>
+<p><a id="analysis-context-strip" name="analysis-context-strip"></a></p>
+<h3>Analysis Context strip</h3>
+<p>Findings, AI, and Compare show the full <strong>Analysis Context</strong> strip (trace name, <strong>Scope</strong>, <strong>Filters</strong>, sample count). The Statistics panel keeps Scope and Filters in its header; when cursors are placed but <strong>Limit to C1–Cn</strong> is off, it shows only a short note: <strong>Not limited to cursors</strong>. <strong>Clear filters</strong> remains available. Selection and Highlight are never listed as analysis constraints.</p>
+<p>When Scope or Filters change after results were calculated, Findings and AI may mark content <strong>stale</strong> and offer <strong>Recalculate with current context</strong>. The Statistics panel recalculates automatically when Scope or Filters change (same as Desktop).</p>
+<p><a id="symptom-shortcuts" name="symptom-shortcuts"></a></p>
+<h3>Symptom shortcuts</h3>
+<p><strong>Where should I start?</strong> is an optional guide on the Statistics toolbar (Desktop and Web). It stays closed by default so familiar users see tables immediately. Open it to pick a symptom card (unknown issue, late task, spike, dispatch delay, blocking, jitter, load imbalance, migration, sync, deadline); each jumps to the first recommended metric. <strong>Recommended from Findings</strong> appears when a finding maps to a symptom.</p>
+<p>Use a finding to select the next measurement, not as the conclusion. Confirm the sample count, related distribution, and timeline event order before recording a root cause.</p>
+<h3>Workflow A — first review of an unfamiliar trace</h3>
+<ol>
+<li>Set the Scope to a meaningful workload phase.</li>
+<li>Open <strong>Trace Health</strong> and confirm that the captured TICK pattern and gaps are plausible.</li>
+<li>Check <strong>Core Utilisation</strong>, <strong>Core Time Breakdown</strong>, and <strong>Concurrent Core Active Distribution</strong> for overall load and missing time.</li>
+<li>Use <strong>Timeline Anomalies</strong>, <strong>Worst Events</strong>, and <strong>Task Health</strong> to choose a task or time range.</li>
+<li>Inspect the relevant <strong>Execution</strong>, <strong>Blocking</strong>, <strong>Response</strong>, or <strong>Period</strong> distribution.</li>
+<li>Return to the timeline and place cursors around the selected sample.</li>
+<li>Use scheduling or synchronization statistics to explain what happened inside that range.</li>
+</ol>
+<h3>Workflow B — investigate a latency spike</h3>
+<ol>
+<li>Find the task in <strong>Response Time</strong>, <strong>Worst Events</strong>, or <strong>Timeline Anomalies</strong>.</li>
+<li>Compare Avg, p95, p99, and Max. A large gap between p95 and Max suggests a rare episode; a high p95 suggests a recurring tail.</li>
+<li>Split the episode into own execution and off-CPU time with <strong>Execution Time</strong>, <strong>Blocking Time</strong>, and <strong>Critical Path</strong>.</li>
+<li>If own execution grew, inspect <strong>Distribution Explorer</strong>, <strong>Intervals</strong>, and relevant Tags.</li>
+<li>If off-CPU time grew, inspect <strong>Dispatch Latency</strong>, <strong>Preemption Matrix</strong>, <strong>Mutex Blocking</strong>, and <strong>Core Migrations</strong>.</li>
+<li>Confirm the event order on the timeline. Use an instrumented Interval when an exact end-to-end boundary is required.</li>
+</ol>
+<h3>Workflow C — investigate an unstable periodic task</h3>
+<ol>
+<li>Use <strong>Period / Jitter</strong> to find missed, extra, or burst activations.</li>
+<li>Open <strong>Inter-Arrival Time</strong> and compare the median, p95, and Max.</li>
+<li>Check <strong>Unified Jitter</strong> to determine whether variation comes mainly from execution, off-CPU gaps, response, or dispatch.</li>
+<li>Check <strong>Core Utilization Over Time</strong> for load bursts at the same time.</li>
+<li>Check <strong>Preemption</strong>, <strong>Mutex Blocking</strong>, and <strong>Migrations</strong> for interference.</li>
+<li>If the application defines an explicit period or deadline, compare against that requirement rather than only the observed median.</li>
+</ol>
+<h3>Workflow D — investigate multicore load balance or migration</h3>
+<ol>
+<li>Confirm that load balancing and task migration are enabled by the RTOS design. Migration is not expected for pinned tasks.</li>
+<li>Use <strong>Core Utilisation</strong> and <strong>Core Utilization Over Time</strong> to distinguish a persistent imbalance from a short phase.</li>
+<li>Use <strong>Task × Core</strong> to identify which tasks contribute to each core.</li>
+<li>Use <strong>Core Migrations</strong> and <strong>Core-Pair Migration Summary</strong> to find frequent moves and bounce paths.</li>
+<li>Validate the allowed placement with <strong>Core Affinity</strong>.</li>
+<li>Correlate migration with <strong>Execution</strong>, <strong>Response</strong>, <strong>Switch Overhead</strong>, and <strong>Preemption</strong>. A migration count alone does not measure its cost.</li>
+</ol>
+<h3>Workflow E — investigate synchronization delay</h3>
+<ol>
+<li>Confirm that the trace contains the required STI take/give or send/receive events.</li>
+<li>Use <strong>Mutex / Semaphore</strong> or <strong>Queue</strong> to check pairing quality before using derived wait values.</li>
+<li>Use <strong>Mutex Blocking</strong> to rank likely contention by task and object.</li>
+<li>Use <strong>Waiter × Owner</strong> to identify the task pairs involved in repeated handoffs.</li>
+<li>Use <strong>Priority Inheritance</strong> to look for priority boosts and possible inversion patterns.</li>
+<li>Verify the exact take/give order on the timeline. Heuristic handoffs are not a kernel wait queue.</li>
+</ol>
+<h3>Workflow F — validate a change with Trace Compare</h3>
+<ol>
+<li>Select equivalent workload phases in Baseline A and Candidate B.</li>
+<li>Confirm compatible instrumentation, task naming, time units, and core configuration.</li>
+<li>Compare normalized values such as CPU%, events/s, and migrations/s before totals.</li>
+<li>Compare tail values, not only averages.</li>
+<li>Return to each trace and inspect the samples responsible for the change.</li>
+<li>Treat a difference as a regression only when it exceeds normal run-to-run variation and matters to a requirement.</li>
+</ol>
+<h2>Statistic dependency map</h2>
+<p>The table below identifies the strongest dependencies. “Requires” describes the evidence needed to calculate a statistic. “Confirm with” lists related statistics that usually help explain it.</p>
+<table>
+<thead>
+<tr>
+<th>Statistic</th>
+<th>Requires</th>
+<th>Confirm with</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Core Utilisation</td>
+<td>Per-core slices and Scope duration</td>
+<td>Core Time Breakdown, Task × Core, Core Time</td>
+</tr>
+<tr>
+<td>Trace Health</td>
+<td>TICK events</td>
+<td>Core Breakdown, Timeline</td>
+</tr>
+<tr>
+<td>Task Health</td>
+<td>Several timing and scheduling statistics</td>
+<td>The component section selected by the score</td>
+</tr>
+<tr>
+<td>Anomalies / Worst / Patterns</td>
+<td>Derived sample sets</td>
+<td>Timeline and the named source statistic</td>
+</tr>
+<tr>
+<td>Response Time</td>
+<td>Consecutive task slices</td>
+<td>Execution, Blocking, Dispatch, Interval</td>
+</tr>
+<tr>
+<td>Execution Time</td>
+<td>Slice start/end</td>
+<td>Distribution, Interval, Tags</td>
+</tr>
+<tr>
+<td>Dispatch Latency</td>
+<td>Ready STI/create plus switch-in</td>
+<td>Preemption, Core Time, Timeline</td>
+</tr>
+<tr>
+<td>Blocking Time</td>
+<td>Consecutive task slices</td>
+<td>Preemption, Mutex Blocking, Period</td>
+</tr>
+<tr>
+<td>Critical Path</td>
+<td>Response windows and overlapping evidence</td>
+<td>Execution, Blocking, Preemption, Migration</td>
+</tr>
+<tr>
+<td>Period / Inter-arrival</td>
+<td>Consecutive activation starts</td>
+<td>Unified Jitter, Deadline, Core Time</td>
+</tr>
+<tr>
+<td>Activation Latency</td>
+<td>Activation starts plus fitted period T</td>
+<td>Period / Jitter, Dispatch Latency, Ready-Gap</td>
+</tr>
+<tr>
+<td>Ready-Gap (Starvation)</td>
+<td>Off-CPU gaps, same-core overlap, STI take/suspend</td>
+<td>Preemption Chain, Priority, Mutex Blocking</td>
+</tr>
+<tr>
+<td>Migration statistics</td>
+<td>Consecutive slices and core IDs</td>
+<td>Affinity, Task × Core, Switch Overhead</td>
+</tr>
+<tr>
+<td>Idle Analysis</td>
+<td>Per-core IDLE segments clipped to scope</td>
+<td>Core Utilisation, Ready-Gap, Blocking Time</td>
+</tr>
+<tr>
+<td>Queue Backlog / Semaphore Level</td>
+<td>STI give/send and take/recv per object</td>
+<td>Mutex / Semaphore, Dispatch Latency, Ready-Gap</td>
+</tr>
+<tr>
+<td>Preemption statistics</td>
+<td>Off-CPU gaps plus same-core overlap</td>
+<td>Priority, Core Time, Timeline</td>
+</tr>
+<tr>
+<td>Switch Reason Breakdown</td>
+<td>Off-CPU gaps, same-core overlap, STI take/suspend</td>
+<td>Preemption Matrix, Preemption Chain, Priority</td>
+</tr>
+<tr>
+<td>Scheduling Load Over Time</td>
+<td>Per-core slice starts and utilisation bins</td>
+<td>Core Utilization Over Time, Task × Core, Core Utilisation</td>
+</tr>
+<tr>
+<td>Mutex statistics</td>
+<td>STI synchronization events</td>
+<td>Waiter × Owner, Priority, Timeline</td>
+</tr>
+<tr>
+<td>Queue statistics</td>
+<td>STI queue events</td>
+<td>Tags, Intervals, Timeline</td>
+</tr>
+<tr>
+<td>Intervals / Tags</td>
+<td>Application STI events</td>
+<td>Execution, Response, Timeline</td>
+</tr>
+<tr>
+<td>Deadline / CPU Budget</td>
+<td>Configured thresholds plus slices</td>
+<td>Execution, CPU share, Period</td>
+</tr>
+</tbody>
+</table>
+<h2>Advanced analysis tutorials</h2>
+<p>The following tutorials restore the worked explanations from the earlier guide. They complement the per-section reference below.</p>
+<h3>Migration investigation</h3>
+<p>Before treating migration as a problem, confirm that the RTOS configuration permits load balancing. A task pinned to one core should not migrate; an unpinned task may legitimately move when the scheduler balances ready work.</p>
+<p>Use this sequence:</p>
+<ol>
+<li>Confirm load balance. An SMP scheduler may move tasks to idle cores, so some migration is expected.</li>
+<li>Open <strong>Core Migrations</strong> and rank by Rate, Dwell, and Ping rather than Count alone.</li>
+<li>Open the <strong>Migration &amp; Corridor Inspector</strong>. The workspace has three columns: <strong>Core path</strong>, <strong>migration heatmap</strong>, and <strong>Topology</strong>, sized <strong>1 : 2 : 1</strong> by default. Drag the pane dividers to resize; Desktop stores the layout in <code>btf_viewer.rc</code> and Web stores it in localStorage. Path-table columns are resizable (drag the header dividers); widths stay fixed when you click a header to sort. Topology has Circle and Matrix views (icons stay at the top right). Traces with more than 16 cores open in Matrix. Click a heatmap cell to show <strong>Path info</strong> in the right column. Topology and Path info share that column and are exclusive.</li>
+<li>Check ping-pong, median dwell, and short-dwell share on the selected path.</li>
+<li>Treat <strong>Handoff</strong> as a synchronization-ownership heuristic, not a measured cache-line transfer.</li>
+<li>Inspect the relevant timeline window with <strong>Show events</strong>. <strong>Filter Timeline</strong> is a persistent task filter; Inspector filters stay local.</li>
+</ol>
+<p><strong>Analysis Scope</strong> defaults to <strong>Follow zoom</strong>: Fit (or ≥ 92% of the trace) is <strong>Full Trace</strong>; a zoomed-in window is <strong>Viewport</strong> and follows pan/zoom. Lock <strong>Full Trace</strong> or <strong>Viewport</strong> from the menu, or choose <strong>Cursor C1–Cn</strong> when at least two cursors are placed. If fewer than two cursors are placed, Cursor C1–Cn is disabled.</p>
+<p>The Inspector overview shows scope, load-balance status, migration count and rate, the most affected task, the hottest path, and the main concern (None / Burst / Ping-pong / Short dwell / Handoff suspect). Use <strong>Show Top 5 / 10 / 25 / All paths</strong> rather than a percentage cutoff. The Core path table lists Rate, Count, Ping, Dwell, Handoff, Net, and Share (hover a header for the full name). Click a column header to sort the path list and heatmap together; click again to reverse. <strong>Investigate with AI</strong> sends that structured context on the <code>migrations</code> template; it does not filter the timeline or move cursors unless you choose a viewer action.</p>
+<p>A corridor is evidence of repeated placement, not proof of cache cost. Cache misses, lazy coprocessor context invalidation, and additional register saves require processor-specific evidence.</p>
+<h3>Priority inheritance and the L/M/H pattern</h3>
+<p>Priority Inheritance appears when the trace contains a create priority and later priority events. Supported event meanings are:</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>priority_inherit Name[id] pri:N</code></td>
+<td>A mutex holder inherited priority <code>N</code></td>
+</tr>
+<tr>
+<td><code>priority_disinherit Name[id] pri:N</code></td>
+<td>The holder returned toward its base priority</td>
+</tr>
+<tr>
+<td><code>set_priority Name[id] pri:N</code></td>
+<td>The application or RTOS explicitly changed priority</td>
+</tr>
+</tbody>
+</table>
+<p>A boost episode is a continuous interval during which effective priority is above the create priority:</p>
+<div class="math-block"><mjx-container class="MathJax" jax="SVG" display="true"><svg style="vertical-align: -3.006ex;" xmlns="http://www.w3.org/2000/svg" width="27.689ex" height="5.155ex" role="img" focusable="false" viewBox="0 -950 12238.8 2278.6" xmlns:xlink="http://www.w3.org/1999/xlink"><g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)"><g data-mml-node="math"><g data-mml-node="msub"><g data-mml-node="mi"><use data-c="1D447" xlink:href="#MJX-TEX-I-1D447"></use></g><g data-mml-node="TeXAtom" transform="translate(617,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D44F" xlink:href="#MJX-TEX-I-1D44F"></use></g><g data-mml-node="mi" transform="translate(429,0)"><use data-c="1D45C" xlink:href="#MJX-TEX-I-1D45C"></use></g><g data-mml-node="mi" transform="translate(914,0)"><use data-c="1D45C" xlink:href="#MJX-TEX-I-1D45C"></use></g><g data-mml-node="mi" transform="translate(1399,0)"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(1868,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(2229,0)"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="mi" transform="translate(2695,0)"><use data-c="1D451" xlink:href="#MJX-TEX-I-1D451"></use></g></g></g><g data-mml-node="mo" transform="translate(3218.1,0)"><use data-c="3D" xlink:href="#MJX-TEX-N-3D"></use></g><g data-mml-node="munder" transform="translate(4273.9,0)"><g data-mml-node="mo"><use data-c="2211" xlink:href="#MJX-TEX-LO-2211"></use></g><g data-mml-node="mi" transform="translate(576.3,-1084.4) scale(0.707)"><use data-c="1D457" xlink:href="#MJX-TEX-I-1D457"></use></g></g><g data-mml-node="mo" transform="translate(5717.9,0)"><use data-c="28" xlink:href="#MJX-TEX-N-28"></use></g><g data-mml-node="msub" transform="translate(6106.9,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="mi" transform="translate(466,0)"><use data-c="1D45B" xlink:href="#MJX-TEX-I-1D45B"></use></g><g data-mml-node="mi" transform="translate(1066,0)"><use data-c="1D451" xlink:href="#MJX-TEX-I-1D451"></use></g><g data-mml-node="mo" transform="translate(1586,0)"><use data-c="2C" xlink:href="#MJX-TEX-N-2C"></use></g><g data-mml-node="mi" transform="translate(1864,0)"><use data-c="1D457" xlink:href="#MJX-TEX-I-1D457"></use></g></g></g><g data-mml-node="mo" transform="translate(8382.5,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="msub" transform="translate(9382.7,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(469,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(830,0)"><use data-c="1D44E" xlink:href="#MJX-TEX-I-1D44E"></use></g><g data-mml-node="mi" transform="translate(1359,0)"><use data-c="1D45F" xlink:href="#MJX-TEX-I-1D45F"></use></g><g data-mml-node="mi" transform="translate(1810,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mo" transform="translate(2171,0)"><use data-c="2C" xlink:href="#MJX-TEX-N-2C"></use></g><g data-mml-node="mi" transform="translate(2449,0)"><use data-c="1D457" xlink:href="#MJX-TEX-I-1D457"></use></g></g></g><g data-mml-node="mo" transform="translate(11849.8,0)"><use data-c="29" xlink:href="#MJX-TEX-N-29"></use></g></g></g></svg></mjx-container></div>
+<p><strong>Boosts</strong> is the number of episodes, <strong>Peak</strong> is the highest observed priority, and <strong>Boosted</strong> is their total duration.</p>
+<p>The classic <strong>L/M/H</strong> pattern contains:</p>
+<ul>
+<li><strong>L:</strong> a low-priority task holding a mutex;</li>
+<li><strong>H:</strong> a high-priority task waiting for that mutex; and</li>
+<li><strong>M:</strong> runnable work with priority strictly between L and H.</li>
+</ul>
+<p>Without inheritance, M can delay L while H waits. With inheritance, the RTOS raises L toward H so L can release the mutex. In BTFViewer, an orange band means a boost without the L/M/H pattern; a red band means mutex inheritance or an L/M/H-related pattern.</p>
+<div class="mermaid-diagram"><svg id="my-svg" width="100%" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" class="flowchart" style="max-width: 896px; background-color: transparent;" viewBox="0 0 896 406" role="graphics-document document" aria-roledescription="flowchart-v2"><style>#my-svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;fill:#ccc;}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#my-svg .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#my-svg .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#my-svg .error-icon{fill:#a44141;}#my-svg .error-text{fill:#ddd;stroke:#ddd;}#my-svg .edge-thickness-normal{stroke-width:1px;}#my-svg .edge-thickness-thick{stroke-width:3.5px;}#my-svg .edge-pattern-solid{stroke-dasharray:0;}#my-svg .edge-thickness-invisible{stroke-width:0;fill:none;}#my-svg .edge-pattern-dashed{stroke-dasharray:3;}#my-svg .edge-pattern-dotted{stroke-dasharray:2;}#my-svg .marker{fill:lightgrey;stroke:lightgrey;}#my-svg .marker.cross{stroke:lightgrey;}#my-svg svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;}#my-svg p{margin:0;}#my-svg .label{font-family:"trebuchet ms",verdana,arial,sans-serif;color:#ccc;}#my-svg .cluster-label text{fill:#F9FFFE;}#my-svg .cluster-label span{color:#F9FFFE;}#my-svg .cluster-label span p{background-color:transparent;}#my-svg .label text,#my-svg span{fill:#ccc;color:#ccc;}#my-svg .node rect,#my-svg .node circle,#my-svg .node ellipse,#my-svg .node polygon,#my-svg .node path{fill:#1f2020;stroke:#ccc;stroke-width:1px;}#my-svg .rough-node .label text,#my-svg .node .label text,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-anchor:middle;}#my-svg .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#my-svg .rough-node .label,#my-svg .node .label,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-align:center;}#my-svg .node.clickable{cursor:pointer;}#my-svg .root .anchor path{fill:lightgrey!important;stroke-width:0;stroke:lightgrey;}#my-svg .arrowheadPath{fill:lightgrey;}#my-svg .edgePath .path{stroke:lightgrey;stroke-width:2.0px;}#my-svg .flowchart-link{stroke:lightgrey;fill:none;}#my-svg .edgeLabel{background-color:hsl(0, 0%, 34.4117647059%);text-align:center;}#my-svg .edgeLabel p{background-color:hsl(0, 0%, 34.4117647059%);}#my-svg .edgeLabel rect{opacity:0.5;background-color:hsl(0, 0%, 34.4117647059%);fill:hsl(0, 0%, 34.4117647059%);}#my-svg .labelBkg{background-color:rgba(87.75, 87.75, 87.75, 0.5);}#my-svg .cluster rect{fill:hsl(180, 1.5873015873%, 28.3529411765%);stroke:rgba(255, 255, 255, 0.25);stroke-width:1px;}#my-svg .cluster text{fill:#F9FFFE;}#my-svg .cluster span{color:#F9FFFE;}#my-svg div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:12px;background:hsl(20, 1.5873015873%, 12.3529411765%);border:1px solid rgba(255, 255, 255, 0.25);border-radius:2px;pointer-events:none;z-index:100;}#my-svg .flowchartTitleText{text-anchor:middle;font-size:18px;fill:#ccc;}#my-svg rect.text{fill:none;stroke-width:0;}#my-svg .icon-shape,#my-svg .image-shape{background-color:hsl(0, 0%, 34.4117647059%);text-align:center;}#my-svg .icon-shape p,#my-svg .image-shape p{background-color:hsl(0, 0%, 34.4117647059%);padding:2px;}#my-svg .icon-shape .label rect,#my-svg .image-shape .label rect{opacity:0.5;background-color:hsl(0, 0%, 34.4117647059%);fill:hsl(0, 0%, 34.4117647059%);}#my-svg .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#my-svg .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#my-svg :root{--mermaid-font-family:"trebuchet ms",verdana,arial,sans-serif;}</style><g><marker id="my-svg_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="4.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 5 L 10 10 L 10 0 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="11" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-1" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossEnd" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="12" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossStart" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="-1" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><g class="root"><g class="clusters"/><g class="edgePaths"><path d="M138,86L138,90.167C138,94.333,138,102.667,171.344,112.426C204.688,122.186,271.375,133.373,304.719,138.966L338.063,144.559" id="L_H_I_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_H_I_0" data-points="W3sieCI6MTM4LCJ5Ijo4Nn0seyJ4IjoxMzgsInkiOjExMX0seyJ4IjozNDIuMDA3ODEyNSwieSI6MTQ1LjIyMDY2NTMyMjU4MDY2fV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M448,86L448,90.167C448,94.333,448,102.667,448,110.333C448,118,448,125,448,128.5L448,132" id="L_M_I_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_M_I_0" data-points="W3sieCI6NDQ4LCJ5Ijo4Nn0seyJ4Ijo0NDgsInkiOjExMX0seyJ4Ijo0NDgsInkiOjEzNn1d" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M758,86L758,90.167C758,94.333,758,102.667,724.656,112.426C691.312,122.186,624.625,133.373,591.281,138.966L557.937,144.559" id="L_L_I_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_L_I_0" data-points="W3sieCI6NzU4LCJ5Ijo4Nn0seyJ4Ijo3NTgsInkiOjExMX0seyJ4Ijo1NTMuOTkyMTg3NSwieSI6MTQ1LjIyMDY2NTMyMjU4MDY2fV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M448,190L448,194.167C448,198.333,448,206.667,448,214.333C448,222,448,229,448,232.5L448,236" id="L_I_B_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_I_B_0" data-points="W3sieCI6NDQ4LCJ5IjoxOTB9LHsieCI6NDQ4LCJ5IjoyMTV9LHsieCI6NDQ4LCJ5IjoyNDB9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M448,294L448,298.167C448,302.333,448,310.667,448,318.333C448,326,448,333,448,336.5L448,340" id="L_B_R_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_B_R_0" data-points="W3sieCI6NDQ4LCJ5IjoyOTR9LHsieCI6NDQ4LCJ5IjozMTl9LHsieCI6NDQ4LCJ5IjozNDR9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/></g><g class="edgeLabels"><g class="edgeLabel"><g class="label" data-id="L_H_I_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_M_I_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_L_I_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_I_B_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_B_R_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g></g><g class="nodes"><g class="node default" id="flowchart-H-0" transform="translate(138, 47)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>High-priority task waits for the mutex</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-I-1" transform="translate(448, 163)"><rect class="basic label-container" style="" x="-105.9921875" y="-27" width="211.984375" height="54"/><g class="label" style="" transform="translate(-75.9921875, -12)"><rect/><foreignObject width="151.984375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Priority inversion risk</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-M-2" transform="translate(448, 47)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Medium-priority task can preempt the holder</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L-4" transform="translate(758, 47)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Low-priority task holds the mutex</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-B-7" transform="translate(448, 267)"><rect class="basic label-container" style="" x="-112.5546875" y="-27" width="225.109375" height="54"/><g class="label" style="" transform="translate(-82.5546875, -12)"><rect/><foreignObject width="165.109375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>RTOS boosts the holder</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-R-9" transform="translate(448, 371)"><rect class="basic label-container" style="" x="-124.75" y="-27" width="249.5" height="54"/><g class="label" style="" transform="translate(-94.75, -12)"><rect/><foreignObject width="189.5" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Holder releases the mutex</p></span></div></foreignObject></g></g></g></g></g></svg></div>
+<p>The viewer finds a possible medium blocker by looking for a known base priority strictly between Base and Peak. This is supporting geometry, not proof that the medium task ran during every boost. Confirm the mutex object, task activity, and switch order on the timeline.</p>
+<h3>Mutex, semaphore, and queue pairing</h3>
+<p>Synchronization events are grouped by object pointer so that different objects on the same STI channel remain separate.</p>
+<table>
+<thead>
+<tr>
+<th>Object pattern</th>
+<th>Pairing direction</th>
+<th>Typical meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mutex</td>
+<td><code>take → give</code></td>
+<td>Ownership / hold duration</td>
+</tr>
+<tr>
+<td>Semaphore used as a resource</td>
+<td><code>take → give</code></td>
+<td>Resource residency</td>
+</tr>
+<tr>
+<td>Semaphore used as a signal</td>
+<td><code>give → take</code></td>
+<td>Posted signal consumed later</td>
+</tr>
+<tr>
+<td>Queue</td>
+<td><code>send → receive</code></td>
+<td>Recorded producer-to-consumer interval</td>
+</tr>
+</tbody>
+</table>
+<p>For completed hold spans <code>τ_h</code>, average hold time is:</p>
+<div class="math-block"><mjx-container class="MathJax" jax="SVG" display="true"><svg style="vertical-align: -2.75ex;" xmlns="http://www.w3.org/2000/svg" width="20.971ex" height="5.786ex" role="img" focusable="false" viewBox="0 -1342 9269.2 2557.5" xmlns:xlink="http://www.w3.org/1999/xlink"><g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)"><g data-mml-node="math"><g data-mml-node="mi"><use data-c="1D434" xlink:href="#MJX-TEX-I-1D434"></use></g><g data-mml-node="mi" transform="translate(750,0)"><use data-c="1D463" xlink:href="#MJX-TEX-I-1D463"></use></g><g data-mml-node="mi" transform="translate(1235,0)"><use data-c="1D454" xlink:href="#MJX-TEX-I-1D454"></use></g><g data-mml-node="mi" transform="translate(1712,0)"><use data-c="1D43B" xlink:href="#MJX-TEX-I-1D43B"></use></g><g data-mml-node="mi" transform="translate(2600,0)"><use data-c="1D45C" xlink:href="#MJX-TEX-I-1D45C"></use></g><g data-mml-node="mi" transform="translate(3085,0)"><use data-c="1D459" xlink:href="#MJX-TEX-I-1D459"></use></g><g data-mml-node="mi" transform="translate(3383,0)"><use data-c="1D451" xlink:href="#MJX-TEX-I-1D451"></use></g><g data-mml-node="mo" transform="translate(4180.8,0)"><use data-c="3D" xlink:href="#MJX-TEX-N-3D"></use></g><g data-mml-node="mfrac" transform="translate(5236.6,0)"><g data-mml-node="mn" transform="translate(414,676)"><use data-c="31" xlink:href="#MJX-TEX-N-31"></use></g><g data-mml-node="mi" transform="translate(220,-686)"><use data-c="1D441" xlink:href="#MJX-TEX-I-1D441"></use></g><rect width="1088" height="60" x="120" y="220"></rect></g><g data-mml-node="munder" transform="translate(6731.2,0)"><g data-mml-node="mo"><use data-c="2211" xlink:href="#MJX-TEX-LO-2211"></use></g><g data-mml-node="mi" transform="translate(518.4,-1107.7) scale(0.707)"><use data-c="210E" xlink:href="#MJX-TEX-I-210E"></use></g></g><g data-mml-node="msub" transform="translate(8341.9,0)"><g data-mml-node="mi"><use data-c="1D70F" xlink:href="#MJX-TEX-I-1D70F"></use></g><g data-mml-node="mi" transform="translate(470,-150) scale(0.707)"><use data-c="210E" xlink:href="#MJX-TEX-I-210E"></use></g></g></g></g></svg></mjx-container></div>
+<p>Review pairing quality before using hold or blocking results. Important issues include orphan give, cross-task give, unmatched take, unmatched signal, deletion while held, and an object still held at the end of the capture. A mutex taken on one core and given on another is reported as a core-boundary bounce. It may imply cache-line movement, but the trace does not measure the hardware cost.</p>
+<p><strong>Waiter × Owner</strong> and <strong>Mutex Blocking</strong> are derived from successful handoffs. They do not reconstruct blocked attempts or the RTOS wait queue. Use them to rank likely contention, then verify the take/give order and task states on the timeline.</p>
+<h3>Interval and Tag instrumentation</h3>
+<p>Use an <strong>Interval</strong> when one task can record a clear start and stop for an operation. Current interval notes include the interval ID and task ID, allowing different tasks to reuse the same numeric ID without cross-pairing. Legacy notes without a task ID can be ambiguous when concurrent tasks use the same ID.</p>
+<table>
+<thead>
+<tr>
+<th>Trace pattern</th>
+<th>Suitable for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>interval_start</code> / <code>interval_stop</code> on the same task</td>
+<td>Loop iteration, handler, critical region, or complete job</td>
+</tr>
+<tr>
+<td>Consecutive values on one Tag channel</td>
+<td>Timing across tasks or ISRs</td>
+</tr>
+<tr>
+<td>Tag value samples</td>
+<td>Queue depth, free memory, sensor value, application state</td>
+</tr>
+</tbody>
+</table>
+<p>Completed intervals provide Count, Min, Avg, Max, Jitter, σ, p50, p95, and p99. Unmatched events near the Scope boundary are excluded and may reflect partial capture. Recursive or overlapping use of the same interval ID should be avoided unless the instrumentation contract defines the nesting order.</p>
+<p>Tag values have application-defined units. The viewer can summarize and plot the numeric payload, but it cannot infer whether <code>10</code> means bytes, messages, degrees, or a state code. Document each channel and correlate value changes with timeline events.</p>
+<h3>Reading scatter plots, histograms, and CDFs</h3>
+<p>All three views use the same selected sample set:</p>
+<table>
+<thead>
+<tr>
+<th>View</th>
+<th style="text-align:right">Preserves time order?</th>
+<th>Main question</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scatter</td>
+<td style="text-align:right">Yes</td>
+<td>When did a spike, trend, or mode change occur?</td>
+</tr>
+<tr>
+<td>Histogram</td>
+<td style="text-align:right">No</td>
+<td>Which value ranges contain most samples?</td>
+</tr>
+<tr>
+<td>CDF</td>
+<td style="text-align:right">No</td>
+<td>What percentage of samples is at or below a value?</td>
+</tr>
+</tbody>
+</table>
+<p>On a CDF, the horizontal axis is the metric value and the vertical axis is cumulative percentage. The curve begins near 0% and rises toward 100%. A steep rise indicates a tight cluster; a gradual rise indicates a wider distribution or long tail.</p>
+<table>
+<thead>
+<tr>
+<th>Reference</th>
+<th>CDF interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>p5</td>
+<td>5% of observed samples are at or below this value</td>
+</tr>
+<tr>
+<td>p50</td>
+<td>Half of the samples are at or below the median</td>
+</tr>
+<tr>
+<td>p95</td>
+<td>95% are at or below this value; 5% are above it</td>
+</tr>
+<tr>
+<td>Avg</td>
+<td>A mean reference line; it does not correspond to a fixed cumulative percentage</td>
+</tr>
+</tbody>
+</table>
+<p>Use Linear scale for compact distributions, p5–p95 to focus on the main population while retaining edge buckets, and Log duration when short and long samples differ by orders of magnitude. The scale changes only the horizontal mapping; it does not change the samples or percentiles.</p>
+<p>For a deadline <code>D</code>, read the CDF height at <code>D</code> to estimate the observed completion percentage. This is a result for the selected Scope, not a future guarantee or a proof of worst-case timing.</p>
+<h3>Trace Compare reading order</h3>
+<p>Trace Compare is most reliable when read in this order:</p>
+<ol>
+<li>Confirm file identity, Scope, tick mode, task matching, core count, and validation warnings.</li>
+<li>Use span-normalized Summary rows when capture lengths differ.</li>
+<li>Review the regression result on the <strong>Summary</strong> tab for differences that exceed both absolute and relative thresholds.</li>
+<li>Open the related detail table and compare tail values. Click a column header to sort; click again to reverse.</li>
+<li>Return to both timelines and verify the events behind the difference.</li>
+</ol>
+<p>Task rows are matched by display name (<code>Name[id]</code>). A changed ID can prevent a logical match. A dash means unavailable, not zero. CPU and utilisation differences use percentage points (<code>pp</code>).</p>
+<p>Useful comparison groups include Summary, Top Tasks, Core Util, Core Migrations, Execution, Blocking, Inter-Arrival, Preemption, Sync, Response, Mutex, Shared Patterns, and Trends. Exported reports include the full tables rather than only the dialog preview.</p>
+<h4>Example: fixed tick compared with tickless idle </h4>
+<p>Capture the same workload once with a fixed tick and once with tickless idle. Keep TICK instrumentation, workload duration, and build options otherwise equivalent.</p>
+<table>
+<thead>
+<tr>
+<th>Compare item</th>
+<th>What to check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Context switches and <code>/s</code></td>
+<td>Whether suppressed idle ticks reduce scheduler activity</td>
+</tr>
+<tr>
+<td>Tick mode, count, gaps, and CV</td>
+<td>Whether the two policies were actually observed</td>
+</tr>
+<tr>
+<td>Core gap, utilisation, and load balance</td>
+<td>Whether idle and busy phases are comparable</td>
+</tr>
+<tr>
+<td>Migrations and core pairs</td>
+<td>Whether wake-up policy changes task placement</td>
+</tr>
+<tr>
+<td>Execution, Blocking, Response tails</td>
+<td>Whether power savings affect latency budgets</td>
+</tr>
+<tr>
+<td>Preemption and Top Tasks</td>
+<td>Which work absorbs tick or wake-up overhead</td>
+</tr>
+</tbody>
+</table>
+<p>Tickless behavior is easiest to see in an idle-heavy cursor range. In a fully busy phase, context-switch and tick counts can remain similar. If a supposed tickless capture still shows regular TICK events, investigate kernel eligibility and ready-list behavior before blaming the trace or viewer.</p>
+<h2>Stable Help links</h2>
+<p>Each Statistics section has a stable anchor in this form:</p>
+<pre><code class="language-text">STATISTICS.md#statistics-&lt;section-id&gt;
+</code></pre>
+<p>The <code>&lt;section-id&gt;</code> is the same identifier used by the Statistics panel. English and Traditional Chinese documents use identical anchors, so the application can select the appropriate file without changing the fragment.</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Section IDs in default order</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>OVERVIEW</strong></td>
+<td><code>cores</code>, <code>health</code>, <code>task_health</code></td>
+</tr>
+<tr>
+<td><strong>TRIAGE</strong></td>
+<td><code>anomalies</code>, <code>worst</code>, <code>patterns</code></td>
+</tr>
+<tr>
+<td><strong>TIMING</strong></td>
+<td><code>response</code>, <code>exec</code>, <code>dispatch</code>, <code>block</code>, <code>crit_path</code>, <code>period</code>, <code>jitter</code>, <code>inter</code></td>
+</tr>
+<tr>
+<td><strong>SCHED</strong></td>
+<td><code>task_core</code>, <code>core_time</code>, <code>migrations</code>, <code>core_pairs</code>, <code>affinity</code>, <code>preempt_matrix</code>, <code>preemption</code>, <code>priority</code>, <code>concurrency</code></td>
+</tr>
+<tr>
+<td><strong>SYNC</strong></td>
+<td><code>mutex_block</code>, <code>wait_owner</code>, <code>sync</code>, <code>queue</code></td>
+</tr>
+<tr>
+<td><strong>DETAIL</strong></td>
+<td><code>core_breakdown</code>, <code>switch_overhead</code>, <code>tasks</code>, <code>distrib</code>, <code>intervals</code>, <code>tags</code>, <code>lifecycle</code>, <code>deadline</code></td>
+</tr>
+</tbody>
+</table>
+<p>The categories describe an investigation purpose:</p>
+<ul>
+<li><strong>OVERVIEW</strong> summarizes overall condition.</li>
+<li><strong>TRIAGE</strong> identifies where to investigate first.</li>
+<li><strong>TIMING</strong> explains task latency, execution, and variation.</li>
+<li><strong>SCHED</strong> explains multicore placement and scheduling behavior.</li>
+<li><strong>SYNC</strong> explains waits and synchronization objects.</li>
+<li><strong>DETAIL</strong> provides supporting measurements and instrumented data.</li>
+</ul>
+<h2>1. OVERVIEW — overall condition </h2>
+<p>Start here to understand system load, trace quality, and which tasks may need attention.</p>
+<p><a id="statistics-cores" name="statistics-cores"></a></p>
+<h3>Core Utilisation (excl. IDLE/TICK) </h3>
+<p><strong>What it tells you</strong></p>
+<p>Shows the percentage of the current Scope during which each core runs a user task. IDLE and TICK activity are excluded from the busy percentage.</p>
+<p>The <strong>Load Balance Score</strong> summarizes how evenly work is distributed across active cores. A high score means similar utilisation; a low score means work is concentrated on fewer cores. The score does not indicate whether the system is overloaded—a system can be evenly busy or evenly idle.</p>
+<p>Use this section to find heavily loaded cores and uneven placement. Confirm the cause with <strong>Task × Core</strong>, <strong>Core Migrations</strong>, and <strong>Core Affinity</strong>.</p>
+<p><strong>Calculation.</strong> For each core, BTFViewer sums the overlap between user-task slices and the Scope, then divides by the scoped duration. IDLE and TICK slices are excluded from the busy numerator. The load-balance score is <code>100 × (1 − Gini coefficient)</code> for the per-core utilisation values. A score near 100 means a more even distribution; it is not an available-capacity score.</p>
+<p><strong>How to use it.</strong> Compare the busiest and least busy cores, then open <strong>Core Utilization Over Time</strong> to see whether the difference persists. Use <strong>Task × Core</strong> to identify the tasks behind the load. A low score can be correct when affinity intentionally reserves a core or the workload contains a serial stage.</p>
+<p><a id="statistics-health" name="statistics-health"></a></p>
+<h3>Trace Health (TICK) </h3>
+<p><strong>What it tells you</strong></p>
+<p>Uses the time between consecutive TICK events to assess tick regularity and identify a periodic or tickless pattern.</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Mode</strong></td>
+<td><code>TICK</code> for regular intervals or <code>TICKLESS</code> for wider variation associated with suppressed idle ticks</td>
+</tr>
+<tr>
+<td><strong>Avg period / Max gap</strong></td>
+<td>Typical and longest observed TICK interval</td>
+</tr>
+<tr>
+<td><strong>CV</strong></td>
+<td>Relative variation of TICK intervals</td>
+</tr>
+<tr>
+<td><strong>Missed ticks (est.)</strong></td>
+<td>Approximate number of nominal periods covered by unusually large gaps</td>
+</tr>
+</tbody>
+</table>
+<p>A large gap can come from tickless idle, a long critical section, CPU pressure, or missing trace data. A <code>GOOD</code> status describes the observed TICK pattern; it is not a complete performance verdict.</p>
+<p><strong>Calculation.</strong> Consecutive TICK timestamps form the interval samples. The average, maximum, CV, and typical interval are calculated from that set. The missed-tick estimate compares unusually large intervals with the nominal period; it does not prove that the hardware tick failed.</p>
+<p><strong>How to use it.</strong> Establish whether the trace is periodic or tickless before treating a large gap as an error. Correlate the gap with <strong>Core Time Breakdown</strong>, CPU load, and the timeline. If all event types disappear in the same range, suspect capture loss; if tasks continue but TICK events disappear, investigate tick suppression, interrupt masking, or instrumentation.</p>
+<p></p>
+<p><a id="statistics-task_health" name="statistics-task_health"></a></p>
+<h3>Task Health </h3>
+<p><strong>What it tells you</strong></p>
+<p>Combines measured execution variation, blocking tails, period behavior, migration, deadline results, and CPU share into a 0–100 screening score.</p>
+<p>Use the score to prioritize tasks for inspection. It is not an AI probability, a failure probability, or proof of a root cause. Open the related Statistics section before drawing a conclusion.</p>
+<p><strong>Calculation.</strong> The score starts at 100 and subtracts the following heuristic penalties. A component uses the more severe of its applicable checks.</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Warning</th>
+<th>Fail</th>
+<th>Penalty (warning / fail)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Execution</td>
+<td>CV <code>≥ 0.5</code> or <code>Max / Avg ≥ 3</code></td>
+<td>CV <code>≥ 1.0</code> or <code>Max / Avg ≥ 8</code></td>
+<td>10 / 20</td>
+</tr>
+<tr>
+<td>Blocking</td>
+<td>CV <code>≥ 0.6</code> or <code>Max / Avg ≥ 4</code></td>
+<td>CV <code>≥ 1.2</code> or <code>Max / Avg ≥ 10</code></td>
+<td>10 / 20</td>
+</tr>
+<tr>
+<td>Period</td>
+<td>CV <code>≥ 0.15</code> or at least one estimated miss</td>
+<td>CV <code>≥ 0.4</code> or at least three estimated misses</td>
+<td>8 / 16</td>
+</tr>
+<tr>
+<td>Migration</td>
+<td><code>migration count / execution-slice count ≥ 0.3</code></td>
+<td>Ratio <code>≥ 0.7</code></td>
+<td>8 / 16</td>
+</tr>
+<tr>
+<td>Deadline</td>
+<td>—</td>
+<td>At least one configured violation</td>
+<td>30</td>
+</tr>
+<tr>
+<td>CPU share</td>
+<td>CPU% <code>≥ 80</code></td>
+<td>CPU% <code>≥ 95</code></td>
+<td>8 / 16</td>
+</tr>
+</tbody>
+</table>
+<p>The final score is limited to 0–100. The thresholds are screening rules chosen by BTFViewer, not RTOS requirements. Missing components are not treated as confirmed failures.</p>
+<p><strong>How to use it.</strong> Open the score band or contributing metric with the strongest warning. Check its sample count and distribution, then inspect the corresponding event. A lower score can also result from richer instrumentation or a larger sample set, so compare tasks in context.</p>
+<h2>2. TRIAGE — where to investigate first </h2>
+<p>These sections reduce a long trace to a short list of events and recurring problems.</p>
+<p><a id="statistics-anomalies" name="statistics-anomalies"></a></p>
+<h3>Timeline Anomalies </h3>
+<p><strong>What it tells you</strong></p>
+<p>Lists unusual long tails, bursts, CPU spikes, idle gaps, mutex waits, and deadline misses in the current Scope. Each row identifies the event type, affected task, time, and reason it was selected.</p>
+<p>Click a row to inspect the evidence on the timeline. An anomaly means “worth investigating”; it does not prove a defect.</p>
+<p><strong>Selection logic.</strong> The section searches available sample sets for long tails, bursts, spikes, gaps, repeated migration or preemption, mutex-wait estimates, and configured deadline violations. Each row retains the source statistic and a timestamp.</p>
+<p><strong>How to use it.</strong> Start with severe or repeated rows, but remember that one physical episode may create several related anomalies. Place C1–C2 around the episode and analyse the related timing, scheduling, and synchronization rows together.</p>
+<p><a id="statistics-worst" name="statistics-worst"></a></p>
+<h3>Worst Events </h3>
+<p><strong>What it tells you</strong></p>
+<p>Collects the longest execution, blocking, inter-arrival, and estimated response episodes in one table.</p>
+<p>Use it when the first question is “Where is the largest observed delay?” A maximum is only the worst sample captured in this Scope; it is not a guaranteed worst-case bound.</p>
+<p><strong>Calculation.</strong> BTFViewer takes the largest valid samples from execution, off-CPU gap, inter-arrival, and heuristic-response sets, retaining the task and time boundary for each sample.</p>
+<p><strong>How to use it.</strong> Compare Max with p95 and p99. A Max far above p99 suggests a rare episode; high p95, p99, and Max suggest a persistent tail. Longer traces have more opportunities to contain an extreme, so do not compare Max alone across runs.</p>
+<p><a id="statistics-patterns" name="statistics-patterns"></a></p>
+<h3>Recurring Patterns </h3>
+<p><strong>What it tells you</strong></p>
+<p>Groups repeated anomaly types by task and points to the worst instance of each group.</p>
+<p>Repeated events are more likely to represent a systematic condition than a single isolated sample. Their cause still needs confirmation from timing, scheduling, or synchronization evidence.</p>
+<p><strong>Calculation.</strong> Anomalies with the same task and type are grouped. The table reports recurrence and retains the worst representative instance.</p>
+<p><strong>How to use it.</strong> Prefer patterns that recur across several workload cycles. Inspect the worst instance and at least one other instance to verify a consistent event order. Pair this section with <strong>Period / Jitter</strong> for periodic recurrence and <strong>Core Utilization Over Time</strong> for phase-related recurrence.</p>
+<p></p>
+<h2>3. TIMING — task latency and variation </h2>
+<p>These sections describe when a task runs, how long it runs, and how long it waits. The metrics observe different boundaries and should not be treated as interchangeable.</p>
+<p></p>
+<p><a id="statistics-response" name="statistics-response"></a></p>
+<h3>Response Time </h3>
+<p><strong>What it tells you</strong></p>
+<p>Estimates a ready-to-completion window from adjacent task slices. For later slices, the window starts when the previous slice ends and finishes when the current slice ends; the first slice uses its execution duration.</p>
+<p>This is a <strong>heuristic response time</strong>, not an explicit release/completion pair recorded by the kernel. Use an instrumented interval when an exact application response boundary is required.</p>
+<p>Tail percentiles are usually more useful than the average for latency-sensitive work. Click a percentile or extreme value to inspect the corresponding episode.</p>
+<p>For later slices, the calculation can be written as:</p>
+<div class="math-block"><mjx-container class="MathJax" jax="SVG" display="true"><svg style="vertical-align: -0.471ex;" xmlns="http://www.w3.org/2000/svg" width="31.666ex" height="2.041ex" role="img" focusable="false" viewBox="0 -694 13996.2 902" xmlns:xlink="http://www.w3.org/1999/xlink"><g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)"><g data-mml-node="math"><g data-mml-node="msub"><g data-mml-node="mi"><use data-c="1D445" xlink:href="#MJX-TEX-I-1D445"></use></g><g data-mml-node="mi" transform="translate(792,-150) scale(0.707)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g><g data-mml-node="mo" transform="translate(1488.2,0)"><use data-c="3D" xlink:href="#MJX-TEX-N-3D"></use></g><g data-mml-node="msub" transform="translate(2544,0)"><g data-mml-node="mi"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(502,-150) scale(0.707)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g><g data-mml-node="mo" transform="translate(3686.6,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="msub" transform="translate(4686.8,0)"><g data-mml-node="mi"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="TeXAtom" transform="translate(499,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g><g data-mml-node="mo" transform="translate(521,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="mn" transform="translate(1299,0)"><use data-c="31" xlink:href="#MJX-TEX-N-31"></use></g></g></g><g data-mml-node="mo" transform="translate(6730.1,0)"><use data-c="2B" xlink:href="#MJX-TEX-N-2B"></use></g><g data-mml-node="msub" transform="translate(7730.3,0)"><g data-mml-node="mi"><use data-c="1D451" xlink:href="#MJX-TEX-I-1D451"></use></g><g data-mml-node="mi" transform="translate(553,-150) scale(0.707)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g><g data-mml-node="mo" transform="translate(8979.5,0)"><use data-c="3D" xlink:href="#MJX-TEX-N-3D"></use></g><g data-mml-node="msub" transform="translate(10035.3,0)"><g data-mml-node="mi"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="mi" transform="translate(499,-150) scale(0.707)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g><g data-mml-node="mo" transform="translate(11174.9,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="msub" transform="translate(12175.1,0)"><g data-mml-node="mi"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="TeXAtom" transform="translate(499,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g><g data-mml-node="mo" transform="translate(521,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="mn" transform="translate(1299,0)"><use data-c="31" xlink:href="#MJX-TEX-N-31"></use></g></g></g></g></g></svg></mjx-container></div>
+<p>It includes the off-CPU gap before the current slice and the current execution duration. Compare it with <strong>Execution Time</strong> and <strong>Blocking Time</strong> to see which part dominates. Use <strong>Dispatch Latency</strong> when an STI ready point exists, and an instrumented <strong>Interval</strong> for an exact request-to-response boundary.</p>
+<p></p>
+<p>The following distribution for <code>CS[11]</code> illustrates how to read the metric beyond the table. A steep CDF at short durations means most estimated responses are short; the sparse points to the right form the latency tail. Compare p95 and p99 with the application requirement, then jump to the corresponding samples to determine whether execution or the preceding off-CPU gap dominates.</p>
+<p></p>
+<p><a id="statistics-exec" name="statistics-exec"></a></p>
+<h3>Execution Time Per Slice </h3>
+<p><strong>What it tells you</strong></p>
+<p>Measures each continuous on-CPU slice:</p>
+<div class="math-block"><mjx-container class="MathJax" jax="SVG" display="true"><svg style="vertical-align: -0.65ex;" xmlns="http://www.w3.org/2000/svg" width="18.556ex" height="2.22ex" role="img" focusable="false" viewBox="0 -694 8202 981.2" xmlns:xlink="http://www.w3.org/1999/xlink"><g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)"><g data-mml-node="math"><g data-mml-node="msub"><g data-mml-node="mi"><use data-c="1D451" xlink:href="#MJX-TEX-I-1D451"></use></g><g data-mml-node="mi" transform="translate(553,-150) scale(0.707)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g><g data-mml-node="mo" transform="translate(1249.2,0)"><use data-c="3D" xlink:href="#MJX-TEX-N-3D"></use></g><g data-mml-node="msub" transform="translate(2305,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="mi" transform="translate(466,0)"><use data-c="1D45B" xlink:href="#MJX-TEX-I-1D45B"></use></g><g data-mml-node="mi" transform="translate(1066,0)"><use data-c="1D451" xlink:href="#MJX-TEX-I-1D451"></use></g><g data-mml-node="mo" transform="translate(1586,0)"><use data-c="2C" xlink:href="#MJX-TEX-N-2C"></use></g><g data-mml-node="mi" transform="translate(1864,0)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g></g><g data-mml-node="mo" transform="translate(4657.6,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="msub" transform="translate(5657.9,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(469,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(830,0)"><use data-c="1D44E" xlink:href="#MJX-TEX-I-1D44E"></use></g><g data-mml-node="mi" transform="translate(1359,0)"><use data-c="1D45F" xlink:href="#MJX-TEX-I-1D45F"></use></g><g data-mml-node="mi" transform="translate(1810,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mo" transform="translate(2171,0)"><use data-c="2C" xlink:href="#MJX-TEX-N-2C"></use></g><g data-mml-node="mi" transform="translate(2449,0)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g></g></g></g></svg></mjx-container></div>
+<p><strong>Runs</strong> is the number of slices. <strong>CPU%</strong> is the task's on-CPU time divided by the Scope wall-clock duration. <strong>Jitter</strong> is the observed <code>Max − Min</code> range.</p>
+<p>Long slices may coincide with computation, critical sections, lock ownership, or disabled interrupts, but timing alone cannot identify the cause. <strong>Max</strong> is an observed maximum, not a proven WCET; <strong>Min</strong> is not a proven BCET.</p>
+<p><strong>Calculation.</strong> A complete slice inside the selected range forms an execution-duration sample. CPU time accounting clips slice overlap to the Scope before calculating CPU%. A preempted application operation may appear as several Runs, so a Run is not necessarily one job or request.</p>
+<p><strong>How to use it.</strong> Use Avg or p50 for typical cost, p95/p99 for recurring tails, and Max to locate the largest captured slice. If preemption can divide one operation, use <strong>Interval Analysis</strong> to measure the whole operation. Correlate long slices with Tags, mutex holds, and timeline activity.</p>
+<p>In this example, the scatter reveals when longer slices occur, while the histogram and CDF show whether they are common or limited to a small tail. A log-scaled duration axis may be selected when short and long samples span a wide range.</p>
+<p></p>
+<p><a id="statistics-dispatch" name="statistics-dispatch"></a></p>
+<h3>Dispatch / Scheduling Latency </h3>
+<p><strong>What it tells you</strong></p>
+<p>Measures the delay from a recorded ready point to the next switch-in:</p>
+<div class="math-block"><mjx-container class="MathJax" jax="SVG" display="true"><svg style="vertical-align: -0.667ex;" xmlns="http://www.w3.org/2000/svg" width="26.822ex" height="2.213ex" role="img" focusable="false" viewBox="0 -683 11855.4 978" xmlns:xlink="http://www.w3.org/1999/xlink"><g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)"><g data-mml-node="math"><g data-mml-node="msub"><g data-mml-node="mi"><use data-c="1D43F" xlink:href="#MJX-TEX-I-1D43F"></use></g><g data-mml-node="TeXAtom" transform="translate(714,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D451" xlink:href="#MJX-TEX-I-1D451"></use></g><g data-mml-node="mi" transform="translate(520,0)"><use data-c="1D456" xlink:href="#MJX-TEX-I-1D456"></use></g><g data-mml-node="mi" transform="translate(865,0)"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(1334,0)"><use data-c="1D45D" xlink:href="#MJX-TEX-I-1D45D"></use></g><g data-mml-node="mi" transform="translate(1837,0)"><use data-c="1D44E" xlink:href="#MJX-TEX-I-1D44E"></use></g><g data-mml-node="mi" transform="translate(2366,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(2727,0)"><use data-c="1D450" xlink:href="#MJX-TEX-I-1D450"></use></g><g data-mml-node="mi" transform="translate(3160,0)"><use data-c="210E" xlink:href="#MJX-TEX-I-210E"></use></g></g></g><g data-mml-node="mo" transform="translate(3683.5,0)"><use data-c="3D" xlink:href="#MJX-TEX-N-3D"></use></g><g data-mml-node="msub" transform="translate(4739.3,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(469,0)"><use data-c="1D464" xlink:href="#MJX-TEX-I-1D464"></use></g><g data-mml-node="mi" transform="translate(1185,0)"><use data-c="1D456" xlink:href="#MJX-TEX-I-1D456"></use></g><g data-mml-node="mi" transform="translate(1530,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(1891,0)"><use data-c="1D450" xlink:href="#MJX-TEX-I-1D450"></use></g><g data-mml-node="mi" transform="translate(2324,0)"><use data-c="210E" xlink:href="#MJX-TEX-I-210E"></use></g><g data-mml-node="mo" transform="translate(2900,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="mi" transform="translate(3678,0)"><use data-c="1D456" xlink:href="#MJX-TEX-I-1D456"></use></g><g data-mml-node="mi" transform="translate(4023,0)"><use data-c="1D45B" xlink:href="#MJX-TEX-I-1D45B"></use></g></g></g><g data-mml-node="mo" transform="translate(8674.5,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="msub" transform="translate(9674.7,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D45F" xlink:href="#MJX-TEX-I-1D45F"></use></g><g data-mml-node="mi" transform="translate(451,0)"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="mi" transform="translate(917,0)"><use data-c="1D44E" xlink:href="#MJX-TEX-I-1D44E"></use></g><g data-mml-node="mi" transform="translate(1446,0)"><use data-c="1D451" xlink:href="#MJX-TEX-I-1D451"></use></g><g data-mml-node="mi" transform="translate(1966,0)"><use data-c="1D466" xlink:href="#MJX-TEX-I-1D466"></use></g></g></g></g></g></svg></mjx-container></div>
+<p>The ready point comes from a task create or STI resume event. Synchronization-object wakeups cannot be assigned to a task when the trace does not record the woken task ID. Therefore, this section covers only activations with a known ready point.</p>
+<p><strong>Pairing.</strong> A ready event is paired with the next switch-in of the same task. An event without a later switch-in in the Scope does not form a completed sample. Multiple ready events before one switch-in can make attribution ambiguous.</p>
+<p><strong>How to use it.</strong> A high tail means the task was known to be ready but did not run promptly. Check <strong>Preemption Matrix</strong>, task priorities, and <strong>Core Utilization Over Time</strong>. Wakes without a task ID require application instrumentation or direct timeline inspection.</p>
+<p>The distribution for <code>SR0[271]</code> demonstrates a lifecycle task with create, suspend, and resume samples. Use it to distinguish a consistently slow dispatch path from a few isolated scheduling delays.</p>
+<p></p>
+<p><a id="statistics-block" name="statistics-block"></a></p>
+<h3>Blocking Time (off-CPU gap) </h3>
+<p><strong>What it tells you</strong></p>
+<p>Measures the positive gap from one slice ending to the task's next slice starting:</p>
+<div class="math-block"><mjx-container class="MathJax" jax="SVG" display="true"><svg style="vertical-align: -0.65ex;" xmlns="http://www.w3.org/2000/svg" width="20.504ex" height="2.066ex" role="img" focusable="false" viewBox="0 -626 9062.6 913.2" xmlns:xlink="http://www.w3.org/1999/xlink"><g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)"><g data-mml-node="math"><g data-mml-node="msub"><g data-mml-node="mi"><use data-c="1D454" xlink:href="#MJX-TEX-I-1D454"></use></g><g data-mml-node="mi" transform="translate(510,-150) scale(0.707)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g><g data-mml-node="mo" transform="translate(1206.2,0)"><use data-c="3D" xlink:href="#MJX-TEX-N-3D"></use></g><g data-mml-node="msub" transform="translate(2262,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(469,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(830,0)"><use data-c="1D44E" xlink:href="#MJX-TEX-I-1D44E"></use></g><g data-mml-node="mi" transform="translate(1359,0)"><use data-c="1D45F" xlink:href="#MJX-TEX-I-1D45F"></use></g><g data-mml-node="mi" transform="translate(1810,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mo" transform="translate(2171,0)"><use data-c="2C" xlink:href="#MJX-TEX-N-2C"></use></g><g data-mml-node="mi" transform="translate(2449,0)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g><g data-mml-node="mo" transform="translate(2970,0)"><use data-c="2B" xlink:href="#MJX-TEX-N-2B"></use></g><g data-mml-node="mn" transform="translate(3748,0)"><use data-c="31" xlink:href="#MJX-TEX-N-31"></use></g></g></g><g data-mml-node="mo" transform="translate(5932,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="msub" transform="translate(6932.2,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="mi" transform="translate(466,0)"><use data-c="1D45B" xlink:href="#MJX-TEX-I-1D45B"></use></g><g data-mml-node="mi" transform="translate(1066,0)"><use data-c="1D451" xlink:href="#MJX-TEX-I-1D451"></use></g><g data-mml-node="mo" transform="translate(1586,0)"><use data-c="2C" xlink:href="#MJX-TEX-N-2C"></use></g><g data-mml-node="mi" transform="translate(1864,0)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g></g></g></g></svg></mjx-container></div>
+<p>The task may be ready, blocked, suspended, preempted, or waiting for its next period during this gap. The metric therefore shows <strong>off-CPU time</strong>, not the exact RTOS state and not end-to-end response time.</p>
+<p><strong>Calculation.</strong> Each pair of consecutive slices produces one positive gap. Scope boundaries can remove either side of a pair, so the sample count may change when the Scope changes.</p>
+<p><strong>How to use it.</strong> Compare the gap with <strong>Inter-Arrival Time</strong> and the expected period. A long gap can be normal when a task sleeps between activations. If the task should remain ready, inspect <strong>Preemption</strong>, <strong>Dispatch Latency</strong>, and CPU load. If synchronization events overlap, inspect <strong>Mutex Blocking</strong> and <strong>Waiter × Owner</strong>.</p>
+<p>In this example, large gaps cluster in particular time regions. That pattern is a prompt to inspect concurrent high-priority work or synchronization evidence; it is not, by itself, proof of lock contention.</p>
+<p></p>
+<p><a id="statistics-crit_path" name="statistics-crit_path"></a></p>
+<h3>Critical Path </h3>
+<p><strong>What it tells you</strong></p>
+<p>Shows the longest estimated ready-to-completion windows and how much time overlaps task execution, off-CPU waiting, preemption, and migration.</p>
+<p><strong>Preempt</strong>, <strong>Wait</strong>, and <strong>Migration</strong> can overlap. Do not add them as if they were separate parts of <strong>Duration</strong>. This is an investigation view, not a kernel-recorded dependency graph.</p>
+<p><strong>Calculation.</strong> BTFViewer selects long heuristic response windows, sums the task's own on-CPU overlap as Exec, and treats the remainder as Off-CPU. It then attaches preemption, wait, and migration evidence that overlaps the window. The annotations can describe the same time simultaneously.</p>
+<p><strong>How to use it.</strong> Follow the dominant evidence: execution distribution for high Exec, preemption and load for Off-CPU, synchronization views for waits, or migration views for core changes. Confirm the event order on the timeline.</p>
+<p></p>
+<p><a id="statistics-period" name="statistics-period"></a></p>
+<h3>Period / Jitter </h3>
+<p><strong>What it tells you</strong></p>
+<p>Uses inter-arrival samples to estimate periodic behavior. The median interval is the <strong>Expected</strong> period.</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Missed</strong></td>
+<td>Interval greater than <code>1.5 × Expected</code></td>
+</tr>
+<tr>
+<td><strong>Extra</strong></td>
+<td>Interval less than <code>0.5 × Expected</code></td>
+</tr>
+<tr>
+<td><strong>Burst</strong></td>
+<td>Interval less than <code>0.25 × Expected</code></td>
+</tr>
+<tr>
+<td><strong>RMS</strong></td>
+<td>Root-mean-square variation from the expected period</td>
+</tr>
+</tbody>
+</table>
+<p>These thresholds describe observed scheduling behavior. They are not application deadlines unless the expected period matches the application's timing contract.</p>
+<p><strong>Calculation.</strong> Expected is the median inter-arrival because it is less sensitive than Avg to a few large gaps. Each sample is classified relative to Expected, while RMS summarizes the overall distance from it.</p>
+<p><strong>How to use it.</strong> Limit the Scope to one operating mode. Start-up, shutdown, or a deliberately variable rate can create misleading classifications. Confirm missed periods with <strong>Inter-Arrival Time</strong>, <strong>Core Utilization Over Time</strong>, and the timeline. Use the application's configured requirement when it differs from the observed median.</p>
+<p><a id="statistics-jitter" name="statistics-jitter"></a></p>
+<h3>Unified Jitter </h3>
+<p><strong>What it tells you</strong></p>
+<p>Places execution, blocking, inter-arrival, estimated response, dispatch, and wake-to-run variation in one table.</p>
+<p>The spread (<code>Max − Min</code>) shows the absolute range. <strong>CV</strong> shows variation relative to the average, which helps compare metrics with different time scales. High CV with very small absolute times may be less important than moderate CV on a large latency.</p>
+<p><strong>Calculation.</strong> Each row reuses the samples of its source metric. Wake-to-run is a stand-in derived from available response-wait evidence; dispatch includes only explicit ready events.</p>
+<p><strong>How to use it.</strong> Compare both duration and CV. A very small metric can have a high CV without practical impact, while moderate variation on a large delay can break a deadline. Open the source distribution before drawing a conclusion.</p>
+<p></p>
+<p><a id="statistics-inter" name="statistics-inter"></a></p>
+<h3>Inter-Arrival Time </h3>
+<p><strong>What it tells you</strong></p>
+<p>Measures the time between consecutive starts of the same task:</p>
+<div class="math-block"><mjx-container class="MathJax" jax="SVG" display="true"><svg style="vertical-align: -0.65ex;" xmlns="http://www.w3.org/2000/svg" width="23.062ex" height="2.27ex" role="img" focusable="false" viewBox="0 -716 10193.3 1003.2" xmlns:xlink="http://www.w3.org/1999/xlink"><g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)"><g data-mml-node="math"><g data-mml-node="mi"><use data-c="394" xlink:href="#MJX-TEX-N-394"></use></g><g data-mml-node="msub" transform="translate(833,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(394,-150) scale(0.707)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g><g data-mml-node="mo" transform="translate(1923.2,0)"><use data-c="3D" xlink:href="#MJX-TEX-N-3D"></use></g><g data-mml-node="msub" transform="translate(2979,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(469,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(830,0)"><use data-c="1D44E" xlink:href="#MJX-TEX-I-1D44E"></use></g><g data-mml-node="mi" transform="translate(1359,0)"><use data-c="1D45F" xlink:href="#MJX-TEX-I-1D45F"></use></g><g data-mml-node="mi" transform="translate(1810,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mo" transform="translate(2171,0)"><use data-c="2C" xlink:href="#MJX-TEX-N-2C"></use></g><g data-mml-node="mi" transform="translate(2449,0)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g><g data-mml-node="mo" transform="translate(2970,0)"><use data-c="2B" xlink:href="#MJX-TEX-N-2B"></use></g><g data-mml-node="mn" transform="translate(3748,0)"><use data-c="31" xlink:href="#MJX-TEX-N-31"></use></g></g></g><g data-mml-node="mo" transform="translate(6649,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="msub" transform="translate(7649.2,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(469,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(830,0)"><use data-c="1D44E" xlink:href="#MJX-TEX-I-1D44E"></use></g><g data-mml-node="mi" transform="translate(1359,0)"><use data-c="1D45F" xlink:href="#MJX-TEX-I-1D45F"></use></g><g data-mml-node="mi" transform="translate(1810,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mo" transform="translate(2171,0)"><use data-c="2C" xlink:href="#MJX-TEX-N-2C"></use></g><g data-mml-node="mi" transform="translate(2449,0)"><use data-c="1D458" xlink:href="#MJX-TEX-I-1D458"></use></g></g></g></g></g></svg></mjx-container></div>
+<p>For the same pair of slices, inter-arrival time is approximately the previous execution time plus the following off-CPU gap. Use it to study activation frequency, drift, missed periods, and burst behavior.</p>
+<p><strong>Calculation.</strong> Every pair of consecutive slice starts forms a sample, even after a migration. If one logical activation is split by preemption, the additional slice starts also enter the set. It is therefore a scheduling-slice interval unless instrumentation defines a cleaner release point.</p>
+<p><strong>How to use it.</strong> Use the median and distribution to find the dominant cadence. Compare with <strong>Period / Jitter</strong> for classification and <strong>Blocking Time</strong> for long intervals. For exact application arrivals, record an STI Tag or Interval event at the release point.</p>
+<p>The example spans very short and much longer activation gaps, so the duration axis is logarithmic. Compare it with <strong>Blocking Time</strong> carefully: inter-arrival includes the previous execution slice as well as the following off-CPU gap.</p>
+<p></p>
+<p><a id="statistics-activation" name="statistics-activation"></a></p>
+<h3>Activation Latency </h3>
+<p><strong>What it tells you</strong></p>
+<p>For each periodic task, how far every actual activation lands from a fitted ideal periodic clock. Inter-Arrival and Period / Jitter measure each release against the <em>previous</em> release; a task can drift steadily against the schedule while every gap still looks close to <code>T</code>. Activation Latency measures each release against a fixed grid, so accumulating phase error shows up.</p>
+<p><strong>Calculation.</strong> The period <code>T</code> is the p50 inter-arrival gap (the same value <strong>Period / Jitter</strong> calls &quot;Expected&quot;). The grid is <code>anchor + k·T</code>, anchored at the first activation in the current Scope. For activation <code>t</code>, the error is <code>min_k |t − (anchor + k·T)|</code> — the distance to the nearest grid point. The Min / Avg / Max / Jitter / σ / p50 / p95 / p99 columns summarise that error distribution, worst (largest Max) first. Needs at least three activations per task.</p>
+<p><strong>How to use it.</strong> A near-zero row is a task locked to the schedule. A large Max with a small p50 is an occasional slip; a p50 that is itself large is steady phase drift — check the task's release path and any lower-priority work delaying it. Compare with <strong>Dispatch / Scheduling Latency</strong> (ready → running) and <strong>Ready-Gap</strong> to see whether the late release is the task itself or the scheduler. Click a row to open the activation-latency distribution and highlight the task on the timeline.</p>
+<p><a id="statistics-ready_gap" name="statistics-ready_gap"></a></p>
+<h3>Ready-Gap (Starvation) </h3>
+<p><strong>What it tells you</strong></p>
+<p>Per task, the off-CPU time it spent while arguably able to run — a starvation view. Long or frequent ready-gaps mean the task wanted the CPU and did not get it.</p>
+<p><strong>Calculation.</strong> Built on the same off-CPU gap classifier as <strong>Switch Reason Breakdown</strong>. Each gap between two consecutive slices of a task is labelled <code>preempted</code> (another task ran on its core), <code>blocked</code> (an STI take/recv ended the slice), <code>suspended</code> (STI suspend), <code>period_wait</code> (only IDLE ran), or <code>unknown</code>. Ready-Gap keeps the <code>preempted</code> / <code>blocked</code> / <code>unknown</code> gaps and drops <code>suspended</code> / <code>period_wait</code>, which are the task voluntarily off-CPU. Columns: gap count, Longest single gap, Total, Avg, p95, and <strong>% preempt</strong> — the preempted share of the total, so you can tell scheduling starvation (high %) from lock contention (low %). Sorted longest-gap first.</p>
+<p><strong>How to use it.</strong> Rank by Longest or Total. A high <strong>% preempt</strong> points at priority or affinity — cross-check <strong>Preemption Chain Analysis</strong> and task priorities. A low <strong>% preempt</strong> means the gap is mostly <code>blocked</code>; follow it into <strong>Mutex / Semaphore</strong> and <strong>Waiter × Owner</strong>. <code>blocked</code> here is a heuristic (STI take/recv near the slice end), not a kernel-recorded wait. Click a row to open the ready-gap distribution and highlight the task on the timeline.</p>
+<h2>4. SCHED — multicore scheduling and placement </h2>
+<p>These sections explain where tasks run, how they move, and which tasks interfere with one another.</p>
+<p><a id="statistics-task_core" name="statistics-task_core"></a></p>
+<h3>Task × Core </h3>
+<p><strong>What it tells you</strong></p>
+<p>Shows how much of the current Scope each task spends on each core. A task concentrated on one core may be pinned or naturally stable; a task spread across many cores may be load-balanced or frequently migrated.</p>
+<p>Use this table with <strong>Core Affinity</strong> and <strong>Core Migrations</strong>. Click a cell to inspect the first matching slice.</p>
+<p><strong>Calculation.</strong> Each cell is the sum of the task's slice overlap on that core within the Scope. Read a row to see a task's placement; read a column to see which tasks consume one core.</p>
+<p><strong>How to use it.</strong> A spread row is not automatically harmful. Check whether the task is allowed to migrate, then use <strong>Core Migrations</strong> to distinguish occasional placement from frequent movement. Compare columns with <strong>Core Utilisation</strong> when investigating imbalance.</p>
+<p><a id="statistics-core_time" name="statistics-core_time"></a></p>
+<h3>Core Utilization Over Time </h3>
+<p><strong>What it tells you</strong></p>
+<p>Divides the current Scope into equal time bins and reports each core's user-task busy percentage in every bin.</p>
+<p>The overall utilisation summary can hide short bursts. This section reveals when an imbalance, overload, or idle phase occurred. Click a bin to zoom to that time range.</p>
+<p><strong>Calculation.</strong> The Scope is divided into equal-width bins. For each core and bin, user-task slice overlap is divided by the bin duration. A slice crossing bins contributes only its overlap to each bin.</p>
+<p><strong>How to use it.</strong> Look for bins near saturation, persistent differences between cores, and load changes aligned with a latency spike. Increase the selected Scope for phase analysis or narrow it with cursors for an incident. Use <strong>Task × Core</strong> and the timeline to identify the work inside a hot bin.</p>
+<p></p>
+<p><a id="statistics-migrations" name="statistics-migrations"></a></p>
+<h3>Core Migrations </h3>
+<p><strong>What it tells you</strong></p>
+<p>A migration occurs when consecutive slices of the same task run on different cores.</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Count</strong></td>
+<td>Number of observed core changes</td>
+</tr>
+<tr>
+<td><strong>Rate</strong></td>
+<td>Migrations relative to the task's active time; <code>/tick</code> is shown when TICK evidence is available</td>
+</tr>
+<tr>
+<td><strong>Dwell</strong></td>
+<td>Average time a task remains on a core before its next scheduling episode</td>
+</tr>
+<tr>
+<td><strong>Ping</strong></td>
+<td>Rapid return or bounce between cores</td>
+</tr>
+<tr>
+<td><strong>Primary</strong></td>
+<td>Core with the largest share of the task's on-CPU time</td>
+</tr>
+</tbody>
+</table>
+<p>High Count alone is not enough to diagnose a problem. Short Dwell together with high Rate and Ping is stronger evidence of repeated migration. Frequent migration can increase scheduling and cache costs, but the effect depends on the processor and workload.</p>
+<p><strong>Calculation.</strong> Consecutive slices of the same task are compared in time order. A core change creates a migration sample. Count is the number of changes; Primary comes from accumulated on-CPU time. Rate normalizes Count to an available time or TICK base. Dwell and Ping describe how long placement remains stable and how quickly a task returns.</p>
+<p><strong>How to use it.</strong> First confirm that RTOS load balancing permits migration. Rank by Rate and short Dwell rather than Count alone, then inspect <strong>Core-Pair Migration Summary</strong>, <strong>Core Affinity</strong>, and the <strong>Migration &amp; Corridor Inspector</strong>. Compare the migration timestamps with response, execution, and switch-gap tails. The trace cannot directly measure cache refill or coprocessor save cost.</p>
+<p></p>
+<p>To inspect a migrating task in context, lock-highlight it in Task View and enable per-core CPU Load. If the problem is limited to a time window, zoom the timeline (<strong>Follow zoom</strong> becomes Viewport) or lock Inspector <strong>Analysis Scope</strong> to <strong>Viewport</strong>, or place at least two cursors and select <strong>Cursor C1–Cn</strong>. Statistics <strong>Limit to C1–Cn</strong> is independent: it changes Statistics calculations, not Inspector results, unless you also select Cursor C1–Cn in the Inspector.</p>
+<p></p>
+<p>The migration plot has three complementary views:</p>
+<ul>
+<li><strong>Dwell</strong> plots the duration of each on-core run. A concentration of short samples suggests unstable placement.</li>
+<li><strong>Rate</strong> plots the time since the previous migration. Clusters of short gaps reveal bursts of rapid movement.</li>
+<li><strong>Gap</strong> plots the positive off-CPU gap immediately after a migration. Compare it with <strong>Blocking Time</strong>, which includes all off-CPU gaps rather than only post-migration samples.</li>
+</ul>
+<p></p>
+<p></p>
+<p></p>
+<p><a id="statistics-core_pairs" name="statistics-core_pairs"></a></p>
+<h3>Core-Pair Migration Summary </h3>
+<p><strong>What it tells you</strong></p>
+<p>Aggregates directed migrations such as <code>Core_2 → Core_5</code>. It identifies busy migration corridors, return traffic, and the average gap around a move.</p>
+<p>Use it to determine whether migrations are distributed broadly or concentrated between a few cores. A high bounce percentage suggests repeated movement in both directions.</p>
+<p><strong>Calculation.</strong> Each directed migration increments its <code>from → to</code> pair. Reverse moves are kept separately; bounce statistics relate traffic in both directions and short returns. Average gap describes observed time around migrations, not a hardware transfer duration.</p>
+<p><strong>How to use it.</strong> A concentrated corridor can point to affinity layout, asymmetric load, or two cores repeatedly exchanging a task. Click a row to open the pair plot and correlate it with per-core utilisation. Broad low-rate movement may be normal load balancing.</p>
+<p></p>
+<p></p>
+<p><a id="statistics-affinity" name="statistics-affinity"></a></p>
+<h3>Core Affinity </h3>
+<p><strong>What it tells you</strong></p>
+<p>Compares the latest recorded affinity mask with the cores on which a task actually ran. <strong>Violations</strong> are slices observed outside the active mask.</p>
+<p>Slices before the first recorded affinity setting are treated as unrestricted. Absence of an <code>affinity_set</code> event means the viewer cannot verify the configured mask.</p>
+<p><strong>Calculation.</strong> Affinity events update the active mask over time. Each later task slice is checked against the most recent known mask. A slice on a core whose bit is not set is counted as a violation.</p>
+<p><strong>How to use it.</strong> Inspect violations first because they can indicate configuration, instrumentation, ID mapping, or scheduling problems. When there are no violations, use the allowed-core count with <strong>Task × Core</strong> to determine whether the task actually uses the available placement. No event means “unknown,” not “unrestricted by design.”</p>
+<p><a id="statistics-preempt_matrix" name="statistics-preempt_matrix"></a></p>
+<h3>Preemption Matrix </h3>
+<p><strong>What it tells you</strong></p>
+<p>Summarizes overlap between an off-CPU <strong>victim</strong> and tasks that ran on the same core during that gap. Rows and cells help identify the main sources of interference for each victim.</p>
+<p>This is evidence of temporal overlap, not proof that one task directly caused another task to block.</p>
+<p><strong>Calculation.</strong> During each victim off-CPU gap, BTFViewer finds task slices that run on the victim's previous core and sums their overlap. The matrix aggregates victim rows and possible preemptor columns.</p>
+<p><strong>How to use it.</strong> Large row totals identify tasks that lose substantial time; large cells identify recurring same-core interference pairs. Check priorities and the switch sequence on the timeline. A victim may have blocked voluntarily while another task happened to run, so the matrix alone does not prove preemption.</p>
+<p></p>
+<p><a id="statistics-preemption" name="statistics-preemption"></a></p>
+<h3>Preemption Chain Analysis </h3>
+<p><strong>What it tells you</strong></p>
+<p>Lists victim–preemptor pairs with count, total overlap, average overlap, and maximum overlap.</p>
+<p>High total overlap indicates a persistent source of interference; a large maximum indicates a severe single episode. Check task priorities and the timeline before attributing causality.</p>
+<p><strong>Calculation.</strong> This section uses the same overlap evidence as the matrix but presents pair statistics: occurrence count, total, average, and maximum overlap. One off-CPU gap can overlap more than one task.</p>
+<p><strong>How to use it.</strong> Use Total to find sustained interference and Max to locate a severe episode. Compare with <strong>Blocking Time</strong>, <strong>Dispatch Latency</strong>, and <strong>Core Time</strong>. Confirm that the possible preemptor actually switched in as the victim left before calling it causal.</p>
+<p></p>
+<p><a id="statistics-priority" name="statistics-priority"></a></p>
+<h3>Priority Inheritance </h3>
+<p><strong>What it tells you</strong></p>
+<p>Shows tasks whose observed priority rises above their create priority. Priority inheritance commonly occurs when a high-priority task waits for a mutex held by a lower-priority task, temporarily boosting the holder.</p>
+<p>Orange ranges show boosts. A red L/M/H pattern indicates that a medium-priority task ran at a priority between the holder's base and boosted priority. This is supporting evidence; confirm it with mutex and timeline events.</p>
+<p><strong>Calculation.</strong> The create priority is the baseline. Later <code>set_priority</code> STI events define changes over time. A value above the baseline is shown as a boost. The L/M/H pattern combines low/base, medium, and high/boosted priority activity observed in the same episode.</p>
+<p><strong>Columns.</strong> <code>Boosted</code> is the total time the task spent above its base priority. <code>Invert (worst)</code> / <code>Invert (total)</code> are the <em>measured</em> priority-inversion duration: for each boost episode, the wall-clock time a medium-priority task (base priority strictly between this task's base and peak) actually ran on some core while this task — the resource holder — was off-CPU. Worst is the largest single episode; total is the sum. A dash means no medium task ran during any episode — for an inherited boost that is priority inheritance working (the boost stops medium tasks preempting the holder); a large value means the mechanism was absent or too slow.</p>
+<p><strong>How to use it.</strong> Rank by <code>Invert (total)</code> to find where a lock actually caused unbounded inversion, then pair that episode with <strong>Mutex / Semaphore</strong>, <strong>Waiter × Owner</strong>, and <strong>Ready-Gap</strong> for the blocked high-priority task. A priority change can have an application-specific cause; it is not automatically priority inheritance. A boost with a <code>—</code> inversion usually shows that mitigation occurred, while a non-zero value shows latency that a working PI mutex would have removed.</p>
+<p></p>
+<p></p>
+<p><a id="statistics-concurrency" name="statistics-concurrency"></a></p>
+<h3>Concurrent Core Active Distribution </h3>
+<p><strong>What it tells you</strong></p>
+<p>Reports how much of the current Scope had exactly 0, 1, 2, … cores running user tasks at the same time.</p>
+<p>This measures <strong>temporal parallelism</strong>. It differs from load balance: cores can have similar total utilisation without running tasks concurrently. Low concurrency may be expected for a serial workload.</p>
+<p><strong>Calculation.</strong> BTFViewer sweeps the Scope boundaries of user-task slices and measures how long the number of simultaneously active cores equals <code>0 ... N</code>. The durations should account for the scoped time, subject to trace gaps and clipping.</p>
+<p><strong>How to use it.</strong> Compare the observed distribution with the workload's expected parallelism. High time at one active core in an SMP workload can indicate serialization, affinity restrictions, or insufficient ready work. Use <strong>Core Utilisation</strong>, <strong>Task × Core</strong>, and synchronization statistics to explain it.</p>
+<p></p>
+<p><a id="statistics-switch_reason" name="statistics-switch_reason"></a></p>
+<h3>Switch Reason Breakdown </h3>
+<p><strong>What it tells you</strong></p>
+<p>For each task, why it went off-CPU on every context switch in the Scope: <strong>Preempted</strong> (another user task ran on its previous core during the gap — involuntary), <strong>Blocked</strong> (an STI <code>take</code> / <code>recv</code> on that core ended the slice), <strong>Suspended</strong> (an STI <code>suspend</code> for that task), <strong>Period</strong> (only IDLE ran for the whole gap — the task is between activations), or <strong>Other</strong> (no signal — partial coverage, a capture gap, or an unrecorded cause). <strong>Preempt/s</strong> is the involuntary rate, the number most worth ranking on.</p>
+<p>Involuntary preemption count is a first-order real-time metric; a high or rising value points to scheduling thrash, an over-tuned tick, or a lock convoy.</p>
+<p><strong>Calculation.</strong> Each off-CPU gap between consecutive slices of a task is classified in that priority order using same-core slice overlap and STI events within ~50 native time units of the slice end. The result is a heuristic screen, not a kernel-recorded reason.</p>
+<p><strong>How to use it.</strong> Rank by <strong>Preempted</strong> or <strong>Preempt/s</strong>. Click a row to highlight that task on the timeline. Confirm a high count against <strong>Preemption Matrix</strong> and <strong>Preemption Chain Analysis</strong> for the interfering tasks, and check task priorities. A high <strong>Period</strong> count is normal for a periodic task that sleeps between jobs.</p>
+<p><a id="statistics-sched_load" name="statistics-sched_load"></a></p>
+<h3>Scheduling Load Over Time </h3>
+<p><strong>What it tells you</strong></p>
+<p>Divides the Scope into equal time bins and reports, per bin, the <strong>context-switch count</strong> and rate (<strong>Ctx sw/s</strong>), the <strong>busiest core</strong>, and the load-balance spread — core-utilisation standard deviation (<strong>Util σ</strong>) and <strong>LB score</strong> (<code>100 × (1 − Gini)</code>). It places a switching burst or a load imbalance <em>in time</em> rather than only detecting it as a Scope-wide average.</p>
+<p><strong>Calculation.</strong> Bins reuse the Core Utilization Over Time grid (4–32 bins). Context switches per bin are slice starts per core inside the bin. Util σ and LB score use the per-bin per-core utilisation percentages.</p>
+<p><strong>How to use it.</strong> Look for bins with a spike in Ctx sw/s, a persistent low LB score, or a load change aligned with a latency spike elsewhere. Click a row to select that time bin on the timeline, then use <strong>Task × Core</strong> and <strong>Switch Reason Breakdown</strong> to identify the work inside it.</p>
+<h2>5. SYNC — synchronization and waiting </h2>
+<p>These sections use STI synchronization events. They appear only when the trace contains the required events.</p>
+<p><a id="statistics-mutex_block" name="statistics-mutex_block"></a></p>
+<h3>Mutex Blocking </h3>
+<p><strong>What it tells you</strong></p>
+<p>Summarizes estimated mutex wait time by task, object, and previous owner. The estimate uses handoff order between distinct acquirers.</p>
+<p>Because the trace does not expose the kernel wait queue, this is not an exact record of which task was blocked on the mutex. Use it to locate likely contention and confirm the episode on the timeline.</p>
+<p><strong>Calculation.</strong> Completed holds are ordered by object. When a different task acquires the object after the previous holder, BTFViewer treats the transition as a possible handoff and estimates the waiting interval from the observable hold/acquire sequence. Results are aggregated by possible waiter, object, and previous owner.</p>
+<p><strong>How to use it.</strong> Rank by Total to find accumulated contention and by Max or tail values to find a severe episode. Check <strong>Mutex / Semaphore</strong> pairing quality first. Then use <strong>Waiter × Owner</strong>, <strong>Priority Inheritance</strong>, and the timeline. Click a row to open the wait-time distribution. Treat a value as an upper-level contention estimate, not an exact kernel block time.</p>
+<p></p>
+<p><a id="statistics-wait_owner" name="statistics-wait_owner"></a></p>
+<h3>Waiter × Owner </h3>
+<p><strong>What it tells you</strong></p>
+<p>Shows an estimated handoff matrix. The next distinct task to acquire a mutex is treated as the waiter following the previous owner.</p>
+<p>Large or frequent cells identify task pairs worth investigating. They do not prove a direct waiter–owner relationship when other unrecorded events occur between acquisitions.</p>
+<p><strong>Calculation.</strong> Rows are possible waiters and columns are previous owners. The next distinct acquirer after a completed hold contributes to the corresponding cell. Re-acquisition by the same task does not establish a cross-task handoff.</p>
+<p><strong>How to use it.</strong> A large cell shows a repeated relationship around one object or set of objects. Open the longest handoff, confirm that the tasks access the same object, and check whether priority and timing support the waiter–owner interpretation.</p>
+<p><a id="statistics-sync" name="statistics-sync"></a></p>
+<h3>Mutex / Semaphore </h3>
+<p><strong>What it tells you</strong></p>
+<p>Pairs take/give events by synchronization-object pointer and reports hold counts, hold durations, core bounce, and pairing issues.</p>
+<p>Common issues include an unmatched take, an orphan give, deletion while held, or an object still held at the end of the trace. These may indicate incomplete capture, missing instrumentation, or a real synchronization problem.</p>
+<p><strong>Calculation.</strong> Events are grouped by object pointer and processed in timestamp order. A matching take/give pair forms a hold-duration sample. The current owner and held-object state support orphan, unmatched, delete-while-held, and end-of-trace checks. Nested or recursive behavior is only as accurate as the recorded events allow.</p>
+<p><strong>Columns.</strong> Alongside <code>Avg hold</code>, the table reports <strong>p95 hold</strong> / <strong>p99 hold</strong> — the tail of the hold-duration distribution, so one pathological hold shows even when the average looks fine. <strong>Waiters</strong> is the number of distinct tasks that acquired the object while it was already held (a fan-in count); <strong>MaxNest</strong> is the deepest set of simultaneously-open takes seen. Both are computed over the whole trace, not the current Scope. They only register when the capture logs a <code>take</code> before the previous holder's <code>give</code> — which happens with recursive mutexes or a tracer that logs <code>take</code> at the blocking attempt; a tracer that logs <code>take</code> only at acquire will show <code>0</code> even for a heavily contended lock.</p>
+<p><strong>How to use it.</strong> Resolve pairing problems before trusting hold or blocking estimates. Rank by <strong>p99 hold</strong> to find the objects with the worst hold tail, then a non-zero <strong>Waiters</strong> tells you that tail actually delayed other tasks — follow it into <strong>Mutex Blocking</strong> and <strong>Waiter × Owner</strong>. A <strong>MaxNest</strong> above 1 means lock nesting; check the acquire order against your locking hierarchy for deadlock risk. A long <em>uncontended</em> hold (Waiters 0) may be harmless. Click a row to open the hold-duration distribution. Combine with task priorities and the timeline.</p>
+<p><a id="statistics-queue" name="statistics-queue"></a></p>
+<h3>Queue </h3>
+<p><strong>What it tells you</strong></p>
+<p>Pairs send/receive events by queue pointer and summarizes completed holds and pairing issues.</p>
+<p>The table describes recorded queue activity; it does not reconstruct queue contents or application semantics. Missing or unmatched events may come from a partial Scope or incomplete instrumentation.</p>
+<p><strong>Calculation.</strong> Send and receive events are grouped by queue pointer and paired in recorded order to form completed activity intervals. Without message IDs or queue-content snapshots, the viewer cannot prove which receive consumed which application message in complex producer/consumer patterns.</p>
+<p><strong>How to use it.</strong> Check pairing quality and event rates, then correlate queue activity with <strong>Inter-Arrival</strong>, <strong>Dispatch Latency</strong>, Tags such as queue depth, and end-to-end Intervals. Click a row to open the hold-duration distribution. A long send-to-receive interval can include normal batching or consumer scheduling delay.</p>
+<p><a id="statistics-sync_level" name="statistics-sync_level"></a></p>
+<h3>Queue Backlog / Semaphore Level </h3>
+<p><strong>What it tells you</strong></p>
+<p>The running fill level of every queue and semaphore over the Scope, reconstructed from the STI event stream. For a queue this is the message backlog; for a counting semaphore it is the number of available tokens. Peak level flags a producer outrunning its consumer (or a token leak); a rising end-of-scope level is a slow leak.</p>
+<p><strong>Calculation.</strong> Per object pointer, <code>give</code> / <code>send</code> add 1 and <code>take</code> / <code>recv</code> subtract 1, with the level floored at 0. <strong>Peak</strong> is the highest level reached, <strong>Time at peak</strong> is how long it sat there, and <strong>End level</strong> is the level at the end of the Scope. <strong>Starved</strong> counts <code>take</code> / <code>recv</code> events issued while the level was 0 — an attempt that would block (a genuine capacity limit or a lost <code>give</code>). Sorted by peak, then starved.</p>
+<p><strong>How to use it.</strong> A high Peak with a large Time-at-peak on a queue means the consumer cannot keep up — check the consumer's <strong>Dispatch / Scheduling Latency</strong>, priority, and <strong>Ready-Gap</strong>. A non-zero End level that grows across runs is a leak. Frequent Starved counts on a semaphore point at a mis-sized token pool or a missing release path. Click a row to jump to peak onset (or the first starve when Peak is 0). This reconstruction assumes every <code>give</code>/<code>take</code> is instrumented; unmatched events (see <strong>Mutex / Semaphore</strong> issues) make the level approximate.</p>
+<h2>6. DETAIL — supporting measurements </h2>
+<p>Use these sections when the earlier categories identify an area that needs more evidence.</p>
+<p><a id="statistics-core_breakdown" name="statistics-core_breakdown"></a></p>
+<h3>Core Time Breakdown </h3>
+<p><strong>What it tells you</strong></p>
+<p>Splits each core's current Scope into:</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Active</strong></td>
+<td>User-task execution time</td>
+</tr>
+<tr>
+<td><strong>Idle</strong></td>
+<td>IDLE task time</td>
+</tr>
+<tr>
+<td><strong>Tick</strong></td>
+<td>TICK handler time</td>
+</tr>
+<tr>
+<td><strong>Gap</strong></td>
+<td>Time not represented by consecutive core slices</td>
+</tr>
+</tbody>
+</table>
+<p>Gap can include scheduling overhead, interrupts, critical sections, trace loss, or resolution limits. It is not automatically kernel overhead.</p>
+<p><strong>Calculation.</strong> Each recorded core slice is clipped to the Scope and classified as Active, Idle, or Tick. Gap is the remaining scoped core time not covered by those categories. Small overlaps or rounding can affect totals at trace resolution.</p>
+<p><strong>How to use it.</strong> Active explains workload, Idle explains unused capacity, and Tick explains recorded tick service. Investigate a large Gap with <strong>Kernel Switch Overhead</strong>, Trace Health, and the timeline. If all cores show a gap at the same time, capture loss or a global event is more plausible than ordinary per-core scheduling. Click a core to switch to Core View, expand that core, and scroll to it.</p>
+<p><a id="statistics-idle" name="statistics-idle"></a></p>
+<h3>Idle Analysis </h3>
+<p><strong>What it tells you</strong></p>
+<p>Per core, how the IDLE time is shaped: the total, the single longest idle stretch, how many separate idle fragments there were, and p95. A large total with a large longest stretch is real headroom; a large total split into many tiny fragments is a core that is busy but constantly waiting. The note reports the longest window where <strong>every</strong> core was idle at once.</p>
+<p><strong>Calculation.</strong> Every IDLE segment in each core's slice list is clipped to the Scope. <strong>Idle total</strong> is their sum, <strong>Longest</strong> the largest single one, <strong>Frags</strong> the count, <strong>p95</strong> the 95th-percentile fragment. The all-cores-idle window is a sweep over all cores' idle intervals for the longest stretch covered on every core simultaneously. Sorted by idle total, most-idle core first.</p>
+<p><strong>How to use it.</strong> Use the total against <strong>Core Utilisation</strong> to size spare capacity. A long all-cores-idle window is fine if nothing was pending — cross-check <strong>Ready-Gap</strong> and <strong>Blocking Time</strong> for the same interval to be sure it was not a system-wide stall. A high fragment count with a small longest stretch usually means fine-grained blocking; follow it into <strong>Switch Reason Breakdown</strong>. Click a row to open the idle-fragment distribution and highlight that core on the timeline.</p>
+<p><a id="statistics-switch_overhead" name="statistics-switch_overhead"></a></p>
+<h3>Kernel Switch Overhead </h3>
+<p><strong>What it tells you</strong></p>
+<p>Measures the gap from one task leaving a core to the next task starting on that core:</p>
+<div class="math-block"><mjx-container class="MathJax" jax="SVG" display="true"><svg style="vertical-align: -0.65ex;" xmlns="http://www.w3.org/2000/svg" width="30.394ex" height="2.242ex" role="img" focusable="false" viewBox="0 -704 13434.3 991.2" xmlns:xlink="http://www.w3.org/1999/xlink"><g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)"><g data-mml-node="math"><g data-mml-node="msub"><g data-mml-node="mi"><use data-c="1D442" xlink:href="#MJX-TEX-I-1D442"></use></g><g data-mml-node="TeXAtom" transform="translate(796,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(469,0)"><use data-c="1D464" xlink:href="#MJX-TEX-I-1D464"></use></g><g data-mml-node="mi" transform="translate(1185,0)"><use data-c="1D456" xlink:href="#MJX-TEX-I-1D456"></use></g><g data-mml-node="mi" transform="translate(1530,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(1891,0)"><use data-c="1D450" xlink:href="#MJX-TEX-I-1D450"></use></g><g data-mml-node="mi" transform="translate(2324,0)"><use data-c="210E" xlink:href="#MJX-TEX-I-210E"></use></g></g></g><g data-mml-node="mo" transform="translate(3174.4,0)"><use data-c="3D" xlink:href="#MJX-TEX-N-3D"></use></g><g data-mml-node="msub" transform="translate(4230.2,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D45B" xlink:href="#MJX-TEX-I-1D45B"></use></g><g data-mml-node="mi" transform="translate(600,0)"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="mi" transform="translate(1066,0)"><use data-c="1D465" xlink:href="#MJX-TEX-I-1D465"></use></g><g data-mml-node="mi" transform="translate(1638,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mtext" transform="translate(1999,0)"><use data-c="A0" xlink:href="#MJX-TEX-N-A0"></use></g><g data-mml-node="mi" transform="translate(2249,0)"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(2718,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(3079,0)"><use data-c="1D44E" xlink:href="#MJX-TEX-I-1D44E"></use></g><g data-mml-node="mi" transform="translate(3608,0)"><use data-c="1D45F" xlink:href="#MJX-TEX-I-1D45F"></use></g><g data-mml-node="mi" transform="translate(4059,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g></g></g><g data-mml-node="mo" transform="translate(8021.8,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="msub" transform="translate(9022,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D45D" xlink:href="#MJX-TEX-I-1D45D"></use></g><g data-mml-node="mi" transform="translate(503,0)"><use data-c="1D45F" xlink:href="#MJX-TEX-I-1D45F"></use></g><g data-mml-node="mi" transform="translate(954,0)"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="mi" transform="translate(1420,0)"><use data-c="1D463" xlink:href="#MJX-TEX-I-1D463"></use></g><g data-mml-node="mi" transform="translate(1905,0)"><use data-c="1D456" xlink:href="#MJX-TEX-I-1D456"></use></g><g data-mml-node="mi" transform="translate(2250,0)"><use data-c="1D45C" xlink:href="#MJX-TEX-I-1D45C"></use></g><g data-mml-node="mi" transform="translate(2735,0)"><use data-c="1D462" xlink:href="#MJX-TEX-I-1D462"></use></g><g data-mml-node="mi" transform="translate(3307,0)"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mtext" transform="translate(3776,0)"><use data-c="A0" xlink:href="#MJX-TEX-N-A0"></use></g><g data-mml-node="mi" transform="translate(4026,0)"><use data-c="1D452" xlink:href="#MJX-TEX-I-1D452"></use></g><g data-mml-node="mi" transform="translate(4492,0)"><use data-c="1D45B" xlink:href="#MJX-TEX-I-1D45B"></use></g><g data-mml-node="mi" transform="translate(5092,0)"><use data-c="1D451" xlink:href="#MJX-TEX-I-1D451"></use></g></g></g></g></g></svg></mjx-container></div>
+<p>The gap is an observed interval around a switch. It can include scheduler work, interrupt activity, trace overhead, or unrecorded time, so treat it as an upper-level switch-gap measurement rather than a pure kernel instruction cost.</p>
+<p><strong>Calculation.</strong> Consecutive slices on the same core form a sample when the next start follows the previous end. The value is associated with that transition. Overlapping or invalid pairs are excluded.</p>
+<p><strong>How to use it.</strong> Compare cores and tail percentiles, then inspect the largest transition. Correlate with migration, interrupts, TICK, and trace gaps. A larger value after a change can signal more scheduling work, but it cannot isolate the scheduler's instruction cycles without lower-level instrumentation.</p>
+<p></p>
+<p><a id="statistics-tasks" name="statistics-tasks"></a></p>
+<h3>Top Tasks by CPU (excl. IDLE/TICK) </h3>
+<p><strong>What it tells you</strong></p>
+<p>Ranks user tasks by <code>task on-CPU time ÷ Scope wall-clock duration</code>. IDLE and TICK tasks are not listed.</p>
+<p>This ranking shows where processor time is spent. A high share is not necessarily a problem if it matches the workload design.</p>
+<p><strong>Calculation.</strong> A task's clipped slice durations are summed and divided by the Scope wall-clock duration. On multicore traces, the sum across tasks can exceed 100% because several cores can run at the same time. This value is different from per-core utilisation and from a task's percentage of only user-task CPU time.</p>
+<p><strong>How to use it.</strong> Use this as a starting point for CPU optimisation and workload validation. Compare with per-core utilisation and Execution distributions. A low-share task can still be latency-critical, and a high-share task can be healthy when it performs the intended work.</p>
+<p><a id="statistics-distrib" name="statistics-distrib"></a></p>
+<h3>Distribution Explorer </h3>
+<p><strong>What it tells you</strong></p>
+<p>Selects a task and timing metric, then shows sample count, percentiles, variation, a trend summary, and the related histogram/CDF.</p>
+<ul>
+<li>A <strong>scatter plot</strong> reveals trends, bursts, and isolated outliers over time.</li>
+<li>A <strong>histogram</strong> shows how many samples fall in each value range.</li>
+<li>A <strong>CDF</strong> shows the percentage of samples at or below a value.</li>
+</ul>
+<p>For example, the CDF crosses p95 at 95%. If a deadline is drawn at that value, about 95% of the observed samples meet it. This is an observation from the current Scope, not a future guarantee.</p>
+<p><strong>How plots relate.</strong> The scatter plot preserves sample order and time; the histogram groups values into bins; the CDF sorts values and shows cumulative probability. The three views use the same selected sample set but answer different questions.</p>
+<p><strong>How to use it.</strong> Start with the CDF to assess tail probability, use the histogram to see whether there are multiple operating modes, and use the scatter plot to locate when the mode or outlier occurred. Confirm the selected metric's definition—especially heuristic response, wake, and blocking—before applying a requirement line.</p>
+<p><a id="statistics-intervals" name="statistics-intervals"></a></p>
+<h3>Interval Analysis </h3>
+<p><strong>What it tells you</strong></p>
+<p>Pairs <code>interval_start</code> and <code>interval_stop</code> STI events and measures each completed interval:</p>
+<div class="math-block"><mjx-container class="MathJax" jax="SVG" display="true"><svg style="vertical-align: -0.666ex;" xmlns="http://www.w3.org/2000/svg" width="18.217ex" height="2.082ex" role="img" focusable="false" viewBox="0 -626 8051.8 920.2" xmlns:xlink="http://www.w3.org/1999/xlink"><g stroke="currentColor" fill="currentColor" stroke-width="0" transform="scale(1,-1)"><g data-mml-node="math"><g data-mml-node="msub"><g data-mml-node="mi"><use data-c="1D70F" xlink:href="#MJX-TEX-I-1D70F"></use></g><g data-mml-node="mi" transform="translate(470,-150) scale(0.707)"><use data-c="1D457" xlink:href="#MJX-TEX-I-1D457"></use></g></g><g data-mml-node="mo" transform="translate(1089.1,0)"><use data-c="3D" xlink:href="#MJX-TEX-N-3D"></use></g><g data-mml-node="msub" transform="translate(2144.9,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(469,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(830,0)"><use data-c="1D45C" xlink:href="#MJX-TEX-I-1D45C"></use></g><g data-mml-node="mi" transform="translate(1315,0)"><use data-c="1D45D" xlink:href="#MJX-TEX-I-1D45D"></use></g><g data-mml-node="mo" transform="translate(1818,0)"><use data-c="2C" xlink:href="#MJX-TEX-N-2C"></use></g><g data-mml-node="mi" transform="translate(2096,0)"><use data-c="1D457" xlink:href="#MJX-TEX-I-1D457"></use></g></g></g><g data-mml-node="mo" transform="translate(4584.5,0)"><use data-c="2212" xlink:href="#MJX-TEX-N-2212"></use></g><g data-mml-node="msub" transform="translate(5584.8,0)"><g data-mml-node="mi"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="TeXAtom" transform="translate(394,-150) scale(0.707)" data-mjx-texclass="ORD"><g data-mml-node="mi"><use data-c="1D460" xlink:href="#MJX-TEX-I-1D460"></use></g><g data-mml-node="mi" transform="translate(469,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mi" transform="translate(830,0)"><use data-c="1D44E" xlink:href="#MJX-TEX-I-1D44E"></use></g><g data-mml-node="mi" transform="translate(1359,0)"><use data-c="1D45F" xlink:href="#MJX-TEX-I-1D45F"></use></g><g data-mml-node="mi" transform="translate(1810,0)"><use data-c="1D461" xlink:href="#MJX-TEX-I-1D461"></use></g><g data-mml-node="mo" transform="translate(2171,0)"><use data-c="2C" xlink:href="#MJX-TEX-N-2C"></use></g><g data-mml-node="mi" transform="translate(2449,0)"><use data-c="1D457" xlink:href="#MJX-TEX-I-1D457"></use></g></g></g></g></g></svg></mjx-container></div>
+<p>Current traces pair by interval ID and task ID, allowing parallel tasks to reuse an interval ID. Unmatched events are excluded. Legacy traces without a task ID can pair concurrent intervals incorrectly.</p>
+<p>Use intervals for code regions with explicit boundaries, such as one loop iteration or an end-to-end handler. For timing across different tasks or ISRs, use consecutive samples on a tag channel.</p>
+<p><strong>Pairing and nesting.</strong> The same interval ID can be used by different tasks because task ID participates in current pairing. Completed start/stop pairs become samples; unmatched starts or stops are reported or excluded. Avoid ambiguous recursive use of the same ID unless the instrumentation contract defines how nesting is paired.</p>
+<p><strong>Columns.</strong> Count, Min, Avg, Max, Jitter (<code>Max − Min</code>), σ (population standard deviation), p50, p95, and p99 — the same summary set as the slice-based timing tables, so an interval and an execution distribution can be read the same way.</p>
+<p><strong>How to use it.</strong> Intervals are preferable to slice-based response estimates when the application can mark the real operation boundaries. Compare interval tails with Execution and Blocking to determine whether the operation spends time on-CPU or waiting. Keep instrumentation overhead and partial-Scope pairing in mind.</p>
+<p></p>
+<p><a id="statistics-tags" name="statistics-tags"></a></p>
+<h3>Tag Analysis </h3>
+<p><strong>What it tells you</strong></p>
+<p>Summarizes numeric values recorded on <code>tag0_event</code> … <code>tag7_event</code> or <code>tag_event</code>. A tag can represent any application-defined value, such as queue depth, free memory, or a sensor reading.</p>
+<p>The value axis is not a duration unless the application records a duration. The <strong>Interval</strong> view measures time between consecutive samples on the same channel and can measure a handoff across tasks or ISRs.</p>
+<p><strong>Calculation.</strong> Samples are grouped by tag channel and kept in timestamp order. Value statistics operate on the recorded numeric payload. Inter-sample timing uses consecutive timestamps on the same channel, independent of which task or ISR emitted them.</p>
+<p><strong>Columns.</strong> Count, Min, Avg, Max, Jitter (<code>Max − Min</code>), σ, p50, p95, and p99 — computed on the recorded value, not on time. Read them against the channel's documented unit.</p>
+<p><strong>How to use it.</strong> Document each channel's unit and meaning. Use values for state variables such as queue depth or free memory, and inter-sample time for cross-context handoff or event cadence. Correlate a value change with the timeline; the viewer cannot infer application semantics from the number alone.</p>
+<p></p>
+<p><a id="statistics-lifecycle" name="statistics-lifecycle"></a></p>
+<h3>Task Lifecycle </h3>
+<p><strong>What it tells you</strong></p>
+<p>Summarizes recorded task create, delete, suspend, and resume events, together with alive span and run count.</p>
+<p>Only recorded STI lifecycle events are shown. An absent event may mean the event did not occur, was outside the Scope, or was not instrumented.</p>
+<p><strong>Calculation.</strong> Lifecycle records are grouped by task ID. Alive span uses available create and delete boundaries; run count comes from scheduling slices. Suspend and resume counts use their STI events.</p>
+<p><strong>How to use it.</strong> Check for unexpected creation, deletion, or repeated suspend/resume behavior. Use lifecycle boundaries to avoid interpreting start-up or shutdown as steady state. Missing create events are common when capture begins after tasks already exist.</p>
+<p><a id="statistics-deadline" name="statistics-deadline"></a></p>
+<h3>Deadlines / CPU Budget </h3>
+<p><strong>What it tells you</strong></p>
+<p>Compares observed slice durations and CPU shares with per-task thresholds configured in <strong>Settings → Display</strong>.</p>
+<ul>
+<li>A <strong>deadline violation</strong> means an observed slice exceeded its configured duration threshold.</li>
+<li>A <strong>CPU budget violation</strong> means the task's CPU share exceeded its configured limit in the current Scope.</li>
+</ul>
+<p>If no threshold is configured, BTFViewer cannot evaluate compliance. A result of zero violations is meaningful only for tasks with configured thresholds and within the selected Scope.</p>
+<p><strong>Calculation.</strong> Each execution slice is compared with the configured duration threshold. CPU budget compares the task's scoped CPU share with its configured percentage. These checks use the viewer's slice and CPU-share definitions; they do not automatically represent a complete application job or scheduling-server budget.</p>
+<p><strong>How to use it.</strong> Set thresholds from an engineering requirement, not from the same trace being tested. Inspect every violation on the timeline and compare with p95/p99. Use <strong>Interval Analysis</strong> when the deadline applies to a multi-slice operation, and <strong>Period / Jitter</strong> when it applies to activation timing.</p>
+<h2>Trace comparison</h2>
+<p><a id="statistics-trace-compare" name="statistics-trace-compare"></a></p>
+<h3>Trace Compare </h3>
+<p><strong>What it tells you</strong></p>
+<p>The <strong>Summary</strong> tab shows the regression result (Baseline and Candidate identity, regression and improvement counts, and the largest regression) and the summary metric table. Click a column header to sort any compare table; click again to reverse.</p>
+<p>Compares two runs of the same workload. Use Trace A as the baseline and Trace B as the candidate. Keep workload, instrumentation, core count, and capture phase as similar as possible.</p>
+<p>When trace lengths differ, prefer normalized values such as <code>/s</code>, <code>%</code>, and percentage points (<code>pp</code>) over raw totals. Task rows are matched by display name (<code>Name[id]</code>), so changed task IDs can prevent a logical match.</p>
+<p>The comparison uses two delta conventions:</p>
+<table>
+<thead>
+<tr>
+<th>Location</th>
+<th>Formula</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Data tables</td>
+<td><code>Δ = Baseline A − Candidate B</code></td>
+<td>Positive means A is numerically larger</td>
+</tr>
+<tr>
+<td>Change charts</td>
+<td><code>Change = Candidate B − Baseline A</code></td>
+<td>Positive means the candidate increased</td>
+</tr>
+</tbody>
+</table>
+<p>Read the sign together with the metric meaning and the <strong>Improved / Regressed / Changed</strong> status. A positive value is not automatically good or bad.</p>
+<p><strong>Shape Δ.</strong> The Execution Time, Blocking Time, and Inter-Arrival Time tables add a <strong>Shape Δ</strong> column: the two-sample Kolmogorov–Smirnov (KS) <em>D</em> statistic between the task's Baseline A and Candidate B sample distributions.</p>
+<p><em>What it measures.</em> Build the empirical CDF of each side — for every duration <em>x</em>, the fraction of that side's samples that are ≤ <em>x</em>. <strong>Shape Δ</strong> is the largest vertical gap between the two curves: <code>D = max over x of |F_A(x) − F_B(x)|</code>, a value in <code>[0, 1]</code>. <code>0</code> means the two sample sets trace the same curve — same spread <em>and</em> same location; <code>1</code> means they do not overlap at all. It is distribution-free (assumes no particular shape) and scale-free (a global unit or clock-rate change does not move it), so it reacts to a widened tail, a split mode, or a pure location shift that Avg, Max, and the <code>Δ</code> column can each miss.</p>
+<p><em>Calculation.</em> Each side's raw per-slice samples for that metric are sorted, then the two ECDFs are walked together in one merge pass tracking the running fraction on each side; <code>D</code> is the maximum absolute difference seen. Samples are collected per task by display name over each trace's compare Scope — the same matching and scoping the other columns use — with IDLE and TICK excluded. The cell shows <code>D</code> to two decimals; a dash (<code>—</code>) means one side had fewer than three samples, too few to have a shape.</p>
+<p><em>How to read it.</em> Treat it as a distance, not a direction: it says <em>how much</em> the distribution moved, not <em>which way</em> — read it next to the signed <code>Δ</code>, <code>p95</code>, and <code>p99</code> columns for direction, and open the distribution plot to see the change. Rough bands: <code>&lt; 0.10</code> practically the same shape; <code>0.10–0.30</code> a visible change worth investigating on the timeline; <code>&gt; 0.30</code> a substantial shift. With very large sample counts even a trivial real difference yields a non-zero <code>D</code>, so do not chase small values; with counts near the three-sample floor a single outlier can swing <code>D</code>, so confirm against several runs. <strong>Shape Δ</strong> is the raw statistic only — BTFViewer applies no critical value or p-value — so it is evidence of a difference, not a significance test.</p>
+<h3>Comparison workflow and dependencies</h3>
+<p>Start with capture compatibility and workload duration, then compare overall load, top-task CPU share, timing tails, migration rates, and synchronization evidence. A difference in one metric often explains another: higher CPU load can increase dispatch and blocking tails; changed affinity can increase migration; changed instrumentation can alter event counts without changing runtime behavior.</p>
+<p>Use several comparable runs when normal run-to-run variation is unknown. <strong>Trace Compare</strong> shows the observed difference between two captures. It does not perform a statistical significance test by itself, and it does not prove that a code change caused the difference.</p>
+<h2>Documentation navigation</h2>
+<table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="README.md">README.md</a></td>
+<td>Installation, interface, and general operation</td>
+</tr>
+<tr>
+<td><a href="WORKFLOWS.md">WORKFLOWS.md</a></td>
+<td>Step-by-step investigation workflows</td>
+</tr>
+<tr>
+<td><a href="STATISTICS_zh-TW.md">STATISTICS_zh-TW.md</a></td>
+<td>Traditional Chinese version of this reference</td>
+</tr>
+<tr>
+<td><a href="AI.md">AI.md</a></td>
+<td>AI-assisted investigation</td>
+</tr>
+</tbody>
+</table>
+
+<script>
+window.__setDocTheme = function (t) {
+  document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+};
+</script>
+</body>
+</html>
