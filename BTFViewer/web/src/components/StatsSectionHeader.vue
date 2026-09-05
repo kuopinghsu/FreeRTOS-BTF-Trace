@@ -50,6 +50,17 @@
         :class="categoryClass"
         :title="categoryBadgeTitle"
       >{{ category }}</span>
+      <span
+        v-if="helpText"
+        class="stats-section-help-icon"
+        :title="`Open in Statistics Reference — ${helpText}`"
+        role="button"
+        tabindex="0"
+        aria-label="Open Statistics Reference for this section"
+        @click.stop="$emit('openReference', sectionId)"
+        @keydown.enter.stop="$emit('openReference', sectionId)"
+        @keydown.space.stop.prevent="$emit('openReference', sectionId)"
+      >ⓘ</span>
       <slot name="actions" />
       <span
         class="stats-pin-slot"
@@ -96,17 +107,6 @@
         </button>
       </span>
     </span>
-  </div>
-  <div
-    v-if="!collapsed && helpText"
-    class="range-hint stats-section-help"
-    :title="helpText"
-  >
-    <span
-      class="stats-section-help-icon"
-      :title="helpText"
-      aria-label="Section help"
-    >ⓘ</span>
   </div>
   </div>
 </template>
@@ -159,7 +159,7 @@ const effectiveFilterLabel = computed(() => {
   return inj || ''
 })
 
-const emit = defineEmits(['toggle', 'togglePin', 'dragStart', 'dragEnd'])
+const emit = defineEmits(['toggle', 'togglePin', 'dragStart', 'dragEnd', 'openReference'])
 
 function onDragStart(e) {
   const sid = String(props.sectionId || '').trim()
@@ -209,9 +209,18 @@ function onDragEnd() {
   height: 1.1em;
   font-size: var(--type-meta, 11px);
   font-style: normal;
-  cursor: help;
+  cursor: pointer;
   color: var(--fg-dim);
   opacity: 0.9;
+  border-radius: 50%;
+}
+
+.stats-section-help-icon:hover,
+.stats-section-help-icon:focus-visible {
+  color: var(--accent, #4F8BFF);
+  opacity: 1;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(79, 139, 255, 0.2);
 }
 
 .stats-section-title {

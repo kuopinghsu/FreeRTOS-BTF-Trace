@@ -79,6 +79,9 @@ __pycache__
 # Web viewer build artifacts
 BTFViewer/web/node_modules/
 BTFViewer/web/dist/
+
+# Build-tools-only Node deps (STATISTICS.md -> HTML math rendering)
+BTFViewer/scripts/node_modules/
 BTFViewer/scripts/.monolith_doc_cache.py
 .vite/
 

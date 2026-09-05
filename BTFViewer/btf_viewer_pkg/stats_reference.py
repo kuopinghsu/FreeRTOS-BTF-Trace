@@ -282,18 +282,24 @@ class StatsReferenceViewer(QDialog):
             url.setFragment(f"statistics-{self._current_section}")
         QDesktopServices.openUrl(url)
 
-    # -- MainWindow's app-wide event filter (demo Esc/Space handling) has been
-    # observed to crash when it intercepts focus events from QWebEngineView's
-    # internal Qt Quick surface (PySide6/QtWebEngine interaction). Suspending
-    # it while this viewer is open trades away Esc/Space demo shortcuts for
-    # the duration — harmless, since a demo is not being driven while the
-    # user is reading documentation — in exchange for not crashing.
-    def showEvent(self, event) -> None:  # noqa: N802
+    # -- MainWindow's app-wide event filter (demo Esc/Space handling) crashes
+    # (SIGSEGV in PySide::typeName / getWrapperForQObject) when it intercepts
+    # a hover event from QWebEngineView's internal Qt Quick surface. That
+    # surface delivers its first hover event synchronously from *inside*
+    # QDialog.show()'s children-showing cascade (setVisible -> show_helper ->
+    # showChildren -> the QWebEngineView -> its internal QQuickWidget's own
+    # showEvent) — entirely before this dialog's own showEvent() ever runs,
+    # so removing the filter there (a QDialog.showEvent override, tried
+    # first) is already too late. Overriding show() itself, instead of
+    # showEvent(), removes the filter before super().show() starts that
+    # cascade. Trades away Esc/Space demo shortcuts while this viewer is
+    # open — harmless, since a demo isn't driven while reading docs.
+    def show(self) -> None:
         app = QApplication.instance()
         main_window = self.parent()
         if app is not None and main_window is not None:
             app.removeEventFilter(main_window)
-        super().showEvent(event)
+        super().show()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         app = QApplication.instance()

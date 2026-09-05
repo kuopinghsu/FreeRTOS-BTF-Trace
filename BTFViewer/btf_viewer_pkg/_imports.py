@@ -52,6 +52,15 @@ from PySide6.QtGui import (
     QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTextCharFormat, QTextCursor, QTextOption, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer
+# QtWebEngineWidgets must be imported before the QApplication instance is
+# constructed (Qt.AA_ShareOpenGLContexts side effect) — Statistics Reference
+# viewer (stats_reference.py) only imports it lazily, well after QApplication
+# already exists, so this early, always-executed import is what makes that
+# safe (a late-only import crashes the process once a QWebEngineView is used).
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
+except ImportError:
+    QWebEngineView = None  # type: ignore[assignment]
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,

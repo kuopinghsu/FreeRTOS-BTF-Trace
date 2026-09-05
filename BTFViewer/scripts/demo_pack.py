@@ -49,14 +49,19 @@ BTF_GLOBS = ("*.btf", "*.btf.gz", "*.btf.bz2", "*.btf.zip")
 FFMPEG_AAC_ARGS = ("-c:a", "aac", "-ar", "32000", "-ac", "1", "-b:a", "48k")
 
 
-def list_voice_packs(demo_dir: Path) -> List[dict]:
-    """Available voice packs under ``voice/<lang>/`` (with clip counts)."""
+def list_voice_packs(demo_dir: Path, voice_root: str = "voice") -> List[dict]:
+    """Available voice packs under ``<voice_root>/<lang>/`` (with clip counts).
+
+    ``voice_root`` lets a pack be built from an alternate rendered take —
+    ``voice-male``/``voice-female`` (see demo_voice.py render --gender) —
+    instead of the live ``voice/`` tree, without first running ``use-voice``.
+    """
     demo_dir = resolve_demo_dir(demo_dir)
-    recs = iter_lang_records(demo_dir)
-    # Prefer packs that actually have a voice/ folder (clips), not text-only.
+    recs = iter_lang_records(demo_dir, voice_root=voice_root)
+    # Prefer packs that actually have clips under voice_root/, not text-only.
     out = []
     for rec in recs:
-        voice_dir = demo_dir / "voice" / rec["id"]
+        voice_dir = demo_dir / voice_root / rec["id"]
         if not voice_dir.is_dir():
             continue
         out.append({
@@ -68,13 +73,13 @@ def list_voice_packs(demo_dir: Path) -> List[dict]:
     return out
 
 
-def format_voice_packs(demo_dir: Path) -> str:
-    packs = list_voice_packs(demo_dir)
+def format_voice_packs(demo_dir: Path, voice_root: str = "voice") -> str:
+    packs = list_voice_packs(demo_dir, voice_root=voice_root)
     demo_dir = resolve_demo_dir(demo_dir)
     if not packs:
-        return f"demo={demo_dir.name}\n  (no voice/<lang>/ packs)"
+        return f"demo={demo_dir.name}\n  (no {voice_root}/<lang>/ packs)"
     rows = [
-        f"demo={demo_dir.name}  available voice packs:",
+        f"demo={demo_dir.name}  available {voice_root}/ packs:",
         f"  {'id':<10} {'label':<12} {'clips':>5}",
     ]
     for p in packs:
@@ -90,6 +95,7 @@ def format_voice_packs(demo_dir: Path) -> str:
     rows.append(f"  python3 scripts/demo_pack.py {demo_arg} --voice en --voice zh-tw")
     rows.append(f"  python3 scripts/demo_pack.py {demo_arg} --voice en,zh-tw,ja")
     rows.append(f"  python3 scripts/demo_pack.py {demo_arg} --all-voices")
+    rows.append(f"  python3 scripts/demo_pack.py {demo_arg} --gender male   # pack from voice-male/")
     return "\n".join(rows)
 
 
@@ -98,11 +104,12 @@ def resolve_voice_selection(
     *,
     voice_args: Sequence[str],
     all_voices: bool = False,
+    voice_root: str = "voice",
 ) -> List[str]:
     """Resolve CLI voice selection to language ids present on disk."""
-    available = [p["id"] for p in list_voice_packs(demo_dir)]
+    available = [p["id"] for p in list_voice_packs(demo_dir, voice_root=voice_root)]
     if not available:
-        raise FileNotFoundError(f"no voice/<lang>/ packs under {resolve_demo_dir(demo_dir)}")
+        raise FileNotFoundError(f"no {voice_root}/<lang>/ packs under {resolve_demo_dir(demo_dir)}")
 
     if all_voices:
         return list(available)
@@ -279,7 +286,13 @@ def pack_demo_xtf(
     default_lang: str = "en",
     to_aac: bool = True,
     ffmpeg: Optional[str] = None,
+    voice_src_root: str = "voice",
 ) -> Path:
+    """``voice_src_root`` is the folder on disk to pack clips FROM (default
+    the live ``voice/`` tree; pass ``voice-male``/``voice-female`` to pack
+    straight from a rendered-but-not-yet-live take). The archive always
+    stores clips under ``voice/<lang>/`` internally regardless — that is
+    the path the packed demo XML references at playback time."""
     demo_dir = resolve_demo_dir(demo)
     xml_src = find_demo_xml(demo_dir)
     if xml_src is None:
@@ -292,10 +305,11 @@ def pack_demo_xtf(
     if not lang_ids:
         lang_ids = list(DEFAULT_LANGS)
 
-    missing_voice = [lid for lid in lang_ids if not (demo_dir / "voice" / lid).is_dir()]
+    missing_voice = [lid for lid in lang_ids if not (demo_dir / voice_src_root / lid).is_dir()]
     if missing_voice:
         raise FileNotFoundError(
-            f"missing voice folders: {', '.join(missing_voice)} under {demo_dir / 'voice'}"
+            f"missing {voice_src_root} folders: {', '.join(missing_voice)} "
+            f"under {demo_dir / voice_src_root}"
         )
 
     btfs = _iter_btf_files(demo_dir)
@@ -320,7 +334,7 @@ def pack_demo_xtf(
 
     members = 0
     with tempfile.TemporaryDirectory(prefix="btf_xtf_voice_") as td:
-        voice_root = Path(td)
+        staging_root = Path(td)
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr(xml_src.name, xml_text.encode("utf-8"))
             members += 1
@@ -328,9 +342,9 @@ def pack_demo_xtf(
                 zf.write(btf, btf.name)
                 members += 1
             for lid in lang_ids:
-                staged = voice_root / lid
+                staged = staging_root / lid
                 prepare_voice_dir(
-                    demo_dir / "voice" / lid,
+                    demo_dir / voice_src_root / lid,
                     staged,
                     to_aac=to_aac,
                     ffmpeg=ffmpeg,
@@ -371,6 +385,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "  --all-voices               every voice/<lang>/ on disk\n"
             "  --list-voices              list available packs and exit\n"
             "  (default voice packs: en, zh-tw)\n"
+            "\n"
+            "Source folder (pack from a rendered take, not just voice/):\n"
+            "  --gender male              pack from voice-male/ instead of voice/\n"
+            "  --voice-folder voice-male  same, by exact folder name\n"
+            "  (the archive always stores clips under voice/<lang>/ internally —\n"
+            "   this only picks which folder on disk to read them FROM)\n"
         ),
     )
     ap.add_argument(
@@ -414,6 +434,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="list available voice packs and exit",
     )
     ap.add_argument(
+        "--voice-folder",
+        default="",
+        metavar="NAME",
+        help="pack from <NAME>/<lang>/ instead of voice/ "
+             "(e.g. voice-male, voice-female); overrides --gender",
+    )
+    ap.add_argument(
+        "--gender", default="", choices=("", "male", "female"),
+        help="shorthand for --voice-folder voice-<gender>",
+    )
+    ap.add_argument(
         "--default-lang",
         default="",
         help="XML <languages default> (default: first selected pack)",
@@ -430,9 +461,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     args = ap.parse_args(argv)
 
+    voice_src_root = args.voice_folder.strip() or (f"voice-{args.gender}" if args.gender else "voice")
+
     demo_dir = resolve_demo_dir(args.demo)
     if args.list_voices:
-        print(format_voice_packs(demo_dir))
+        print(format_voice_packs(demo_dir, voice_root=voice_src_root))
         return 0
 
     voice_args = list(args.voice) + list(args.lang)
@@ -441,10 +474,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             demo_dir,
             voice_args=voice_args,
             all_voices=args.all_voices,
+            voice_root=voice_src_root,
         )
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        print(format_voice_packs(demo_dir), file=sys.stderr)
+        print(format_voice_packs(demo_dir, voice_root=voice_src_root), file=sys.stderr)
         return 2
 
     out = args.output
@@ -459,10 +493,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default_lang=default_lang,
         to_aac=to_aac,
         ffmpeg=(args.ffmpeg or None),
+        voice_src_root=voice_src_root,
     )
     size = path.stat().st_size
     audio = "aac" if to_aac else "mp3"
-    print(f"packed {path} ({size:,} bytes) voices={','.join(langs)} audio={audio}")
+    print(
+        f"packed {path} ({size:,} bytes) voices={','.join(langs)} "
+        f"audio={audio} from={voice_src_root}/"
+    )
     return 0
 
 

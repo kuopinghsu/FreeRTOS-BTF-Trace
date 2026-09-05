@@ -206,6 +206,7 @@
         :pinned="isSectionPinned('cores')"
         @toggle="toggleSectionCollapse('cores')"
         @toggle-pin="toggleSectionPin('cores')"
+        @open-reference="onOpenReference"
       >
         Core Utilisation (excl. IDLE/TICK){{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -258,6 +259,7 @@
         :pinned="isSectionPinned('core_breakdown')"
         @toggle="toggleSectionCollapse('core_breakdown')"
         @toggle-pin="toggleSectionPin('core_breakdown')"
+        @open-reference="onOpenReference"
       >
         Core Time Breakdown{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -327,6 +329,7 @@
         :pinned="isSectionPinned('concurrency')"
         @toggle="toggleSectionCollapse('concurrency')"
         @toggle-pin="toggleSectionPin('concurrency')"
+        @open-reference="onOpenReference"
       >
         Concurrent Core Active Distribution{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -400,6 +403,7 @@
         :pinned="isSectionPinned('switch_reason')"
         @toggle="toggleSectionCollapse('switch_reason')"
         @toggle-pin="toggleSectionPin('switch_reason')"
+        @open-reference="onOpenReference"
       >
         Switch Reason Breakdown{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -477,6 +481,7 @@
         :pinned="isSectionPinned('sched_load')"
         @toggle="toggleSectionCollapse('sched_load')"
         @toggle-pin="toggleSectionPin('sched_load')"
+        @open-reference="onOpenReference"
       >
         Scheduling Load Over Time{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -546,6 +551,7 @@
         :pinned="isSectionPinned('activation')"
         @toggle="toggleSectionCollapse('activation')"
         @toggle-pin="toggleSectionPin('activation')"
+        @open-reference="onOpenReference"
       >
         Activation Latency{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -627,6 +633,7 @@
         :pinned="isSectionPinned('ready_gap')"
         @toggle="toggleSectionCollapse('ready_gap')"
         @toggle-pin="toggleSectionPin('ready_gap')"
+        @open-reference="onOpenReference"
       >
         Ready-Gap (Starvation){{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -702,6 +709,7 @@
         :pinned="isSectionPinned('idle')"
         @toggle="toggleSectionCollapse('idle')"
         @toggle-pin="toggleSectionPin('idle')"
+        @open-reference="onOpenReference"
       >
         Idle Analysis{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -777,6 +785,7 @@
         :pinned="isSectionPinned('sync_level')"
         @toggle="toggleSectionCollapse('sync_level')"
         @toggle-pin="toggleSectionPin('sync_level')"
+        @open-reference="onOpenReference"
       >
         Queue Backlog / Semaphore Level{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -850,6 +859,7 @@
         :pinned="isSectionPinned('switch_overhead')"
         @toggle="toggleSectionCollapse('switch_overhead')"
         @toggle-pin="toggleSectionPin('switch_overhead')"
+        @open-reference="onOpenReference"
       >
         Kernel Switch Overhead{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -922,6 +932,7 @@
         :pinned="isSectionPinned('tasks')"
         @toggle="toggleSectionCollapse('tasks')"
         @toggle-pin="toggleSectionPin('tasks')"
+        @open-reference="onOpenReference"
       >
         Top Tasks by CPU (excl. IDLE/TICK){{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -982,6 +993,7 @@
         :pinned="isSectionPinned('health')"
         @toggle="toggleSectionCollapse('health')"
         @toggle-pin="toggleSectionPin('health')"
+        @open-reference="onOpenReference"
       >
         Trace Health (TICK){{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -1120,6 +1132,7 @@
         :pinned="isSectionPinned('migrations')"
         @toggle="toggleSectionCollapse('migrations')"
         @toggle-pin="toggleSectionPin('migrations')"
+        @open-reference="onOpenReference"
       >
         Core Migrations{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -1277,6 +1290,7 @@
         :pinned="isSectionPinned('core_pairs')"
         @toggle="toggleSectionCollapse('core_pairs')"
         @toggle-pin="toggleSectionPin('core_pairs')"
+        @open-reference="onOpenReference"
       >
         Core-Pair Migration Summary{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -1377,6 +1391,7 @@
         :pinned="isSectionPinned('anomalies')"
         @toggle="toggleSectionCollapse('anomalies')"
         @toggle-pin="toggleSectionPin('anomalies')"
+        @open-reference="onOpenReference"
       >
         Timeline Anomalies{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -1461,6 +1476,7 @@
         :pinned="isSectionPinned('worst')"
         @toggle="toggleSectionCollapse('worst')"
         @toggle-pin="toggleSectionPin('worst')"
+        @open-reference="onOpenReference"
       >
         Worst Events{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -1530,6 +1546,7 @@
         :pinned="isSectionPinned('crit_path')"
         @toggle="toggleSectionCollapse('crit_path')"
         @toggle-pin="toggleSectionPin('crit_path')"
+        @open-reference="onOpenReference"
       >
         Critical Path{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -1606,6 +1623,7 @@
         :pinned="isSectionPinned('patterns')"
         @toggle="toggleSectionCollapse('patterns')"
         @toggle-pin="toggleSectionPin('patterns')"
+        @open-reference="onOpenReference"
       >
         Recurring Patterns{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -1676,6 +1694,7 @@
         :pinned="isSectionPinned('exec')"
         @toggle="toggleSectionCollapse('exec')"
         @toggle-pin="toggleSectionPin('exec')"
+        @open-reference="onOpenReference"
       >
         Execution Time Per Slice{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -1852,6 +1871,7 @@
         :pinned="isSectionPinned('block')"
         @toggle="toggleSectionCollapse('block')"
         @toggle-pin="toggleSectionPin('block')"
+        @open-reference="onOpenReference"
       >
         Blocking Time (off-CPU gap){{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -2021,6 +2041,7 @@
         :pinned="isSectionPinned('dispatch')"
         @toggle="toggleSectionCollapse('dispatch')"
         @toggle-pin="toggleSectionPin('dispatch')"
+        @open-reference="onOpenReference"
       >
         Dispatch / Scheduling Latency{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -2184,6 +2205,7 @@
         :pinned="isSectionPinned('inter')"
         @toggle="toggleSectionCollapse('inter')"
         @toggle-pin="toggleSectionPin('inter')"
+        @open-reference="onOpenReference"
       >
         Inter-Arrival Time{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -2346,6 +2368,7 @@
         :pinned="isSectionPinned('period')"
         @toggle="toggleSectionCollapse('period')"
         @toggle-pin="toggleSectionPin('period')"
+        @open-reference="onOpenReference"
       >
         Period / Jitter{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -2436,6 +2459,7 @@
         :pinned="isSectionPinned('response')"
         @toggle="toggleSectionCollapse('response')"
         @toggle-pin="toggleSectionPin('response')"
+        @open-reference="onOpenReference"
       >
         Response Time{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -2522,6 +2546,7 @@
         :pinned="isSectionPinned('jitter')"
         @toggle="toggleSectionCollapse('jitter')"
         @toggle-pin="toggleSectionPin('jitter')"
+        @open-reference="onOpenReference"
       >
         Unified Jitter{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -2610,6 +2635,7 @@
         :pinned="isSectionPinned('distrib')"
         @toggle="toggleSectionCollapse('distrib')"
         @toggle-pin="toggleSectionPin('distrib')"
+        @open-reference="onOpenReference"
       >
         Distribution Explorer{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -2766,6 +2792,7 @@
         :pinned="isSectionPinned('preemption')"
         @toggle="toggleSectionCollapse('preemption')"
         @toggle-pin="toggleSectionPin('preemption')"
+        @open-reference="onOpenReference"
       >
         Preemption Chain Analysis{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -2880,6 +2907,7 @@
         :pinned="isSectionPinned('preempt_matrix')"
         @toggle="toggleSectionCollapse('preempt_matrix')"
         @toggle-pin="toggleSectionPin('preempt_matrix')"
+        @open-reference="onOpenReference"
       >
         Preemption Matrix{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -3002,6 +3030,7 @@
         :pinned="isSectionPinned('priority')"
         @toggle="toggleSectionCollapse('priority')"
         @toggle-pin="toggleSectionPin('priority')"
+        @open-reference="onOpenReference"
       >
         Priority Inheritance{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -3130,6 +3159,7 @@
         :pinned="isSectionPinned('sync')"
         @toggle="toggleSectionCollapse('sync')"
         @toggle-pin="toggleSectionPin('sync')"
+        @open-reference="onOpenReference"
       >
         Mutex / Semaphore{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -3369,6 +3399,7 @@
         :pinned="isSectionPinned('wait_owner')"
         @toggle="toggleSectionCollapse('wait_owner')"
         @toggle-pin="toggleSectionPin('wait_owner')"
+        @open-reference="onOpenReference"
       >
         Waiter × Owner{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -3447,6 +3478,7 @@
         :pinned="isSectionPinned('mutex_block')"
         @toggle="toggleSectionCollapse('mutex_block')"
         @toggle-pin="toggleSectionPin('mutex_block')"
+        @open-reference="onOpenReference"
       >
         Mutex Blocking{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -3562,6 +3594,7 @@
         :pinned="isSectionPinned('queue')"
         @toggle="toggleSectionCollapse('queue')"
         @toggle-pin="toggleSectionPin('queue')"
+        @open-reference="onOpenReference"
       >
         Queue{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -3638,6 +3671,7 @@
         :pinned="isSectionPinned('lifecycle')"
         @toggle="toggleSectionCollapse('lifecycle')"
         @toggle-pin="toggleSectionPin('lifecycle')"
+        @open-reference="onOpenReference"
       >
         Task Lifecycle{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -3712,6 +3746,7 @@
         :pinned="isSectionPinned('affinity')"
         @toggle="toggleSectionCollapse('affinity')"
         @toggle-pin="toggleSectionPin('affinity')"
+        @open-reference="onOpenReference"
       >
         Core Affinity{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -3777,6 +3812,7 @@
         :pinned="isSectionPinned('task_core')"
         @toggle="toggleSectionCollapse('task_core')"
         @toggle-pin="toggleSectionPin('task_core')"
+        @open-reference="onOpenReference"
       >
         Task × Core{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -3882,6 +3918,7 @@
         :pinned="isSectionPinned('core_time')"
         @toggle="toggleSectionCollapse('core_time')"
         @toggle-pin="toggleSectionPin('core_time')"
+        @open-reference="onOpenReference"
       >
         Core Utilization Over Time{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -3954,6 +3991,7 @@
         :pinned="isSectionPinned('deadline')"
         @toggle="toggleSectionCollapse('deadline')"
         @toggle-pin="toggleSectionPin('deadline')"
+        @open-reference="onOpenReference"
       >
         Deadlines / CPU budget{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -4046,6 +4084,7 @@
         :pinned="isSectionPinned('task_health')"
         @toggle="toggleSectionCollapse('task_health')"
         @toggle-pin="toggleSectionPin('task_health')"
+        @open-reference="onOpenReference"
       >
         Task Health{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -4128,6 +4167,7 @@
         :pinned="isSectionPinned('intervals')"
         @toggle="toggleSectionCollapse('intervals')"
         @toggle-pin="toggleSectionPin('intervals')"
+        @open-reference="onOpenReference"
       >
         Interval Analysis{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -4259,6 +4299,7 @@
         :pinned="isSectionPinned('tags')"
         @toggle="toggleSectionCollapse('tags')"
         @toggle-pin="toggleSectionPin('tags')"
+        @open-reference="onOpenReference"
       >
         Tag Analysis{{ scopeSuffixStr }}
       </StatsSectionHeader>
@@ -5178,7 +5219,12 @@ const emit = defineEmits([
   'openPairHeatmap', 'openPairChord', 'openSettings',
   'exploreRange', 'query-ai', 'filterTimeline',
   'clear-scope', 'clear-filter',
+  'statsReferenceRequested',
 ])
+
+function onOpenReference(sectionId) {
+  emit('statsReferenceRequested', sectionId)
+}
 
 const aiFeatureEnabled = computed(() => props.analysisSettings?.aiEnabled !== false)
 

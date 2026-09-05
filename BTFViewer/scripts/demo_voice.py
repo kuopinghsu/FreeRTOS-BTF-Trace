@@ -8,8 +8,16 @@ Every language is packed the same way. XML keeps
 On-disk layout inside a demo folder::
 
     text/<lang>/01_title.txt
-    voice/<lang>/01_title.mp3
+    voice/<lang>/01_title.mp3          <- the app plays only from here
     voice/<lang>/voice.json
+    voice-male/<lang>/01_title.mp3     <- `render --gender male` output
+    voice-female/<lang>/01_title.mp3   <- `render --gender female` output
+
+``render --gender`` writes into its own ``voice-male/`` or ``voice-female/``
+tree rather than the live ``voice/`` tree, so rendering one gender never
+overwrites the other and both takes stay on disk. Nothing reads
+``voice-male/``/``voice-female/`` at demo-playback time — run ``use-voice``
+to copy one of them over ``voice/`` once you've picked a take.
 
 Shareable zip (install/export)::
 
@@ -27,6 +35,9 @@ Examples::
     python3 scripts/demo_voice.py export demos/demo_8cores --lang en -o en.zip
     python3 scripts/demo_voice.py install demos/demo_8cores zh-tw.zip
     python3 scripts/demo_voice.py render demos/demo_8cores --lang zh-tw
+    python3 scripts/demo_voice.py render demos/demo_8cores --lang en --gender male
+    python3 scripts/demo_voice.py render demos/demo_8cores --lang en --gender female
+    python3 scripts/demo_voice.py use-voice demos/demo_8cores --gender male
     python3 scripts/demo_voice.py sync-xml demos/demo_8cores
 """
 from __future__ import annotations
@@ -68,6 +79,23 @@ DEFAULT_SAY_VOICES = {
     "de": "Anna",
     "fr": "Thomas",
     "es": "Monica",
+}
+# Used only when --gender is passed (default voice above wins when it isn't).
+# "Rocko"/"Flo" are Apple's multilingual persona voices — the same name
+# exists once per language, disambiguated by a localized "(<language>)"
+# suffix (e.g. "Rocko (中文（台灣）)") that _resolve_say_voice() looks up by
+# locale instead of hardcoding, since that suffix text itself changes with
+# the *rendering* machine's system language.
+FEMALE_SAY_VOICES = dict(DEFAULT_SAY_VOICES, fr="Flo")
+MALE_SAY_VOICES = {
+    "en": "Daniel", "zh-tw": "Rocko", "zh": "Rocko", "ja": "Rocko",
+    "ko": "Rocko", "de": "Rocko", "fr": "Thomas", "es": "Rocko",
+}
+# macOS locale each language id renders as, for disambiguating a persona
+# voice name that repeats across languages (see _resolve_say_voice()).
+_SAY_LOCALES = {
+    "en": "en_US", "zh-tw": "zh_TW", "zh": "zh_CN", "ja": "ja_JP",
+    "ko": "ko_KR", "de": "de_DE", "fr": "fr_FR", "es": "es_ES",
 }
 
 
@@ -219,10 +247,10 @@ def manifest_lang(data: Dict[str, Any]) -> str:
     )
 
 
-def load_lang_manifest(demo_dir: Path, lang: str) -> Dict[str, Any]:
+def load_lang_manifest(demo_dir: Path, lang: str, voice_root: str = "voice") -> Dict[str, Any]:
     n = normalize_voice_lang(lang)
     for cand in (
-        demo_dir / "voice" / n / MANIFEST_NAME,
+        demo_dir / voice_root / n / MANIFEST_NAME,
         demo_dir / "text" / n / MANIFEST_NAME,
     ):
         if cand.is_file():
@@ -233,8 +261,15 @@ def load_lang_manifest(demo_dir: Path, lang: str) -> Dict[str, Any]:
     return {}
 
 
-def iter_lang_records(demo_dir: Path, default_lang: str = "en") -> List[Dict[str, Any]]:
-    """One record per language found under text/ and voice/."""
+def iter_lang_records(
+    demo_dir: Path, default_lang: str = "en", voice_root: str = "voice",
+) -> List[Dict[str, Any]]:
+    """One record per language found under text/ and <voice_root>/.
+
+    ``voice_root`` defaults to the live ``voice/`` tree; pass ``voice-male``
+    / ``voice-female`` to inspect a rendered-but-not-yet-live take instead
+    (see demo_voice.py render --gender / use-voice).
+    """
     demo_dir = Path(demo_dir)
     found: Dict[str, Dict[str, Any]] = {}
 
@@ -253,8 +288,10 @@ def iter_lang_records(demo_dir: Path, default_lang: str = "en") -> List[Dict[str
         if rel not in rec[key]:
             rec[key].append(rel)
 
-    for kind, exts in (("text", TEXT_EXTS), ("voice", AUDIO_EXTS)):
-        root = demo_dir / kind
+    for kind, root_name, exts in (
+        ("text", "text", TEXT_EXTS), ("voice", voice_root, AUDIO_EXTS),
+    ):
+        root = demo_dir / root_name
         if not root.is_dir():
             continue
         try:
@@ -283,7 +320,7 @@ def iter_lang_records(demo_dir: Path, default_lang: str = "en") -> List[Dict[str
                 continue
 
     for lang, rec in list(found.items()):
-        data = load_lang_manifest(demo_dir, lang)
+        data = load_lang_manifest(demo_dir, lang, voice_root)
         if data:
             rec["label"] = voice_label(lang, str(data.get("label") or rec.get("label") or ""))
         rec["scripts"].sort()
@@ -556,11 +593,55 @@ def _which(name: str) -> Optional[str]:
     return shutil.which(name)
 
 
+_say_voices_cache: Optional[List[Tuple[str, str]]] = None
+
+
+def _list_say_voices() -> List[Tuple[str, str]]:
+    """``[(display_name, locale), ...]`` from ``say -v ?``, cached per run."""
+    global _say_voices_cache
+    if _say_voices_cache is not None:
+        return _say_voices_cache
+    out: List[Tuple[str, str]] = []
+    if sys.platform == "darwin" and _which("say"):
+        try:
+            proc = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, check=True)
+            for line in proc.stdout.splitlines():
+                m = re.match(r"^(.*\S)\s{2,}([a-zA-Z]{2}[_-][a-zA-Z0-9]+)\s", line)
+                if m:
+                    out.append((m.group(1).strip(), m.group(2)))
+        except (OSError, subprocess.CalledProcessError):
+            pass
+    _say_voices_cache = out
+    return out
+
+
+def _resolve_say_voice(name: str, lang_n: str) -> str:
+    """Disambiguate a persona voice name (e.g. "Rocko") that macOS repeats
+    across languages, each with a localized "(<language>)" display suffix —
+    that suffix's text depends on the *rendering* machine's own system
+    language, so it can't be hardcoded. Returns ``name`` unchanged when it
+    is already unambiguous (a single-locale voice, e.g. "Samantha") or when
+    voice discovery isn't available (non-macOS, or "say" missing)."""
+    if not name:
+        return name
+    voices = _list_say_voices()
+    base = name.strip().lower()
+    matches = [(disp, loc) for disp, loc in voices if disp.split(" (", 1)[0].strip().lower() == base]
+    if len(matches) <= 1:
+        return name
+    target_locale = _SAY_LOCALES.get(lang_n, "")
+    for disp, loc in matches:
+        if loc == target_locale:
+            return disp
+    return name
+
+
 def render_lang(
     demo_dir: Path,
     lang: str,
     *,
     voice: str = "",
+    gender: str = "",
     rate: int = 170,
     tts_cmd: str = "",
     overwrite: bool = False,
@@ -575,9 +656,23 @@ def render_lang(
     )
     if not scripts:
         raise FileNotFoundError(f"no .txt scripts in {text_dir}")
-    voice_dir = demo_dir / "voice" / lang_n
+    gender_n = gender.strip().lower()
+    # A gendered render lands in its own voice-male/ or voice-female/ tree,
+    # never the live voice/ tree the app actually plays from — so rendering
+    # one gender never clobbers the other, and both can be kept side by
+    # side. "use-voice" below copies one of them into voice/ to make it live.
+    voice_root = f"voice-{gender_n}" if gender_n else "voice"
+    voice_dir = demo_dir / voice_root / lang_n
     voice_dir.mkdir(parents=True, exist_ok=True)
-    voice_name = voice or DEFAULT_SAY_VOICES.get(lang_n, "")
+    if voice:
+        voice_name = voice
+    elif gender_n == "male":
+        voice_name = MALE_SAY_VOICES.get(lang_n, "")
+    elif gender_n == "female":
+        voice_name = FEMALE_SAY_VOICES.get(lang_n, "")
+    else:
+        voice_name = DEFAULT_SAY_VOICES.get(lang_n, "")
+    voice_name = _resolve_say_voice(voice_name, lang_n)
     made = 0
     skipped = 0
     for src in scripts:
@@ -602,7 +697,10 @@ def render_lang(
         )
         made += 1
     write_manifest(voice_dir / MANIFEST_NAME, lang_n, extra={"demo": demo_dir.name})
-    return {"lang": lang_n, "rendered": made, "skipped": skipped, "voice": voice_name}
+    return {
+        "lang": lang_n, "rendered": made, "skipped": skipped,
+        "voice": voice_name, "root": voice_root,
+    }
 
 
 def _render_one(
@@ -658,6 +756,48 @@ def _render_one(
     raise SystemExit("no TTS backend (macOS say, espeak, or --tts-cmd)")
 
 
+def use_voice(
+    demo_dir: Path,
+    gender: str,
+    lang: str = "",
+    *,
+    overwrite: bool = True,
+) -> Dict[str, Any]:
+    """Copy a previously rendered voice-<gender>/ take into voice/ — the
+    tree the app actually plays from — without re-running TTS. ``lang``
+    empty means every language voice-<gender>/ has."""
+    demo_dir = resolve_demo_dir(demo_dir)
+    gender_n = gender.strip().lower()
+    if gender_n not in ("male", "female"):
+        raise ValueError(f"gender must be 'male' or 'female', got {gender!r}")
+    src_root = demo_dir / f"voice-{gender_n}"
+    if not src_root.is_dir():
+        raise FileNotFoundError(
+            f"no {src_root.name}/ — render it first: "
+            f"demo_voice.py render {demo_dir} --gender {gender_n} --lang <lang>"
+        )
+    lang_dirs = (
+        [src_root / normalize_voice_lang(lang)] if lang
+        else sorted(p for p in src_root.iterdir() if p.is_dir())
+    )
+    copied = 0
+    langs: List[str] = []
+    for lang_dir in lang_dirs:
+        if not lang_dir.is_dir():
+            raise FileNotFoundError(f"no {lang_dir}")
+        lang_n = normalize_voice_lang(lang_dir.name) or lang_dir.name
+        dest_dir = demo_dir / "voice" / lang_n
+        for src in lang_dir.iterdir():
+            if not src.is_file():
+                continue
+            if src.suffix.lower() not in AUDIO_EXTS and src.name != MANIFEST_NAME:
+                continue
+            if _copy_file(src, dest_dir / src.name, overwrite):
+                copied += 1
+        langs.append(lang_n)
+    return {"gender": gender_n, "langs": langs, "copied": copied}
+
+
 def sync_xml_languages(
     demo_dir: Path,
     default_lang: str = "en",
@@ -707,6 +847,15 @@ def format_status(demo_dir: Path) -> str:
         rows.append(
             f"  {rec['id']:<8} {rec['label']:<10} {len(rec['scripts']):>7} {len(rec['clips']):>7}"
         )
+    genders = []
+    for g in ("male", "female"):
+        root = demo_dir / f"voice-{g}"
+        if root.is_dir():
+            langs = sorted(p.name for p in root.iterdir() if p.is_dir())
+            genders.append(f"{g}=[{', '.join(langs) or '-'}]")
+    if genders:
+        rows.append(f"  rendered takes not yet live: {'  '.join(genders)}")
+        rows.append(f"  (make one live: demo_voice.py use-voice {demo_dir} --gender <male|female>)")
     return "\n".join(rows)
 
 
@@ -751,13 +900,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p_exp.add_argument("--lang", required=True, help="language id to export")
     p_exp.add_argument("-o", "--output", type=Path, required=True, help="zip path")
 
-    p_ren = sub.add_parser("render", help="TTS text/<lang>/*.txt into voice/<lang>/")
+    p_ren = sub.add_parser(
+        "render",
+        help="TTS text/<lang>/*.txt into voice/<lang>/ (or voice-<gender>/<lang>/ with --gender)",
+    )
     _add_demo_arg(p_ren)
     p_ren.add_argument("--lang", default="en")
-    p_ren.add_argument("--voice", default="", help="TTS voice name (macOS say -v)")
+    p_ren.add_argument("--voice", default="", help="TTS voice name (macOS say -v); overrides --gender")
+    p_ren.add_argument(
+        "--gender", default="", choices=("", "male", "female"),
+        help="pick a male/female voice; written to its own voice-<gender>/ tree, "
+             "not the live voice/ tree — see 'use-voice' to make one live",
+    )
     p_ren.add_argument("--rate", type=int, default=170)
     p_ren.add_argument("--tts-cmd", default="", help="command prefix; text and output path appended")
     p_ren.add_argument("--overwrite", action="store_true")
+
+    p_use = sub.add_parser(
+        "use-voice",
+        help="copy a rendered voice-<gender>/ take into voice/ (the tree the app plays), no re-render",
+    )
+    _add_demo_arg(p_use)
+    p_use.add_argument("--gender", required=True, choices=("male", "female"))
+    p_use.add_argument("--lang", default="", help="one language id; default: every language rendered")
+    p_use.add_argument("--no-overwrite", action="store_true")
 
     p_sync = sub.add_parser("sync-xml", help="rewrite <languages> from discovered folders")
     _add_demo_arg(p_sync)
@@ -801,13 +967,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             demo,
             args.lang,
             voice=args.voice,
+            gender=args.gender,
             rate=args.rate,
             tts_cmd=args.tts_cmd,
             overwrite=args.overwrite,
         )
         print(
             f"render lang={info['lang']} rendered={info['rendered']} "
-            f"skipped={info['skipped']} voice={info['voice'] or '-'}"
+            f"skipped={info['skipped']} voice={info['voice'] or '-'} root={info['root']}/"
+        )
+        return 0
+    if args.cmd == "use-voice":
+        info = use_voice(demo, args.gender, args.lang, overwrite=not args.no_overwrite)
+        print(
+            f"use-voice gender={info['gender']} langs={','.join(info['langs'])} "
+            f"copied={info['copied']} -> voice/"
         )
         return 0
     if args.cmd == "sync-xml":

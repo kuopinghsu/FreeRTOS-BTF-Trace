@@ -770,7 +770,9 @@
                 @query-ai="queryAnalysisWithAi"
                 @clear-scope="onStatsScopeChange(false)"
                 @clear-filter="clearAllActiveFilters"
+                @stats-reference-requested="onStatsReferenceRequested"
               />
+              <StatsReferenceViewer ref="statsReferenceViewerRef" />
             </div>
           </div>
 
@@ -935,6 +937,11 @@
         </div>
 
         <div class="help-body">
+          <div class="help-section">
+            <button type="button" class="help-reference-link" @click="openStatsReference">
+              Statistics Reference — full documentation for every stat →
+            </button>
+          </div>
           <div class="help-section">
             <div class="help-section-title">
               Keyboard
@@ -1522,6 +1529,7 @@ import CursorPanel      from './components/CursorPanel.vue'
 import CursorBar        from './components/CursorBar.vue'
 import LegendPanel      from './components/LegendPanel.vue'
 import StatisticsPanel  from './components/StatisticsPanel.vue'
+import StatsReferenceViewer from './components/StatsReferenceViewer.vue'
 import MarksPanel       from './components/MarksPanel.vue'
 import SnapshotEditor   from './components/SnapshotEditor.vue'
 import CorridorInspectorDialog from './components/CorridorInspectorDialog.vue'
@@ -6062,6 +6070,17 @@ function openHelpDialog() {
   helpOpen.value = true
 }
 
+const statsReferenceViewerRef = ref(null)
+
+function onStatsReferenceRequested(sectionId) {
+  statsReferenceViewerRef.value?.openSection(sectionId)
+}
+
+function openStatsReference() {
+  helpOpen.value = false
+  onStatsReferenceRequested('cores')
+}
+
 function openAboutDialog() {
   helpOpen.value = false
   if (settingsOpen.value) onSettingsCancel()
@@ -7821,6 +7840,25 @@ body.row-resizing * {
   letter-spacing: 0.06em;
   color: var(--fg-dim);
   margin-bottom: 8px;
+}
+
+.help-reference-link {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--app-surface-2, var(--panel-bg));
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 10px 14px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.help-reference-link:hover {
+  background: var(--app-surface-3, var(--tb-btn-hover));
 }
 
 .help-grid {

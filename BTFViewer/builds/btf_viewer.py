@@ -127,6 +127,12 @@ from PySide6.QtGui import (
     QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTextCharFormat, QTextCursor, QTextOption, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer
+# QtWebEngineWidgets must be imported before QApplication is constructed
+# (Qt.AA_ShareOpenGLContexts side effect) — see _imports.py for why.
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+except ImportError:
+    QWebEngineView = None
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
@@ -58325,6 +58331,22 @@ class _StatsHeaderClickFilter(QObject):
         return False
 
 
+class _StatsHelpIconClickFilter(QObject):
+    """Open the Statistics Reference viewer when a section's help icon is clicked."""
+
+    def __init__(self, panel: "_StatsPanel", section_id: str) -> None:
+        super().__init__(panel)
+        self._panel = panel
+        self._section_id = section_id
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if (event.type() == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._panel.stats_reference_requested.emit(self._section_id)
+            return True
+        return False
+
+
 class _UtilScrollResizeFilter(QObject):
     """Keep util rows inside the scroll viewport when the panel is resized."""
 
@@ -66329,6 +66351,7 @@ class _StatsPanel(QWidget):
     task_clicked = Signal(str)   # merge key of the clicked task row
     segment_jump   = Signal(int)    # ns - scroll timeline to this timestamp
     plot_point_clicked = Signal(object, int, str)  # payload, mark_ns, note
+    stats_reference_requested = Signal(str)  # section_id — open Statistics Reference
     explore_range_requested = Signal(object)  # {lo, hi, mk, section, note, ns}
     core_clicked = Signal(str)   # core name of the clicked core row
     # Core-Pair chart footer → open heatmap/chord focused on (from, to, bounce_only)
@@ -68957,6 +68980,23 @@ class _StatsPanel(QWidget):
                 cat_badge, 0,
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self._section_category_badges[section_id] = cat_badge
+        help_text = (STATS_SECTION_HELP.get(section_id) or "").strip()
+        if help_text:
+            help_icon = QLabel("ⓘ")
+            help_icon.setObjectName("stats_section_help_icon")
+            help_icon.setCursor(Qt.CursorShape.PointingHandCursor)
+            help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            help_icon.setToolTip(
+                qt_wrap_tooltip(f"Open in Statistics Reference — {help_text}"))
+            help_icon.setStyleSheet(
+                f"color:#888888; font-size:{ui_fs}; padding:0 3px;"
+                " background:transparent;")
+            help_filt = _StatsHelpIconClickFilter(self, section_id)
+            help_icon.installEventFilter(help_filt)
+            self._section_click_filters.append(help_filt)
+            row_lay.addWidget(
+                help_icon, 0,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         row_lay.addWidget(
             pin_slot, 0,
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -79895,6 +79935,285 @@ def _exec_centred(dlg, parent):
 # CPU Load Graph
 # ===========================================================================
 # ===========================================================================
+# stats_reference
+# ===========================================================================
+
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+    _HAVE_WEBENGINE = True
+except ImportError:  # pragma: no cover - environment without QtWebEngine
+    QWebEngineView = None  # type: ignore[assignment,misc]
+    _HAVE_WEBENGINE = False
+
+STATS_CATEGORY_LABELS = globals().get("STATS_CATEGORY_LABELS")
+STATS_PINNABLE_SECTIONS = globals().get("STATS_PINNABLE_SECTIONS")
+STATS_SECTION_CATEGORIES = globals().get("STATS_SECTION_CATEGORIES")
+STATS_SECTION_CATEGORY = globals().get("STATS_SECTION_CATEGORY")
+STATS_SECTION_TITLES = globals().get("STATS_SECTION_TITLES")
+
+HELP_FILENAME = "btf_viewer.hlp"
+
+
+def help_file_path() -> Optional[Path]:
+    """Resolve ``btf_viewer.hlp``.
+
+    Same two-tier lookup as the existing ``play_audio_clip.py`` helper in
+    demo_inapp.py: prefer the in-repo dev location, then fall back to
+    beside the actually-invoked script — the layout a standalone release
+    (just ``btf_viewer.py`` + ``btf_viewer.hlp`` copied elsewhere) has.
+    """
+    dev_candidate = Path(__file__).resolve().parents[1] / "builds" / HELP_FILENAME
+    if dev_candidate.is_file():
+        return dev_candidate
+    release_candidate = Path(sys.argv[0]).resolve().parent / HELP_FILENAME
+    return release_candidate if release_candidate.is_file() else None
+
+
+class StatsReferenceViewer(QDialog):
+    """Docs viewer: chrome bar, category-grouped TOC, embedded browser."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Statistics Reference")
+        self.setObjectName("stats_reference_viewer")
+        self.setSizeGripEnabled(True)
+        self.resize(1040, 760)
+
+        self._current_section: Optional[str] = None
+        self._history: List[str] = []
+        self._history_index: int = -1
+        self._doc_loaded = False
+        self._doc_html: Optional[str] = None
+        self._view: Optional["QWebEngineView"] = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._build_chrome())
+
+        body = QSplitter(Qt.Orientation.Horizontal)
+        body.setChildrenCollapsible(False)
+        body.addWidget(self._build_toc())
+        body.addWidget(self._build_content_pane())
+        body.setStretchFactor(0, 0)
+        body.setStretchFactor(1, 1)
+        outer.addWidget(body, 1)
+
+    # -- construction ----------------------------------------------------
+    def _build_chrome(self) -> QWidget:
+        chrome = QWidget()
+        chrome.setObjectName("stats_ref_chrome")
+        row = QHBoxLayout(chrome)
+        row.setContentsMargins(8, 6, 8, 6)
+        row.setSpacing(4)
+
+        self._back_btn = QToolButton()
+        self._back_btn.setText("←")
+        self._back_btn.setToolTip("Back")
+        self._back_btn.setAutoRaise(True)
+        self._back_btn.setEnabled(False)
+        self._back_btn.clicked.connect(self._go_back)
+        row.addWidget(self._back_btn)
+
+        self._fwd_btn = QToolButton()
+        self._fwd_btn.setText("→")
+        self._fwd_btn.setToolTip("Forward")
+        self._fwd_btn.setAutoRaise(True)
+        self._fwd_btn.setEnabled(False)
+        self._fwd_btn.clicked.connect(self._go_forward)
+        row.addWidget(self._fwd_btn)
+
+        self._breadcrumb = QLabel("Statistics Reference")
+        self._breadcrumb.setObjectName("stats_ref_breadcrumb")
+        self._breadcrumb.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        row.addWidget(self._breadcrumb, 1)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Search reference…")
+        self._search.setFixedWidth(190)
+        self._search.textChanged.connect(self._filter_toc)
+        row.addWidget(self._search)
+
+        open_ext_btn = QToolButton()
+        open_ext_btn.setText("↗")
+        open_ext_btn.setToolTip("Open in system browser")
+        open_ext_btn.setAutoRaise(True)
+        open_ext_btn.clicked.connect(self._open_in_system_browser)
+        row.addWidget(open_ext_btn)
+
+        close_btn = QToolButton()
+        close_btn.setText("✕")
+        close_btn.setToolTip("Close")
+        close_btn.setAutoRaise(True)
+        close_btn.clicked.connect(self.close)
+        row.addWidget(close_btn)
+
+        return chrome
+
+    def _build_toc(self) -> QWidget:
+        self._toc = QListWidget()
+        self._toc.setObjectName("stats_ref_toc")
+        self._toc.setMaximumWidth(260)
+        self._toc.setMinimumWidth(200)
+        self._toc.itemClicked.connect(self._on_toc_item_clicked)
+        self._populate_toc()
+        return self._toc
+
+    def _build_content_pane(self) -> QWidget:
+        if _HAVE_WEBENGINE:
+            self._view = QWebEngineView()
+            self._view.loadFinished.connect(self._on_load_finished)
+            return self._view
+        placeholder = QLabel(
+            "QtWebEngine is not available in this environment.\n"
+            "Use “Open in system browser” to view the reference.")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setWordWrap(True)
+        return placeholder
+
+    # -- TOC ---------------------------------------------------------------
+    def _populate_toc(self) -> None:
+        self._toc.clear()
+        for cat in STATS_SECTION_CATEGORIES:
+            label = STATS_CATEGORY_LABELS.get(cat, cat)
+            header = QListWidgetItem(label.upper())
+            header.setFlags(Qt.ItemFlag.NoItemFlags)
+            font = header.font()
+            font.setBold(True)
+            header.setFont(font)
+            self._toc.addItem(header)
+            for sid in STATS_PINNABLE_SECTIONS:
+                if STATS_SECTION_CATEGORY.get(sid) != cat:
+                    continue
+                title = STATS_SECTION_TITLES.get(sid, sid)
+                item = QListWidgetItem(f"    {title}")
+                item.setData(Qt.ItemDataRole.UserRole, sid)
+                self._toc.addItem(item)
+
+    def _filter_toc(self, text: str) -> None:
+        q = text.strip().lower()
+        for i in range(self._toc.count()):
+            item = self._toc.item(i)
+            sid = item.data(Qt.ItemDataRole.UserRole)
+            if sid is None:
+                continue  # category headers always visible
+            item.setHidden(bool(q) and q not in item.text().lower())
+
+    def _on_toc_item_clicked(self, item: QListWidgetItem) -> None:
+        sid = item.data(Qt.ItemDataRole.UserRole)
+        if sid:
+            self.open_section(sid)
+
+    # -- navigation ----------------------------------------------------
+    def open_section(self, section_id: str) -> None:
+        """Show the viewer, scrolled to *section_id* (its STATISTICS.md anchor)."""
+        # Truncate any forward history, then push — a normal browser-tab history model.
+        self._history = self._history[: self._history_index + 1] + [section_id]
+        self._history_index = len(self._history) - 1
+        self._navigate(section_id)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _navigate(self, section_id: str) -> None:
+        self._current_section = section_id
+        title = STATS_SECTION_TITLES.get(section_id, section_id)
+        cat = STATS_SECTION_CATEGORY.get(section_id)
+        cat_label = STATS_CATEGORY_LABELS.get(cat, cat) if cat else ""
+        crumb = " › ".join(
+            p for p in ("Statistics Reference", cat_label, title) if p)
+        self._breadcrumb.setText(crumb)
+
+        for i in range(self._toc.count()):
+            item = self._toc.item(i)
+            item.setSelected(item.data(Qt.ItemDataRole.UserRole) == section_id)
+
+        self._back_btn.setEnabled(self._history_index > 0)
+        self._fwd_btn.setEnabled(self._history_index < len(self._history) - 1)
+
+        if self._view is None:
+            return
+        if self._doc_html is None:
+            help_path = help_file_path()
+            if help_path is None:
+                self._breadcrumb.setText(f"{crumb}  (reference not built)")
+                return
+            self._doc_html = help_path.read_text(encoding="utf-8")
+        if self._doc_loaded:
+            self._scroll_to(section_id)
+        else:
+            self._view.setHtml(self._doc_html, QUrl("about:blank"))
+
+    def _on_load_finished(self, ok: bool) -> None:
+        self._doc_loaded = bool(ok)
+        if ok and self._current_section:
+            self._scroll_to(self._current_section)
+
+    def _scroll_to(self, section_id: str) -> None:
+        if self._view is None:
+            return
+        js = (
+            f"var el = document.getElementById('statistics-{section_id}');"
+            "if (el) el.scrollIntoView();"
+        )
+        self._view.page().runJavaScript(js)
+
+    def _go_back(self) -> None:
+        if self._history_index <= 0:
+            return
+        self._history_index -= 1
+        self._navigate(self._history[self._history_index])
+
+    def _go_forward(self) -> None:
+        if self._history_index >= len(self._history) - 1:
+            return
+        self._history_index += 1
+        self._navigate(self._history[self._history_index])
+
+    def _open_in_system_browser(self) -> None:
+        # btf_viewer.hlp is plain HTML but not a browser-registered extension
+        # (unlike .html) — write a scratch copy with the right extension so
+        # the OS file association actually opens a browser, not "no app".
+        if self._doc_html is None:
+            return
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".html", delete=False, encoding="utf-8")
+        try:
+            tmp.write(self._doc_html)
+        finally:
+            tmp.close()
+        url = QUrl.fromLocalFile(tmp.name)
+        if self._current_section:
+            url.setFragment(f"statistics-{self._current_section}")
+        QDesktopServices.openUrl(url)
+
+    # -- MainWindow's app-wide event filter (demo Esc/Space handling) crashes
+    # (SIGSEGV in PySide::typeName / getWrapperForQObject) when it intercepts
+    # a hover event from QWebEngineView's internal Qt Quick surface. That
+    # surface delivers its first hover event synchronously from *inside*
+    # QDialog.show()'s children-showing cascade (setVisible -> show_helper ->
+    # showChildren -> the QWebEngineView -> its internal QQuickWidget's own
+    # showEvent) — entirely before this dialog's own showEvent() ever runs,
+    # so removing the filter there (a QDialog.showEvent override, tried
+    # first) is already too late. Overriding show() itself, instead of
+    # showEvent(), removes the filter before super().show() starts that
+    # cascade. Trades away Esc/Space demo shortcuts while this viewer is
+    # open — harmless, since a demo isn't driven while reading docs.
+    def show(self) -> None:
+        app = QApplication.instance()
+        main_window = self.parent()
+        if app is not None and main_window is not None:
+            app.removeEventFilter(main_window)
+        super().show()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        app = QApplication.instance()
+        main_window = self.parent()
+        if app is not None and main_window is not None:
+            app.installEventFilter(main_window)
+        super().closeEvent(event)
+# ===========================================================================
 # MVVM
 # ===========================================================================
 
@@ -89540,6 +89859,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.task_clicked.connect(self._on_legend_task_clicked)
         self._stats_panel.segment_jump.connect(self._on_segment_jump)
         self._stats_panel.plot_point_clicked.connect(self._on_stats_plot_point_clicked)
+        self._stats_panel.stats_reference_requested.connect(self._open_stats_reference)
         self._stats_panel.explore_range_requested.connect(self._on_explore_range)
         self._stats_panel.core_clicked.connect(self._on_stats_core_clicked)
         self._stats_panel.open_pair_heatmap.connect(self._on_open_pair_heatmap)
@@ -89747,6 +90067,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # "Shift+/" are the same sequence, so only bind one to avoid an ambiguous
         # overload.)
         _sc_act.setShortcuts([QKeySequence("?"), QKeySequence("F1")])
+        hm.addAction("&Statistics Reference…", lambda: self._open_stats_reference(""))
         hm.addSeparator()
         hm.addAction("&About", self._on_about)
 
@@ -90005,6 +90326,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if btn is not None:
             btn.setText("Review details")
         self._sync_context_strip_visibility()
+
+    def _open_stats_reference(self, section_id: str = "") -> None:
+        """Open the in-app Statistics Reference viewer (section help icon,
+        or the Help menu with no *section_id* for general browsing)."""
+        viewer = getattr(self, "_stats_reference_viewer", None)
+        if viewer is None:
+            StatsReferenceViewer = globals().get("StatsReferenceViewer")
+            viewer = StatsReferenceViewer(self)
+            self._stats_reference_viewer = viewer
+        if section_id:
+            viewer.open_section(section_id)
+        else:
+            viewer.show()
+            viewer.raise_()
+            viewer.activateWindow()
 
     def _open_trace_quality_guidance(self) -> None:
         """Open WORKFLOWS.md#trace-quality (Web Open capture guidance)."""

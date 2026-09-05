@@ -3089,6 +3089,22 @@ class _StatsHeaderClickFilter(QObject):
         return False
 
 
+class _StatsHelpIconClickFilter(QObject):
+    """Open the Statistics Reference viewer when a section's help icon is clicked."""
+
+    def __init__(self, panel: "_StatsPanel", section_id: str) -> None:
+        super().__init__(panel)
+        self._panel = panel
+        self._section_id = section_id
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if (event.type() == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._panel.stats_reference_requested.emit(self._section_id)
+            return True
+        return False
+
+
 class _UtilScrollResizeFilter(QObject):
     """Keep util rows inside the scroll viewport when the panel is resized."""
 
@@ -11085,6 +11101,7 @@ class _StatsPanel(QWidget):
     task_clicked = Signal(str)   # merge key of the clicked task row
     segment_jump   = Signal(int)    # ns - scroll timeline to this timestamp
     plot_point_clicked = Signal(object, int, str)  # payload, mark_ns, note
+    stats_reference_requested = Signal(str)  # section_id — open Statistics Reference
     explore_range_requested = Signal(object)  # {lo, hi, mk, section, note, ns}
     core_clicked = Signal(str)   # core name of the clicked core row
     # Core-Pair chart footer → open heatmap/chord focused on (from, to, bounce_only)
@@ -13715,6 +13732,23 @@ class _StatsPanel(QWidget):
                 cat_badge, 0,
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self._section_category_badges[section_id] = cat_badge
+        help_text = (STATS_SECTION_HELP.get(section_id) or "").strip()
+        if help_text:
+            help_icon = QLabel("ⓘ")
+            help_icon.setObjectName("stats_section_help_icon")
+            help_icon.setCursor(Qt.CursorShape.PointingHandCursor)
+            help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            help_icon.setToolTip(
+                qt_wrap_tooltip(f"Open in Statistics Reference — {help_text}"))
+            help_icon.setStyleSheet(
+                f"color:#888888; font-size:{ui_fs}; padding:0 3px;"
+                " background:transparent;")
+            help_filt = _StatsHelpIconClickFilter(self, section_id)
+            help_icon.installEventFilter(help_filt)
+            self._section_click_filters.append(help_filt)
+            row_lay.addWidget(
+                help_icon, 0,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         row_lay.addWidget(
             pin_slot, 0,
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)

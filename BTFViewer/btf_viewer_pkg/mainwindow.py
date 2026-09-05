@@ -6159,6 +6159,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.task_clicked.connect(self._on_legend_task_clicked)
         self._stats_panel.segment_jump.connect(self._on_segment_jump)
         self._stats_panel.plot_point_clicked.connect(self._on_stats_plot_point_clicked)
+        self._stats_panel.stats_reference_requested.connect(self._open_stats_reference)
         self._stats_panel.explore_range_requested.connect(self._on_explore_range)
         self._stats_panel.core_clicked.connect(self._on_stats_core_clicked)
         self._stats_panel.open_pair_heatmap.connect(self._on_open_pair_heatmap)
@@ -6366,6 +6367,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # "Shift+/" are the same sequence, so only bind one to avoid an ambiguous
         # overload.)
         _sc_act.setShortcuts([QKeySequence("?"), QKeySequence("F1")])
+        hm.addAction("&Statistics Reference…", lambda: self._open_stats_reference(""))
         hm.addSeparator()
         hm.addAction("&About", self._on_about)
 
@@ -6624,6 +6626,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if btn is not None:
             btn.setText("Review details")
         self._sync_context_strip_visibility()
+
+    def _open_stats_reference(self, section_id: str = "") -> None:
+        """Open the in-app Statistics Reference viewer (section help icon,
+        or the Help menu with no *section_id* for general browsing)."""
+        viewer = getattr(self, "_stats_reference_viewer", None)
+        if viewer is None:
+            from .stats_reference import StatsReferenceViewer
+            viewer = StatsReferenceViewer(self)
+            self._stats_reference_viewer = viewer
+        if section_id:
+            viewer.open_section(section_id)
+        else:
+            viewer.show()
+            viewer.raise_()
+            viewer.activateWindow()
 
     def _open_trace_quality_guidance(self) -> None:
         """Open WORKFLOWS.md#trace-quality (Web Open capture guidance)."""
