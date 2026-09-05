@@ -11,6 +11,20 @@ export const STATS_SECTION_CATEGORIES = Object.freeze([
 ])
 
 /**
+ * Human labels for the investigation-category filter pills (also used by
+ * "Find section" category matches). Keep lockstep with StatisticsPanel.vue
+ * CATEGORY_META and btf_viewer_pkg/config.py STATS_CATEGORY_LABELS.
+ */
+export const STATS_CATEGORY_LABELS = Object.freeze({
+  OVERVIEW: 'Overview',
+  TRIAGE: 'Triage',
+  TIMING: 'Timing',
+  SCHED: 'Scheduling',
+  SYNC: 'Sync',
+  DETAIL: 'Detail',
+})
+
+/**
  * Section id → category label (exactly one primary category each).
  * Keep lockstep with btf_viewer_pkg/config.py STATS_SECTION_CATEGORY.
  */
@@ -216,6 +230,10 @@ export function statsSectionTitle(sectionId) {
 
 /**
  * Filter pinnable section ids whose title contains *query* (case-insensitive).
+ * A match against a category label (e.g. "Triage") is returned first, as a
+ * synthetic ``cat:<CATEGORY>`` id, so a caller can expand every section in
+ * that category instead of jumping to a single one. Keep lockstep with
+ * btf_viewer_pkg/config.py ``find_stats_sections``.
  * @param {string} query
  * @returns {{ id: string, title: string }[]}
  */
@@ -223,6 +241,15 @@ export function findStatsSections(query) {
   const q = String(query || '').trim().toLowerCase()
   if (!q) return []
   const out = []
+  for (const cat of STATS_SECTION_CATEGORIES) {
+    const label = STATS_CATEGORY_LABELS[cat] || cat
+    if (label.toLowerCase().includes(q)) {
+      const count = STATS_PINNABLE_SECTIONS.filter(
+        (sid) => STATS_SECTION_CATEGORY[sid] === cat,
+      ).length
+      if (count) out.push({ id: `cat:${cat}`, title: `${label} (all ${count})` })
+    }
+  }
   for (const id of STATS_PINNABLE_SECTIONS) {
     const title = statsSectionTitle(id)
     if (title.toLowerCase().includes(q) || id.toLowerCase().includes(q)) {

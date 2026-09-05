@@ -276,6 +276,14 @@ export function priorityInversionTime(trace, ep) {
   return medTotal - intervalsOverlapMeasure(medUnion, mergeIntervals(holdIv))
 }
 
+/** Annotation note for a Priority Inheritance table row jump. Lockstep with
+ *  btf_viewer_pkg/parser.py _format_priority_episode_note. */
+export function priorityEpisodeNote(trace, ep) {
+  const fmt = v => formatTime(v, trace.timeScale)
+  const kind = ep.inversionSuspect ? 'inversion' : (ep.inherited ? 'inheritance' : 'boost')
+  return `${ep.taskLabel} priority ${kind}: pri ${ep.basePri}→${ep.peakPri} at ${fmt(ep.startNs)}`
+}
+
 export function priorityStatsRows(trace, lo, hi) {
   if (!trace?.hasPriorityInstrumentation) return []
   const rows = []

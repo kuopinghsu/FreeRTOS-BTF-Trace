@@ -157,6 +157,7 @@
           class="tb-btn"
           :class="{ active: (modelValue.orientation || 'h') === 'h' }"
           title="Horizontal layout — time runs left → right"
+          data-demo-target="toolbar_horiz"
           @click="emit('update:modelValue', { ...modelValue, orientation: 'h' })"
         >
           <svg
@@ -177,6 +178,7 @@
           class="tb-btn"
           :class="{ active: (modelValue.orientation || 'h') === 'v' }"
           title="Vertical layout — time runs top → bottom"
+          data-demo-target="toolbar_vert"
           @click="emit('update:modelValue', { ...modelValue, orientation: 'v' })"
         >
           <svg

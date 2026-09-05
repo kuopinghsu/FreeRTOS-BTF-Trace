@@ -792,11 +792,27 @@ def stats_section_title(section_id: str) -> str:
 
 
 def find_stats_sections(query: str) -> List[Tuple[str, str]]:
-    """Return ``(id, title)`` pairs whose title/id contains *query*."""
+    """Return ``(id, title)`` pairs whose title/id contains *query*.
+
+    A match against an investigation-category label (e.g. "Triage") is
+    returned as a synthetic ``cat:<CATEGORY>`` id ahead of individual
+    section hits, so a caller can expand every section in that category
+    instead of jumping to a single one. Keep lockstep with web
+    statsPins.js ``findStatsSections``.
+    """
     q = str(query or "").strip().lower()
     if not q:
         return []
     out: List[Tuple[str, str]] = []
+    for cat in STATS_SECTION_CATEGORIES:
+        label = STATS_CATEGORY_LABELS.get(cat, cat)
+        if q in label.lower():
+            count = sum(
+                1 for sid in STATS_PINNABLE_SECTIONS
+                if STATS_SECTION_CATEGORY.get(sid) == cat
+            )
+            if count:
+                out.append((f"cat:{cat}", f"{label} (all {count})"))
     for sid in STATS_PINNABLE_SECTIONS:
         title = stats_section_title(sid)
         if q in title.lower() or q in sid.lower():

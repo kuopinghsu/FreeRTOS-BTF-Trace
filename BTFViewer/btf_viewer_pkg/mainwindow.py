@@ -8062,6 +8062,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 str(payload.get("name") or payload.get("tab") or "stats"))
         if op == "target":
             return self._demo_target(str(payload.get("name") or payload.get("target") or ""))
+        if op == "focus_widget":
+            w = self._demo_resolve_input_widget(
+                str(payload.get("target") or payload.get("name") or ""))
+            if w is not None:
+                w.setFocus(Qt.FocusReason.OtherFocusReason)
+            return {}
+        if op == "set_text":
+            w = self._demo_resolve_input_widget(
+                str(payload.get("target") or payload.get("name") or ""))
+            if w is not None:
+                w.setText(str(payload.get("text") or ""))
+            return {}
+        if op == "press_enter":
+            w = self._demo_resolve_input_widget(
+                str(payload.get("target") or payload.get("name") or ""))
+            if w is not None and hasattr(w, "returnPressed"):
+                w.returnPressed.emit()
+            return {}
         if op in ("view_mode", "view"):
             return self._demo_view_mode(
                 str(payload.get("mode") or payload.get("name") or "task"))
@@ -8241,6 +8259,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         p = bar.mapToGlobal(r.center())
         return {"x": int(p.x()), "y": int(p.y())}
 
+    def _demo_resolve_input_widget(self, name: str):
+        """Named input widgets reachable by ``<type>``/``<press>`` demo tags."""
+        key = (name or "").strip().lower()
+        if key in ("stats_find", "stats_section_find"):
+            return getattr(getattr(self, "_stats_panel", None), "_section_find", None)
+        return None
+
     def _demo_target(self, name: str) -> dict:
         key = (name or "").strip().lower()
         actions = {
@@ -8250,6 +8275,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "toolbar_fit": "_tb_fit_btn",
             "toolbar_1to1": "_act_zoom_1to1",
             "toolbar_open": "_tb_open_btn",
+            "toolbar_horiz": "_tb_horiz_btn",
+            "toolbar_vert": "_tb_vert_btn",
         }
         if key in actions:
             return self._demo_action_center(getattr(self, actions[key], None))
@@ -8266,7 +8293,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return self._demo_widget_screen_center(btn)
         tabs = {
             "stats_tab": _PANEL_TAB_STATS,
+            "marks_tab": _PANEL_TAB_MARKS,
             "find_tab": _PANEL_TAB_FIND,
+            "legend_tab": _PANEL_TAB_LEGEND,
             "ai_tab": _PANEL_TAB_AI,
         }
         if key in tabs:
@@ -8291,6 +8320,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "stats_health": headers.get("health") if isinstance(headers, dict) else None,
             "stats_tick_dist": getattr(panel, "_btn_tick_dist", None),
             "toolbar_limit": getattr(self, "_tb_limit_badge", None),
+            "stats_find": getattr(panel, "_section_find", None),
         }
         if key in widgets:
             return self._demo_widget_screen_center(widgets[key])

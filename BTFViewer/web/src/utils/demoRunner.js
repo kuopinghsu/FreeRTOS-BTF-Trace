@@ -30,7 +30,7 @@ export class DemoSkip extends Error {
 }
 
 const SKIP_TAGS = new Set([
-  'hotkey', 'type', 'focus', 'voice', 'note', 'comment', 'log', 'title',
+  'hotkey', 'focus', 'voice', 'note', 'comment', 'log', 'title',
 ])
 
 export function shouldSkipStep(step, { skipOptional = false, skipTags = [] } = {}) {
@@ -445,6 +445,27 @@ export function createDemoRunner(host, pack, options = {}) {
     if (tag === 'press') {
       const key = attr(el, 'key', vars).toLowerCase()
       if (key === 'esc' || key === 'escape') await host.pressEscape?.()
+      else if (key === 'enter' || key === 'return') {
+        await host.pressEnter?.(attr(el, 'target', vars))
+      }
+      return
+    }
+    if (tag === 'type') {
+      // Human-paced typing into a named input target (e.g. the Statistics
+      // "Find section" box) so its live-filter/popup reacts one keystroke
+      // at a time, like a real user typing.
+      const target = attr(el, 'target', vars)
+      const fullText = attr(el, 'text', vars, elementText(el))
+      const delay = Number(el.attrib.delay ?? 0.1)
+      if (!fullText) return
+      if (target) await host.focusTarget?.(target)
+      let typed = ''
+      for (const ch of fullText) {
+        check()
+        typed += ch
+        await host.typeText?.({ target, text: typed })
+        if (delay) await waitMs(delay * 1000)
+      }
       return
     }
     if (tag === 'confirm') {
@@ -568,7 +589,11 @@ export function createDemoRunner(host, pack, options = {}) {
       return
     }
     if (tag === 'zoom_in') {
-      await host.zoomIn?.()
+      const times = Math.max(1, Number(el.attrib.times ?? 1))
+      for (let i = 0; i < times; i++) {
+        check()
+        await host.zoomIn?.()
+      }
       return
     }
     if (tag === 'zoom_out') {

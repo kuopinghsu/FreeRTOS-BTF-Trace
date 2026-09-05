@@ -97,12 +97,14 @@
       </button>
       <div class="stats-section-find">
         <input
+          ref="sectionFindInputRef"
           v-model="sectionFindQuery"
           type="search"
           class="stats-section-find-input"
           placeholder="Find section…"
           aria-label="Find statistics section"
           autocomplete="off"
+          data-demo-target="stats_find"
           @keydown="onSectionFindKeydown"
         >
         <ul
@@ -115,7 +117,7 @@
             :key="hit.id"
             role="option"
             class="stats-section-find-item"
-            :class="{ active: idx === sectionFindActive }"
+            :class="{ active: idx === sectionFindActive, 'is-category': hit.id.startsWith('cat:') }"
             :aria-selected="idx === sectionFindActive"
             @mousedown.prevent="goToStatsSection(hit.id)"
             @mouseenter="sectionFindActive = idx"
@@ -3086,7 +3088,11 @@
                   <td class="task-col">{{ row.label }}</td>
                   <td>{{ row.basePri }}</td>
                   <td>{{ row.peakPri }}</td>
-                  <td>{{ row.episodeCount }}</td>
+                  <td
+                    class="extreme-col"
+                    :title="`Click to view boost duration distribution for ${row.label}`"
+                    @click.stop="onPriorityBoostsClick(row)"
+                  >{{ row.episodeCount }}</td>
                   <td>{{ row.total }}</td>
                   <td>{{ row.invertWorst }}</td>
                   <td>{{ row.invertTotal }}</td>
@@ -5005,7 +5011,7 @@ import {
   formatTagValue,
   tagSampleDetailRows,
 } from '../utils/tagAnalysis.js'
-import { priorityStatsRows, priorityEpisodePlotPoints, priorityEpisodeDetailRows, BOOST_BAND_COLOR, INVERSION_BAND_COLOR } from '../utils/priorityAnalysis.js'
+import { priorityStatsRows, priorityEpisodePlotPoints, priorityEpisodeDetailRows, priorityEpisodeNote, BOOST_BAND_COLOR, INVERSION_BAND_COLOR } from '../utils/priorityAnalysis.js'
 import {
   syncObjectStatsRows,
   syncObjectIssueRows,
@@ -5090,7 +5096,7 @@ import LoadBalanceGauge from './LoadBalanceGauge.vue'
 import StatsSectionHeader from './StatsSectionHeader.vue'
 import StatsSectionBlock from './StatsSectionBlock.vue'
 import StatsEmptyHint from './StatsEmptyHint.vue'
-import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggleStatsPin, isDefaultStatsSectionOrder, defaultStatsSectionOrder, mergeSectionCollapsed, STATS_SECTION_CATEGORIES, STATS_SECTION_CATEGORY, findStatsSections } from '../utils/statsPins.js'
+import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggleStatsPin, isDefaultStatsSectionOrder, defaultStatsSectionOrder, mergeSectionCollapsed, STATS_SECTION_CATEGORIES, STATS_SECTION_CATEGORY, STATS_PINNABLE_SECTIONS, findStatsSections } from '../utils/statsPins.js'
 import { buildHistogramModel, histogramBarTooltip } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
@@ -5451,9 +5457,23 @@ async function applyDemoSections(payload = {}) {
   return { ids, expand, collapse_others: collapseOthers, scroll }
 }
 
+const sectionFindInputRef = ref(null)
 const sectionFindQuery = ref('')
 const sectionFindMatches = computed(() => findStatsSections(sectionFindQuery.value).slice(0, 12))
 const sectionFindActive = ref(0)
+
+/** Demo-driven typing (host.typeText): set the query as if the user typed it. */
+function setFindQuery(text) {
+  sectionFindQuery.value = String(text ?? '')
+}
+/** Demo-driven focus (host.focusTarget): move real DOM focus to the input. */
+function focusFind() {
+  sectionFindInputRef.value?.focus?.()
+}
+/** Demo-driven Enter (host.pressEnter): pick the active/first match. */
+function pressFindEnter() {
+  onSectionFindEnter()
+}
 
 watch(sectionFindMatches, (hits) => {
   sectionFindActive.value = hits.length ? 0 : -1
@@ -5464,11 +5484,29 @@ function clearSectionFind() {
   sectionFindActive.value = -1
 }
 
+function goToStatsCategory(cat) {
+  // Lockstep Desktop scroll_to_category: expand every section in the
+  // category (un-hiding it first if a pill filter hid it), pin the first
+  // one to the top of the viewport.
+  const ids = STATS_PINNABLE_SECTIONS.filter((sid) => STATS_SECTION_CATEGORY[sid] === cat)
+  if (!ids.length) return
+  if (statsHiddenCategories.value.has(cat)) {
+    const next = new Set(statsHiddenCategories.value)
+    next.delete(cat)
+    statsHiddenCategories.value = next
+  }
+  applyDemoSections({ id: ids.join(','), expand: true, scroll: ids[0], collapse_others: false })
+}
+
 function goToStatsSection(sid) {
   // Lockstep Desktop scroll_to_section: expand, settle, pin header to top.
   const id = String(sid || '').trim()
   if (!id) return
   clearSectionFind()
+  if (id.startsWith('cat:')) {
+    goToStatsCategory(id.slice(4))
+    return
+  }
   applyDemoSections({ id, expand: true, scroll: id, collapse_others: false })
 }
 
@@ -7090,12 +7128,28 @@ function onDeadlineSliceClick(v) {
 }
 
 function priorityRowTitle(row) {
-  return `Open boost duration plot for ${row.label}`
+  return `Jump to first occurrence for ${row.label}`
 }
 
 function onPriorityRowClick(row) {
-  openPriorityPlot(row.mk)
-  emit('highlightTask', row.mk)
+  const episodes = props.trace?.priorityEpisodesByMk?.get(row.mk) || []
+  if (!episodes.length) return
+  const ep = episodes.reduce((a, b) => (b.startNs < a.startNs ? b : a))
+  emit('plotPointActivate', {
+    ns: ep.startNs,
+    note: priorityEpisodeNote(props.trace, ep),
+    priorityRange: { startNs: ep.startNs, stopNs: ep.stopNs, mk: ep.mk },
+  })
+}
+
+/** Boosts-count cell: secondary action, opens the duration distribution
+ *  histogram for this task (web parity: desktop's `_boosts_col`). */
+function onPriorityBoostsClick(row) {
+  const range = statsRange.value
+  const plot = _buildPriorityPlot(props.trace, row.mk, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { mk: row.mk, kind: 'priority' }
+  selectedPlotPoint.value = -1
 }
 
 function activateExtremeSegment(mk, kind, seg, findMax) {
@@ -7967,14 +8021,6 @@ function openTagPlot(channel) {
   const plot = _buildTagPlot(props.trace, channel, range)
   if (!plot || plot.points.length === 0) return
   openPlotRef.value = { tagChannel: channel, kind: 'tag' }
-  selectedPlotPoint.value = -1
-}
-
-function openPriorityPlot(mk) {
-  const range = statsRange.value
-  const plot = _buildPriorityPlot(props.trace, mk, range)
-  if (!plot || plot.points.length === 0) return
-  openPlotRef.value = { mk, kind: 'priority' }
   selectedPlotPoint.value = -1
 }
 
@@ -9538,6 +9584,9 @@ defineExpose({
   collapseAllSections,
   openTickDistPlot,
   closePlot,
+  setFindQuery,
+  focusFind,
+  pressFindEnter,
 })
 </script>
 
@@ -9713,6 +9762,10 @@ defineExpose({
 .stats-section-find-item:hover,
 .stats-section-find-item.active {
   background: var(--tb-btn-hover, rgba(255, 255, 255, 0.08));
+}
+
+.stats-section-find-item.is-category {
+  font-weight: 600;
 }
 
 .stats-icon-btn {

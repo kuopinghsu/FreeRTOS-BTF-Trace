@@ -5,3 +5,5 @@ Start with the full timeline and Statistics. Read the verdict and Analysis Findi
 Use AI after the evidence is visible. Follow its jump:TIME links, check the same events in Statistics and on the timeline, and treat unsupported or out-of-scope claims as unverified.
 
 The workflow stays the same from beginning to end: find the evidence, narrow the scope, investigate the cause, verify it against the trace, test a change, and compare a new measurement.
+
+Open demo folder yourself in BTFViewer, and walk through every step at your own pace.

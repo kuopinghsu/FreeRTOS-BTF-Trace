@@ -29,7 +29,7 @@ from .parser import is_btf_open_path
 
 _VAR_RE = re.compile(r"\$\{([A-Za-z0-9_./-]+)\}")
 SKIP_TAGS = frozenset({
-    "hotkey", "type", "focus", "voice", "note", "comment", "log", "title",
+    "hotkey", "focus", "voice", "note", "comment", "log", "title",
 })
 _LANG_RE = re.compile(r"^[a-z]{2}(?:-[a-z0-9]+)?$", re.I)
 _AUDIO_RE = re.compile(r"\.(mp3|wav|m4a|ogg|flac|aac|aiff|aif)$", re.I)
@@ -1424,6 +1424,31 @@ class InAppDemoRunner:
             key = self._attr(el, "key").lower()
             if key in ("esc", "escape") and self._press_escape:
                 self.gui(self._press_escape)
+            elif key in ("enter", "return"):
+                target = self._attr(el, "target").strip()
+                self._api({"op": "press_enter", "target": target}, settle=0.4)
+            return
+        if tag == "type":
+            # Human-paced typing into a named input target (e.g. the
+            # Statistics "Find section" box) so its live-filter/popup
+            # reacts one keystroke at a time, like a real user typing.
+            target = self._attr(el, "target").strip()
+            full_text = self._attr(el, "text", text_content(el))
+            try:
+                delay = float(self._attr(el, "delay", "0.1"))
+            except ValueError:
+                delay = 0.1
+            if not full_text:
+                return
+            if target:
+                self._api({"op": "focus_widget", "target": target}, settle=0.0)
+            typed = ""
+            for ch in full_text:
+                self._check()
+                typed += ch
+                self._api({"op": "set_text", "target": target, "text": typed}, settle=0.0)
+                if delay:
+                    self._wait_interruptible(delay)
             return
         if tag == "confirm":
             prompt = expand_vars(el.attrib.get("prompt", "") or text_content(el), self._vars)
@@ -1556,7 +1581,10 @@ class InAppDemoRunner:
             self._api({"op": "zoom_1to1"}, settle=0.4)
             return
         if tag == "zoom_in":
-            self._api({"op": "zoom_in"}, settle=0.4)
+            times = max(1, int(float(self._attr(el, "times", "1"))))
+            for _ in range(times):
+                self._check()
+                self._api({"op": "zoom_in"}, settle=0.4)
             return
         if tag == "zoom_out":
             self._api({"op": "zoom_out"}, settle=0.4)

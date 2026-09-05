@@ -834,6 +834,7 @@
           <button
             v-if="appSettings.showMarks"
             class="rail-btn"
+            data-demo-target="marks_tab"
             :class="{ active: rightPanelTab === 'marks' }"
             role="tab"
             :aria-selected="rightPanelTab === 'marks'"
@@ -859,6 +860,7 @@
           <button
             v-if="appSettings.showLegend"
             class="rail-btn"
+            data-demo-target="legend_tab"
             :class="{ active: rightPanelTab === 'legend' }"
             role="tab"
             :aria-selected="rightPanelTab === 'legend'"
@@ -2451,6 +2453,27 @@ function demoHost() {
         collapse_others: true,
         scroll: 'top',
       })
+    },
+    focusTarget: async (target) => {
+      const key = String(target || '').trim().toLowerCase()
+      if (key === 'stats_find' || key === 'stats_section_find') {
+        const panel = await demoEnsureStatsPanel()
+        panel?.focusFind?.()
+      }
+    },
+    typeText: async ({ target, text } = {}) => {
+      const key = String(target || '').trim().toLowerCase()
+      if (key === 'stats_find' || key === 'stats_section_find') {
+        const panel = await demoEnsureStatsPanel()
+        panel?.setFindQuery?.(text)
+      }
+    },
+    pressEnter: async (target) => {
+      const key = String(target || '').trim().toLowerCase()
+      if (key === 'stats_find' || key === 'stats_section_find') {
+        const panel = await demoEnsureStatsPanel()
+        panel?.pressFindEnter?.()
+      }
     },
     tickDist: async ({ close } = {}) => {
       const panel = await demoEnsureStatsPanel()

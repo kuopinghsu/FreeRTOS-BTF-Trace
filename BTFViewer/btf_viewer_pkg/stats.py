@@ -12600,7 +12600,10 @@ class _StatsPanel(QWidget):
             find.blockSignals(True)
             find.clear()
             find.blockSignals(False)
-        self.scroll_to_section(sid)
+        if sid.startswith("cat:"):
+            self.scroll_to_category(sid[4:])
+        else:
+            self.scroll_to_section(sid)
         # Belt-and-suspenders: hide again after layout/scroll settles.
         QTimer.singleShot(0, self._hide_section_find_popup)
 
@@ -13137,8 +13140,19 @@ class _StatsPanel(QWidget):
     def _open_tag_plot(self, trace: "BtfTrace", channel: str) -> None:
         self._open_plot(trace, channel, "tag")
 
-    def _open_priority_plot(self, trace: "BtfTrace", mk: str) -> None:
-        self._open_plot(trace, mk, "priority")
+    def _activate_priority_episode(self, trace: "BtfTrace",
+                                   ep: Optional["PriorityEpisode"]) -> None:
+        if ep is None:
+            return
+        note = _format_priority_episode_note(trace, ep)
+        self.plot_point_clicked.emit(ep, ep.start_ns, note)
+
+    def _on_priority_click(self, trace: "BtfTrace", mk: str) -> None:
+        """Priority Inheritance row click: jump to its first occurrence."""
+        episodes = trace.priority_episodes_by_mk.get(mk, [])
+        if not episodes:
+            return
+        self._activate_priority_episode(trace, min(episodes, key=lambda e: e.start_ns))
 
     def _open_tick_dist_plot(self, trace: "BtfTrace") -> None:
         """Open a tick-interval distribution scatter+histogram plot."""
@@ -15113,6 +15127,37 @@ class _StatsPanel(QWidget):
             elif app is not None:
                 app.processEvents()
             self.scroll_section_into_view(sid, prefer_top=True)
+
+    def scroll_to_category(self, category: str) -> None:
+        """Expand every section in *category* and scroll to the first one.
+
+        Web parity: ``goToStatsSection('cat:<CAT>')`` in StatisticsPanel.vue —
+        reached from the "Find section" box matching a category label
+        (e.g. "Tri" -> "Triage").
+        """
+        cat = str(category or "").strip().upper()
+        ids = [
+            sid for sid in STATS_PINNABLE_SECTIONS
+            if STATS_SECTION_CATEGORY.get(sid) == cat
+        ]
+        if not ids:
+            return
+        hidden = getattr(self, "_stats_hidden_categories", None)
+        if hidden is not None and cat in hidden:
+            hidden.discard(cat)
+            pill = getattr(self, "_cat_pills", {}).get(cat)
+            if pill is not None:
+                pill.blockSignals(True)
+                pill.setChecked(True)
+                pill.blockSignals(False)
+            self._apply_category_filter()
+            self._sync_category_pills()
+        for sid in ids:
+            self._section_collapsed[sid] = False
+            self._ensure_section_body(sid)
+            self._update_section_header_icon(sid)
+        self._notify_section_collapsed()
+        self.scroll_to_section(ids[0])
 
     def set_active_filter_label(self, label: Optional[str]) -> None:
         """Step-1 item 6: show the active Filter next to the Statistics Scope."""
@@ -19138,6 +19183,8 @@ class _StatsPanel(QWidget):
                     table.horizontalHeader().setSortIndicatorShown(True)
                     self._apply_stats_table_theme(table, _fs)
                     _item_bg = QBrush(self._stats_table_colors()[0])
+                    _link_color = QBrush(QColor("#88AAFF"))
+                    _boosts_col = 3
                     _priority_align = [
                         Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignRight,
                         Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
@@ -19161,18 +19208,30 @@ class _StatsPanel(QWidget):
                             item.setTextAlignment(_priority_align[ci] | Qt.AlignmentFlag.AlignVCenter)
                             if ci == 0:
                                 item.setData(Qt.ItemDataRole.UserRole, mk)
+                                item.setToolTip(
+                                    f"Click to jump to the first priority "
+                                    f"boost for {label}")
+                            if ci == _boosts_col:
+                                item.setForeground(_link_color)
+                                item.setToolTip(
+                                    f"Click to view boost duration "
+                                    f"distribution for {label}")
                             if ci == 7 and "L/M/H" in pattern:
                                 item.setForeground(QBrush(QColor("#E74C3C")))
                             table.setItem(ri, ci, item)
                     table.setSortingEnabled(True)
 
-                    def _on_priority_row_clicked(row: int, _col: int) -> None:
+                    def _on_priority_row_clicked(row: int, col: int) -> None:
                         item = table.item(row, 0)
                         if item is None:
                             return
                         mk = item.data(Qt.ItemDataRole.UserRole)
-                        if mk:
-                            self._open_priority_plot(trace, mk)
+                        if not mk:
+                            return
+                        if col == _boosts_col:
+                            self._open_plot(trace, mk, "priority")
+                        else:
+                            self._on_priority_click(trace, mk)
 
                     table.cellClicked.connect(_on_priority_row_clicked)
                     self._wire_stats_table_click_cursor(table)

@@ -2534,6 +2534,14 @@ def _format_extreme_segment_note(
         return f"{name} {label} inter-arrival: {gap_s} at {fmt(seg.start)}"
     return f"{name} at {fmt(seg.start)}"
 
+
+def _format_priority_episode_note(trace: "BtfTrace", ep: "PriorityEpisode") -> str:
+    """Annotation note for a Priority Inheritance table row jump."""
+    fmt = lambda v: _format_time(v, trace.time_scale)
+    kind = "inversion" if ep.inversion_suspect else ("inheritance" if ep.inherited else "boost")
+    return (f"{ep.task_label} priority {kind}: pri {ep.base_pri}→{ep.peak_pri} "
+            f"at {fmt(ep.start_ns)}")
+
 @dataclass
 class TraceBookmark:
     """User bookmark pinned to a timeline timestamp."""

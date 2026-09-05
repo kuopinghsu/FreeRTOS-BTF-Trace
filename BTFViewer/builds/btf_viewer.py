@@ -1012,11 +1012,27 @@ def stats_section_title(section_id: str) -> str:
 
 
 def find_stats_sections(query: str) -> List[Tuple[str, str]]:
-    """Return ``(id, title)`` pairs whose title/id contains *query*."""
+    """Return ``(id, title)`` pairs whose title/id contains *query*.
+
+    A match against an investigation-category label (e.g. "Triage") is
+    returned as a synthetic ``cat:<CATEGORY>`` id ahead of individual
+    section hits, so a caller can expand every section in that category
+    instead of jumping to a single one. Keep lockstep with web
+    statsPins.js ``findStatsSections``.
+    """
     q = str(query or "").strip().lower()
     if not q:
         return []
     out: List[Tuple[str, str]] = []
+    for cat in STATS_SECTION_CATEGORIES:
+        label = STATS_CATEGORY_LABELS.get(cat, cat)
+        if q in label.lower():
+            count = sum(
+                1 for sid in STATS_PINNABLE_SECTIONS
+                if STATS_SECTION_CATEGORY.get(sid) == cat
+            )
+            if count:
+                out.append((f"cat:{cat}", f"{label} (all {count})"))
     for sid in STATS_PINNABLE_SECTIONS:
         title = stats_section_title(sid)
         if q in title.lower() or q in sid.lower():
@@ -6480,6 +6496,14 @@ def _format_extreme_segment_note(
     if kind == "inter":
         return f"{name} {label} inter-arrival: {gap_s} at {fmt(seg.start)}"
     return f"{name} at {fmt(seg.start)}"
+
+
+def _format_priority_episode_note(trace: "BtfTrace", ep: "PriorityEpisode") -> str:
+    """Annotation note for a Priority Inheritance table row jump."""
+    fmt = lambda v: _format_time(v, trace.time_scale)
+    kind = "inversion" if ep.inversion_suspect else ("inheritance" if ep.inherited else "boost")
+    return (f"{ep.task_label} priority {kind}: pri {ep.base_pri}→{ep.peak_pri} "
+            f"at {fmt(ep.start_ns)}")
 
 @dataclass
 class TraceBookmark:
@@ -67820,7 +67844,10 @@ class _StatsPanel(QWidget):
             find.blockSignals(True)
             find.clear()
             find.blockSignals(False)
-        self.scroll_to_section(sid)
+        if sid.startswith("cat:"):
+            self.scroll_to_category(sid[4:])
+        else:
+            self.scroll_to_section(sid)
         # Belt-and-suspenders: hide again after layout/scroll settles.
         QTimer.singleShot(0, self._hide_section_find_popup)
 
@@ -68355,8 +68382,19 @@ class _StatsPanel(QWidget):
     def _open_tag_plot(self, trace: "BtfTrace", channel: str) -> None:
         self._open_plot(trace, channel, "tag")
 
-    def _open_priority_plot(self, trace: "BtfTrace", mk: str) -> None:
-        self._open_plot(trace, mk, "priority")
+    def _activate_priority_episode(self, trace: "BtfTrace",
+                                   ep: Optional["PriorityEpisode"]) -> None:
+        if ep is None:
+            return
+        note = _format_priority_episode_note(trace, ep)
+        self.plot_point_clicked.emit(ep, ep.start_ns, note)
+
+    def _on_priority_click(self, trace: "BtfTrace", mk: str) -> None:
+        """Priority Inheritance row click: jump to its first occurrence."""
+        episodes = trace.priority_episodes_by_mk.get(mk, [])
+        if not episodes:
+            return
+        self._activate_priority_episode(trace, min(episodes, key=lambda e: e.start_ns))
 
     def _open_tick_dist_plot(self, trace: "BtfTrace") -> None:
         """Open a tick-interval distribution scatter+histogram plot."""
@@ -70331,6 +70369,37 @@ class _StatsPanel(QWidget):
             elif app is not None:
                 app.processEvents()
             self.scroll_section_into_view(sid, prefer_top=True)
+
+    def scroll_to_category(self, category: str) -> None:
+        """Expand every section in *category* and scroll to the first one.
+
+        Web parity: ``goToStatsSection('cat:<CAT>')`` in StatisticsPanel.vue —
+        reached from the "Find section" box matching a category label
+        (e.g. "Tri" -> "Triage").
+        """
+        cat = str(category or "").strip().upper()
+        ids = [
+            sid for sid in STATS_PINNABLE_SECTIONS
+            if STATS_SECTION_CATEGORY.get(sid) == cat
+        ]
+        if not ids:
+            return
+        hidden = getattr(self, "_stats_hidden_categories", None)
+        if hidden is not None and cat in hidden:
+            hidden.discard(cat)
+            pill = getattr(self, "_cat_pills", {}).get(cat)
+            if pill is not None:
+                pill.blockSignals(True)
+                pill.setChecked(True)
+                pill.blockSignals(False)
+            self._apply_category_filter()
+            self._sync_category_pills()
+        for sid in ids:
+            self._section_collapsed[sid] = False
+            self._ensure_section_body(sid)
+            self._update_section_header_icon(sid)
+        self._notify_section_collapsed()
+        self.scroll_to_section(ids[0])
 
     def set_active_filter_label(self, label: Optional[str]) -> None:
         """Step-1 item 6: show the active Filter next to the Statistics Scope."""
@@ -74356,6 +74425,8 @@ class _StatsPanel(QWidget):
                     table.horizontalHeader().setSortIndicatorShown(True)
                     self._apply_stats_table_theme(table, _fs)
                     _item_bg = QBrush(self._stats_table_colors()[0])
+                    _link_color = QBrush(QColor("#88AAFF"))
+                    _boosts_col = 3
                     _priority_align = [
                         Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignRight,
                         Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
@@ -74379,18 +74450,30 @@ class _StatsPanel(QWidget):
                             item.setTextAlignment(_priority_align[ci] | Qt.AlignmentFlag.AlignVCenter)
                             if ci == 0:
                                 item.setData(Qt.ItemDataRole.UserRole, mk)
+                                item.setToolTip(
+                                    f"Click to jump to the first priority "
+                                    f"boost for {label}")
+                            if ci == _boosts_col:
+                                item.setForeground(_link_color)
+                                item.setToolTip(
+                                    f"Click to view boost duration "
+                                    f"distribution for {label}")
                             if ci == 7 and "L/M/H" in pattern:
                                 item.setForeground(QBrush(QColor("#E74C3C")))
                             table.setItem(ri, ci, item)
                     table.setSortingEnabled(True)
 
-                    def _on_priority_row_clicked(row: int, _col: int) -> None:
+                    def _on_priority_row_clicked(row: int, col: int) -> None:
                         item = table.item(row, 0)
                         if item is None:
                             return
                         mk = item.data(Qt.ItemDataRole.UserRole)
-                        if mk:
-                            self._open_priority_plot(trace, mk)
+                        if not mk:
+                            return
+                        if col == _boosts_col:
+                            self._open_plot(trace, mk, "priority")
+                        else:
+                            self._on_priority_click(trace, mk)
 
                     table.cellClicked.connect(_on_priority_row_clicked)
                     self._wire_stats_table_click_cursor(table)
@@ -81759,7 +81842,7 @@ def start_demo_api(
 
 _VAR_RE = re.compile(r"\$\{([A-Za-z0-9_./-]+)\}")
 SKIP_TAGS = frozenset({
-    "hotkey", "type", "focus", "voice", "note", "comment", "log", "title",
+    "hotkey", "focus", "voice", "note", "comment", "log", "title",
 })
 _LANG_RE = re.compile(r"^[a-z]{2}(?:-[a-z0-9]+)?$", re.I)
 _AUDIO_RE = re.compile(r"\.(mp3|wav|m4a|ogg|flac|aac|aiff|aif)$", re.I)
@@ -83154,6 +83237,31 @@ class InAppDemoRunner:
             key = self._attr(el, "key").lower()
             if key in ("esc", "escape") and self._press_escape:
                 self.gui(self._press_escape)
+            elif key in ("enter", "return"):
+                target = self._attr(el, "target").strip()
+                self._api({"op": "press_enter", "target": target}, settle=0.4)
+            return
+        if tag == "type":
+            # Human-paced typing into a named input target (e.g. the
+            # Statistics "Find section" box) so its live-filter/popup
+            # reacts one keystroke at a time, like a real user typing.
+            target = self._attr(el, "target").strip()
+            full_text = self._attr(el, "text", text_content(el))
+            try:
+                delay = float(self._attr(el, "delay", "0.1"))
+            except ValueError:
+                delay = 0.1
+            if not full_text:
+                return
+            if target:
+                self._api({"op": "focus_widget", "target": target}, settle=0.0)
+            typed = ""
+            for ch in full_text:
+                self._check()
+                typed += ch
+                self._api({"op": "set_text", "target": target, "text": typed}, settle=0.0)
+                if delay:
+                    self._wait_interruptible(delay)
             return
         if tag == "confirm":
             prompt = expand_vars(el.attrib.get("prompt", "") or text_content(el), self._vars)
@@ -83286,7 +83394,10 @@ class InAppDemoRunner:
             self._api({"op": "zoom_1to1"}, settle=0.4)
             return
         if tag == "zoom_in":
-            self._api({"op": "zoom_in"}, settle=0.4)
+            times = max(1, int(float(self._attr(el, "times", "1"))))
+            for _ in range(times):
+                self._check()
+                self._api({"op": "zoom_in"}, settle=0.4)
             return
         if tag == "zoom_out":
             self._api({"op": "zoom_out"}, settle=0.4)
@@ -91330,6 +91441,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 str(payload.get("name") or payload.get("tab") or "stats"))
         if op == "target":
             return self._demo_target(str(payload.get("name") or payload.get("target") or ""))
+        if op == "focus_widget":
+            w = self._demo_resolve_input_widget(
+                str(payload.get("target") or payload.get("name") or ""))
+            if w is not None:
+                w.setFocus(Qt.FocusReason.OtherFocusReason)
+            return {}
+        if op == "set_text":
+            w = self._demo_resolve_input_widget(
+                str(payload.get("target") or payload.get("name") or ""))
+            if w is not None:
+                w.setText(str(payload.get("text") or ""))
+            return {}
+        if op == "press_enter":
+            w = self._demo_resolve_input_widget(
+                str(payload.get("target") or payload.get("name") or ""))
+            if w is not None and hasattr(w, "returnPressed"):
+                w.returnPressed.emit()
+            return {}
         if op in ("view_mode", "view"):
             return self._demo_view_mode(
                 str(payload.get("mode") or payload.get("name") or "task"))
@@ -91509,6 +91638,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         p = bar.mapToGlobal(r.center())
         return {"x": int(p.x()), "y": int(p.y())}
 
+    def _demo_resolve_input_widget(self, name: str):
+        """Named input widgets reachable by ``<type>``/``<press>`` demo tags."""
+        key = (name or "").strip().lower()
+        if key in ("stats_find", "stats_section_find"):
+            return getattr(getattr(self, "_stats_panel", None), "_section_find", None)
+        return None
+
     def _demo_target(self, name: str) -> dict:
         key = (name or "").strip().lower()
         actions = {
@@ -91518,6 +91654,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "toolbar_fit": "_tb_fit_btn",
             "toolbar_1to1": "_act_zoom_1to1",
             "toolbar_open": "_tb_open_btn",
+            "toolbar_horiz": "_tb_horiz_btn",
+            "toolbar_vert": "_tb_vert_btn",
         }
         if key in actions:
             return self._demo_action_center(getattr(self, actions[key], None))
@@ -91534,7 +91672,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return self._demo_widget_screen_center(btn)
         tabs = {
             "stats_tab": _PANEL_TAB_STATS,
+            "marks_tab": _PANEL_TAB_MARKS,
             "find_tab": _PANEL_TAB_FIND,
+            "legend_tab": _PANEL_TAB_LEGEND,
             "ai_tab": _PANEL_TAB_AI,
         }
         if key in tabs:
@@ -91559,6 +91699,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "stats_health": headers.get("health") if isinstance(headers, dict) else None,
             "stats_tick_dist": getattr(panel, "_btn_tick_dist", None),
             "toolbar_limit": getattr(self, "_tb_limit_badge", None),
+            "stats_find": getattr(panel, "_section_find", None),
         }
         if key in widgets:
             return self._demo_widget_screen_center(widgets[key])
