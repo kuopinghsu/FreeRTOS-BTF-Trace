@@ -18,10 +18,12 @@ Web parity: web/src/components/StatsReferenceViewer.vue.
 """
 from __future__ import annotations
 
+import json
+import re
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import QUrl, Qt
 from PySide6.QtGui import QDesktopServices
@@ -42,10 +44,28 @@ from .config import (
     STATS_PINNABLE_SECTIONS,
     STATS_SECTION_CATEGORIES,
     STATS_SECTION_CATEGORY,
+    STATS_SECTION_HELP,
     STATS_SECTION_TITLES,
 )
 
 HELP_FILENAME = "btf_viewer.hlp"
+# A second custom role (distinct from Qt.ItemDataRole.UserRole, which holds
+# a top-level section id) marks a TOC row as a sub-heading within the
+# active section — see scripts/build_docs_html.py's embedded
+# statistics-subsections JSON for where this data comes from.
+_SUB_ROLE = Qt.ItemDataRole.UserRole + 1
+_SUBSECTIONS_RE = re.compile(
+    r'<script type="application/json" id="statistics-subsections">(.*?)</script>', re.S)
+
+
+def _parse_subsections(html: str) -> Dict[str, List[Dict[str, str]]]:
+    m = _SUBSECTIONS_RE.search(html)
+    if not m:
+        return {}
+    try:
+        return json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return {}
 
 
 def help_file_path() -> Optional[Path]:
@@ -78,6 +98,8 @@ class StatsReferenceViewer(QDialog):
         self._history_index: int = -1
         self._doc_loaded = False
         self._doc_html: Optional[str] = None
+        self._subsections: Dict[str, List[Dict[str, str]]] = {}
+        self._sub_items: List[QListWidgetItem] = []
         self._view: Optional["QWebEngineView"] = None
 
         outer = QVBoxLayout(self)
@@ -192,9 +214,18 @@ class StatsReferenceViewer(QDialog):
             sid = item.data(Qt.ItemDataRole.UserRole)
             if sid is None:
                 continue  # category headers always visible
-            item.setHidden(bool(q) and q not in item.text().lower())
+            if not q:
+                item.setHidden(False)
+                continue
+            help_text = STATS_SECTION_HELP.get(sid, "")
+            match = q in item.text().lower() or q in help_text.lower()
+            item.setHidden(not match)
 
     def _on_toc_item_clicked(self, item: QListWidgetItem) -> None:
+        sub_id = item.data(_SUB_ROLE)
+        if sub_id:
+            self._scroll_to(sub_id)  # same page, no history/breadcrumb change
+            return
         sid = item.data(Qt.ItemDataRole.UserRole)
         if sid:
             self.open_section(sid)
@@ -234,15 +265,64 @@ class StatsReferenceViewer(QDialog):
                 self._breadcrumb.setText(f"{crumb}  (reference not built)")
                 return
             self._doc_html = help_path.read_text(encoding="utf-8")
+            self._subsections = _parse_subsections(self._doc_html)
+        self._sync_toc_subsections(section_id)
         if self._doc_loaded:
             self._scroll_to(section_id)
         else:
             self._view.setHtml(self._doc_html, QUrl("about:blank"))
 
+    def _sync_toc_subsections(self, section_id: str) -> None:
+        """Show *section_id*'s h3 sub-headings (if any) nested right under
+        its TOC row; collapse whatever the previously active section had."""
+        for item in self._sub_items:
+            row = self._toc.row(item)
+            if row >= 0:
+                self._toc.takeItem(row)
+        self._sub_items = []
+
+        subs = self._subsections.get(section_id) or []
+        if not subs:
+            return
+        parent_row = -1
+        for i in range(self._toc.count()):
+            if self._toc.item(i).data(Qt.ItemDataRole.UserRole) == section_id:
+                parent_row = i
+                break
+        if parent_row < 0:
+            return
+        for offset, sub in enumerate(subs, start=1):
+            item = QListWidgetItem(f"        {sub['title']}")
+            item.setData(Qt.ItemDataRole.UserRole, "")
+            item.setData(_SUB_ROLE, sub["id"])
+            font = item.font()
+            font.setPointSize(max(font.pointSize() - 1, 7))
+            item.setFont(font)
+            self._toc.insertItem(parent_row + offset, item)
+            self._sub_items.append(item)
+
     def _on_load_finished(self, ok: bool) -> None:
         self._doc_loaded = bool(ok)
-        if ok and self._current_section:
+        if not ok:
+            return
+        main_window = self.parent()
+        self.sync_theme(bool(getattr(main_window, "_is_dark", True)))
+        if self._current_section:
             self._scroll_to(self._current_section)
+
+    def sync_theme(self, is_dark: bool) -> None:
+        """Match the reference's own dark/light CSS to the app's current
+        theme. The page defaults to dark (see build_docs_html.py's
+        <html data-theme="dark">) and nothing updates it afterward unless
+        told to — this is that telling, called once when the page finishes
+        loading and again whenever MainWindow._apply_theme() runs while
+        this viewer is open."""
+        if self._view is None or not self._doc_loaded:
+            return
+        theme = "dark" if is_dark else "light"
+        self._view.page().runJavaScript(
+            f"window.__setDocTheme && window.__setDocTheme('{theme}');"
+        )
 
     def _scroll_to(self, section_id: str) -> None:
         if self._view is None:

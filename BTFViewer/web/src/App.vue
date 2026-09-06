@@ -381,7 +381,6 @@
           type="button"
           class="rail-btn act-btn"
           data-demo-target="rail_heatmap"
-          title="Migration heatmap"
           @click="onOpenHeatmap"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/></svg>
@@ -391,7 +390,6 @@
           type="button"
           class="rail-btn act-btn"
           data-demo-target="rail_analysis"
-          title="Analysis findings"
           @click="analysisOpen = true"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v5l-5 9.2A2 2 0 0 0 6.8 20h10.4a2 2 0 0 0 1.8-2.8L14 8V3"/></svg>
@@ -402,7 +400,6 @@
           type="button"
           class="rail-btn act-btn"
           data-demo-target="rail_compare"
-          title="Compare traces"
           @click="onOpenTraceCompare"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 15.5V9a3 3 0 0 1 3-3h4M18 8.5V15a3 3 0 0 1-3 3h-4"/><path d="m11 4 2 2-2 2M13 20l-2-2 2-2"/></svg>
@@ -413,7 +410,6 @@
           type="button"
           class="rail-btn act-btn"
           data-demo-target="rail_snapshot"
-          title="Snapshot editor"
           @click="onCopyScreenshot"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h2.5l1.6-2h5.8L18.5 6H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.5"/></svg>
@@ -424,7 +420,6 @@
           type="button"
           class="rail-btn act-btn"
           data-demo-target="rail_help"
-          title="Help &amp; keyboard shortcuts"
           @click="openHelpDialog"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.4 2.4 0 0 1 4.7.6c0 1.6-2.3 2-2.3 3.4"/><path d="M12 17h.01"/></svg>
@@ -434,7 +429,6 @@
           type="button"
           class="rail-btn act-btn"
           data-demo-target="rail_settings"
-          title="Settings"
           @click="openSettingsDialog"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.2a1.7 1.7 0 0 0-1.4 1z"/></svg>
@@ -772,7 +766,7 @@
                 @clear-filter="clearAllActiveFilters"
                 @stats-reference-requested="onStatsReferenceRequested"
               />
-              <StatsReferenceViewer ref="statsReferenceViewerRef" />
+              <StatsReferenceViewer ref="statsReferenceViewerRef" :dark-mode="timelineOptions.darkMode" />
             </div>
           </div>
 
@@ -827,7 +821,6 @@
             :class="{ active: rightPanelTab === 'stats' }"
             role="tab"
             :aria-selected="rightPanelTab === 'stats'"
-            title="Statistics"
             @click="selectRightPanelTab('stats')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
@@ -840,7 +833,6 @@
             :class="{ active: rightPanelTab === 'marks' }"
             role="tab"
             :aria-selected="rightPanelTab === 'marks'"
-            title="Marks"
             @click="selectRightPanelTab('marks')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
@@ -853,7 +845,6 @@
             :class="{ active: rightPanelTab === 'find' }"
             role="tab"
             :aria-selected="rightPanelTab === 'find'"
-            title="Find"
             @click="selectRightPanelTab('find')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -866,7 +857,6 @@
             :class="{ active: rightPanelTab === 'legend' }"
             role="tab"
             :aria-selected="rightPanelTab === 'legend'"
-            title="Legend"
             @click="selectRightPanelTab('legend')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="5" cy="6" r="1.6"/><circle cx="5" cy="12" r="1.6"/><circle cx="5" cy="18" r="1.6"/><path d="M10 6h11M10 12h11M10 18h11"/></svg>
@@ -880,7 +870,6 @@
             :class="{ active: rightPanelTab === 'ai' }"
             role="tab"
             :aria-selected="rightPanelTab === 'ai'"
-            title="AI Assistant"
             @click="selectRightPanelTab('ai')"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l1.8 4.9L19 9.6l-4.2 2.4L14 17l-2-3.6L8 17l.2-5-4.2-2.4 5.2-1.7z"/></svg>
@@ -889,7 +878,6 @@
           <button
             type="button"
             class="rail-btn rail-collapse"
-            :title="rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'"
             :aria-label="rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'"
             @click="toggleRightPanelCollapsed"
           >
@@ -6130,6 +6118,14 @@ function onGlobalKeydown(e) {
     e.preventDefault()
     aboutOpen.value = false
     helpOpen.value = !helpOpen.value
+    return
+  }
+
+  // Shift+F1 mirrors Qt's own "What's This?" convention (desktop parity) —
+  // one level past F1/? straight into the detailed reference.
+  if (e.key === 'F1' && e.shiftKey) {
+    e.preventDefault()
+    openStatsReference()
     return
   }
 

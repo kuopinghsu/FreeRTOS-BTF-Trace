@@ -124,7 +124,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QHoverEvent, QIcon, QImage, QKeySequence, QLinearGradient, QMouseEvent, QPainter, QRawFont,
-    QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTextCharFormat, QTextCursor, QTextOption, QTransform, QWheelEvent,
+    QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QRegion, QShortcut, QTextCharFormat, QTextCursor, QTextOption, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer
 # QtWebEngineWidgets must be imported before QApplication is constructed
@@ -46178,6 +46178,29 @@ def _ai_more_heading(label: str) -> QLabel:
     return hdr
 
 
+def _tooltip_font_css() -> str:
+    """CSS matching QToolTip's actual current font.
+
+    QToolTip.setFont() (see mainwindow._apply_theme) only affects
+    plain-text tooltips — a rich-text/HTML one like qt_wrap_tooltip()
+    produces renders through QTextDocument instead and ignores it
+    entirely, falling back to a small generic default. Reading the font
+    QToolTip is actually configured with right now and setting it
+    explicitly in the HTML is what makes a wrapped tooltip's text the
+    same size as every plain-text tooltip in the app, including after a
+    user changes Settings -> Appearance -> UI font size.
+    """
+    font = QToolTip.font()
+    px = font.pixelSize()
+    if px <= 0:
+        pt = font.pointSize()
+        px = round(pt * 4 / 3) if pt > 0 else 13
+    family = font.family() or "sans-serif"
+    # Single-quoted: this is injected into an already-double-quoted
+    # style="..." HTML attribute — a literal " here would truncate it.
+    return f"font-size:{px}px; font-family:'{family}';"
+
+
 def qt_wrap_tooltip(text: str, width_px: int = 320) -> str:
     """Rich-text tooltip that wraps at word boundaries at a readable width.
 
@@ -46195,9 +46218,10 @@ def qt_wrap_tooltip(text: str, width_px: int = 320) -> str:
         parts.append(html.escape(chunk) if chunk else "")
     body = "<br/>".join(parts)
     px = max(160, int(width_px))
+    font_css = _tooltip_font_css()
     return (
         f'<html><body><table cellspacing="0" cellpadding="0"><tr>'
-        f'<td width="{px}">{body}</td></tr></table></body></html>'
+        f'<td width="{px}" style="{font_css}">{body}</td></tr></table></body></html>'
     )
 
 
@@ -79178,6 +79202,8 @@ class SnapshotEditorDialog(QDialog):
                 self._clear_crop(); return True
             if self._tool != 'select':
                 self._select_tool('select'); return True
+            # Nothing left to peel back — close, same as every other dialog.
+            self.close()
             return True
 
         if typing or self._text_edit_active():
@@ -79949,9 +79975,27 @@ STATS_CATEGORY_LABELS = globals().get("STATS_CATEGORY_LABELS")
 STATS_PINNABLE_SECTIONS = globals().get("STATS_PINNABLE_SECTIONS")
 STATS_SECTION_CATEGORIES = globals().get("STATS_SECTION_CATEGORIES")
 STATS_SECTION_CATEGORY = globals().get("STATS_SECTION_CATEGORY")
+STATS_SECTION_HELP = globals().get("STATS_SECTION_HELP")
 STATS_SECTION_TITLES = globals().get("STATS_SECTION_TITLES")
 
 HELP_FILENAME = "btf_viewer.hlp"
+# A second custom role (distinct from Qt.ItemDataRole.UserRole, which holds
+# a top-level section id) marks a TOC row as a sub-heading within the
+# active section — see scripts/build_docs_html.py's embedded
+# statistics-subsections JSON for where this data comes from.
+_SUB_ROLE = Qt.ItemDataRole.UserRole + 1
+_SUBSECTIONS_RE = re.compile(
+    r'<script type="application/json" id="statistics-subsections">(.*?)</script>', re.S)
+
+
+def _parse_subsections(html: str) -> Dict[str, List[Dict[str, str]]]:
+    m = _SUBSECTIONS_RE.search(html)
+    if not m:
+        return {}
+    try:
+        return json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return {}
 
 
 def help_file_path() -> Optional[Path]:
@@ -79984,6 +80028,8 @@ class StatsReferenceViewer(QDialog):
         self._history_index: int = -1
         self._doc_loaded = False
         self._doc_html: Optional[str] = None
+        self._subsections: Dict[str, List[Dict[str, str]]] = {}
+        self._sub_items: List[QListWidgetItem] = []
         self._view: Optional["QWebEngineView"] = None
 
         outer = QVBoxLayout(self)
@@ -80098,9 +80144,18 @@ class StatsReferenceViewer(QDialog):
             sid = item.data(Qt.ItemDataRole.UserRole)
             if sid is None:
                 continue  # category headers always visible
-            item.setHidden(bool(q) and q not in item.text().lower())
+            if not q:
+                item.setHidden(False)
+                continue
+            help_text = STATS_SECTION_HELP.get(sid, "")
+            match = q in item.text().lower() or q in help_text.lower()
+            item.setHidden(not match)
 
     def _on_toc_item_clicked(self, item: QListWidgetItem) -> None:
+        sub_id = item.data(_SUB_ROLE)
+        if sub_id:
+            self._scroll_to(sub_id)  # same page, no history/breadcrumb change
+            return
         sid = item.data(Qt.ItemDataRole.UserRole)
         if sid:
             self.open_section(sid)
@@ -80140,15 +80195,64 @@ class StatsReferenceViewer(QDialog):
                 self._breadcrumb.setText(f"{crumb}  (reference not built)")
                 return
             self._doc_html = help_path.read_text(encoding="utf-8")
+            self._subsections = _parse_subsections(self._doc_html)
+        self._sync_toc_subsections(section_id)
         if self._doc_loaded:
             self._scroll_to(section_id)
         else:
             self._view.setHtml(self._doc_html, QUrl("about:blank"))
 
+    def _sync_toc_subsections(self, section_id: str) -> None:
+        """Show *section_id*'s h3 sub-headings (if any) nested right under
+        its TOC row; collapse whatever the previously active section had."""
+        for item in self._sub_items:
+            row = self._toc.row(item)
+            if row >= 0:
+                self._toc.takeItem(row)
+        self._sub_items = []
+
+        subs = self._subsections.get(section_id) or []
+        if not subs:
+            return
+        parent_row = -1
+        for i in range(self._toc.count()):
+            if self._toc.item(i).data(Qt.ItemDataRole.UserRole) == section_id:
+                parent_row = i
+                break
+        if parent_row < 0:
+            return
+        for offset, sub in enumerate(subs, start=1):
+            item = QListWidgetItem(f"        {sub['title']}")
+            item.setData(Qt.ItemDataRole.UserRole, "")
+            item.setData(_SUB_ROLE, sub["id"])
+            font = item.font()
+            font.setPointSize(max(font.pointSize() - 1, 7))
+            item.setFont(font)
+            self._toc.insertItem(parent_row + offset, item)
+            self._sub_items.append(item)
+
     def _on_load_finished(self, ok: bool) -> None:
         self._doc_loaded = bool(ok)
-        if ok and self._current_section:
+        if not ok:
+            return
+        main_window = self.parent()
+        self.sync_theme(bool(getattr(main_window, "_is_dark", True)))
+        if self._current_section:
             self._scroll_to(self._current_section)
+
+    def sync_theme(self, is_dark: bool) -> None:
+        """Match the reference's own dark/light CSS to the app's current
+        theme. The page defaults to dark (see build_docs_html.py's
+        <html data-theme="dark">) and nothing updates it afterward unless
+        told to — this is that telling, called once when the page finishes
+        loading and again whenever MainWindow._apply_theme() runs while
+        this viewer is open."""
+        if self._view is None or not self._doc_loaded:
+            return
+        theme = "dark" if is_dark else "light"
+        self._view.page().runJavaScript(
+            f"window.__setDocTheme && window.__setDocTheme('{theme}');"
+        )
 
     def _scroll_to(self, section_id: str) -> None:
         if self._view is None:
@@ -86023,6 +86127,54 @@ class _CommandPaletteDialog(QDialog):
         super().keyPressEvent(event)
 
 
+class _ToolTipTranslucencyFilter(QObject):
+    """Keeps QToolTip's native window translucent and shaped to its rounded
+    corners across its own repaints.
+
+    Setting WA_TranslucentBackground once, when the tooltip widget is first
+    shown, is not enough on its own: Qt's stylesheet engine clears that
+    attribute again the moment the widget polishes/repaints and picks up
+    the QToolTip QSS rule's explicit background color (a translucent window
+    with an opaque-background style rule looks contradictory to Qt, so it
+    resolves it by dropping the translucency) — verified by instrumenting a
+    real QToolTip show: the attribute reads True immediately after being
+    set, then False again by the time the tip is actually on screen.
+
+    Translucency alone still was not enough: the *native* window can be
+    larger than the QSS-painted rounded rect (room reserved for the
+    platform's own drop shadow, for one), and on macOS that gap plus the
+    shadow itself shows through as a stray dark sliver — most visible along
+    the bottom edge, and far more visible against a light-theme tooltip's
+    pale fill than a dark-theme one. setMask() clips the *actual* native
+    window to the exact rounded-rect the QSS draws, so nothing — background
+    bleed-through or the platform's own shadow — can appear past it.
+
+    This filter is installed on the tooltip widget itself (see MainWindow.
+    eventFilter's Show handling) and reapplies both on every event that
+    could have just undone them, which is what actually makes them stick.
+    """
+
+    _RADIUS = 6  # keep in sync with the QToolTip QSS rule's border-radius
+
+    _REASSERT_ON = (
+        QEvent.Type.Paint, QEvent.Type.UpdateRequest,
+        QEvent.Type.Polish, QEvent.Type.StyleChange, QEvent.Type.Resize,
+    )
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() in self._REASSERT_ON:
+            try:
+                obj.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                rect = obj.rect()
+                if not rect.isEmpty():
+                    path = QPainterPath()
+                    path.addRoundedRect(QRectF(rect), self._RADIUS, self._RADIUS)
+                    obj.setMask(QRegion(path.toFillPolygon().toPolygon()))
+            except RuntimeError:
+                pass
+        return False
+
+
 class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     # ------------------------------------------------------------------
@@ -86130,6 +86282,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Install the demo key filter after restore: app.setStyleSheet during
         # theme apply must not re-enter this QObject through the app filter.
         self._restore_settings()
+        self._tooltip_translucency_filter = _ToolTipTranslucencyFilter(self)
+        self._tooltip_filter_installed: set = set()
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
@@ -86236,6 +86390,29 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return False
         self._in_app_event_filter = True
         try:
+            if event.type() == QEvent.Type.Show and isinstance(obj, QWidget):
+                # QToolTip's real widget is created internally by Qt with the
+                # Qt::ToolTip window flag; catching its first Show here is the
+                # only hook the public API gives to touch it at all. Without
+                # WA_TranslucentBackground, its native window paints as an
+                # opaque rectangle no matter what QSS says — border-radius
+                # only cuts corners out of the *content*, so the corners the
+                # QSS "removed" show through as a leftover square frame (see
+                # the QToolTip QSS rule above for what that looks like).
+                # A one-time setAttribute() here is not enough by itself —
+                # see _ToolTipTranslucencyFilter for why it needs reasserting
+                # on every later repaint too.
+                # Window *type* (ToolTip, Popup, Dialog, ...) lives in the low
+                # byte of windowFlags(), not as an independent bit — testing
+                # `flags & Qt.WindowType.ToolTip` directly is wrong and false
+                # -positives on other types that happen to share a set bit
+                # (e.g. Popup = 9 = 0b1001 also matches ToolTip = 13 = 0b1101).
+                # Masking first is the only correct way to read the type out.
+                if (obj.windowFlags() & Qt.WindowType.WindowType_Mask) == Qt.WindowType.ToolTip:
+                    obj.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                    if id(obj) not in self._tooltip_filter_installed:
+                        self._tooltip_filter_installed.add(id(obj))
+                        obj.installEventFilter(self._tooltip_translucency_filter)
             if (event.type() == QEvent.Type.KeyPress
                     and self._demo_runner is not None
                     and not getattr(event, "isAutoRepeat", lambda: False)()):
@@ -88343,8 +88520,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 win_base      = "#121212",
                 mid           = "#2D2D2D",
                 text          = "#D4D4D4",
-                tooltip_bg    = "#252526",
-                tooltip_border= "#555555",
+                # Inverted, not matched to the panel — high-contrast and
+                # theme-independent-looking, same formula as the web app's
+                # tooltips: dark app -> light tip, light app -> dark tip.
+                tooltip_bg    = "#D4D4D4",
+                tooltip_fg    = "#1E1E1E",
+                tooltip_border= "#AAAAAA",
                 menu_bg       = "#252526",
                 sep           = "#444444",
                 tb_hover      = "#3C3C3C",
@@ -88384,8 +88565,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             win_base      = "#FFFFFF",
             mid           = "#E0E0E0",
             text          = "#1E1E1E",
-            tooltip_bg    = "#FFFFCC",
-            tooltip_border= "#AAAAAA",
+            tooltip_bg    = "#1E1E1E",
+            tooltip_fg    = "#D4D4D4",
+            tooltip_border= "#555555",
             menu_bg       = "#F5F5F5",
             sep           = "#C0C0C0",
             tb_hover      = "#D0D0D0",
@@ -88501,13 +88683,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
             palette.setColor(QPalette.Link,            QColor(c['accent']))
             palette.setColor(QPalette.ToolTipBase,     QColor(c['tooltip_bg']))
-            palette.setColor(QPalette.ToolTipText,     QColor(c['text']))
+            palette.setColor(QPalette.ToolTipText,     QColor(c['tooltip_fg']))
             app.setPalette(palette)
 
             # --- App-wide QSS -------------------------------------------------
             app.setStyleSheet(f"""
-            QToolTip  {{ background:{c['tooltip_bg']}; color:{c['text']}; border:1px solid {c['tooltip_border']};
-                         padding:5px 7px; border-radius:6px; font-size:{_ui_fs}; }}
+            /* border-radius here only looks right because eventFilter() below
+               sets WA_TranslucentBackground on the native QToolTip window the
+               moment it's shown — without that, the native window stays an
+               opaque rectangle regardless of QSS, and the corners this radius
+               cuts away would show through as a stray square frame (a visible
+               dark line in light theme; blending into the dark fill, so not
+               gone, just harder to see, in dark theme). If that event filter
+               ever stops running, drop this radius rather than leaving it. */
+            QToolTip  {{ background:{c['tooltip_bg']}; color:{c['tooltip_fg']}; border:1px solid {c['tooltip_border']};
+                         padding:1px 4px; border-radius:6px; font-size:{_ui_fs}; }}
             QMenuBar  {{ background:{c['mid']}; color:{c['text']}; font-size:{_ui_fs}; }}
             QMenuBar::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QMenu     {{ background:{c['menu_bg']}; color:{c['text']}; font-size:{_ui_fs};
@@ -88864,6 +89054,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         elif op is not None:
             # No view yet (called before _build_ui); nothing to schedule.
             self._release_theme_change()
+
+        stats_ref = getattr(self, "_stats_reference_viewer", None)
+        if stats_ref is not None:
+            stats_ref.sync_theme(self._is_dark)
 
     def _schedule_theme_widgets(self, op: int | None = None) -> None:
         """Defer per-widget theme sync until after app QSS has settled."""
@@ -90067,7 +90261,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # "Shift+/" are the same sequence, so only bind one to avoid an ambiguous
         # overload.)
         _sc_act.setShortcuts([QKeySequence("?"), QKeySequence("F1")])
-        hm.addAction("&Statistics Reference…", lambda: self._open_stats_reference(""))
+        _ref_act = hm.addAction("&Statistics Reference…", lambda: self._open_stats_reference(""))
+        # Shift+F1 is Qt's own long-standing "What's This?" convention —
+        # a fitting mnemonic for "detailed reference," one level past F1.
+        _ref_act.setShortcuts([QKeySequence("Shift+F1")])
         hm.addSeparator()
         hm.addAction("&About", self._on_about)
 

@@ -4569,6 +4569,29 @@ def _ai_more_heading(label: str) -> QLabel:
     return hdr
 
 
+def _tooltip_font_css() -> str:
+    """CSS matching QToolTip's actual current font.
+
+    QToolTip.setFont() (see mainwindow._apply_theme) only affects
+    plain-text tooltips — a rich-text/HTML one like qt_wrap_tooltip()
+    produces renders through QTextDocument instead and ignores it
+    entirely, falling back to a small generic default. Reading the font
+    QToolTip is actually configured with right now and setting it
+    explicitly in the HTML is what makes a wrapped tooltip's text the
+    same size as every plain-text tooltip in the app, including after a
+    user changes Settings -> Appearance -> UI font size.
+    """
+    font = QToolTip.font()
+    px = font.pixelSize()
+    if px <= 0:
+        pt = font.pointSize()
+        px = round(pt * 4 / 3) if pt > 0 else 13
+    family = font.family() or "sans-serif"
+    # Single-quoted: this is injected into an already-double-quoted
+    # style="..." HTML attribute — a literal " here would truncate it.
+    return f"font-size:{px}px; font-family:'{family}';"
+
+
 def qt_wrap_tooltip(text: str, width_px: int = 320) -> str:
     """Rich-text tooltip that wraps at word boundaries at a readable width.
 
@@ -4586,9 +4609,10 @@ def qt_wrap_tooltip(text: str, width_px: int = 320) -> str:
         parts.append(html.escape(chunk) if chunk else "")
     body = "<br/>".join(parts)
     px = max(160, int(width_px))
+    font_css = _tooltip_font_css()
     return (
         f'<html><body><table cellspacing="0" cellpadding="0"><tr>'
-        f'<td width="{px}">{body}</td></tr></table></body></html>'
+        f'<td width="{px}" style="{font_css}">{body}</td></tr></table></body></html>'
     )
 
 

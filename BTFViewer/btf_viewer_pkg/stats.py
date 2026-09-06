@@ -23930,6 +23930,8 @@ class SnapshotEditorDialog(QDialog):
                 self._clear_crop(); return True
             if self._tool != 'select':
                 self._select_tool('select'); return True
+            # Nothing left to peel back — close, same as every other dialog.
+            self.close()
             return True
 
         if typing or self._text_edit_active():

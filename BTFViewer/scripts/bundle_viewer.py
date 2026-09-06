@@ -177,7 +177,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QHoverEvent, QIcon, QImage, QKeySequence, QLinearGradient, QMouseEvent, QPainter, QRawFont,
-    QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTextCharFormat, QTextCursor, QTextOption, QTransform, QWheelEvent,
+    QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QRegion, QShortcut, QTextCharFormat, QTextCursor, QTextOption, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer
 # QtWebEngineWidgets must be imported before QApplication is constructed

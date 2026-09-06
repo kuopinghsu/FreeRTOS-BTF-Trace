@@ -78,13 +78,51 @@ def _find_chrome() -> str | None:
     return None
 
 
-def _render_mermaid_to_svg(src: str) -> str:
-    """Render one mermaid diagram to an inline <svg> via mermaid-cli."""
+# Mermaid's default edgeLabel background is a fixed mid-grey regardless of
+# theme, at 50% opacity over whatever is behind it — a visible grey patch
+# on a light page, and a muddy grey-on-grey blend with light edge-label
+# text on a dark one. Overriding it to the page's own --bg per theme makes
+# the label read as floating directly on the line (the box is invisible,
+# since it's an exact color match) instead of an odd disconnected chip.
+# lineColor is likewise repointed to the page's own --fg-dim so arrows
+# have real contrast instead of mermaid's default. Keep in sync with
+# _PAGE_TEMPLATE's :root / html[data-theme="light"] --bg / --fg-dim.
+_MERMAID_THEME_VARS = {
+    "dark": {"edgeLabelBackground": "#1E1E1E", "lineColor": "#858585"},
+    "default": {"edgeLabelBackground": "#FFFFFF", "lineColor": "#666666"},
+}
+
+
+def _render_mermaid_to_svg(src: str, theme: str, svg_id: str) -> str:
+    """Render one mermaid diagram to an inline <svg> via mermaid-cli.
+
+    Node fills/text/line colors are baked into the SVG at *this* theme —
+    mermaid has no runtime CSS-variable hook for it — so a diagram rendered
+    once at build time would stay stuck in whichever theme it was rendered
+    at, even after the page's own data-theme is switched at runtime. Called
+    twice (dark + light) so both are shipped and the right one is picked at
+    runtime — see _inline_mermaid()'s CSS toggle.
+
+    ``svg_id`` MUST be unique across every call in one build: mmdc scopes
+    each SVG's embedded <style> to its own element id, but always uses the
+    same default id ("my-svg") unless told otherwise — with several such
+    SVGs on one page, their same-id style blocks collide and the LAST one
+    in the document silently wins for ALL of them (e.g. every diagram's
+    edge-label colors flip to whichever diagram happens to render last).
+    """
     with tempfile.TemporaryDirectory() as td:
         mmd = Path(td) / "d.mmd"
         svg = Path(td) / "d.svg"
         mmd.write_text(src, encoding="utf-8")
-        cmd = ["mmdc", "-i", str(mmd), "-o", str(svg), "-b", "transparent", "-t", "dark"]
+        mermaid_cfg = Path(td) / "mermaid-config.json"
+        mermaid_cfg.write_text(
+            json.dumps({"theme": theme, "themeVariables": _MERMAID_THEME_VARS[theme]}),
+            encoding="utf-8",
+        )
+        cmd = [
+            "mmdc", "-i", str(mmd), "-o", str(svg), "-b", "transparent",
+            "-t", theme, "-c", str(mermaid_cfg), "-I", svg_id,
+        ]
         chrome = _find_chrome()
         if chrome:
             cfg = Path(td) / "puppeteer-config.json"
@@ -94,21 +132,30 @@ def _render_mermaid_to_svg(src: str) -> str:
         return svg.read_text(encoding="utf-8")
 
 
-def _extract_mermaid(text: str) -> tuple[str, list[str]]:
-    """Replace ```mermaid blocks with placeholders; return (text, svgs)."""
-    svgs: list[str] = []
+def _extract_mermaid(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Replace ```mermaid blocks with placeholders; return (text, [(dark, light), ...])."""
+    svgs: list[tuple[str, str]] = []
 
     def _sub(m: re.Match) -> str:
-        svgs.append(_render_mermaid_to_svg(m.group(1)))
-        return f"\n<div class=\"mermaid-slot\" data-mermaid-index=\"{len(svgs) - 1}\"></div>\n\n"
+        src = m.group(1)
+        idx = len(svgs)
+        svgs.append((
+            _render_mermaid_to_svg(src, "dark", f"mermaid-{idx}-dark"),
+            _render_mermaid_to_svg(src, "default", f"mermaid-{idx}-light"),
+        ))
+        return f"\n<div class=\"mermaid-slot\" data-mermaid-index=\"{idx}\"></div>\n\n"
 
     return _MERMAID_RE.sub(_sub, text), svgs
 
 
-def _inline_mermaid(html: str, svgs: list[str]) -> str:
+def _inline_mermaid(html: str, svgs: list[tuple[str, str]]) -> str:
     def _sub(m: re.Match) -> str:
         idx = int(m.group(1))
-        return f'<div class="mermaid-diagram">{svgs[idx]}</div>'
+        dark_svg, light_svg = svgs[idx]
+        return (
+            f'<div class="mermaid-diagram mermaid-diagram--dark">{dark_svg}</div>'
+            f'<div class="mermaid-diagram mermaid-diagram--light">{light_svg}</div>'
+        )
 
     return re.sub(
         r'<div class="mermaid-slot" data-mermaid-index="(\d+)"></div>',
@@ -163,6 +210,67 @@ def _strip_images(html: str) -> str:
     return _IMG_RE.sub("", html)
 
 
+_SECTION_ANCHOR_RE = re.compile(r'<a id="statistics-([\w-]+)"')
+_H3_RE = re.compile(r"<h3>(.*?)</h3>", re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _add_subsection_ids(html: str) -> tuple[str, dict]:
+    """Assign ``id="statistics-<section>-<slug>"`` to every genuine <h3>
+    sub-heading and collect a ``{section_id: [{id, title}, ...]}`` map, so
+    the TOC can offer sub-navigation within a section instead of only
+    jumping to its top.
+
+    Position-based, not a real DOM walk: <h3>s are attributed to the
+    nearest preceding ``<a id="statistics-...">`` section marker — those
+    markers are hand-authored right before each STATISTICS.md heading and
+    pass through MarkdownIt as raw HTML, so their order in the rendered
+    output matches source order. Each section's own *title* is itself an
+    <h3> (STATISTICS.md uses h3 for section titles, not h2) — the first h3
+    seen right after a section's anchor is that title, not a sub-heading,
+    and is left untouched.
+    """
+    section_markers = list(_SECTION_ANCHOR_RE.finditer(html))
+    subsections: dict = {}
+    seen_slugs: dict = {}
+    title_seen: set = set()
+
+    def _section_at(pos: int) -> str:
+        current = ""
+        for m in section_markers:
+            if m.start() > pos:
+                break
+            current = m.group(1)
+        return current
+
+    def _sub(m: re.Match) -> str:
+        section_id = _section_at(m.start())
+        title_html = m.group(1)
+        if not section_id:
+            return m.group(0)
+        if section_id not in title_seen:
+            title_seen.add(section_id)  # this h3 is the section's own title
+            return m.group(0)
+        title_text = _TAG_RE.sub("", title_html).strip()
+        slug = _SLUG_RE.sub("-", title_text.lower()).strip("-")
+        if not slug:
+            return m.group(0)
+        key = f"{section_id}-{slug}"
+        n = seen_slugs.get(key, 0)
+        seen_slugs[key] = n + 1
+        sub_id = key if n == 0 else f"{key}-{n}"
+        subsections.setdefault(section_id, []).append({"id": sub_id, "title": title_text})
+        return f'<h3 id="statistics-{sub_id}">{title_html}</h3>'
+
+    return _H3_RE.sub(_sub, html), subsections
+
+
+# --heading reuses STATS_CATEGORY_BADGE_COLORS.SCHED's fg (web/src/utils/
+# statsPins.js) rather than --accent (the link color) — headings needed a
+# color of their own so they don't read as clickable, and reusing an
+# existing app color keeps the reference visually tied to the app instead
+# of introducing a one-off.
 _PAGE_TEMPLATE = """<!doctype html>
 <html data-theme="dark">
 <head>
@@ -176,6 +284,7 @@ _PAGE_TEMPLATE = """<!doctype html>
   --fg: #D4D4D4;
   --fg-dim: #858585;
   --accent: #4F8BFF;
+  --heading: #C1B7E3;
   --code-bg: #2D2D2D;
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -187,6 +296,7 @@ html[data-theme="light"] {{
   --fg: #1E1E1E;
   --fg-dim: #666666;
   --accent: #0066CC;
+  --heading: #665A98;
   --code-bg: #EEEEEE;
 }}
 * {{ box-sizing: border-box; }}
@@ -202,7 +312,7 @@ body {{
 }}
 a {{ color: var(--accent); text-decoration: none; }}
 a:hover {{ text-decoration: underline; }}
-h1, h2, h3, h4 {{ color: var(--fg); font-weight: 700; line-height: 1.3; }}
+h1, h2, h3, h4 {{ color: var(--heading); font-weight: 700; line-height: 1.3; }}
 h1 {{ font-size: 22px; margin: 0 0 14px; }}
 h2 {{ font-size: 18px; margin: 40px 0 14px; padding-top: 18px; border-top: 1px solid var(--border); }}
 h2:first-of-type {{ border-top: none; padding-top: 0; }}
@@ -223,6 +333,12 @@ th, td {{ border: 1px solid var(--border); padding: 6px 10px; text-align: left; 
 th {{ background: var(--panel-bg); font-weight: 700; }}
 .mermaid-diagram {{ margin: 0 0 18px; }}
 .mermaid-diagram svg {{ max-width: 100%; height: auto; }}
+/* Each diagram ships as two pre-rendered SVGs (see _render_mermaid_to_svg
+   in build_docs_html.py) since mermaid bakes its theme's colors into the
+   SVG at render time — only one can match html[data-theme] at once. */
+.mermaid-diagram--light {{ display: none; }}
+html[data-theme="light"] .mermaid-diagram--dark {{ display: none; }}
+html[data-theme="light"] .mermaid-diagram--light {{ display: block; }}
 .math-block {{ overflow-x: auto; margin: 0 0 18px; }}
 mjx-container[jax="SVG"] {{ color: inherit; }}
 blockquote {{
@@ -232,12 +348,14 @@ blockquote {{
   color: var(--fg-dim);
 }}
 hr {{ border: none; border-top: 1px solid var(--border); margin: 30px 0; }}
+h3[id] {{ scroll-margin-top: 12px; }}
 </style>
 {math_style}
 </head>
 <body>
 {math_defs}
 {body}
+<script type="application/json" id="statistics-subsections">{subsections_json}</script>
 <script>
 window.__setDocTheme = function (t) {{
   document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
@@ -268,10 +386,13 @@ def build() -> list[Path]:
             f'xmlns="http://www.w3.org/2000/svg">{math_data["defs"]}</svg>'
         )
     html_body = _strip_images(html_body)
+    html_body, subsections = _add_subsection_ids(html_body)
+    subsections_json = json.dumps(subsections, ensure_ascii=False).replace("</script", "<\\/script")
 
     page = _PAGE_TEMPLATE.format(
         title="BTFViewer Statistics Reference", body=html_body,
         math_style=math_style, math_defs=math_defs,
+        subsections_json=subsections_json,
     )
     written: list[Path] = []
 

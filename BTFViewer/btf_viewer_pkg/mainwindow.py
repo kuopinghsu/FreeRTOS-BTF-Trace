@@ -2323,6 +2323,54 @@ class _CommandPaletteDialog(QDialog):
         super().keyPressEvent(event)
 
 
+class _ToolTipTranslucencyFilter(QObject):
+    """Keeps QToolTip's native window translucent and shaped to its rounded
+    corners across its own repaints.
+
+    Setting WA_TranslucentBackground once, when the tooltip widget is first
+    shown, is not enough on its own: Qt's stylesheet engine clears that
+    attribute again the moment the widget polishes/repaints and picks up
+    the QToolTip QSS rule's explicit background color (a translucent window
+    with an opaque-background style rule looks contradictory to Qt, so it
+    resolves it by dropping the translucency) — verified by instrumenting a
+    real QToolTip show: the attribute reads True immediately after being
+    set, then False again by the time the tip is actually on screen.
+
+    Translucency alone still was not enough: the *native* window can be
+    larger than the QSS-painted rounded rect (room reserved for the
+    platform's own drop shadow, for one), and on macOS that gap plus the
+    shadow itself shows through as a stray dark sliver — most visible along
+    the bottom edge, and far more visible against a light-theme tooltip's
+    pale fill than a dark-theme one. setMask() clips the *actual* native
+    window to the exact rounded-rect the QSS draws, so nothing — background
+    bleed-through or the platform's own shadow — can appear past it.
+
+    This filter is installed on the tooltip widget itself (see MainWindow.
+    eventFilter's Show handling) and reapplies both on every event that
+    could have just undone them, which is what actually makes them stick.
+    """
+
+    _RADIUS = 6  # keep in sync with the QToolTip QSS rule's border-radius
+
+    _REASSERT_ON = (
+        QEvent.Type.Paint, QEvent.Type.UpdateRequest,
+        QEvent.Type.Polish, QEvent.Type.StyleChange, QEvent.Type.Resize,
+    )
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() in self._REASSERT_ON:
+            try:
+                obj.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                rect = obj.rect()
+                if not rect.isEmpty():
+                    path = QPainterPath()
+                    path.addRoundedRect(QRectF(rect), self._RADIUS, self._RADIUS)
+                    obj.setMask(QRegion(path.toFillPolygon().toPolygon()))
+            except RuntimeError:
+                pass
+        return False
+
+
 class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     # ------------------------------------------------------------------
@@ -2430,6 +2478,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Install the demo key filter after restore: app.setStyleSheet during
         # theme apply must not re-enter this QObject through the app filter.
         self._restore_settings()
+        self._tooltip_translucency_filter = _ToolTipTranslucencyFilter(self)
+        self._tooltip_filter_installed: set = set()
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
@@ -2536,6 +2586,29 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return False
         self._in_app_event_filter = True
         try:
+            if event.type() == QEvent.Type.Show and isinstance(obj, QWidget):
+                # QToolTip's real widget is created internally by Qt with the
+                # Qt::ToolTip window flag; catching its first Show here is the
+                # only hook the public API gives to touch it at all. Without
+                # WA_TranslucentBackground, its native window paints as an
+                # opaque rectangle no matter what QSS says — border-radius
+                # only cuts corners out of the *content*, so the corners the
+                # QSS "removed" show through as a leftover square frame (see
+                # the QToolTip QSS rule above for what that looks like).
+                # A one-time setAttribute() here is not enough by itself —
+                # see _ToolTipTranslucencyFilter for why it needs reasserting
+                # on every later repaint too.
+                # Window *type* (ToolTip, Popup, Dialog, ...) lives in the low
+                # byte of windowFlags(), not as an independent bit — testing
+                # `flags & Qt.WindowType.ToolTip` directly is wrong and false
+                # -positives on other types that happen to share a set bit
+                # (e.g. Popup = 9 = 0b1001 also matches ToolTip = 13 = 0b1101).
+                # Masking first is the only correct way to read the type out.
+                if (obj.windowFlags() & Qt.WindowType.WindowType_Mask) == Qt.WindowType.ToolTip:
+                    obj.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                    if id(obj) not in self._tooltip_filter_installed:
+                        self._tooltip_filter_installed.add(id(obj))
+                        obj.installEventFilter(self._tooltip_translucency_filter)
             if (event.type() == QEvent.Type.KeyPress
                     and self._demo_runner is not None
                     and not getattr(event, "isAutoRepeat", lambda: False)()):
@@ -4643,8 +4716,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 win_base      = "#121212",
                 mid           = "#2D2D2D",
                 text          = "#D4D4D4",
-                tooltip_bg    = "#252526",
-                tooltip_border= "#555555",
+                # Inverted, not matched to the panel — high-contrast and
+                # theme-independent-looking, same formula as the web app's
+                # tooltips: dark app -> light tip, light app -> dark tip.
+                tooltip_bg    = "#D4D4D4",
+                tooltip_fg    = "#1E1E1E",
+                tooltip_border= "#AAAAAA",
                 menu_bg       = "#252526",
                 sep           = "#444444",
                 tb_hover      = "#3C3C3C",
@@ -4684,8 +4761,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             win_base      = "#FFFFFF",
             mid           = "#E0E0E0",
             text          = "#1E1E1E",
-            tooltip_bg    = "#FFFFCC",
-            tooltip_border= "#AAAAAA",
+            tooltip_bg    = "#1E1E1E",
+            tooltip_fg    = "#D4D4D4",
+            tooltip_border= "#555555",
             menu_bg       = "#F5F5F5",
             sep           = "#C0C0C0",
             tb_hover      = "#D0D0D0",
@@ -4801,13 +4879,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
             palette.setColor(QPalette.Link,            QColor(c['accent']))
             palette.setColor(QPalette.ToolTipBase,     QColor(c['tooltip_bg']))
-            palette.setColor(QPalette.ToolTipText,     QColor(c['text']))
+            palette.setColor(QPalette.ToolTipText,     QColor(c['tooltip_fg']))
             app.setPalette(palette)
 
             # --- App-wide QSS -------------------------------------------------
             app.setStyleSheet(f"""
-            QToolTip  {{ background:{c['tooltip_bg']}; color:{c['text']}; border:1px solid {c['tooltip_border']};
-                         padding:5px 7px; border-radius:6px; font-size:{_ui_fs}; }}
+            /* border-radius here only looks right because eventFilter() below
+               sets WA_TranslucentBackground on the native QToolTip window the
+               moment it's shown — without that, the native window stays an
+               opaque rectangle regardless of QSS, and the corners this radius
+               cuts away would show through as a stray square frame (a visible
+               dark line in light theme; blending into the dark fill, so not
+               gone, just harder to see, in dark theme). If that event filter
+               ever stops running, drop this radius rather than leaving it. */
+            QToolTip  {{ background:{c['tooltip_bg']}; color:{c['tooltip_fg']}; border:1px solid {c['tooltip_border']};
+                         padding:1px 4px; border-radius:6px; font-size:{_ui_fs}; }}
             QMenuBar  {{ background:{c['mid']}; color:{c['text']}; font-size:{_ui_fs}; }}
             QMenuBar::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QMenu     {{ background:{c['menu_bg']}; color:{c['text']}; font-size:{_ui_fs};
@@ -5164,6 +5250,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         elif op is not None:
             # No view yet (called before _build_ui); nothing to schedule.
             self._release_theme_change()
+
+        stats_ref = getattr(self, "_stats_reference_viewer", None)
+        if stats_ref is not None:
+            stats_ref.sync_theme(self._is_dark)
 
     def _schedule_theme_widgets(self, op: int | None = None) -> None:
         """Defer per-widget theme sync until after app QSS has settled."""
@@ -6367,7 +6457,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # "Shift+/" are the same sequence, so only bind one to avoid an ambiguous
         # overload.)
         _sc_act.setShortcuts([QKeySequence("?"), QKeySequence("F1")])
-        hm.addAction("&Statistics Reference…", lambda: self._open_stats_reference(""))
+        _ref_act = hm.addAction("&Statistics Reference…", lambda: self._open_stats_reference(""))
+        # Shift+F1 is Qt's own long-standing "What's This?" convention —
+        # a fitting mnemonic for "detailed reference," one level past F1.
+        _ref_act.setShortcuts([QKeySequence("Shift+F1")])
         hm.addSeparator()
         hm.addAction("&About", self._on_about)
 

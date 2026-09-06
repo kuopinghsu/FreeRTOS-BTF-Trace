@@ -50,13 +50,30 @@
             <div v-if="tocByCategory[cat].length" class="stats-ref-toc-cat">
               {{ STATS_CATEGORY_LABELS[cat] || cat }}
             </div>
-            <div
-              v-for="row in tocByCategory[cat]"
-              :key="row.id"
-              class="stats-ref-toc-row"
-              :class="{ active: row.id === currentSection }"
-              @click="openSection(row.id)"
-            >{{ row.title }}</div>
+            <template v-for="row in tocByCategory[cat]" :key="row.id">
+              <div
+                class="stats-ref-toc-row"
+                :class="{ active: row.id === currentSection }"
+                role="button"
+                tabindex="0"
+                :aria-current="row.id === currentSection ? 'true' : undefined"
+                @click="openSection(row.id)"
+                @keydown.enter="openSection(row.id)"
+                @keydown.space.prevent="openSection(row.id)"
+              >{{ row.title }}</div>
+              <template v-if="row.id === currentSection">
+                <div
+                  v-for="sub in activeSubsections"
+                  :key="sub.id"
+                  class="stats-ref-toc-subrow"
+                  role="button"
+                  tabindex="0"
+                  @click="navigateToSub(sub.id)"
+                  @keydown.enter="navigateToSub(sub.id)"
+                  @keydown.space.prevent="navigateToSub(sub.id)"
+                >{{ sub.title }}</div>
+              </template>
+            </template>
           </template>
         </div>
 
@@ -73,7 +90,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onUnmounted, watch } from 'vue'
 import {
   STATS_SECTION_CATEGORIES,
   STATS_SECTION_CATEGORY,
@@ -81,12 +98,27 @@ import {
   STATS_PINNABLE_SECTIONS,
   STATS_SECTION_TITLES,
 } from '../utils/statsPins.js'
+import { STATS_SECTION_HELP } from '../config.js'
+
+const props = defineProps({ darkMode: { type: Boolean, default: true } })
 // Imported as a raw string (not fetched from a URL): Web ships as ONE
 // self-contained HTML file (vite-plugin-singlefile) with no server and no
 // guaranteed sibling files at runtime, so the doc content must be inlined
 // into the JS bundle and rendered via <iframe srcdoc> — see
 // scripts/build_docs_html.py for how this is generated.
 import docHtml from '../generated/statistics-en.inline.html?raw'
+
+// Sub-heading (h3) map, embedded by scripts/build_docs_html.py right in
+// docHtml as a <script type="application/json">. Extracted from the raw
+// string (not the DOM) so it's available before the iframe ever loads —
+// desktop's stats_reference.py parses the identical blob the same way.
+const SECTION_SUBSECTIONS = (() => {
+  const m = docHtml.match(
+    /<script type="application\/json" id="statistics-subsections">([\s\S]*?)<\/script>/
+  )
+  if (!m) return {}
+  try { return JSON.parse(m[1]) } catch { return {} }
+})()
 
 const visible = ref(false)
 const currentSection = ref('')
@@ -115,10 +147,37 @@ const tocByCategory = computed(() => {
     out[cat] = STATS_PINNABLE_SECTIONS
       .filter((sid) => STATS_SECTION_CATEGORY[sid] === cat)
       .map((sid) => ({ id: sid, title: STATS_SECTION_TITLES[sid] || sid }))
-      .filter((row) => !q || row.title.toLowerCase().includes(q))
+      .filter((row) => {
+        if (!q) return true
+        if (row.title.toLowerCase().includes(q)) return true
+        const help = STATS_SECTION_HELP[row.id] || ''
+        return help.toLowerCase().includes(q)
+      })
   }
   return out
 })
+
+// Sub-headings only for the currently active section — same "expand what
+// you're looking at" behaviour as desktop's stats_reference.py, not a full
+// always-expanded tree.
+const activeSubsections = computed(() => SECTION_SUBSECTIONS[currentSection.value] || [])
+
+function navigateToSub(subId) {
+  navigateFrame(subId)  // same page, no history/breadcrumb change
+}
+
+function onKeydown(e) {
+  if (e.key === 'Escape') {
+    e.stopPropagation()
+    close()
+  }
+}
+
+watch(visible, (v) => {
+  if (v) window.addEventListener('keydown', onKeydown, true)
+  else window.removeEventListener('keydown', onKeydown, true)
+})
+onUnmounted(() => window.removeEventListener('keydown', onKeydown, true))
 
 function openSection(sectionId) {
   const sid = String(sectionId || '').trim()
@@ -146,9 +205,22 @@ function navigateFrame(sectionId) {
 
 function onFrameLoad() {
   frameLoaded.value = true
+  syncTheme()
   const sid = currentSection.value
   if (sid) navigateFrame(sid)
 }
+
+// The page defaults to dark (see build_docs_html.py's <html data-theme=
+// "dark">) and has no way to know the app's own theme on its own — this is
+// what tells it, once on load and again whenever the app's theme flips
+// while this viewer is open (the iframe unmounts on close, per v-if=
+// "visible" below, so a fresh one always needs this on its own next load).
+function syncTheme() {
+  const win = frameRef.value?.contentWindow
+  if (win && frameLoaded.value) win.__setDocTheme?.(props.darkMode ? 'dark' : 'light')
+}
+
+watch(() => props.darkMode, syncTheme)
 
 function goBack() {
   if (!canGoBack.value) return
@@ -305,6 +377,33 @@ defineExpose({ openSection, close })
   background: rgba(79, 139, 255, 0.14);
   color: var(--fg);
   font-weight: 600;
+}
+
+.stats-ref-toc-row:focus-visible {
+  outline: 2px solid var(--accent, #4F8BFF);
+  outline-offset: -2px;
+}
+
+.stats-ref-toc-subrow {
+  padding: 4px 10px 4px 28px;
+  border-radius: 5px;
+  margin: 0 4px;
+  cursor: pointer;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  line-height: 1.3;
+  opacity: 0.85;
+}
+
+.stats-ref-toc-subrow:hover {
+  background: var(--app-surface-3, var(--tb-btn-hover));
+  color: var(--fg);
+  opacity: 1;
+}
+
+.stats-ref-toc-subrow:focus-visible {
+  outline: 2px solid var(--accent, #4F8BFF);
+  outline-offset: -2px;
 }
 
 .stats-ref-frame {

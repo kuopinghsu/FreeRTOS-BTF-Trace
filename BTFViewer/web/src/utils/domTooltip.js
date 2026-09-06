@@ -72,6 +72,35 @@ export function placeTipBox(anchor, tipW, tipH, pad = 8, gap = 6) {
   return { left: Math.round(left), top: Math.round(top) }
 }
 
+// Read live theme values off the real .app root and copy them onto the tip
+// element as inline custom properties before every show. The tip element
+// lives under <html> (ensureTip() appends it to document.documentElement,
+// a sibling of <body>/.app, not a descendant of either) so App.vue's own
+// theme rules — scoped to ".app:not(.dark)" and "body:has(.app:not(.dark))"
+// for light theme — never reach it via normal CSS inheritance; only the
+// dark values happen to reach it, via :root's own (dark) defaults, which is
+// why this was invisible in dark theme and only showed up in light theme.
+// Setting these directly on the tip element sidesteps the whole cascade
+// question and always reflects whatever the app is actually showing right
+// now, including a user's custom UI font size.
+//
+// Colors are inverted (background: --fg, color: --bg), not matched to the
+// panel — the same formula the left/right rail's own built-in tooltips
+// (.rail-tip / .act-tip in App.vue) already use: dark app -> light tip,
+// light app -> dark tip. One tooltip color language for the whole app,
+// rather than adding a second "matches the panel" one here.
+const SYNCED_VARS = ['--fg', '--bg', '--font-ui', '--type-meta', '--ui-font-size']
+
+function syncThemeVars(tip) {
+  if (typeof document === 'undefined' || typeof getComputedStyle === 'undefined') return
+  const root = document.querySelector('.app') || document.documentElement
+  const cs = getComputedStyle(root)
+  for (const name of SYNCED_VARS) {
+    const val = cs.getPropertyValue(name)
+    if (val && val.trim()) tip.style.setProperty(name, val.trim())
+  }
+}
+
 function ensureStyle() {
   if (typeof document === 'undefined') return
   if (document.getElementById(STYLE_ID)) return
@@ -84,12 +113,12 @@ function ensureStyle() {
   max-width: min(28rem, calc(100vw - 16px));
   margin: 0; padding: 0.35em 0.6em;
   border-radius: 4px;
-  background: var(--panel-bg, #f7f7f7);
-  color: var(--fg, #1a1a1a);
-  border: 1px solid var(--border, rgba(0,0,0,0.14));
-  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-  font: normal 0.92em/1.35 system-ui, sans-serif;
+  background: var(--fg, #1a1a1a);
+  color: var(--bg, #f7f7f7);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.28);
+  font-family: var(--font-ui, system-ui, sans-serif);
   font-size: var(--type-meta, var(--ui-font-size, 13px));
+  line-height: 1.35;
   pointer-events: none;
   z-index: 2147483646;
   white-space: pre-wrap;
@@ -101,13 +130,6 @@ function ensureStyle() {
 .${TIP_CLASS}.btf-dom-tooltip-show {
   opacity: 1;
   transform: translateY(0);
-}
-body:has(.dark) .${TIP_CLASS},
-.app.dark ~ * .${TIP_CLASS} {
-  background: var(--panel-bg, #2a2a2a);
-  color: var(--fg, #f2f2f2);
-  border-color: var(--border, rgba(255,255,255,0.12));
-  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
 }
 `
   document.head.appendChild(style)
@@ -163,6 +185,7 @@ function showTipFor(el) {
   if (activeEl && activeEl !== el) restoreTitle(activeEl)
   activeEl = el
   stashTitle(el)
+  syncThemeVars(tip)
   tip.textContent = text
   tip.style.visibility = 'hidden'
   tip.classList.remove('btf-dom-tooltip-show')

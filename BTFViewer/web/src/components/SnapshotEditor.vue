@@ -1003,7 +1003,8 @@ const TOOL_KEYS = {
 }
 
 function onDocKeyDown(e) {
-  // Esc — peel back one layer at a time; never closes the editor itself.
+  // Esc — peel back one layer at a time, then close the editor once there's
+  // nothing left to peel (matches every other dialog/panel in the app).
   if (e.key === 'Escape') {
     e.preventDefault()
     e.stopPropagation()
@@ -1013,6 +1014,7 @@ function onDocKeyDown(e) {
     if (selectedIdx.value >= 0) { selectedIdx.value = -1; scheduleRedraw(); return }
     if (crop.value) { clearCrop(); return }
     if (tool.value !== 'select') { setTool('select'); return }
+    handleClose()
     return
   }
 
