@@ -1,13 +1,21 @@
 """In-app Statistics Reference viewer (Desktop).
 
-Renders STATISTICS.md — pre-rendered to static HTML by
-scripts/build_docs_html.py — inside an embedded QtWebEngine browser,
+Renders STATISTICS.md / STATISTICS_zh-TW.md — pre-rendered to static HTML
+by scripts/build_docs_html.py — inside an embedded QtWebEngine browser,
 scrolled to the section the user came from. No markdown parsing happens
 at app runtime.
 
 Ships as a single ``btf_viewer.hlp`` file next to ``btf_viewer.py`` (NOT
 a ``docs_html/`` folder under the repo tree) so a release can be just
 those two files, copied anywhere — no BTFViewer/ package layout needed.
+The file holds a JSON envelope ``{"en": "<!doctype ...", "zh-tw": "<!doctype
+..."}`` — one complete, independent HTML document per language, since both
+source .md files share the same anchor ids (merging them into one DOM would
+collide). ``_load_pages()`` parses it once and ``_toggle_lang()`` swaps
+which language's document is loaded, persisting the choice to
+``btf_viewer.rc``'s ``[help] stats_ref_lang`` key via the parent
+MainWindow's ``_RcSettings`` instance.
+
 Content is loaded via ``setHtml()`` (not ``load(QUrl.fromLocalFile(...))``,
 which would depend on Chromium's file-extension MIME sniffing recognizing
 ``.hlp``) and anchor-scrolled via JavaScript once loaded, with its own
@@ -49,6 +57,14 @@ from .config import (
 )
 
 HELP_FILENAME = "btf_viewer.hlp"
+# btf_viewer.hlp holds a JSON envelope {"en": "<!doctype ...", "zh-tw": "<!doctype
+# ..."} — one complete, independent HTML document per language (see
+# scripts/build_docs_html.py's module docstring for why: both source .md
+# files share the same anchor ids, so merging them into one DOM would
+# collide). Web parity: web/src/components/StatsReferenceViewer.vue.
+_LANG_LABELS = {"en": "EN", "zh-tw": "繁中"}
+_LANG_SWITCH_TOOLTIPS = {"en": "Switch to 繁體中文", "zh-tw": "Switch to English"}
+_OTHER_LANG = {"en": "zh-tw", "zh-tw": "en"}
 # A second custom role (distinct from Qt.ItemDataRole.UserRole, which holds
 # a top-level section id) marks a TOC row as a sub-heading within the
 # active section — see scripts/build_docs_html.py's embedded
@@ -97,10 +113,15 @@ class StatsReferenceViewer(QDialog):
         self._history: List[str] = []
         self._history_index: int = -1
         self._doc_loaded = False
+        self._pages: Dict[str, str] = {}
         self._doc_html: Optional[str] = None
         self._subsections: Dict[str, List[Dict[str, str]]] = {}
         self._sub_items: List[QListWidgetItem] = []
         self._view: Optional["QWebEngineView"] = None
+
+        settings = getattr(parent, "_settings", None)
+        saved_lang = settings.get("help", "stats_ref_lang", "en") if settings is not None else "en"
+        self._lang: str = saved_lang if saved_lang in _LANG_LABELS else "en"
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -150,6 +171,13 @@ class StatsReferenceViewer(QDialog):
         self._search.setFixedWidth(190)
         self._search.textChanged.connect(self._filter_toc)
         row.addWidget(self._search)
+
+        self._lang_btn = QToolButton()
+        self._lang_btn.setText(_LANG_LABELS[self._lang])
+        self._lang_btn.setToolTip(_LANG_SWITCH_TOOLTIPS[self._lang])
+        self._lang_btn.setAutoRaise(True)
+        self._lang_btn.clicked.connect(self._toggle_lang)
+        row.addWidget(self._lang_btn)
 
         open_ext_btn = QToolButton()
         open_ext_btn.setText("↗")
@@ -259,17 +287,61 @@ class StatsReferenceViewer(QDialog):
 
         if self._view is None:
             return
-        if self._doc_html is None:
-            help_path = help_file_path()
-            if help_path is None:
-                self._breadcrumb.setText(f"{crumb}  (reference not built)")
-                return
-            self._doc_html = help_path.read_text(encoding="utf-8")
-            self._subsections = _parse_subsections(self._doc_html)
+        if not self._pages and not self._load_pages():
+            self._breadcrumb.setText(f"{crumb}  (reference not built)")
+            return
         self._sync_toc_subsections(section_id)
         if self._doc_loaded:
             self._scroll_to(section_id)
         else:
+            self._view.setHtml(self._doc_html, QUrl("about:blank"))
+
+    def _load_pages(self) -> bool:
+        """Parse ``btf_viewer.hlp``'s ``{"en": ..., "zh-tw": ...}`` envelope
+        into ``self._pages`` and select the current language's page.
+
+        Returns False if the file is missing or not the JSON envelope this
+        build produces (e.g. a stale pre-dual-language ``.hlp``), leaving
+        ``self._pages`` empty so the caller can show a "not built" message.
+        """
+        help_path = help_file_path()
+        if help_path is None:
+            return False
+        try:
+            pages = json.loads(help_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(pages, dict) or not pages:
+            return False
+        self._pages = pages
+        if self._lang not in self._pages:
+            self._lang = "en" if "en" in self._pages else next(iter(self._pages))
+            self._lang_btn.setText(_LANG_LABELS.get(self._lang, self._lang))
+            self._lang_btn.setToolTip(_LANG_SWITCH_TOOLTIPS.get(self._lang, ""))
+        self._doc_html = self._pages[self._lang]
+        self._subsections = _parse_subsections(self._doc_html)
+        return True
+
+    def _toggle_lang(self) -> None:
+        if not self._pages:
+            return
+        lang = _OTHER_LANG.get(self._lang, "en")
+        if lang not in self._pages or lang == self._lang:
+            return
+        self._lang = lang
+        self._doc_html = self._pages[lang]
+        self._subsections = _parse_subsections(self._doc_html)
+        self._lang_btn.setText(_LANG_LABELS[lang])
+        self._lang_btn.setToolTip(_LANG_SWITCH_TOOLTIPS[lang])
+
+        settings = getattr(self.parent(), "_settings", None)
+        if settings is not None:
+            settings.set("help", "stats_ref_lang", lang)
+
+        if self._current_section:
+            self._sync_toc_subsections(self._current_section)
+        self._doc_loaded = False
+        if self._view is not None:
             self._view.setHtml(self._doc_html, QUrl("about:blank"))
 
     def _sync_toc_subsections(self, section_id: str) -> None:

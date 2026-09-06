@@ -1,7 +1,20 @@
 #!/usr/bin/env python3
-"""Pre-render STATISTICS.md into HTML for both Desktop and Web Statistics
-Reference viewers. English only — STATISTICS_zh-TW.md isn't kept in sync
-with the app and isn't converted.
+"""Pre-render STATISTICS.md and STATISTICS_zh-TW.md into HTML for both
+Desktop and Web Statistics Reference viewers.
+
+Each language becomes its own complete, independent HTML document — not
+one merged document toggled by CSS (the theme is; language isn't). Both
+language files share the exact same anchor ids (id="statistics-cores"
+etc.), so two documents merged into one DOM would collide: whichever
+language's copy of an id came first in the DOM would always win, breaking
+navigation for the other. Keeping documents separate and swapping which
+one is loaded (setHtml() on desktop, :srcdoc on web) sidesteps that
+entirely — see stats_reference.py / StatsReferenceViewer.vue.
+
+Mermaid diagrams are fully translated between the two source files (not
+just prose), so they're rendered per-language; the ```math formulas are
+byte-identical (LaTeX notation isn't prose), so they're rendered once and
+reused for both — see _build_one()'s math_cache parameter.
 
 No markdown parsing, mermaid rendering, or math typesetting happens at
 app runtime — both platforms load pre-built HTML. Screenshot images are
@@ -17,18 +30,22 @@ a shared glyph <defs> instead of per-formula paths or KaTeX's font
 files) fixes that the same way mermaid is handled: rendered once at
 build time, inlined as plain SVG.
 
-Two output copies, because the two platforms load documents differently:
+Two output copies, because the two platforms load documents differently —
+both hold the SAME content though: a JSON object {"en": "<!doctype ...",
+"zh-tw": "<!doctype ..."}, one full HTML document string per language:
 
 - Desktop (QWebEngineView.setHtml(...)) reads the text of a single file
-  next to btf_viewer.py: BTFViewer/builds/btf_viewer.hlp. A single file,
-  not a docs_html/ folder, so a release can be just btf_viewer.py +
-  btf_viewer.hlp copied anywhere — no BTFViewer/ package layout needed.
+  next to btf_viewer.py: BTFViewer/builds/btf_viewer.hlp, json.loads() it,
+  and setHtml()s whichever language is selected. A single file, not a
+  docs_html/ folder, so a release can be just btf_viewer.py + btf_viewer.hlp
+  copied anywhere — no BTFViewer/ package layout needed.
 
 - Web ships as ONE self-contained HTML file (vite-plugin-singlefile,
   see web/vite.config.js) with no server and no guaranteed sibling
-  files at runtime, so its copy is imported as a raw JS string
-  (`?raw`) and rendered via <iframe srcdoc>:
-  web/src/generated/statistics-en.inline.html.
+  files at runtime, so its copy is imported as a raw JS string (`?raw`),
+  JSON.parse()d, and rendered via <iframe :srcdoc="doc[lang]">:
+  web/src/generated/statistics-en.inline.html (filename kept for git-diff
+  continuity even though it now holds both languages).
 
 Requires (build-time only, not an app runtime dependency):
     pip install markdown-it-py
@@ -55,7 +72,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 BTF_ROOT = SCRIPT_DIR.parents[0]
 DESKTOP_OUT_PATH = BTF_ROOT / "builds" / "btf_viewer.hlp"
 WEB_OUT_PATH = BTF_ROOT / "web" / "src" / "generated" / "statistics-en.inline.html"
-SOURCE_MD = BTF_ROOT / "STATISTICS.md"
+LANGS: dict[str, Path] = {
+    "en": BTF_ROOT / "STATISTICS.md",
+    "zh-tw": BTF_ROOT / "STATISTICS_zh-TW.md",
+}
 RENDER_MATH_JS = SCRIPT_DIR / "render_math.mjs"
 
 _MERMAID_RE = re.compile(r"```mermaid\n(.*?)\n```\n?", re.DOTALL)
@@ -132,16 +152,23 @@ def _render_mermaid_to_svg(src: str, theme: str, svg_id: str) -> str:
         return svg.read_text(encoding="utf-8")
 
 
-def _extract_mermaid(text: str) -> tuple[str, list[tuple[str, str]]]:
-    """Replace ```mermaid blocks with placeholders; return (text, [(dark, light), ...])."""
+def _extract_mermaid(text: str, lang: str) -> tuple[str, list[tuple[str, str]]]:
+    """Replace ```mermaid blocks with placeholders; return (text, [(dark, light), ...]).
+
+    ``lang`` is folded into each SVG's id so the two languages' diagrams
+    never collide even though this function runs once per language build
+    (mermaid diagrams are fully translated, not shared — see module
+    docstring), and so ids stay unique when both language documents are
+    ever present in the same runtime page.
+    """
     svgs: list[tuple[str, str]] = []
 
     def _sub(m: re.Match) -> str:
         src = m.group(1)
         idx = len(svgs)
         svgs.append((
-            _render_mermaid_to_svg(src, "dark", f"mermaid-{idx}-dark"),
-            _render_mermaid_to_svg(src, "default", f"mermaid-{idx}-light"),
+            _render_mermaid_to_svg(src, "dark", f"mermaid-{lang}-{idx}-dark"),
+            _render_mermaid_to_svg(src, "default", f"mermaid-{lang}-{idx}-light"),
         ))
         return f"\n<div class=\"mermaid-slot\" data-mermaid-index=\"{idx}\"></div>\n\n"
 
@@ -255,7 +282,10 @@ def _add_subsection_ids(html: str) -> tuple[str, dict]:
         title_text = _TAG_RE.sub("", title_html).strip()
         slug = _SLUG_RE.sub("-", title_text.lower()).strip("-")
         if not slug:
-            return m.group(0)
+            # _SLUG_RE only keeps a-z0-9, so a CJK title (STATISTICS_zh-TW.md)
+            # strips to nothing — fall back to a position-based slug instead
+            # of silently dropping the sub-heading from TOC navigation.
+            slug = f"sub{sum(len(v) for v in subsections.values()) + 1}"
         key = f"{section_id}-{slug}"
         n = seen_slugs.get(key, 0)
         seen_slugs[key] = n + 1
@@ -366,9 +396,24 @@ window.__setDocTheme = function (t) {{
 """
 
 
-def build() -> list[Path]:
-    text = SOURCE_MD.read_text(encoding="utf-8")
-    text, mermaid_svgs = _extract_mermaid(text)
+_PAGE_TITLES = {
+    "en": "BTFViewer Statistics Reference",
+    "zh-tw": "BTFViewer 統計參考手冊",
+}
+
+
+def _build_one(source_md: Path, lang: str, math_cache: dict | None) -> tuple[str, dict | None]:
+    """Render one language's STATISTICS*.md into a complete HTML page.
+
+    ``math_cache`` is the already-rendered {"style", "defs", "formulas"}
+    dict from a prior language's call, or None on the first call — math
+    formulas are byte-identical across languages (LaTeX notation isn't
+    prose), so they're rendered once and reused rather than re-invoking
+    Node/MathJax a second time. Returns (page_html, math_cache) so the
+    caller can thread the cache into the next language's call.
+    """
+    text = source_md.read_text(encoding="utf-8")
+    text, mermaid_svgs = _extract_mermaid(text, lang)
     text, math_formulas = _extract_math(text)
 
     md = MarkdownIt("commonmark").enable("table")
@@ -378,38 +423,51 @@ def build() -> list[Path]:
     math_style = ""
     math_defs = ""
     if math_formulas:
-        math_data = _render_math(math_formulas)
-        html_body = _inline_math(html_body, math_data)
-        math_style = math_data["style"]
+        if math_cache is None:
+            math_cache = _render_math(math_formulas)
+        html_body = _inline_math(html_body, math_cache)
+        math_style = math_cache["style"]
         math_defs = (
             '<svg aria-hidden="true" style="position:absolute;width:0;height:0" '
-            f'xmlns="http://www.w3.org/2000/svg">{math_data["defs"]}</svg>'
+            f'xmlns="http://www.w3.org/2000/svg">{math_cache["defs"]}</svg>'
         )
     html_body = _strip_images(html_body)
     html_body, subsections = _add_subsection_ids(html_body)
     subsections_json = json.dumps(subsections, ensure_ascii=False).replace("</script", "<\\/script")
 
     page = _PAGE_TEMPLATE.format(
-        title="BTFViewer Statistics Reference", body=html_body,
+        title=_PAGE_TITLES[lang], body=html_body,
         math_style=math_style, math_defs=math_defs,
         subsections_json=subsections_json,
     )
+    return page, math_cache
+
+
+def build() -> list[Path]:
+    pages: dict[str, str] = {}
+    math_cache: dict | None = None
+    for lang, source_md in LANGS.items():
+        page, math_cache = _build_one(source_md, lang, math_cache)
+        pages[lang] = page
+
+    envelope = json.dumps(pages, ensure_ascii=False)
     written: list[Path] = []
 
     DESKTOP_OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    DESKTOP_OUT_PATH.write_text(page, encoding="utf-8")
+    DESKTOP_OUT_PATH.write_text(envelope, encoding="utf-8")
     written.append(DESKTOP_OUT_PATH)
 
     WEB_OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    WEB_OUT_PATH.write_text(page, encoding="utf-8")
+    WEB_OUT_PATH.write_text(envelope, encoding="utf-8")
     written.append(WEB_OUT_PATH)
 
     return written
 
 
 def main() -> int:
-    if not SOURCE_MD.is_file():
-        print(f"warning: missing source {SOURCE_MD}", file=sys.stderr)
+    missing = [str(p) for p in LANGS.values() if not p.is_file()]
+    if missing:
+        print(f"warning: missing source(s): {', '.join(missing)}", file=sys.stderr)
         return 1
     for out_path in build():
         size_kb = out_path.stat().st_size / 1024

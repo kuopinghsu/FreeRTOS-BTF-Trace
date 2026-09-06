@@ -139,6 +139,7 @@ DOCS_HTML_ARTIFACTS: Sequence[str] = (
 )
 DOCS_HTML_SOURCE_PATHS: Sequence[str] = (
     "STATISTICS.md",
+    "STATISTICS_zh-TW.md",
     "scripts/build_docs_html.py",
     "scripts/render_math.mjs",
     "scripts/package.json",
@@ -550,10 +551,11 @@ def check_py_freshness() -> List[str]:
 
 def check_docs_html_freshness() -> List[str]:
     """History/dirty freshness for the pre-rendered Statistics Reference HTML
-    (btf_viewer.hlp + statistics-en.inline.html) vs STATISTICS.md and the
+    (btf_viewer.hlp + statistics-en.inline.html — each a JSON envelope
+    {"en": ..., "zh-tw": ...}) vs STATISTICS.md, STATISTICS_zh-TW.md, and the
     build script. Same git-timestamp/dirty-tree approach as PDF freshness —
     no pandoc/npm/mathjax rebuild needed in CI to catch a forgotten
-    ``python3 scripts/build_docs_html.py`` after editing STATISTICS.md."""
+    ``python3 scripts/build_docs_html.py`` after editing either source .md."""
     errors: List[str] = []
     src_t = git_commit_time(*DOCS_HTML_SOURCE_PATHS)
     src_dirty = any_dirty(DOCS_HTML_SOURCE_PATHS)
@@ -568,14 +570,15 @@ def check_docs_html_freshness() -> List[str]:
         art_t = git_commit_time(artifact_rel)
         if src_t and art_t and src_t > art_t:
             errors.append(
-                f"docs-html: {artifact_rel} is older than STATISTICS.md/build script "
+                f"docs-html: {artifact_rel} is older than STATISTICS*.md/build script "
                 f"(sources {src_t} > artifact {art_t}); "
                 f"run: python3 scripts/build_docs_html.py"
             )
         if src_dirty and not git_dirty(artifact_rel):
             errors.append(
-                f"docs-html: STATISTICS.md or the build script has local edits but "
-                f"{artifact_rel} does not; run: python3 scripts/build_docs_html.py"
+                f"docs-html: STATISTICS.md, STATISTICS_zh-TW.md, or the build script "
+                f"has local edits but {artifact_rel} does not; "
+                f"run: python3 scripts/build_docs_html.py"
             )
     return errors
 

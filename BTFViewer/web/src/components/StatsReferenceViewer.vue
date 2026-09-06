@@ -33,6 +33,13 @@
 
         <button
           type="button"
+          class="stats-ref-lang-btn"
+          :title="lang === 'en' ? 'Switch to 繁體中文' : 'Switch to English'"
+          @click="toggleLang"
+        >{{ lang === 'en' ? 'EN' : '繁中' }}</button>
+
+        <button
+          type="button"
           class="stats-ref-chrome-btn"
           title="Open in system browser"
           @click="openInNewTab"
@@ -105,20 +112,49 @@ const props = defineProps({ darkMode: { type: Boolean, default: true } })
 // self-contained HTML file (vite-plugin-singlefile) with no server and no
 // guaranteed sibling files at runtime, so the doc content must be inlined
 // into the JS bundle and rendered via <iframe srcdoc> — see
-// scripts/build_docs_html.py for how this is generated.
-import docHtml from '../generated/statistics-en.inline.html?raw'
+// scripts/build_docs_html.py for how this is generated. The file (name kept
+// for git-diff continuity) now holds a JSON envelope {"en": "<!doctype...",
+// "zh-tw": "<!doctype..."} — one complete, independent document per
+// language, not one document toggled by CSS: both source .md files share
+// the same anchor ids, so merging them into one DOM would collide.
+import rawDocJson from '../generated/statistics-en.inline.html?raw'
+
+const PAGES = JSON.parse(rawDocJson)
+const LANG_STORAGE_KEY = 'btf-stats-ref-lang'
+
+function loadStoredLang() {
+  try {
+    const v = localStorage.getItem(LANG_STORAGE_KEY)
+    return v === 'zh-tw' ? 'zh-tw' : 'en'
+  } catch {
+    return 'en'
+  }
+}
+
+const lang = ref(loadStoredLang())
+const docHtml = computed(() => PAGES[lang.value] || PAGES.en)
+
+function toggleLang() {
+  lang.value = lang.value === 'en' ? 'zh-tw' : 'en'
+  try { localStorage.setItem(LANG_STORAGE_KEY, lang.value) } catch { /* ignore */ }
+  // srcdoc is about to change, remounting the iframe's document — onFrameLoad
+  // re-syncs theme and re-navigates to currentSection once the new doc loads.
+  frameLoaded.value = false
+}
 
 // Sub-heading (h3) map, embedded by scripts/build_docs_html.py right in
-// docHtml as a <script type="application/json">. Extracted from the raw
-// string (not the DOM) so it's available before the iframe ever loads —
-// desktop's stats_reference.py parses the identical blob the same way.
-const SECTION_SUBSECTIONS = (() => {
-  const m = docHtml.match(
+// each language's document as a <script type="application/json">. Extracted
+// from the raw string (not the DOM) so it's available before the iframe
+// ever loads — desktop's stats_reference.py parses the identical blob the
+// same way. Recomputed per language: sub-heading anchors are slugified from
+// the (translated) heading text, so they differ between the two documents.
+const SECTION_SUBSECTIONS = computed(() => {
+  const m = docHtml.value.match(
     /<script type="application\/json" id="statistics-subsections">([\s\S]*?)<\/script>/
   )
   if (!m) return {}
   try { return JSON.parse(m[1]) } catch { return {} }
-})()
+})
 
 const visible = ref(false)
 const currentSection = ref('')
@@ -160,7 +196,7 @@ const tocByCategory = computed(() => {
 // Sub-headings only for the currently active section — same "expand what
 // you're looking at" behaviour as desktop's stats_reference.py, not a full
 // always-expanded tree.
-const activeSubsections = computed(() => SECTION_SUBSECTIONS[currentSection.value] || [])
+const activeSubsections = computed(() => SECTION_SUBSECTIONS.value[currentSection.value] || [])
 
 function navigateToSub(subId) {
   navigateFrame(subId)  // same page, no history/breadcrumb change
@@ -241,7 +277,7 @@ function goForward() {
 function openInNewTab() {
   // No real URL to hand the new tab (srcdoc content) — package it as a
   // Blob URL instead; the fragment still scrolls on that tab's own load.
-  const blob = new Blob([docHtml], { type: 'text/html' })
+  const blob = new Blob([docHtml.value], { type: 'text/html' })
   const url = URL.createObjectURL(blob)
   const sid = currentSection.value
   window.open(sid ? `${url}#statistics-${sid}` : url, '_blank', 'noopener')
@@ -309,6 +345,26 @@ defineExpose({ openSection, close })
 .stats-ref-chrome-btn:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+.stats-ref-lang-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-dim);
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.stats-ref-lang-btn:hover {
+  background: var(--app-surface-3, var(--tb-btn-hover));
+  color: var(--fg);
 }
 
 .stats-ref-breadcrumb {
