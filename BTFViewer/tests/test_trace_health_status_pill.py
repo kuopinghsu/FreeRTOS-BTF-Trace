@@ -147,8 +147,25 @@ class TraceHealthPillStyleTests(unittest.TestCase):
         immediately after it."""
         win = self._make_win()
         sb = win.statusBar()
-        layout = sb.layout()
-        widgets = [layout.itemAt(i).widget() for i in range(layout.count())]
+
+        def find_leaf_layout(lay):
+            """QStatusBar nests its message-area row a couple of QBoxLayouts
+            deep (QHBoxLayout > QVBoxLayout > QHBoxLayout with the actual
+            widgets) — walk down to whichever level directly parents the
+            health button."""
+            widgets = [lay.itemAt(i).widget() for i in range(lay.count())]
+            if win._status_health_btn in widgets:
+                return widgets
+            for i in range(lay.count()):
+                sub = lay.itemAt(i).layout()
+                if sub is not None:
+                    found = find_leaf_layout(sub)
+                    if found is not None:
+                        return found
+            return None
+
+        widgets = find_leaf_layout(sb.layout())
+        self.assertIsNotNone(widgets, "could not find statusHealthBtn's parent layout")
         idx = widgets.index(win._status_health_btn)
         self.assertGreater(idx, 0)
         self.assertLess(idx, len(widgets) - 1)
