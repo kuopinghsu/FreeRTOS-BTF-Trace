@@ -90965,6 +90965,148 @@ class _ToolTipTranslucencyFilter(QObject):
         return False
 
 
+def _status_dot_icon(color_hex: str, diameter: int = 8) -> QIcon:
+    """Small filled circle icon — the Trace Health pill's status dot
+    (web's TraceHealthBadge.vue ``.th-dot``), since QSS alone can't paint a
+    separately-colored dot inside a QToolButton's text/icon area. Rendered
+    at 2x and marked devicePixelRatio so it stays crisp on HiDPI displays.
+    """
+    scale = 2
+    px = QPixmap(diameter * scale, diameter * scale)
+    px.setDevicePixelRatio(scale)
+    px.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(px)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color_hex))
+    painter.drawEllipse(0, 0, diameter, diameter)
+    painter.end()
+    return QIcon(px)
+
+
+class _TraceHealthDetailDialog(QDialog):
+    """Trace Health detail popup opened from the status-bar pill.
+
+    Text and structure mirror web's TraceHealthBadge.vue ``.th-pop`` exactly
+    (status word · issue count, the same explanatory note verbatim, and a
+    per-check list with a colored severity dot, summary, and Range/Limited
+    meta lines) — the native window titlebar/close stands in for the web
+    popup's own header row and ✕ button, since Qt already provides those.
+    """
+
+    def __init__(self, result: dict, parent=None, *, is_dark: bool = True,
+                 ui_font_size: int = UI_FONT_SIZE) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Trace Health")
+        self.setModal(True)
+        c = MainWindow._theme_tokens(is_dark)
+        # Floor at 9pt regardless of the app's own (often compact, 6-8pt)
+        # toolbar/status-bar font: this is a detail popup meant to be read,
+        # not a dense chrome control, so it should never shrink below legible
+        # — only scale UP if the user's chosen UI font is already larger.
+        ui_pt = max(9, min(int(ui_font_size), 24))
+        self.setFont(_application_ui_font(ui_pt))
+        ui_fs = _ui_font_stylesheet_size(ui_pt)
+        status_fs = _ui_font_stylesheet_size(ui_pt + 2)
+        meta_fs = ui_fs
+        note_fs = ui_fs
+
+        status = str(result.get("status") or "pass")
+        n = int(result.get("issue_count") or 0)
+        label = trace_health_status_label(status)
+        status_color = {"pass": c["sem_ok"], "caution": c["sem_warn"],
+                        "insufficient": c["sem_err"]}.get(status, c["text"])
+        checks = list(result.get("checks") or [])
+
+        def _fmt_range(rng: dict) -> str:
+            lo = rng.get("lo", rng.get("start"))
+            hi = rng.get("hi", rng.get("end"))
+            if lo is None or hi is None:
+                return ""
+            return f"{lo} – {hi}"
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setSpacing(0)
+
+        status_row = QHBoxLayout()
+        status_row.setSpacing(6)
+        status_lbl = QLabel(label)
+        status_lbl.setStyleSheet(f"font-weight:650; font-size:{status_fs}; color:{status_color};")
+        status_row.addWidget(status_lbl)
+        sub_lbl = QLabel(f"· {n} structural issue(s)")
+        sub_lbl.setStyleSheet(f"font-size:{ui_fs}; color:{c['sub_text']};")
+        status_row.addWidget(sub_lbl)
+        status_row.addStretch(1)
+        outer.addLayout(status_row)
+
+        note = QLabel(
+            "Structural checks on the parsed event model, independent of AI and of "
+            "<i>Trace Health (TICK)</i>. Passing means the statistics below rest on a "
+            "consistent event stream — not that the system is healthy.")
+        note.setTextFormat(Qt.TextFormat.RichText)
+        note.setWordWrap(True)
+        note.setStyleSheet(f"font-size:{note_fs}; color:{c['sub_text']}; margin-top:6px;")
+        outer.addWidget(note)
+
+        if not checks:
+            ok_line = QLabel("No structural issues detected in the analysed range.")
+            ok_line.setWordWrap(True)
+            ok_line.setStyleSheet(f"font-size:{note_fs}; color:{c['sub_text']}; margin-top:10px;")
+            outer.addWidget(ok_line)
+        else:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setMaximumHeight(420)
+            scroll.setStyleSheet("background:transparent; border:none;")
+            list_host = QWidget()
+            list_host.setStyleSheet("background:transparent;")
+            list_lay = QVBoxLayout(list_host)
+            list_lay.setContentsMargins(0, 8, 0, 0)
+            list_lay.setSpacing(0)
+            sev_color = {"warning": c["sem_warn"], "error": c["sem_err"]}
+            for i, chk in enumerate(checks):
+                row = QWidget()
+                row_border = f"border-top:1px solid {c['sep']};" if i > 0 else ""
+                row.setStyleSheet(f"background:transparent; {row_border}")
+                row_lay = QHBoxLayout(row)
+                row_lay.setContentsMargins(0, 9, 0, 9)
+                row_lay.setSpacing(9)
+                dot = QLabel()
+                dot.setPixmap(_status_dot_icon(
+                    sev_color.get(str(chk.get("severity") or ""), c["sub_text"]), 8
+                ).pixmap(8, 8))
+                dot.setFixedSize(8, 8)
+                dot.setContentsMargins(0, 4, 0, 0)
+                row_lay.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
+                body = QVBoxLayout()
+                body.setSpacing(2)
+                summary = QLabel(str(chk.get("summary") or ""))
+                summary.setWordWrap(True)
+                summary.setStyleSheet(f"font-size:{ui_fs}; color:{c['text']};")
+                body.addWidget(summary)
+                range_text = _fmt_range(chk.get("affected_range") or {})
+                if range_text:
+                    rng_lbl = QLabel(f"Range: {range_text}")
+                    rng_lbl.setStyleSheet(f"font-size:{meta_fs}; color:{c['sub_text']};")
+                    body.addWidget(rng_lbl)
+                limits = [str(m) for m in (chk.get("metric_limitations") or []) if str(m)]
+                if limits:
+                    lim_lbl = QLabel(f"Limited: {', '.join(limits)}")
+                    lim_lbl.setWordWrap(True)
+                    lim_lbl.setStyleSheet(f"font-size:{meta_fs}; color:{c['sub_text']};")
+                    body.addWidget(lim_lbl)
+                row_lay.addLayout(body, 1)
+                list_lay.addWidget(row)
+            scroll.setWidget(list_host)
+            outer.addWidget(scroll)
+
+        self.setStyleSheet(f"QDialog {{ background:{c['menu_bg']}; }}")
+        self.setMinimumWidth(400)
+        self.resize(460, self.sizeHint().height())
+
+
 class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     # ------------------------------------------------------------------
@@ -92409,10 +92551,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._trace_health_result = result
         status = str(result.get("status") or "pass")
         n = int(result.get("issue_count", 0) or 0)
-        glyph = {"pass": "●", "caution": "⚠", "insufficient": "✕"}.get(status, "●")
         label = trace_health_status_label(status)
-        btn.setText(f"  {glyph} {label}" + (f" · {n}" if n else "") + "  ")
+        c = self._theme_tokens(self._is_dark)
+        dot_hex = {"pass": c["sem_ok"], "caution": c["sem_warn"],
+                   "insufficient": c["sem_err"]}.get(status, c["sub_text"])
+        btn.setIcon(_status_dot_icon(dot_hex))
+        btn.setText(f"{label}" + (f" · {n}" if n else ""))
         btn.setProperty("healthStatus", status)
+        # Dynamic-property QSS selectors (QToolButton#statusHealthBtn[healthStatus=...])
+        # only re-evaluate after an explicit unpolish/polish, not on setProperty alone.
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
         btn.setToolTip(trace_health_summary(result) + " — click for detail")
         btn.setVisible(True)
 
@@ -92420,35 +92569,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         result = getattr(self, "_trace_health_result", None)
         if not result:
             return
-        status = str(result.get("status") or "pass")
-        n = int(result.get("issue_count", 0) or 0)
-        lines = [
-            f"Status: {trace_health_status_label(status)} · {n} structural issue(s)",
-            "",
-            "Structural checks on the parsed event model, independent of AI and of "
-            "Trace Health (TICK). Passing means the statistics rest on a consistent "
-            "event stream — not that the system is healthy.",
-            "",
-        ]
-        checks = result.get("checks") or []
-        if not checks:
-            lines.append("No structural issues detected in the analysed range.")
-        for c in checks:
-            lines.append(f"[{c.get('severity', 'info')}] {c.get('summary', '')}")
-            rng = c.get("affected_range") or {}
-            lo, hi = rng.get("lo"), rng.get("hi")
-            if lo is not None and hi is not None:
-                lines.append(f"    Range: {lo} – {hi}")
-            lim = c.get("metric_limitations") or []
-            if lim:
-                lines.append(f"    Limited: {', '.join(lim)}")
-            lines.append("")
-        box = QMessageBox(self)
-        box.setWindowTitle("Trace Health")
-        box.setIcon(
-            QMessageBox.Icon.Warning if status != "pass" else QMessageBox.Icon.Information)
-        box.setText("\n".join(lines).rstrip())
-        box.exec()
+        dlg = _TraceHealthDetailDialog(result, parent=self, is_dark=self._is_dark,
+                                        ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE))
+        dlg.exec()
 
     def _sync_file_export_actions(self, has_range: Optional[bool] = None) -> None:
         """Enable snapshot / SVG / Export with a trace loaded (the Export dialog
@@ -93444,6 +93567,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 muted_text    = "#999999",
                 welcome_h2    = "#888888",
                 welcome_p     = "#666666",
+                # Analysis semantic colors — same values as web's --analysis-ok/
+                # warn/err (App.vue) and _AnalysisFindingsDialog's own local
+                # palette; used by the status-bar Trace Health pill/popup.
+                sem_ok        = "#7dcea0",
+                sem_warn      = "#e67e22",
+                sem_err       = "#e74c3c",
             )
         return dict(
             accent        = "#005A9E",
@@ -93486,6 +93615,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             muted_text    = "#666666",
             welcome_h2    = "#555555",
             welcome_p     = "#444444",
+            sem_ok        = "#166534",
+            sem_warn      = "#9a4d00",
+            sem_err       = "#c0392b",
         )
 
     def _apply_theme(self, is_dark: bool, *, op: int | None = None) -> None:
@@ -93606,6 +93738,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QStatusBar QLabel {{ font-size:{_ui_fs}; color:{c['sub_text']}; }}
             QStatusBar QLabel#zoomScaleLabel {{ font-size:{_ui_fs}; color:{c['status_text']}; }}
             QStatusBar QCheckBox {{ font-size:{_ui_fs}; color:{c['sub_text']}; padding: 0 4px; }}
+            /* Trace Health pill — mirrors web's TraceHealthBadge.vue .th-badge
+               (rounded pill, status-colored border/dot, hover fill). The dot
+               is an icon (see _status_dot_icon), not paintable via QSS alone. */
+            QToolButton#statusHealthBtn {{
+                border:1px solid {c['sep']}; border-radius:9px; padding:1px 9px;
+                background:{c['mid']}; color:{c['text']}; font-weight:600; font-size:{_ui_fs};
+            }}
+            QToolButton#statusHealthBtn:hover {{ background:{c['tb_hover']}; border-radius:9px; }}
+            QToolButton#statusHealthBtn[healthStatus="pass"] {{ border-color:{c['sem_ok']}; }}
+            QToolButton#statusHealthBtn[healthStatus="caution"] {{ border-color:{c['sem_warn']}; }}
+            QToolButton#statusHealthBtn[healthStatus="insufficient"] {{ border-color:{c['sem_err']}; }}
             QLabel      {{ font-size:{_ui_fs}; }}
             /* Unified context strip — one bordered zone; each bar keeps its
                semantic colour as a 3px left stripe (web App.vue .ctx-row). */
@@ -95716,7 +95859,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._status_health_btn.setText("")
         self._status_health_btn.setToolTip("Structural trace health — click for detail")
         self._status_health_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._status_health_btn.setAutoRaise(True)
+        # Not auto-raise: the pill's border/background (web .th-badge) must
+        # stay visible at rest, not only reveal itself on hover.
+        self._status_health_btn.setAutoRaise(False)
+        self._status_health_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._status_health_btn.setIconSize(QSize(8, 8))
         self._status_health_btn.setVisible(False)
         self._status_health_btn.clicked.connect(self._show_trace_health_detail)
 
@@ -95809,7 +95956,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sb.addWidget(self._status_load_lbl)
         sb.addWidget(self._status_load_cancel)
         sb.addWidget(self._status_inspect)
+        # Two equal expanding spacers straddling the pill approximate web's
+        # `.status-bar { justify-content: space-between }`, where the health
+        # badge floats roughly mid-row instead of sitting packed against the
+        # file-info text on its left (QStatusBar's addWidget() zone has no
+        # built-in space-distribution of its own).
+        _health_spacer_l = QWidget()
+        _health_spacer_l.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        sb.addWidget(_health_spacer_l, 1)
         sb.addWidget(self._status_health_btn)
+        _health_spacer_r = QWidget()
+        _health_spacer_r.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        sb.addWidget(_health_spacer_r, 1)
         sb.addPermanentWidget(self._cursor_bar)
         sb.addPermanentWidget(self._status_migrated_filter_btn)
         sb.addPermanentWidget(self._status_core_filter_btn)
