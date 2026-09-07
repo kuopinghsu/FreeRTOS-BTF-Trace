@@ -64,6 +64,7 @@ build
 !BTFViewer/demos/**/*.btf
 !BTFViewer/demos/**/*.btf.gz
 !BTFViewer/tests/ai/*.btf
+!BTFViewer/tests/fixtures/**/*.btf
 tracedata/trace.*
 
 # BTF viewer runtime settings (user-local, not shared)

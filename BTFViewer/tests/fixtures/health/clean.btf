@@ -1,0 +1,31 @@
+#version 2.2.0
+#creator BTFViewer trace-health regression fixture
+#timeScale us
+100,Core_0,0,C,Core_0,0,set_frequency,20000000
+100,Core_1,0,C,Core_1,0,set_frequency,20000000
+100,Core_0,0,T,[0/0001]Runner,0,preempt,create pri:4
+101,Core_0,0,T,[0/0002]IDLE0,0,preempt,create pri:0
+102,Core_1,0,T,[1/0003]Worker,0,preempt,create pri:3
+103,Core_1,0,T,[1/0004]IDLE1,0,preempt,create pri:0
+104,[0/0000],0,T,[0/0001]Runner,0,resume,
+105,[1/0000],0,T,[1/0003]Worker,0,resume,
+120,Core_0,0,STI,TICK,0,trigger,1
+120,Core_1,0,STI,TICK,0,trigger,1
+130,Core_0,0,STI,interval_start,0,trigger,7 tid:1
+140,Core_0,0,T,[0/0001]Runner,0,preempt,
+141,[0/0001]Runner,0,T,[0/0002]IDLE0,0,resume,
+150,Core_0,0,STI,interval_stop,0,trigger,7 tid:1
+160,Core_1,0,T,[1/0003]Worker,0,preempt,
+161,[1/0003]Worker,0,T,[1/0004]IDLE1,0,resume,
+180,Core_0,0,STI,TICK,0,trigger,2
+180,Core_1,0,STI,TICK,0,trigger,2
+190,Core_0,0,T,[0/0002]IDLE0,0,preempt,
+191,[0/0002]IDLE0,0,T,[0/0001]Runner,0,resume,
+200,Core_1,0,T,[1/0004]IDLE1,0,preempt,
+201,[1/0004]IDLE1,0,T,[1/0003]Worker,0,resume,
+220,Core_0,0,STI,TICK,0,trigger,3
+220,Core_1,0,STI,TICK,0,trigger,3
+230,Core_0,0,T,[0/0001]Runner,0,preempt,
+231,[0/0001]Runner,0,T,[0/0002]IDLE0,0,resume,
+240,Core_1,0,T,[1/0003]Worker,0,preempt,
+241,[1/0003]Worker,0,T,[1/0004]IDLE1,0,resume,
