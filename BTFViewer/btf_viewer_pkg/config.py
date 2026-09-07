@@ -1718,16 +1718,23 @@ def _screen_raster_ratio() -> float:
     return max(2.0, min(3.0, r if r > 0 else 1.0))
 
 
-def _rail_glyph_icon(inner: str, color: str = "#9E9E9E", size: int = 18) -> "QIcon":
+def _rail_glyph_icon(
+    inner: str, color: str = "#9E9E9E", size: int = 18, opacity: float = 1.0,
+) -> "QIcon":
     """QIcon from a 24-viewBox stroke glyph — 1:1 with the web App.vue sidebar
     SVGs (``fill:none; stroke:currentColor; stroke-width:1.8``; round caps).
-    Rasterised at the screen DPR so the thin strokes stay sharp."""
+    Rasterised at the screen DPR so the thin strokes stay sharp.
+
+    ``opacity`` < 1 fades the glyph (used for a disabled rail button — a
+    QToolButton with a stylesheet no longer gets Qt's auto-generated grey
+    disabled pixmap, so the fade has to be baked into the icon)."""
     ratio = _screen_raster_ratio()
     px = max(1, int(round(size * ratio)))
+    op = "" if opacity >= 1.0 else f' opacity="{max(0.0, opacity):g}"'
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{px}" height="{px}" '
         f'viewBox="0 0 24 24"><g fill="none" stroke="{color}" stroke-width="1.8" '
-        f'stroke-linecap="round" stroke-linejoin="round">{inner}</g></svg>'
+        f'stroke-linecap="round" stroke-linejoin="round"{op}>{inner}</g></svg>'
     )
     pm, _ = rasterize_svg_pixmap(svg, dest_w=px, dest_h=px)
     if not pm.isNull():

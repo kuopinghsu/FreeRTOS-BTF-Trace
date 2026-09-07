@@ -653,6 +653,16 @@ export function createDemoRunner(host, pack, options = {}) {
       await host.openAnalysis({ close })
       return
     }
+    if (tag === 'notebook' || tag === 'investigation_notebook') {
+      let close = false
+      if ('close' in (el.attrib || {})) close = truthy(el.attrib.close, true)
+      else if ('open' in (el.attrib || {})) close = !truthy(el.attrib.open, true)
+      else if (String(el.attrib.action || '').toLowerCase() === 'close') close = true
+      const scaffold = truthy(el.attrib.scaffold, false)
+        || String(el.attrib.action || '').toLowerCase() === 'scaffold'
+      await host.openNotebook?.({ close, scaffold })
+      return
+    }
     if (tag === 'heatmap' || tag === 'chord' || tag === 'corridor') {
       let close = false
       if ('close' in (el.attrib || {})) close = truthy(el.attrib.close, true)

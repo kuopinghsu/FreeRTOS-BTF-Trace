@@ -1,7 +1,9 @@
-Step 12: keep a focused investigation inside its selected scope.
+Step 12: explain a selected region, and keep the answer inside its scope.
 
-Place cursors around the phase you want to explain and enable Limit to C1 through Cn. Then run the scoped AI request. Every jump:TIME used as evidence should fall inside that cursor range.
+Place cursors around the phase you want to explain, enable Limit to C1 through Cn, then run Explain region. Every jump:TIME the AI cites must fall inside that cursor range.
 
-If an evidence link is outside the active scope, do not use it to support the conclusion. Recheck the scope, rebuild the findings for that range, and run the investigation again.
+For the window range:3087568/3090460 the assistant summarizes Med[267] on Core_0 with recurrent blocking and scheduling gaps. Its top issues: a 679 us blocking gap at jump:3088582 that extends to jump:3089261, then shorter 13 us gaps at jump:3089784, jump:3090044, and jump:3090460; and two execution slices, 335 us at jump:3087568 and 384 us at jump:3088582. It points to the Critical Path or Mutex Blocking page for the contention inside that range.
 
-After the cause is supported by measured evidence, you can use Experiment or What-if to explore a possible change. These are estimates, not measured validation. Make the firmware change, capture another trace, and use Compare to verify the result.
+If an evidence link falls outside the active scope, do not use it. Recheck the scope, rebuild the findings for that range, and run the request again.
+
+Once the cause has measured support, Experiment and What-if can sketch a change, but these are estimates, not measurements. Make the firmware change, capture another trace, and use Compare to confirm the result.

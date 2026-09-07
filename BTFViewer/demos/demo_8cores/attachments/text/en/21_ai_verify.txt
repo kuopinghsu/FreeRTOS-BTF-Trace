@@ -1,9 +1,11 @@
-Step 11: verify the AI result against BTFViewer.
+Step 11: verify the finding against BTFViewer.
 
-Click each jump:TIME link and inspect the corresponding event on the timeline. For this case, verify the priority-inheritance trigger, the boost from priority 2 to 4, the boost duration, and the nearby off-CPU interval. Then compare those events with Priority Inheritance, Mutex Blocking, and the related Statistics data.
+Select the Off-CPU finding and use Verify finding. The assistant calls investigate on that finding id, re-collects evidence with metric and timeline queries, runs verify_claim and challenge_conclusion, then sets cursors and zooms to the strongest evidence.
 
-The Evidence and Validation information records the finding, checks, alternative hypothesis, missing evidence, and supporting timeline matches. A Confirmed verdict is useful only when its cited evidence is inside the active scope and agrees with the measured data.
+The second pass returns Confirmed again, now scoped to the cursor window range:3087568/3090460. Its evidence chain: the 679 us blocking gap from jump:3088582 to jump:3089261 on Core_0, and the 335 us execution slice at jump:3087568, with C1 at jump:3087568 and C2 at jump:3090460. Confidence is High, quality Direct, coverage Complete for that window.
 
-As you confirm each jump, record what you verified in the Investigation Notebook: a Verification-step bookmark with the finding and time range attached. Add to investigation on an Analysis finding, or Add region to investigation from the timeline right-click menu, drops the reference in for you.
+The Evidence and Validation panel scores it another way: evidence quality Medium-High at 70, coverage 95 percent, 19 of 20 claims directly observed, one assumption still unverified. A Confirmed verdict only counts when its cited evidence sits inside the active scope and matches the measured data.
 
-If the AI explanation and the trace disagree, use Statistics and the timeline as the source of truth.
+Now click each jump:TIME in the reply and inspect the event on the timeline. Confirm the 679 us gap, the recurring 13 us gaps, and the execution slices, then cross-check them against the Off-CPU Time and Mutex Blocking Statistics pages.
+
+As you confirm each jump, record it in the Investigation Notebook: a Verification bookmark with the finding and time range attached. Add to investigation on the finding, or Add region to investigation from the timeline right-click menu, fills the reference in for you. If the AI explanation and the trace disagree, Statistics and the timeline are the source of truth.

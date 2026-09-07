@@ -201,6 +201,28 @@ class DemoInappSourceParityTests(unittest.TestCase):
         js = WEB_RUNNER.read_text(encoding="utf-8")
         self.assertEqual(_python_run_action_tags(py), _js_run_action_tags(js))
 
+    def test_notebook_demo_action_lockstep(self) -> None:
+        """<notebook open/close/scaffold> drives the Investigation Notebook on
+        both Desktop and Web (used by demo_8cores step 23)."""
+        py_runner = DESKTOP_INAPP.read_text(encoding="utf-8")
+        js_runner = WEB_RUNNER.read_text(encoding="utf-8")
+        mw = DESKTOP_MW.read_text(encoding="utf-8")
+        app = WEB_APP.read_text(encoding="utf-8")
+        xml = DEMO_XML.read_text(encoding="utf-8")
+
+        self.assertIn('tag in ("notebook", "investigation_notebook")', py_runner)
+        self.assertIn("tag === 'notebook' || tag === 'investigation_notebook'", js_runner)
+        self.assertIn('op in ("notebook", "investigation_notebook")', mw)
+        self.assertIn("def _demo_notebook", mw)
+        self.assertIn("_scaffold_from_findings()", mw)
+        self.assertIn("openNotebook: async", app)
+        self.assertIn("onScaffoldNotebook()", app)
+        self.assertIn('"rail_notebook": "notebook"', mw)
+        # The shipped tour uses it.
+        self.assertIn('<notebook open="true"/>', xml)
+        self.assertIn('<notebook scaffold="true"/>', xml)
+        self.assertIn('<notebook close="true"/>', xml)
+
     def test_move_view_desktop_web_lockstep(self) -> None:
         """XML <move_view/> uses the same tags, time rules, and task-centering
         on Desktop and Web (expand one core; do not collapse the rest)."""

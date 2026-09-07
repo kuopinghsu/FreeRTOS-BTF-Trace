@@ -100,6 +100,9 @@ headless control (no extra packages).
 <zoom_out/>
 <cpu_load on="true"/>
 <analysis/>
+<notebook open="true"/>
+<notebook scaffold="true"/>
+<notebook close="true"/>
 <heatmap open="true"/>
 <heatmap mode="chord"/>
 <heatmap close="true"/>
@@ -205,6 +208,8 @@ Toolbar buttons, tabs, Analysis, and Find use API events instead of fixed screen
 | `toolbar_load` | CPU Load |
 | `rail_heatmap` | Migration Heatmap (left activity rail) |
 | `rail_analysis` | Analysis (left activity rail) |
+| `rail_notebook` | Investigation Notebook (left activity rail) |
+| `rail_compare` | Compare traces (left activity rail) |
 | `rail_help` / `rail_settings` | Help / Settings (left activity rail foot) |
 | `toolbar_limit` | C1–Cn status chip |
 | `stats_tab` / `find_tab` / `ai_tab` | Right-panel tabs |
@@ -221,6 +226,13 @@ inspector. The 8-core pack also has XML-only fractions (`timeline`,
 Expanding a section scrolls its header near the top of the Statistics panel so
 the table stays on screen. `<stats_reset/>` (alias `<stats_done/>`) collapses
 sections and scrolls back to the top after narration.
+
+`<analysis/>` opens the Analysis Findings dialog; `<heatmap>` opens the
+Migration Heatmap / Chord inspector; `<notebook>` opens the Investigation
+Notebook. Each accepts `open="true"` / `close="true"`. `<notebook
+scaffold="true"/>` also runs the notebook's **Scaffold** — one Observation
+per actionable finding (finding / entity / range / metric attached), safe to
+re-run.
 
 Statistics section ids match the desktop panel (`health`, `cores`, `tasks`,
 `exec`, `block`, `priority`, `migrations`, `sync`, `queue`, `affinity`,

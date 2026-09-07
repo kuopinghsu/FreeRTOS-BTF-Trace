@@ -440,6 +440,38 @@ describe('demoRunner', () => {
     ])
   })
 
+  it('maps notebook tags to host.openNotebook with close + scaffold', async () => {
+    const parsed = {
+      vars: {},
+      defaults: { pause: 0, after_voice: 0, ai_wait: 0, move_duration: 0, audio_block: false },
+      macros: {},
+      targets: {},
+      steps: [
+        {
+          id: '1', title: 'Notebook', optional: false, tags: new Set(),
+          children: [
+            { tag: 'notebook', attrib: { open: 'true' }, children: [], text: '', tail: '' },
+            { tag: 'notebook', attrib: { scaffold: 'true' }, children: [], text: '', tail: '' },
+            { tag: 'notebook', attrib: { close: 'true' }, children: [], text: '', tail: '' },
+          ],
+        },
+      ],
+    }
+    const calls = []
+    const host = {
+      openNotebook: async (p) => { calls.push(p) },
+      setStatus: () => {},
+      setDemoNav: () => {},
+    }
+    const runner = createDemoRunner(host, { parsed, traceFile: null, resolve: () => null })
+    await runner.run()
+    assert.deepEqual(calls, [
+      { close: false, scaffold: false },
+      { close: false, scaffold: true },
+      { close: true, scaffold: false },
+    ])
+  })
+
   it('maps move_view to host.moveView with time and task', async () => {
     const parsed = {
       vars: {},

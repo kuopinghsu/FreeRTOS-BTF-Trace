@@ -24,7 +24,9 @@
     17-18 Find / Marks / Export / Compare
     19-22 AI for newcomers: setup, Start Investigation, verify jumps,
           Explain region within C1-Cn
-    23    recap
+    23    Investigation Notebook: add your own notes, or Scaffold from
+          findings, then edit and conclude
+    24    recap
 -->
 <demo name="BTFViewer demo 8cores" version="1">
 
@@ -36,7 +38,9 @@
       (health, analysis, scope, balance, WCET, latency, migrations,
       core-migration view, compliance) → Find/Export/Compare →
       AI for newcomers (Settings, Start Investigation, verify jumps,
-      Explain region). Trace: trace/source.btf.gz (frozen demo snapshot).
+      Explain region) → Investigation Notebook (add notes or Scaffold
+      from findings, then edit and conclude).
+      Trace: trace/source.btf.gz (frozen demo snapshot).
     </description>
     <cwd>${BTF}</cwd>
     <trace>${XML_DIR}/../trace/source.btf.gz</trace>
@@ -71,9 +75,10 @@
     <point name="toolbar_task" x="0.37" y="0.055"/>
     <point name="toolbar_load" x="0.43" y="0.055"/>
     <point name="toolbar_find" x="0.52" y="0.055"/>
-    <!-- Heatmap / Analysis live on the left activity rail (shell redesign). -->
+    <!-- Heatmap / Analysis / Notebook live on the left activity rail (shell redesign). -->
     <point name="rail_heatmap" x="0.017" y="0.13"/>
     <point name="rail_analysis" x="0.017" y="0.18"/>
+    <point name="rail_notebook" x="0.017" y="0.23"/>
     <point name="limit_checkbox" x="0.82" y="0.16"/>
     <point name="stats_export_html" x="0.88" y="0.94"/>
     <point name="stats_health" x="0.84" y="0.32"/>
@@ -446,12 +451,30 @@
       <clear_cursors/>
     </step>
 
-    <step id="23" title="Recap" tags="intro">
+    <step id="23" title="Investigation Notebook" tags="ladder">
+      <focus/>
+      <clear_cursors/>
+      <panel name="stats"/>
+      <audio file="${XML_DIR}/voice/23_notebook.mp3"/>
+      <wait seconds="3.0" why="voice: open the Investigation Notebook on the activity rail"/>
+      <move target="rail_notebook"/>
+      <wait seconds="0.4"/>
+      <notebook open="true"/>
+      <wait seconds="1.2"/>
+      <confirm prompt="Investigation Notebook is open: type a Title, then Add bookmark with a short observation of your own — then continue"/>
+      <notebook scaffold="true"/>
+      <wait seconds="1.5" why="Scaffold seeds one Observation per actionable finding (finding / entity / range / metric attached)"/>
+      <confirm prompt="Scaffolded rows added: edit an Observation, fill in a Hypothesis and Verification, and write the Conclusion with its evidence chain — then continue"/>
+      <wait_audio/>
+      <notebook close="true"/>
+    </step>
+
+    <step id="24" title="Recap" tags="intro">
       <focus/>
       <macro ref="fit"/>
-      <audio file="${XML_DIR}/voice/23_close.mp3"/>
+      <audio file="${XML_DIR}/voice/24_close.mp3"/>
       <wait_audio/>
-      <show_message text="Try it yourself: open demo_8cores.xml (or the demo folder / .btfw package) in BTFViewer" seconds="6"/>
+      <show_message text="Try it yourself: open the demo_8cores folder (or the .btfw package) in BTFViewer" seconds="6"/>
       <wait seconds="3" why="end hold"/>
     </step>
 

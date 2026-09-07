@@ -1,9 +1,11 @@
 Step 10: investigate and verify a finding.
 
-In this recorded example, the top actionable finding is suspected priority inversion. The AI investigation focuses on Low[266] and returns a Confirmed verdict.
+In the recorded investigation, Start Investigation picks the top actionable finding: Off-CPU / scheduling-delay candidates. The Off-CPU Time page ranks Med[267] first, with n=1741 gaps and a maximum of 34.924 ms, ahead of Low[266] and CS[13]. The finding note is cautious: off-CPU time is not necessarily resource blocking.
 
-The evidence chain identifies a priority-inheritance trigger at jump:3101862. Low[266] is boosted from base priority 2 to peak priority 4 until jump:3207230, a range of about 105.4 milliseconds. The investigation also finds an off-CPU gap of about 13.6 milliseconds beginning at jump:3101921.
+The AI focuses on Med[267] on Core_0 and returns a Confirmed verdict. Its evidence chain: a blocking gap at jump:3088582 extending to jump:3089261, measured at 679 us, followed by repeated 13 us gaps; a normal execution slice at jump:3087568 lasting 335 us on Core_0; and cursors placed at jump:3087568 and jump:3090460 to bracket the window.
 
-Read the result from the conclusion outward: first the verdict, then the evidence chain, confidence and coverage, alternative explanations, and the recommended validation step. Detailed checks, supporting evidence, and investigation history can be expanded when needed.
+The alternative it tests is that Med[267] simply yields the CPU or finishes early. It rejects this: the task stays off CPU while runnable, and the gaps line up with priority-inversion and mutex warnings on Low[266].
 
-The important point is that the AI conclusion is tied to measurable trace evidence and jump times that you can verify yourself.
+Read the reply from the conclusion outward: verdict first, then the evidence chain, confidence and coverage, the alternative, and the recommended validation step, which here is the Mutex Blocking or Task Health page for Med[267] and Low[266]. Below that, Remaining Findings adds one next-step line per other warning: mutex contention, priority inversion for Low[266] and PS[228], core migrations for CS[20] and CS[15], tick-health WARNING, and WCET spikes for Runner[1] and CS[12] to CS[15].
+
+Every claim is tied to a jump time and a measured value that you can open and check yourself.

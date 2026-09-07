@@ -1967,16 +1967,23 @@ def _screen_raster_ratio() -> float:
     return max(2.0, min(3.0, r if r > 0 else 1.0))
 
 
-def _rail_glyph_icon(inner: str, color: str = "#9E9E9E", size: int = 18) -> "QIcon":
+def _rail_glyph_icon(
+    inner: str, color: str = "#9E9E9E", size: int = 18, opacity: float = 1.0,
+) -> "QIcon":
     """QIcon from a 24-viewBox stroke glyph — 1:1 with the web App.vue sidebar
     SVGs (``fill:none; stroke:currentColor; stroke-width:1.8``; round caps).
-    Rasterised at the screen DPR so the thin strokes stay sharp."""
+    Rasterised at the screen DPR so the thin strokes stay sharp.
+
+    ``opacity`` < 1 fades the glyph (used for a disabled rail button — a
+    QToolButton with a stylesheet no longer gets Qt's auto-generated grey
+    disabled pixmap, so the fade has to be baked into the icon)."""
     ratio = _screen_raster_ratio()
     px = max(1, int(round(size * ratio)))
+    op = "" if opacity >= 1.0 else f' opacity="{max(0.0, opacity):g}"'
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{px}" height="{px}" '
         f'viewBox="0 0 24 24"><g fill="none" stroke="{color}" stroke-width="1.8" '
-        f'stroke-linecap="round" stroke-linejoin="round">{inner}</g></svg>'
+        f'stroke-linecap="round" stroke-linejoin="round"{op}>{inner}</g></svg>'
     )
     pm, _ = rasterize_svg_pixmap(svg, dest_w=px, dest_h=px)
     if not pm.isNull():
@@ -87718,6 +87725,13 @@ class InAppDemoRunner:
                     payload[key] = self._attr(el, key)
             self._api(payload, settle=0.45 if "close" in el.attrib else 0.7)
             return
+        if tag in ("notebook", "investigation_notebook"):
+            payload = {"op": "notebook"}
+            for key in ("open", "close", "action", "scaffold"):
+                if key in el.attrib:
+                    payload[key] = self._attr(el, key)
+            self._api(payload, settle=0.45 if "close" in el.attrib else 0.8)
+            return
         if tag in ("heatmap", "chord", "corridor"):
             payload = {"op": "chord" if tag == "chord" else "heatmap"}
             for key in ("mode", "open", "close", "action"):
@@ -89045,6 +89059,11 @@ class _ActivityRail(QWidget):
         self._lay.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._buttons: Dict[str, QToolButton] = {}
         self._icon_paths: Dict[str, str] = {}
+        self._icon_color: str = "#9E9E9E"
+
+    # A styled QToolButton loses Qt's auto-generated grey disabled icon, so a
+    # disabled rail button gets a faded glyph baked in instead.
+    _DISABLED_ICON_OPACITY = 0.38
 
     def add_item(self, key: str, icon_path: str, label: str) -> QToolButton:
         btn = QToolButton()
@@ -89054,14 +89073,21 @@ class _ActivityRail(QWidget):
         btn.setAutoRaise(True)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        btn.setIcon(_rail_glyph_icon(icon_path, "#9E9E9E", 18))
+        self._buttons[key] = btn
+        self._icon_paths[key] = icon_path
+        self._apply_icon(key)
         btn.setIconSize(QSize(18, 18))
         btn.setFixedSize(self.RAIL_W, 40)
         btn.clicked.connect(lambda _=False, k=key: self.activated.emit(k))
-        self._buttons[key] = btn
-        self._icon_paths[key] = icon_path
         self._lay.addWidget(btn)
         return btn
+
+    def _apply_icon(self, key: str) -> None:
+        b = self._buttons.get(key)
+        if b is None:
+            return
+        op = 1.0 if b.isEnabled() else self._DISABLED_ICON_OPACITY
+        b.setIcon(_rail_glyph_icon(self._icon_paths[key], self._icon_color, 18, op))
 
     def add_spring(self) -> None:
         self._lay.addStretch(1)
@@ -89076,12 +89102,16 @@ class _ActivityRail(QWidget):
 
     def set_item_enabled(self, key: str, enabled: bool) -> None:
         b = self._buttons.get(key)
-        if b is not None:
+        if b is not None and b.isEnabled() != bool(enabled):
             b.setEnabled(bool(enabled))
+            b.setCursor(Qt.CursorShape.PointingHandCursor if enabled
+                        else Qt.CursorShape.ForbiddenCursor)
+            self._apply_icon(key)
 
     def refresh_icons(self, color: str) -> None:
-        for key, b in self._buttons.items():
-            b.setIcon(_rail_glyph_icon(self._icon_paths[key], color, 18))
+        self._icon_color = color
+        for key in self._buttons:
+            self._apply_icon(key)
 
 
 class _LoadSkeleton(QWidget):
@@ -92061,7 +92091,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "heatmap", trace is not None and _trace_is_multi_core(trace))
         rail.set_item_visible("analysis", trace is not None)
         rail.set_item_visible("notebook", trace is not None)
-        rail.set_item_visible("compare", len(getattr(self, "_tabs", ())) >= 2)
+        # Compare always shows once a trace is loaded; it just greys out until a
+        # second trace tab exists (mirrors web App.vue).
+        n_tabs = len(getattr(self, "_tabs", ()))
+        rail.set_item_visible("compare", trace is not None)
+        rail.set_item_enabled("compare", n_tabs >= 2)
+        cbtn = rail.button("compare")
+        if cbtn is not None:
+            cbtn.setToolTip(
+                "Compare traces" if n_tabs >= 2
+                else "Compare traces — open a second trace to enable")
         rail.set_item_visible("snapshot", trace is not None)
 
     def _sync_context_strip_visibility(self) -> None:
@@ -96884,6 +96923,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return self._demo_cpu_load(on)
         if op == "analysis":
             return self._demo_analysis(payload)
+        if op in ("notebook", "investigation_notebook"):
+            return self._demo_notebook(payload)
         if op in ("heatmap", "chord", "corridor", "migration_heatmap"):
             return self._demo_heatmap(
                 payload, default_mode="chord" if op == "chord" else "heatmap")
@@ -97076,7 +97117,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Heatmap / Analysis moved to the left activity rail (shell redesign);
         # keep the historical demo-target names pointed at the rail buttons.
         rail_keys = {"rail_heatmap": "heatmap", "rail_analysis": "analysis",
-                     "rail_compare": "compare", "rail_snapshot": "snapshot",
+                     "rail_notebook": "notebook", "rail_compare": "compare",
+                     "rail_snapshot": "snapshot",
                      "rail_help": "help", "rail_settings": "settings",
                      "toolbar_heatmap": "heatmap", "toolbar_analysis": "analysis",
                      "toolbar_settings": "settings"}
@@ -97202,6 +97244,42 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
             return {"analysis": "closed", "found": True}
         return {"analysis": "closed", "found": False}
+
+    def _demo_notebook(self, payload: dict) -> dict:
+        """Open/close the Investigation Notebook; optionally Scaffold it from the
+        current Analysis Findings (demo step)."""
+        action = str(payload.get("action") or "").strip().lower()
+        scaffold = (self._demo_truthy(payload.get("scaffold"), default=False)
+                    or action == "scaffold")
+        if "open" in payload:
+            want_open = self._demo_truthy(payload.get("open"), default=True)
+        elif "close" in payload:
+            want_open = not self._demo_truthy(payload.get("close"), default=True)
+        elif action in ("close", "hide", "dismiss"):
+            want_open = False
+        else:
+            want_open = True
+        if not want_open:
+            dlg = getattr(self, "_notebook_dlg", None)
+            if dlg is not None:
+                try:
+                    dlg.reject()
+                except RuntimeError:
+                    pass
+            return {"notebook": "closed", "found": dlg is not None}
+        self._open_investigation_notebook()
+        dlg = getattr(self, "_notebook_dlg", None)
+        scaffolded = False
+        if scaffold and dlg is not None:
+            try:
+                dlg.set_context(
+                    findings=self._stats_panel.build_analysis_findings()[0],
+                    cursor_range=self._notebook_cursor_range())
+                dlg._scaffold_from_findings()
+                scaffolded = True
+            except (RuntimeError, AttributeError):
+                pass
+        return {"notebook": "open", "scaffolded": scaffolded}
 
     def _demo_heatmap(self, payload: dict, *, default_mode: str = "heatmap") -> dict:
         """Open/close the shared Migration Heatmap / Chord inspector (demo step)."""

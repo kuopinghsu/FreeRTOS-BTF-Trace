@@ -1,0 +1,9 @@
+Open the Investigation Notebook from the activity rail.
+
+The notebook is where the investigation is recorded. Add observations, hypotheses, verification notes, and a final conclusion as you work. Each bookmark can link to a finding, a task or object, a time range, and a metric, so every claim points back to measured evidence.
+
+Click Scaffold to seed the notebook from the current Analysis Findings. It adds one observation per actionable finding, with the finding, entity, range, and metric already attached, plus a hypothesis and a verification stub. Existing entries are kept, so Scaffold is safe to run again after new findings appear.
+
+Then edit each row: sharpen the observation, record what confirmed or ruled out the hypothesis, and write the conclusion with its supporting evidence chain.
+
+The notebook travels inside the HTML report and the portable workspace file, so the next reader sees the reasoning, not just the result.

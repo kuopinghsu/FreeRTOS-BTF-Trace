@@ -25,7 +25,7 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 
 install()
 
-from PySide6.QtCore import QElapsedTimer  # noqa: E402
+from PySide6.QtCore import QElapsedTimer, QSize  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from btf_viewer_pkg.config import _PANEL_TAB_FIND  # noqa: E402
@@ -112,7 +112,61 @@ class ShellRedesignTest(unittest.TestCase):
         win._sync_activity_rail()
         self.assertFalse(rail._buttons["analysis"].isVisibleTo(rail))
         self.assertFalse(rail._buttons["snapshot"].isVisibleTo(rail))
+        self.assertFalse(rail._buttons["compare"].isVisibleTo(rail))
         self.assertTrue(rail._buttons["settings"].isVisibleTo(rail))
+
+    def test_activity_rail_compare_shows_disabled_until_two_traces(self) -> None:
+        from unittest.mock import PropertyMock, patch
+
+        win = self._make_win()
+        rail = win._activity_rail
+        cbtn = rail._buttons["compare"]
+        # Fake tabs must not reach the real teardown (it walks tab.view).
+        self.addCleanup(setattr, win, "_tabs", [])
+
+        class _FakeTrace:
+            core_names = ["Core_0", "Core_1"]
+
+        def _icon_alpha(btn) -> float:
+            img = btn.icon().pixmap(QSize(36, 36)).toImage()
+            total = sum(
+                img.pixelColor(x, y).alpha()
+                for y in range(img.height()) for x in range(img.width()))
+            return total / max(1, img.width() * img.height())
+
+        with patch.object(type(win), "_trace",
+                          new_callable=PropertyMock, return_value=_FakeTrace()):
+            # One trace tab → compare visible but greyed out.
+            win._tabs = [object()]
+            win._sync_activity_rail()
+            self.assertTrue(cbtn.isVisibleTo(rail))
+            self.assertFalse(cbtn.isEnabled())
+            self.assertIn("second trace", cbtn.toolTip().lower())
+            faded = _icon_alpha(cbtn)
+
+            # Two trace tabs → compare enabled.
+            win._tabs = [object(), object()]
+            win._sync_activity_rail()
+            self.assertTrue(cbtn.isVisibleTo(rail))
+            self.assertTrue(cbtn.isEnabled())
+            self.assertEqual(cbtn.toolTip(), "Compare traces")
+            full = _icon_alpha(cbtn)
+
+        # A styled QToolButton gets no auto grey disabled pixmap — the rail
+        # bakes the fade into the glyph, so the disabled icon must be dimmer.
+        self.assertLess(faded, full * 0.6)
+
+    def test_web_activity_rail_compare_button_matches_desktop(self) -> None:
+        """web App.vue renders the compare rail button whenever a trace is
+        loaded and only greys it out below two traces (parity with the
+        desktop ``_sync_activity_rail`` behaviour above)."""
+        app = (BTF_ROOT / "web" / "src" / "App.vue").read_text(encoding="utf-8")
+        i = app.index('data-demo-target="rail_compare"')
+        btn = app[app.rindex("<button", 0, i):app.index("</button>", i)]
+        self.assertIn('v-if="traceInfo"', btn)
+        self.assertIn(':disabled="compareTabs.length < 2"', btn)
+        self.assertNotIn('v-if="compareTabs.length >= 2"', btn)
+        self.assertIn(".rail-btn:disabled", app)
 
     # ---- Unified context strip -------------------------------------------
 

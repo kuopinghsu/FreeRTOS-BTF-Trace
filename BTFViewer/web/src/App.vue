@@ -405,14 +405,16 @@
           <span class="rail-tip act-tip">Investigation notebook</span>
         </button>
         <button
-          v-if="compareTabs.length >= 2"
+          v-if="traceInfo"
           type="button"
           class="rail-btn act-btn"
           data-demo-target="rail_compare"
+          :disabled="compareTabs.length < 2"
+          :title="compareTabs.length < 2 ? 'Compare traces — open a second trace to enable' : 'Compare traces'"
           @click="onOpenTraceCompare"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 15.5V9a3 3 0 0 1 3-3h4M18 8.5V15a3 3 0 0 1-3 3h-4"/><path d="m11 4 2 2-2 2M13 20l-2-2 2-2"/></svg>
-          <span class="rail-tip act-tip">Compare traces</span>
+          <span class="rail-tip act-tip">{{ compareTabs.length < 2 ? 'Compare traces — open a second trace to enable' : 'Compare traces' }}</span>
         </button>
         <button
           v-if="traceInfo"
@@ -2685,6 +2687,19 @@ function demoHost() {
     openAnalysis: async ({ close } = {}) => {
       analysisOpen.value = !close
       await nextTick()
+    },
+    openNotebook: async ({ close, scaffold } = {}) => {
+      if (close) {
+        notebookDialogOpen.value = false
+        await nextTick()
+        return
+      }
+      openNotebookDialog()
+      await nextTick()
+      if (scaffold) {
+        onScaffoldNotebook()
+        await nextTick()
+      }
     },
     openHeatmap: async ({ close, mode } = {}) => {
       if (close) {
@@ -8606,6 +8621,16 @@ body.row-resizing * {
 .rail-btn:hover {
   background: var(--app-surface-3);
   color: var(--fg);
+}
+
+.rail-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.rail-btn:disabled:hover {
+  background: transparent;
+  color: var(--fg-dim);
 }
 
 .rail-btn.active {
