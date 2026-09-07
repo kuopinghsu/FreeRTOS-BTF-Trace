@@ -102,7 +102,7 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         css_js = re.search(
             r'export const STATS_HTML_EXTRA_CSS = `(.*?)`', js, re.S).group(1).strip()
         self.assertEqual(css_py, css_js)
-        start = vue.find("function exportHtml()")
+        start = vue.find("function exportHtml(")
         end = vue.find("\nfunction ", start + 10)
         export_js = vue[start:end]
         self.assertNotIn("<h2>Cursor Range", export_js)
@@ -126,6 +126,8 @@ class StatsHtmlHelpersTest(unittest.TestCase):
             ("def html_percentile_bars", "export function htmlPercentileBars"),
             ("def html_health_bars", "export function htmlHealthBars"),
             ("def html_tag_overview", "export function htmlTagOverview"),
+            ("def html_trace_health_card", "export function htmlTraceHealthCard"),
+            ("def html_investigation_section", "export function htmlInvestigationSection"),
             ("STATS_TOC_GROUPS", "export const STATS_TOC_GROUPS"),
             ("STATS_DEFAULT_EXPANDED", "export const STATS_DEFAULT_EXPANDED"),
         ):

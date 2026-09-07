@@ -166,6 +166,54 @@ class AiWebParityTests(unittest.TestCase):
         py_query = [n for n in AI_VIEWER_TOOL_NAMES if is_query_tool(n)]
         self.assertEqual(sorted(js_query), sorted(py_query))
 
+    def test_tool_name_canonicalisation_matches_web(self) -> None:
+        """canonical_tool_name / canonicalToolName + their alias tables align,
+        so a mis-named tool call (e.g. ``nextstep:open_statistics``) recovers the
+        same way on Desktop and Web."""
+        from btf_viewer_pkg.ai_tools import canonical_tool_name  # noqa: E402
+        js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
+        self.assertIn("export function canonicalToolName", js)
+        self.assertIn("export function looksLikeNextstepPseudoTool", js)
+        # Same alias keys on both sides.
+        py_src = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8")
+        py_block = re.search(
+            r"_TOOL_NAME_ALIASES: Dict\[str, str\] = \{([\s\S]*?)\n\}", py_src)
+        self.assertIsNotNone(py_block)
+        py_keys = set(re.findall(r'"([a-z_]+)":', py_block.group(1)))
+        js_block = re.search(r"const TOOL_NAME_ALIASES = \{([\s\S]*?)\n\}", js)
+        self.assertIsNotNone(js_block)
+        js_keys = set(re.findall(r"^\s*([a-z_]+):", js_block.group(1), re.M))
+        self.assertEqual(py_keys, js_keys)
+        # Same behaviour on the reported case + the conservative-nextstep rule.
+        for raw, want_known in (
+            ("nextstep:open_statistics", True),
+            ("nextstep:open statistics", True),
+            ("open_stats", True),
+            ("functions.set_cursors", True),
+            ("nextstep:verify the boost", False),
+            ("nextstep:zoom", False),
+        ):
+            got = canonical_tool_name(raw)
+            self.assertEqual(got in AI_VIEWER_TOOL_NAMES, want_known, raw)
+
+    def test_stats_section_resolution_matches_web(self) -> None:
+        """resolve_stats_section_id / resolveStatsSectionId agree so
+        ``open_statistics_section`` with a header title ("Ready-Gap
+        (Starvation)") expands the right section on Desktop and Web."""
+        from btf_viewer_pkg.config import resolve_stats_section_id  # noqa: E402
+        pins_js = (BTF_ROOT / "web/src/utils/statsPins.js").read_text("utf-8")
+        self.assertIn("export function resolveStatsSectionId", pins_js)
+        self.assertIn("from './statsPins.js'",
+                      (BTF_ROOT / "web/src/utils/aiTools.js").read_text("utf-8"))
+        for raw, want in (
+            ("Ready-Gap (Starvation)", "ready_gap"),
+            ("ready-gap", "ready_gap"),
+            ("btfstats:section/activation", "activation"),
+            ("Mutex Blocking", "mutex_block"),
+            ("no such section", ""),
+        ):
+            self.assertEqual(resolve_stats_section_id(raw), want, raw)
+
     def test_investigation_helpers_and_findings_ui_match_web(self) -> None:
         inv_js = (BTF_ROOT / "web/src/utils/aiInvestigation.js").read_text(
             encoding="utf-8")
@@ -2464,6 +2512,13 @@ console.log(JSON.stringify({
         self.assertIn("Ask AI about this event", tl)
         self.assertIn("Explain this region with AI", view)
         self.assertIn("Explain this region with AI", tl)
+        # "Add region to investigation" is offered on both when C1–Cn is set.
+        self.assertIn("Add region to investigation", view)
+        self.assertIn("Add region to investigation", tl)
+        self.assertIn("add_region_to_investigation_requested", view)
+        self.assertIn("add_region_to_investigation_requested", mw)
+        self.assertIn("onCtxAddRegionToInvestigation", tl)
+        self.assertIn("onAddRegionToInvestigation", app)
         self.assertIn("Clear all marks", view)
         self.assertIn("Clear all marks", tl)
         self.assertIn("clear_all_marks_requested", view)

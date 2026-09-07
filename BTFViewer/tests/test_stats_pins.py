@@ -15,6 +15,7 @@ from btf_viewer_pkg.config import (  # noqa: E402
     move_stats_section,
     normalize_stats_pins,
     normalize_stats_section_order,
+    resolve_stats_section_id,
     stats_pins_to_rc,
     stats_section_order_to_rc,
     stats_section_title,
@@ -51,6 +52,25 @@ class StatsPinsTest(unittest.TestCase):
         self.assertEqual(len(actions), len(STATS_PINNABLE_SECTIONS))
         self.assertTrue(all(a[0].startswith("stats-section:") for a in actions))
         self.assertEqual(stats_section_title("exec"), "Execution Time Per Slice")
+
+    def test_resolve_stats_section_id_accepts_titles_and_hrefs(self) -> None:
+        # The AI passes the header title or a loose spelling; it must resolve to
+        # the canonical id so `scroll_to_section` actually expands it.
+        for raw, want in (
+            ("ready_gap", "ready_gap"),
+            ("Ready-Gap (Starvation)", "ready_gap"),
+            ("ready-gap", "ready_gap"),
+            ("ready gap", "ready_gap"),
+            ("Starvation", "ready_gap"),
+            ("btfstats:section/ready_gap", "ready_gap"),
+            ("stats-section:activation", "activation"),
+            ("Activation Latency", "activation"),
+            ("Mutex Blocking", "mutex_block"),
+            ("no such section", ""),
+            ("TIMING", ""),   # a category label is not a section
+            ("", ""),
+        ):
+            self.assertEqual(resolve_stats_section_id(raw), want, raw)
 
 
 class StatsSectionOrderTest(unittest.TestCase):

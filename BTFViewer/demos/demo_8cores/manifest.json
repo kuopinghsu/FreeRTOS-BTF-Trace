@@ -1,0 +1,16 @@
+{
+  "schema": "btf-viewer-workspace/1",
+  "kind": "demo",
+  "trace": {
+    "name": "source.btf.gz",
+    "embedded": true
+  },
+  "demo": {
+    "script": "demo/script.xml",
+    "languages": [
+      "en",
+      "zh-tw"
+    ],
+    "default_language": "en"
+  }
+}

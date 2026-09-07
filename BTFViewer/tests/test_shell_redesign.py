@@ -82,24 +82,28 @@ class ShellRedesignTest(unittest.TestCase):
         self.assertEqual(rail.width(), rail.RAIL_W)
         self.assertEqual(
             sorted(rail._buttons),
-            ["analysis", "compare", "heatmap", "help", "settings", "snapshot"],
+            ["analysis", "compare", "heatmap", "help", "notebook", "settings",
+             "snapshot"],
         )
 
         calls: list[str] = []
         for name, key in (
             ("_open_migration_heatmap", "heatmap"),
             ("_open_analysis_findings", "analysis"),
+            ("_open_investigation_notebook", "notebook"),
             ("_open_trace_compare", "compare"),
             ("_on_save_image", "snapshot"),
             ("_on_keyboard_shortcuts", "help"),
             ("_open_settings", "settings"),
         ):
             setattr(win, name, (lambda k=key: calls.append(k)))
-        for key in ("heatmap", "analysis", "compare", "snapshot", "help", "settings"):
+        for key in ("heatmap", "analysis", "notebook", "compare", "snapshot",
+                    "help", "settings"):
             win._on_activity_rail_activated(key)
         self.assertEqual(
             calls,
-            ["heatmap", "analysis", "compare", "snapshot", "help", "settings"])
+            ["heatmap", "analysis", "notebook", "compare", "snapshot", "help",
+             "settings"])
 
     def test_activity_rail_visibility_tracks_trace(self) -> None:
         win = self._make_win()

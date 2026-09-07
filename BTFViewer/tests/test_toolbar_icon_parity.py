@@ -37,10 +37,14 @@ class ToolbarIconParityTests(unittest.TestCase):
         for name in shared:
             self.assertEqual(js[name], py[name], name)
 
-    def test_desktop_file_cluster_uses_snapshot_perfetto_slice(self) -> None:
+    def test_desktop_file_cluster_uses_unified_export(self) -> None:
         mw = (BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py").read_text(encoding="utf-8")
-        self.assertIn("_IC_PERFETTO", mw)
-        self.assertIn("_IC_EXPORT_SLICE", mw)
+        # Perfetto + Save-BTF folded into one Export chooser (web parity).
+        self.assertIn("_IC_EXPORT_OUT", mw)
+        self.assertIn('_ia(\n            "Export", self._on_export, _IC_EXPORT_OUT', mw)
+        self.assertNotIn('_ia(\n            "Perfetto"', mw)
+        self.assertNotIn('_ia(\n            "Save BTF"', mw)
+        self.assertIn("class _ExportDialog(QDialog)", mw)
         self.assertNotIn('_ia("Save PNG"', mw)
         # Shell redesign: Snapshot / Help / Settings moved to the left activity
         # rail (web-parity glyphs); the File / Help menus keep their entries.
@@ -129,12 +133,17 @@ class ToolbarIconParityTests(unittest.TestCase):
         app = (BTF_ROOT / "web" / "src" / "App.vue").read_text(encoding="utf-8")
         mw = (BTF_ROOT / "btf_viewer_pkg" / "mainwindow.py").read_text(
             encoding="utf-8")
-        # What the slimmed toolbar still carries.
+        # What the slimmed toolbar still carries.  Perfetto + BTF-slice folded
+        # into one Export button (IC.exportOut → emit('openExport')).
         for token in (
-            "IC.open", "IC.saveSvg", "IC.perfetto", "IC.exportSlice",
+            "IC.open", "IC.saveSvg", "IC.exportOut",
             "IC.oneToOne", "IC.find",
         ):
             self.assertIn(token, tb)
+        self.assertIn("emit('openExport')", tb)
+        for gone in ("IC.perfetto", "IC.exportSlice",
+                     "emit('exportPerfetto')", "emit('exportSlice')"):
+            self.assertNotIn(gone, tb)
         # Snapshot / Heatmap / Analysis / Compare / Settings / Help moved to the
         # left activity rail (shell redesign) — gone from the toolbar.
         for token in ("IC.shot", "IC.analysis", "IC.compare", "IC.settings", "IC.help"):

@@ -26,6 +26,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_GENERATE_REPORT,
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_OPEN_CORRIDOR,
+    AI_TOOL_OPEN_STATS_SECTION,
     AI_TOOL_QUERY_RAW_METRIC,
     AI_TOOL_RESET_VIEW,
     AI_TOOL_SEARCH_TIMELINE,
@@ -45,8 +46,10 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     build_ai_report_html,
     GEMINI_SKIP_THOUGHT_SIGNATURE,
     canonical_assistant_tool_message,
+    canonical_tool_name,
     ensure_gemini_thought_signatures,
     extract_tool_calls,
+    looks_like_nextstep_pseudo_tool,
     merge_tool_calls,
     needs_gemini_thought_signatures,
     normalize_raw_metric,
@@ -429,6 +432,36 @@ class AiToolsTests(unittest.TestCase):
         })
         self.assertEqual(as_str[0]["name"], "set_view_mode")
         self.assertEqual(as_str[0]["arguments"]["mode"], "core")
+
+    def test_canonical_tool_name_recovers_near_misses(self) -> None:
+        # The reported bug: model emits a "nextstep:{action}" prose line as a
+        # tool call and it fails with `unknown tool "nextstep:open_statistics"`.
+        for raw in ("nextstep:open_statistics", "nextstep:open statistics",
+                    "nextstep: open statistics", "open_statistics", "open_stats"):
+            self.assertEqual(canonical_tool_name(raw), AI_TOOL_OPEN_STATS_SECTION, raw)
+        # Namespaced real calls + unique-prefix near-misses still resolve.
+        self.assertEqual(canonical_tool_name("functions.set_cursors"), AI_TOOL_SET_CURSORS)
+        self.assertEqual(canonical_tool_name("zoom"), AI_TOOL_ZOOM_TO_RANGE)
+        # An unrelated nextstep: line is NOT force-routed to a real tool.
+        self.assertNotIn(canonical_tool_name("nextstep:verify the boost"),
+                         AI_VIEWER_TOOL_NAMES)
+        self.assertNotIn(canonical_tool_name("nextstep:zoom"), AI_VIEWER_TOOL_NAMES)
+        self.assertTrue(looks_like_nextstep_pseudo_tool("nextstep:zoom"))
+        self.assertFalse(looks_like_nextstep_pseudo_tool("zoom"))
+
+    def test_extract_tool_calls_canonicalises_and_drops_prose(self) -> None:
+        got = extract_tool_calls({"tool_calls": [{"function": {
+            "name": "nextstep:open statistics",
+            "arguments": json.dumps({"section": "cores"})}}]})
+        self.assertEqual([c["name"] for c in got], [AI_TOOL_OPEN_STATS_SECTION])
+        # Prose "nextstep:" that resolves to nothing is dropped, not a failed card.
+        dropped = extract_tool_calls({"tool_calls": [{"function": {
+            "name": "nextstep:verify the boost", "arguments": "{}"}}]})
+        self.assertEqual(dropped, [])
+        legacy = extract_tool_calls({"function_call": {
+            "name": "nextstep:open_statistics",
+            "arguments": json.dumps({"section": "cores"})}})
+        self.assertEqual([c["name"] for c in legacy], [AI_TOOL_OPEN_STATS_SECTION])
 
     def test_parse_btftool_fences_and_xml(self) -> None:
         text = (

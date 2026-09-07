@@ -23,6 +23,7 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 install()
 
 from btf_viewer_pkg.cli import _cli_report_run  # noqa: E402
+from btf_viewer_pkg.investigation_findings import RULE_IDS as _RULE_IDS  # noqa: E402
 
 # Two cores, a handful of switches — enough for every Statistics section to
 # render without error.
@@ -40,9 +41,13 @@ _MINI_TRACE = """\
 """
 
 
-def _args(trace: str, output: str, fmt: str, *, anonymize: bool = False) -> types.SimpleNamespace:
+def _args(trace: str, output: str, fmt: str, *, anonymize: bool = False,
+          investigation: str = None, save_workspace: str = None,
+          embed_trace: bool = True) -> types.SimpleNamespace:
     return types.SimpleNamespace(
-        trace=trace, output=output, format=fmt, lo=None, hi=None, anonymize=anonymize)
+        trace=trace, output=output, format=fmt, lo=None, hi=None,
+        anonymize=anonymize, investigation=investigation,
+        save_workspace=save_workspace, embed_trace=embed_trace)
 
 
 class CliReportTests(unittest.TestCase):
@@ -95,19 +100,102 @@ class CliReportTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertTrue(out.is_file())
         d = json.loads(out.read_text(encoding="utf-8"))
-        self.assertEqual(d["schema"], "btf-viewer-stats/1")
+        self.assertEqual(d["schema"], "btf-viewer-stats/2")
         self.assertEqual(d["trace_file"], "mini.btf")
         self.assertIn("summary", d)
         self.assertIn("tasks", d["summary"])
         self.assertIsInstance(d["findings"], list)
         self.assertIsInstance(d["core_utilisation"], list)
         self.assertEqual(d["scope"]["type"], "full")
+        # Investigation Findings — the structured, reproducible model.
+        self.assertIsInstance(d["investigation_findings"], list)
+        for f in d["investigation_findings"]:
+            self.assertIn(f["rule_id"], _RULE_IDS)
+            self.assertIn(f["status"], ("new", "reviewed", "bookmarked", "dismissed"))
+            self.assertIsInstance(f["measured_values"], list)
+            self.assertIn("comparison_basis", f)
+            self.assertNotIn("evidence_text", f)  # display text kept out of the snapshot
+        if d["findings"]:
+            self.assertIn("rule_id", d["findings"][0])
 
     def test_json_report_inferred_from_extension(self) -> None:
         out = self.tmp / "auto.json"
         rc = _cli_report_run(_args(str(self.trace), str(out), None))
         self.assertEqual(rc, 0)
         self.assertTrue(out.is_file())
+
+    def test_investigation_section_in_html_and_json(self) -> None:
+        import json
+        from btf_viewer_pkg.investigation_notebook import (
+            add_bookmark, dump_investigation, link_bookmarks, new_investigation,
+            set_conclusion,
+        )
+        inv = new_investigation(title="Case", analysis_range={"start": 0, "end": 3000})
+        inv = add_bookmark(inv, type="observation", title="Worker preempted",
+                           bookmark_id="obs", refs=[{"kind": "entity", "entity": "Worker"}])
+        inv = add_bookmark(inv, type="conclusion", title="Contention on core 0",
+                           bookmark_id="con", refs=[{"kind": "entity", "entity": "Worker"}])
+        inv = link_bookmarks(inv, "con", "obs", "concludes")
+        inv = set_conclusion(inv, "Needs affinity change")
+        inv_path = self.tmp / "case.json"
+        inv_path.write_text(dump_investigation(inv), encoding="utf-8")
+
+        stem = self.tmp / "withinv"
+        rc = _cli_report_run(_args(str(self.trace), str(stem), "all",
+                                   investigation=str(inv_path)))
+        self.assertEqual(rc, 0)
+        html = (self.tmp / "withinv.html").read_text(encoding="utf-8")
+        self.assertIn("<h2>Investigation</h2>", html)
+        self.assertIn("Contention on core 0", html)
+        d = json.loads((self.tmp / "withinv.json").read_text(encoding="utf-8"))
+        self.assertIn("investigation", d)
+        self.assertEqual(d["investigation"]["schema"], "btf-viewer-investigation/1")
+        self.assertTrue(d["investigation"]["chains"])
+        self.assertIn("broken_references", d["investigation"])
+
+    def test_missing_investigation_file_errors(self) -> None:
+        rc = _cli_report_run(_args(str(self.trace), str(self.tmp / "x.html"),
+                                   "html", investigation=str(self.tmp / "nope.json")))
+        self.assertEqual(rc, 1)
+
+    def test_save_workspace_bundles_trace_and_report(self) -> None:
+        from btf_viewer_pkg.investigation_notebook import (
+            add_bookmark, dump_investigation, new_investigation,
+        )
+        from btf_viewer_pkg.workspace import open_workspace
+
+        inv = add_bookmark(new_investigation(title="C"), type="observation",
+                           title="obs", bookmark_id="o")
+        inv_path = self.tmp / "case.json"
+        inv_path.write_text(dump_investigation(inv), encoding="utf-8")
+        ws_path = self.tmp / "case.btfw"
+
+        rc = _cli_report_run(_args(
+            str(self.trace), str(self.tmp / "r"), "all",
+            investigation=str(inv_path), save_workspace=str(ws_path)))
+        self.assertEqual(rc, 0)
+        self.assertTrue(ws_path.is_file())
+
+        ws = open_workspace(str(ws_path))
+        self.assertEqual(ws["trace_bytes"], self.trace.read_bytes())
+        self.assertEqual(ws["manifest"]["trace"]["name"], "mini.btf")
+        self.assertTrue(ws["manifest"]["trace"]["embedded"])
+        self.assertIn("<html", (ws["report_html"] or "").lower())
+        self.assertEqual([b["id"] for b in ws["investigation"]["bookmarks"]], ["o"])
+        self.assertIsInstance(ws["health"], dict)
+        self.assertIsInstance(ws["findings"], list)
+
+    def test_save_workspace_no_embed_uses_reference(self) -> None:
+        from btf_viewer_pkg.workspace import open_workspace
+        ws_path = self.tmp / "ref.btfw"
+        rc = _cli_report_run(_args(str(self.trace), str(self.tmp / "r2.html"),
+                                   "html", save_workspace=str(ws_path),
+                                   embed_trace=False))
+        self.assertEqual(rc, 0)
+        ws = open_workspace(str(ws_path))
+        self.assertIsNone(ws["trace_bytes"])
+        self.assertFalse(ws["manifest"]["trace"]["embedded"])
+        self.assertEqual(ws["trace_ref"], str(self.trace))
 
     def test_anonymize_aliases_task_names(self) -> None:
         plain = self.tmp / "p.csv"

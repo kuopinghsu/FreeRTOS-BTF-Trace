@@ -48,6 +48,29 @@ class XtfExtractTests(unittest.TestCase):
             self.assertTrue(xml.endswith("demo_8cores.xml"))
             self.assertTrue(btf.endswith("demo_8cores.btf.gz"))
 
+    def test_extract_xtf_pack_skips_path_traversal_members(self) -> None:
+        """The shared hardened reader must not write a ``../`` member to disk."""
+        with tempfile.TemporaryDirectory(prefix="btf_xtf_") as td:
+            root = Path(td)
+            xtf = root / "evil.xtf"
+            with zipfile.ZipFile(xtf, "w") as zf:
+                zf.writestr("demo.xml", b"<demo/>")
+                zf.writestr("demo.btf.gz", b"\x1f\x8b")
+                zf.writestr("../pwned", b"x")
+            dest = root / "out"
+            xml, btf = extract_xtf_pack(str(xtf), str(dest))
+            self.assertTrue(os.path.isfile(xml))
+            self.assertTrue(os.path.isfile(btf))
+            self.assertFalse((root / "pwned").exists())
+            self.assertFalse((dest / ".." / "pwned").resolve().exists())
+
+    def test_extract_xtf_pack_rejects_non_zip(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="btf_xtf_") as td:
+            bad = Path(td) / "x.xtf"
+            bad.write_bytes(b"not a zip at all")
+            with self.assertRaises(ValueError):
+                extract_xtf_pack(str(bad))
+
 
 if __name__ == "__main__":
     unittest.main()

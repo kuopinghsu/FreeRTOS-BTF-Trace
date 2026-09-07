@@ -1,0 +1,1870 @@
+{
+  "messages": [
+    {
+      "content": "Investigate and verify the top actionable finding. Preferred tools: investigate; correlate_events on the same window; find_critical_path for a causal chain, or detect_priority_inversion when investigate flags priority inversion; query_raw_metric or search_timeline for any missing jump:TIME or measured values; verify_claim; challenge_conclusion; then set_cursors, zoom_to_range, and highlight_task on the evidence window (Limit to C1\u2013Cn). Follow these Preferred tools even when that exceeds the usual Balanced evidence-call preference. Stop after verification. Do not run what_if, optimize_experiment, or export. Cite Evidence as jump:TIME bullets with task/core names and values with units; do not give a High verdict without those citations. Output: Confirmed, Rejected, or Inconclusive; Evidence chain; Confidence/quality/coverage; Alternative; Recommended validation experiment. Then list Remaining findings for other material warning/error findings not covered by the primary verdict. For each remaining finding, emit one dedicated line nextstep:{action} (action in the selected language) naming the tool or Statistics page to open next. Viewer action: focus_evidence.",
+      "role": "user"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "### Verdict\nConfirmed\n\n### Evidence Chain\n- **Off-CPU / scheduling-delay candidate (`id=blocking`)**: Task Med[267] experienced `n=1741` off-CPU gaps with a maximum duration of 34.924 ms.\n- **Critical Path / Blocking Gap**: At jump:3088582, task Med[267] entered a blocking/off-CPU gap extending to jump:3089261 (range:3088582/3089261) with a measured duration of 679 us (and subsequent repeated 13 us blocking intervals).\n- **Core Execution**: During the non-blocked periods within this window, Med[267] executed on Core_0, such as the slice at jump:3087568 lasting for dur=335 (range:3087568/3087903).\n- **Viewer Window**: Cursors set at jump:3087568 and jump:3090460 with range:3087423.4/3090604.6.\n\n### Interpretation\nThe investigation confirms that task Med[267] suffers from frequent off-CPU scheduling delays and blocking gaps. While the statistical maximum off-CPU gap reaches 34.924 ms across 1,741 occurrences, specific analyzed intervals (such as range:3088582/3089261) demonstrate direct blocking durations of 679 us on Core_0. This behavior strongly points toward resource contention, synchronization delays, or priority preemption rather than simple CPU starvation.\n\n### Alternative and Falsification Check\nAn alternative explanation is that Med[267] is simply yielding the CPU voluntarily or completing its periodic execution early. However, this is falsified by the presence of extended off-CPU gaps while runnable and the correlation with priority inversion/mutex warnings on related tasks (such as Low[266]).\n\n### Confidence, Quality, and Coverage\n- **Confidence**: High (supported by direct timeline and metric query results with explicit jump times and values).\n- **Quality**: Direct (backed by metric queries, critical path analysis, and event correlation).\n- **Coverage**: Complete for the targeted investigation of Med[267].\n\n### Recommended Validation Experiment\n- Open the **Mutex Blocking** or **Task Health** Statistics page to inspect holding times and contention details for tasks Med[267] and Low[266].\n\n### Remaining Findings and Next Steps\nOpen Mutex Blocking Statistics page to inspect synchronization contention [Run](btfnext:text/0) [Open Statistics](btfstats:section/block)\nOpen Priority Inversion inspection or Mutex/Semaphore analysis for Low[266] and PS[228] [Run](btfnext:text/1)\nInspect Core Migrations and Core-Pair Migration Summary for CS[20], CS[15], CS[17], CS[14], CS[23] [Run](btfnext:text/2) [Open Statistics](btfstats:section/core_pairs)\nInvestigate Trace Health TICK = WARNING and tick gap distribution [Run](btfnext:text/3)\nCross-check Core-Pair Migration Summary bounce percentages for the 20 sync objects [Run](btfnext:text/4) [Open Statistics](btfstats:section/core_pairs)\nOpen Execution Time page and inspect WCET spike maxima for Runner[1], CS[12], CS[13], CS[14], and CS[15] [Run](btfnext:text/5) [Open Statistics](btfstats:section/exec)",
+      "role": "assistant"
+    },
+    {
+      "content": "Verify the selected Analysis Finding. Call investigate(finding_id=ID) first (use the finding_id given in the user message). Then collect evidence with query_raw_metric / correlate_events / search_timeline as needed. Call verify_claim on the finding statement and challenge_conclusion to list alternatives. Place cursors and zoom_to_range on the strongest evidence. Name the Statistics page to open next. Finish with a verdict: Confirmed, Rejected, or Inconclusive; list Evidence as jump:TIME bullets; Confidence (High/Medium/Low); Alternatives considered; and one next check. Viewer action: focus_evidence.",
+      "role": "user"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "### Verdict\nConfirmed\n\n### Evidence Chain\n- **Off-CPU / scheduling-delay candidate (`id=blocking`)**: Task Med[267] experienced `n=1741` off-CPU gaps with a maximum duration of 34.924 ms.\n- **Blocking Gap within Window**: At jump:3088582, task Med[267] encountered an off-CPU blocking gap extending to jump:3089261 (range:3088582/3089261) lasting 679 us on Core_0.\n- **Execution Within Window**: Med[267] executed on Core_0 at jump:3087568 for dur=335 (range:3087568/3087903).\n- **Timeline Window**: Cursors C1=jump:3087568 and C2=jump:3090460 bracket the evaluated region.\n\n### Interpretation\nThe analysis confirms that Med[267] experiences significant off-CPU scheduling delay and blocking gaps. While the trace-wide maximum blocking duration is 34.924 ms, localized observation inside the scoped window at range:3088582/3089261 shows direct blocking intervals up to 679 us on Core_0, indicating resource contention or scheduling latency.\n\n### Alternative and Falsification Check\nAn alternative explanation is that Med[267] is yielding voluntarily or completing its execution slices normally. However, this is falsified by the presence of extended off-CPU gaps while runnable and the correlation with priority inversion / mutex warnings on related tasks.\n\n### Confidence, Quality, and Coverage\n- **Confidence**: High\n- **Quality**: Direct\n- **Coverage**: Complete within the cursor window range:3087568/3090460.\n\n### Recommended Validation Experiment\n- Open the **Mutex Blocking** Statistics page to examine synchronization contention and holding times for Med[267].\n\n### Remaining Findings and Next Steps\nOpen Mutex Blocking Statistics page to inspect synchronization contention [Run](btfnext:text/0) [Open Statistics](btfstats:section/block)\nOpen Priority Inversion inspection or Mutex/Semaphore analysis for Low[266] and PS[228] [Run](btfnext:text/1)\nInspect Core Migrations and Core-Pair Migration Summary for CS[20], CS[15], CS[17], CS[14], CS[23] [Run](btfnext:text/2) [Open Statistics](btfstats:section/core_pairs)\nInvestigate Trace Health TICK = WARNING and tick gap distribution [Run](btfnext:text/3)\nCross-check Core-Pair Migration Summary bounce percentages for the 20 sync objects [Run](btfnext:text/4) [Open Statistics](btfstats:section/core_pairs)\nOpen Execution Time page and inspect WCET spike maxima for Runner[1], CS[12], CS[13], CS[14], and CS[15] [Run](btfnext:text/5) [Open Statistics](btfstats:section/exec)",
+      "role": "assistant"
+    },
+    {
+      "content": "Explain the current timeline cursor region (scope C1\u2013Cn \u2014 see the Cursor region window in context). Stay strictly inside that window: every jump:TIME you cite must fall between C1 and Cn. Identify longest blocking, migrations, priority changes, wakeups, mutex contention, deadline issues, idle gaps, and CPU imbalance in this window. Check in-window Timeline Anomalies and Worst Events. Call correlate_events and query_raw_metric as needed. Use only in-window jump:TIME evidence (or state that tools found none). End with: Summary, Top issues, Evidence, Suggested next action.",
+      "role": "user"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "content": "### Summary\nThe current timeline cursor region spans from jump:3087568 to jump:3090460 (range:3087568/3090460). Within this active window, tracing and metric correlation focus on task Med[267] executing on Core_0 alongside recurrent blocking intervals and scheduling gaps.\n\n### Top Issues\n- **Blocking & Scheduling Delays**: Task Med[267] encounters frequent off-CPU gaps and blocking periods within the window, notably a 679 us blocking gap starting at jump:3088582 (range:3088582/3089261) and subsequent shorter 13 us blocking gaps (e.g., at jump:3089784, jump:3090044, and jump:3090460).\n- **Core Utilization & Slices**: Execution slices for Med[267] on Core_0 occur at jump:3087568 (duration 335 us, range:3087568/3087903) and jump:3088582 (duration 384 us, range:3088582/3088966).\n\n### Evidence\n- **jump:3087568**: Med[267] execution slice starts on Core_0 with duration 335 (range:3087568/3087903).\n- **jump:3088582**: Med[267] encounters a blocking gap of 679 us extending to jump:3089261 (range:3088582/3089261), concurrent with an execution slice of duration 384 on Core_0 (range:3088582/3088966).\n- **jump:3088979**, **jump:309109**, **jump:3089239**, **jump:3089369**, **jump:3089525**: Recurrent short blocking gaps (13 us to 14 us) for Med[267].\n- **jump:3089784**, **jump:3089914**, **jump:3090044**, **jump:3090174**, **jump:3090304**, **jump:3090460**: Additional in-window blocking intervals of 13 us for Med[267] leading up to cursor C2 (jump:3090460).\n\n### Suggested Next Action\n- Open the **Critical Path** or **Mutex Blocking** Statistics page to examine the resource contention causing the blocking gaps on Med[267] within range:3087568/3090460.\n\nCollect evidence for Correlated events: Med[267]. Missing: No corresponding mutex hold episode in the window. Preserve the current Scope. Call correlate_events or query_raw_metric for any missing jump:TIME values. [Run](btfnext:text/0)\nInspect mutex hold / Blocking Max around the cited jump:TIME Preserve the current Investigation Case, Context, and Scope. [Run](btfnext:text/1)\n",
+      "role": "assistant"
+    },
+    {
+      "content": "**Verdict:** Correlated \u00b7 **Coverage:** Complete \u00b7 **Evidence:** Correlated \u00b7 **Confidence:** Correlation 0.88\n\n**Leading explanation**\nCorrelated events: Med[267]\n\n<details class=\"ai-ev-fold ai-ev-fold-l1\">\n<summary>Direct evidence \u00b7 15 rows</summary>\n\n| Time | Observed event | Task | Core | Duration |\n| --- | --- | --- | --- | ---: |\n| jump:3087568\u2013jump:3087903 | execution: dur=335 core=Core_0 | Med[267] | Core_0 | 335 s |\n| jump:3087568 | search: Med[267] | Med[267] | \u2014 | \u2014 |\n| jump:3088582\u2013jump:3089261 | blocking: 679 | Med[267] | \u2014 | 679 s |\n| jump:3088582\u2013jump:3088966 | execution: dur=384 core=Core_0 | Med[267] | Core_0 | 384 s |\n| jump:3088582 | search: Med[267] | Med[267] | \u2014 | \u2014 |\n| jump:3088979\u2013jump:3088992 | blocking: 13 | Med[267] | \u2014 | 13 s |\n| jump:3088979\u2013jump:3089096 | execution: dur=117 core=Core_0 | Med[267] | Core_0 | 117 s |\n| jump:3088979 | search: Med[267] | Med[267] | \u2014 | \u2014 |\n| jump:3089109\u2013jump:3089122 | blocking: 13 | Med[267] | \u2014 | 13 s |\n| jump:3089109\u2013jump:3089226 | execution: dur=117 core=Core_0 | Med[267] | Core_0 | 117 s |\n| jump:3089109 | search: Med[267] | Med[267] | \u2014 | \u2014 |\n| jump:3089239\u2013jump:3089252 | blocking: 13 | Med[267] | \u2014 | 13 s |\n| jump:3089239\u2013jump:3089356 | execution: dur=117 core=Core_0 | Med[267] | Core_0 | 117 s |\n| jump:3089239 | search: Med[267] | Med[267] | \u2014 | \u2014 |\n| jump:3089369\u2013jump:3089382 | blocking: 13 | Med[267] | \u2014 | 13 s |\n\n</details>\n\n<details class=\"ai-ev-fold ai-ev-fold-l1\">\n<summary>Evidence graph</summary>\n\n```mermaid\ngraph TD\nF[Correlated events: Med267]\nE0{{execution: dur=335 core=Core_0 jump:3087568}}\nE1{{search: Med267 jump:3087568}}\nE2{{blocking: 679 jump:3088582}}\nE3{{execution: dur=384 core=Core_0 jump:3088582}}\nE4{{search: Med267 jump:3088582}}\nE5{{blocking: 13 jump:3088979}}\nE6{{execution: dur=117 core=Core_0 jump:3088979}}\nE7{{search: Med267 jump:3088979}}\nE8{{blocking: 13 jump:3089109}}\nE9{{execution: dur=117 core=Core_0 jump:3089109}}\nE10{{search: Med267 jump:3089109}}\nE11{{blocking: 13 jump:3089239}}\nF --> E0\nF --> E1\nF --> E2\nF --> E3\nF --> E4\nF --> E5\nF --> E6\nF --> E7\nF --> E8\nF --> E9\nF --> E10\nF --> E11\n```\n\n</details>\n\n**Interpretation**\n## Evidence\n\n- **[WARNING] Off-CPU / scheduling-delay candidates** (`id=blocking`)\n  - Tasks with the most off-CPU gaps: Med[267] (n=1741, Max 34.924 ms), Low[266] (n=873, Max 64.274 ms), CS[13] (n=741, Max 5.369 ms), CS[12] (n=739, Max 5.676 ms), CS[11] (n=732, Max 5.267 ms). Cross-check Preemption Chain and Mutex/Semaphore. Off-CPU time is not necessarily resource blocking.\n\n<details class=\"ai-ev-fold ai-ev-fold-l1\">\n<summary>Checks \u00b7 2</summary>\n\n| Check | Status |\n| --- | --- |\n| check |  \u2014 4/6 claim tokens in findings |\n| check |  \u2014 evidence times inside cursors |\n\n</details>\n\n<details class=\"ai-ev-fold ai-ev-fold-l1\">\n<summary>Alternative hypotheses \u00b7 3</summary>\n\n- *Off-CPU blocking / mutex wait* (possible) \u2014 Blocking gaps dominate latency [Support](btfhyp:supported/h1) \u00b7 [Reject](btfhyp:rejected/h1) \u00b7 [Need evidence](btfhyp:need_evidence/h1) \u00b7 [Test](btfhyp:test/h1)\n- *Preemption chain interference* (needs evidence) \u2014 Higher-priority work stretches wait [Support](btfhyp:supported/h2) \u00b7 [Reject](btfhyp:rejected/h2) \u00b7 [Need evidence](btfhyp:need_evidence/h2) \u00b7 [Test](btfhyp:test/h2)\n- *Long execution slices / WCET spike* (needs evidence) \u2014 Max vs typical execution diverge [Support](btfhyp:supported/h3) \u00b7 [Reject](btfhyp:rejected/h3) \u00b7 [Need evidence](btfhyp:need_evidence/h3) \u00b7 [Test](btfhyp:test/h3)\n[Compare hypotheses](btfhyp:compare/all)\n\n</details>\n\n<details class=\"ai-ev-fold ai-ev-fold-l1\">\n<summary>Supporting evidence \u00b7 8</summary>\n\n- execution: dur=335 core=Core_0 jump:3087568.0\n- search: Med[267] jump:3087568.0\n- blocking: 679 jump:3088582.0\n- execution: dur=384 core=Core_0 jump:3088582.0\n- search: Med[267] jump:3088582.0\n- blocking: 13 jump:3088979.0\n- execution: dur=117 core=Core_0 jump:3088979.0\n- search: Med[267] jump:3088979.0\n\n</details>\n\n**Missing evidence**\n- Cited jump:TIME is outside the cursor region\n- Named task does not appear in scoped Statistics\n- The metric named in the conclusion is not present\n\n**\u25b6 Recommended next check:** Collect missing evidence [Run](btfnext:run/0)\n<details class=\"ai-ev-fold ai-ev-fold-l1\">\n<summary>More next steps\u2026</summary>\n\n- Inspect mutex hold / Blocking Max around the\u2026 [Run](btfnext:run/1)\n- Off-CPU / scheduling-delay candidates [Run](btfnext:run/2)\n\n</details>\n\n<details class=\"ai-ev-fold ai-ev-fold-l1\" open>\n<summary>Investigation details</summary>\n\n**Confidence:** Correlation 0.88\n**Evidence Quality:** \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591 Medium-High\n- Direct evidence \u2713\n- Timeline correlation \u2713\n- Metric correlation \u2713\n- Alternative tested \u25b3\n**Evidence Coverage:** \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 95%\n- Directly observed 19/20\n- Timeline verified 13/20\n- Metric verified 5/20\n- Unverified assumptions 1\n**Validation:** 1 unverified claims\n- jump:309109.0 outside cursor window\n**Investigation cost:** Context 395240 tokens \u00b7 Tool calls 16 \u00b7 Trace queries 12 \u00b7 Model time 26.553s \u00b7 Est. \u2014\n<details class=\"ai-ev-fold ai-ev-fold-l2\">\n<summary>Confidence evolution</summary>\n- Initial: insufficient 15% \u2014 Initial investigation context\n- After correlate_events: \u2014 40 correlated event(s) for Med[267] (truncated)\n- After find_critical_path: \u2014 20 step critical path for Med[267]\n- After verify_claim: \u2014 confirmed\n- After challenge_conclusion: \u2014 Alternatives to mutex_blocking: other, execution, migration, scheduler\n- After investigate: insufficient 15% \u2014 Investigation context for blocking (4 hypotheses, 4 suggested tools)\n- After correlate_events: \u2014 40 correlated event(s) for Med[267] (truncated)\n- After verify_claim: \u2014 confirmed\n- After challenge_conclusion: \u2014 Alternatives to mutex_blocking: other, execution, migration, scheduler\n- After correlate_events: \u2014 29 correlated event(s) for Med[267]\n</details>\n<details class=\"ai-ev-fold ai-ev-fold-l2\">\n<summary>Tools used \u00b7 13</summary>\n- query_raw_metric: Pull a scoped per-task series instead of guessing numbers. Finding: Off-CPU / scheduling-delay candidates.\n- query_raw_metric: Pull a scoped per-task series instead of guessing numbers. Finding: Off-CPU / scheduling-delay candidates.\n- query_raw_metric: Pull a scoped per-task series instead of guessing numbers. Finding: Off-CPU / scheduling-delay candidates.\n- highlight_task: Run highlight_task as part of the investigation plan. Finding: Off-CPU / scheduling-delay candidates.\n- correlate_events: Check whether blocking, migrations, and sync overlap the spike. Finding: Off-CPU / scheduling-delay candidates.\n- find_critical_path: Walk preempt / block / mutex around the evidence time. Finding: Off-CPU / scheduling-delay candidates.\n- verify_claim: Check a causal claim against findings and scope. Finding: Off-CPU / scheduling-delay candidates.\n- challenge_conclusion: List alternatives and missing evidence. Finding: Off-CPU / scheduling-delay candidates.\n- investigate: Build hypotheses and an evidence chain for the focus finding. Finding: Off-CPU / scheduling-delay candidates.\n- correlate_events: Check whether blocking, migrations, and sync overlap the spike. Finding: Off-CPU / scheduling-delay candidates.\n- verify_claim: Check a causal claim against findings and scope. Finding: Off-CPU / scheduling-delay candidates.\n- challenge_conclusion: List alternatives and missing evidence. Finding: Off-CPU / scheduling-delay candidates.\n- correlate_events: Check whether blocking, migrations, and sync overlap the spike. Finding: Off-CPU / scheduling-delay candidates.\n</details>\n<details class=\"ai-ev-fold ai-ev-fold-l2\">\n<summary>Investigation tree</summary>\n```mermaid\ngraph TD\nS0[Finding: Off-CPU / scheduling-delay candidates]\nS1[Focus task Med267]\nS2[Off-CPU / blocking gap]\nS3[Synchronization hold]\nS4[Execution / WCET spike]\nS5[Likely long critical section or preemption stretch]\nS6[Verify on timeline]\nS0 --> S1\nS1 --> S2\nS2 --> S3\nS3 --> S4\nS4 --> S5\nS5 --> S6\nH0(Off-CPU blocking / mutex wait)\nS0 --> H0\nH1(Preemption chain interference)\nS0 --> H1\nH2(Long execution",
+      "role": "evidence"
+    }
+  ],
+  "payload": {
+    "alternatives": [
+      {
+        "hypothesis": "Off-CPU blocking / mutex wait",
+        "status": "plausible",
+        "why": "Blocking gaps dominate latency"
+      },
+      {
+        "hypothesis": "Preemption chain interference",
+        "status": "untested",
+        "why": "Higher-priority work stretches wait"
+      },
+      {
+        "hypothesis": "Long execution slices / WCET spike",
+        "status": "untested",
+        "why": "Max vs typical execution diverge"
+      }
+    ],
+    "analysis_findings": [
+      {
+        "comparison_basis": "",
+        "confidence": "High \u2014 derived from measured core utilisation",
+        "evidence": [],
+        "evidence_text": "Load Balance Score 95% (\u03c3=5.8%, G=0.049)",
+        "id": "load_balance_ok",
+        "impact": "",
+        "inspect": "Core Utilisation (excl. IDLE/TICK)",
+        "inspect_href": "",
+        "limitations": [],
+        "measured_values": [],
+        "rule_id": "load_balance_ok",
+        "severity": "info",
+        "task": "",
+        "text": "Load Balance Score 95% (\u03c3=5.8%, G=0.049) \u2014 cores look reasonably balanced. A high score means even distribution, not healthy utilisation.",
+        "title": "Core utilisation balance"
+      },
+      {
+        "comparison_basis": "",
+        "confidence": "High \u2014 measured CPU share",
+        "evidence": [],
+        "evidence_text": "CS[27] (14.5%), CS[18] (14.5%), CS[28] (14.4%), CS[11] (14.4%), CS[20] (14.4%)",
+        "id": "top_cpu",
+        "impact": "",
+        "inspect": "Top Tasks by CPU (excl. IDLE/TICK)",
+        "inspect_href": "",
+        "limitations": [],
+        "measured_values": [],
+        "rule_id": "top_cpu",
+        "severity": "info",
+        "task": "",
+        "text": "Largest share of active CPU time: CS[27] (14.5%), CS[18] (14.5%), CS[28] (14.4%), CS[11] (14.4%), CS[20] (14.4%). High CPU share is not the same as a long worst-case slice.",
+        "title": "Highest CPU consumers"
+      },
+      {
+        "comparison_basis": "",
+        "confidence": "High \u2014 measured slice durations",
+        "evidence": [],
+        "evidence_text": "NC[118] (Max 110.223 ms), QP[198] (Max 21.962 ms), QP[200] (Max 18.323 ms), QP[199] (Max 17.513 ms), QP[197] (Max 13.208 ms)",
+        "id": "exec_max",
+        "impact": "",
+        "inspect": "Execution Time Per Slice",
+        "inspect_href": "",
+        "limitations": [],
+        "measured_values": [],
+        "rule_id": "exec_max",
+        "severity": "info",
+        "task": "",
+        "text": "Longest observed slices: NC[118] (Max 110.223 ms), QP[198] (Max 21.962 ms), QP[200] (Max 18.323 ms), QP[199] (Max 17.513 ms), QP[197] (Max 13.208 ms). See Execution Time Per Slice for the maximum observed slice. These are observed maxima, not proven WCET.",
+        "title": "Largest execution-time maxima"
+      },
+      {
+        "comparison_basis": "",
+        "confidence": "Medium \u2014 measured gaps, mixed causes",
+        "evidence": [],
+        "evidence_text": "Med[267] (n=1741, Max 34.924 ms), Low[266] (n=873, Max 64.274 ms), CS[13] (n=741, Max 5.369 ms), CS[12] (n=739, Max 5.676 ms), CS[11] (n=732, Max 5.267 ms)",
+        "id": "blocking",
+        "impact": "Long or frequent off-CPU gaps delay the next resume.",
+        "inspect": "Off-CPU Time (Blocking Time)",
+        "inspect_href": "",
+        "limitations": [],
+        "measured_values": [],
+        "rule_id": "blocking",
+        "severity": "warning",
+        "task": "",
+        "text": "Tasks with the most off-CPU gaps: Med[267] (n=1741, Max 34.924 ms), Low[266] (n=873, Max 64.274 ms), CS[13] (n=741, Max 5.369 ms), CS[12] (n=739, Max 5.676 ms), CS[11] (n=732, Max 5.267 ms). Cross-check Preemption Chain and Mutex/Semaphore. Off-CPU time is not necessarily resource blocking.",
+        "title": "Off-CPU / scheduling-delay candidates"
+      },
+      {
+        "comparison_basis": "",
+        "confidence": "",
+        "evidence": [],
+        "evidence_text": "",
+        "id": "priority_inversion",
+        "impact": "",
+        "inspect": "",
+        "inspect_href": "",
+        "limitations": [],
+        "measured_values": [],
+        "rule_id": "priority_inversion",
+        "severity": "warning",
+        "task": "",
+        "text": "Tasks with L/M/H pattern: Low[266], PS[228]. Inspect Priority Inheritance boost episodes and the holding mutex.",
+        "title": "Priority inversion (L/M/H) suspected"
+      },
+      {
+        "comparison_basis": "",
+        "confidence": "Medium \u2014 heuristic threshold",
+        "evidence": [],
+        "evidence_text": "CS[20] (Migr=595, Rate=1643.89/s \u00b7 1.462/tick, Dwell=501 \u00b5s, Ping=23); CS[15] (Migr=588, Rate=1664.66/s \u00b7 1.463/tick, Dwell=483 \u00b5s, Ping=23); CS[17] (Migr=584, Rate=1662.55/s \u00b7 1.497/tick, Dwell=482 \u00b5s, Ping=34); CS[14] (Migr=579, Rate=1672.22/s \u00b7 1.496/tick, Dwell=475 \u00b5s, Ping=32); CS[23] (Migr=579, Rate=1652.89/s \u00b7 1.504/tick, Dwell=481 \u00b5s, Ping=27)",
+        "id": "thrashing",
+        "impact": "May increase cache misses and scheduling overhead.",
+        "inspect": "Core Migrations",
+        "inspect_href": "",
+        "limitations": [],
+        "measured_values": [],
+        "rule_id": "thrashing",
+        "severity": "warning",
+        "task": "",
+        "text": "High migration rate, short dwell, and/or ping-pong detected: CS[20] (Migr=595, Rate=1643.89/s \u00b7 1.462/tick, Dwell=501 \u00b5s, Ping=23); CS[15] (Migr=588, Rate=1664.66/s \u00b7 1.463/tick, Dwell=483 \u00b5s, Ping=23); CS[17] (Migr=584, Rate=1662.55/s \u00b7 1.497/tick, Dwell=482 \u00b5s, Ping=34); CS[14] (Migr=579, Rate=1672.22/s \u00b7 1.496/tick, Dwell=475 \u00b5s, Ping=32); CS[23] (Migr=579, Rate=1652.89/s \u00b7 1.504/tick, Dwell=481 \u00b5s, Ping=27). See Core Migrations and Core-Pair Migration Summary.",
+        "title": "Excessive core migration"
+      },
+      {
+        "comparison_basis": "TICK interval CV / large gaps vs the nominal period",
+        "confidence": "High \u2014 measured TICK intervals",
+        "evidence": [],
+        "evidence_text": "",
+        "id": "tick_health",
+        "impact": "",
+        "inspect": "Trace Health (TICK)",
+        "inspect_href": "",
+        "limitations": [],
+        "measured_values": [
+          {
+            "name": "CV",
+            "unit": "%",
+            "value": 34.06
+          },
+          {
+            "name": "missed",
+            "sample_count": 2657,
+            "unit": "",
+            "value": 5
+          }
+        ],
+        "rule_id": "tick_health",
+        "severity": "warning",
+        "task": "",
+        "text": "Mode=TICKLESS, CV=34.06%, missed\u22485. Investigate large TICK gaps and long slices.",
+        "title": "Trace Health (TICK) = WARNING"
+      },
+      {
+        "comparison_basis": "",
+        "confidence": "",
+        "evidence": [],
+        "evidence_text": "",
+        "id": "sync_bounce",
+        "impact": "",
+        "inspect": "",
+        "inspect_href": "",
+        "limitations": [],
+        "measured_values": [],
+        "rule_id": "sync_bounce",
+        "severity": "warning",
+        "task": "",
+        "text": "20 sync object(s) with Core bounce > 0. Cross-check Core-Pair Migration Summary Bounce %.",
+        "title": "Mutex / semaphore core-boundary bounces"
+      },
+      {
+        "evidence": [],
+        "id": "wcet_anomaly",
+        "severity": "warning",
+        "text": "Execution Max is much larger than Avg \u2014 multimodal or bursty slices: Runner[1] (Max/Avg=17.0\u00d7, n=347); CS[12] (Max/Avg=6.2\u00d7, n=740); CS[13] (Max/Avg=7.5\u00d7, n=742); CS[14] (Max/Avg=5.7\u00d7, n=729); CS[15] (Max/Avg=6.7\u00d7, n=731). Open Execution Time and jump to Max.",
+        "title": "Anomaly: WCET spike vs typical execution"
+      }
+    ],
+    "checks": [
+      {
+        "check": "evidence_lookup",
+        "detail": "4/6 claim tokens in findings",
+        "ok": true
+      },
+      {
+        "check": "scope",
+        "detail": "evidence times inside cursors",
+        "ok": true
+      }
+    ],
+    "claims": [
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3087568.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3090460.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3088582.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3089784.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3090044.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3089261.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3088979.0
+      },
+      {
+        "detail": "timestamp before cursor window",
+        "kind": "jump",
+        "ok": false,
+        "value": 309109.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3089239.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3089369.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3089525.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3089914.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3090174.0
+      },
+      {
+        "detail": "",
+        "kind": "jump",
+        "ok": true,
+        "value": 3090304.0
+      },
+      {
+        "detail": "",
+        "kind": "task",
+        "ok": true,
+        "value": "Med[267]"
+      },
+      {
+        "detail": "",
+        "kind": "metric",
+        "ok": true,
+        "value": "blocking"
+      },
+      {
+        "detail": "",
+        "kind": "metric",
+        "ok": true,
+        "value": "contention"
+      },
+      {
+        "detail": "",
+        "kind": "metric",
+        "ok": true,
+        "value": "cpu"
+      },
+      {
+        "detail": "",
+        "kind": "metric",
+        "ok": true,
+        "value": "execution"
+      },
+      {
+        "detail": "",
+        "kind": "metric",
+        "ok": true,
+        "value": "mutex"
+      }
+    ],
+    "conclusion": "Correlated events: Med[267]",
+    "confidence": "Correlation 0.88",
+    "confidence_evolution": "Initial: insufficient 15% \u2014 Initial investigation context\nAfter correlate_events: \u2014 40 correlated event(s) for Med[267] (truncated)\nAfter find_critical_path: \u2014 20 step critical path for Med[267]\nAfter verify_claim: \u2014 confirmed\nAfter challenge_conclusion: \u2014 Alternatives to mutex_blocking: other, execution, migration, scheduler\nAfter investigate: insufficient 15% \u2014 Investigation context for blocking (4 hypotheses, 4 suggested tools)\nAfter correlate_events: \u2014 40 correlated event(s) for Med[267] (truncated)\nAfter verify_claim: \u2014 confirmed\nAfter challenge_conclusion: \u2014 Alternatives to mutex_blocking: other, execution, migration, scheduler\nAfter correlate_events: \u2014 29 correlated event(s) for Med[267]",
+    "cost": "Context 395240 tokens \u00b7 Tool calls 16 \u00b7 Trace queries 12 \u00b7 Model time 26.553s \u00b7 Est. \u2014",
+    "coverage": {
+      "bar": "\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 95%",
+      "claims": 20,
+      "directly_observed": "19/20",
+      "metric_verified": 5,
+      "percent": 95,
+      "timeline_verified": 13,
+      "unverified_assumptions": 1
+    },
+    "evidence": [
+      {
+        "core": "Core_0",
+        "duration": 335,
+        "label": "execution: dur=335 core=Core_0",
+        "start": 3087568,
+        "stop": 3087903,
+        "task": "Med[267]",
+        "time": 3087568.0
+      },
+      {
+        "label": "search: Med[267]",
+        "start": 3087568.0,
+        "task": "Med[267]",
+        "time": 3087568.0
+      },
+      {
+        "duration": 679,
+        "label": "blocking: 679",
+        "start": 3088582,
+        "stop": 3089261.0,
+        "task": "Med[267]",
+        "time": 3088582.0
+      },
+      {
+        "core": "Core_0",
+        "duration": 384,
+        "label": "execution: dur=384 core=Core_0",
+        "start": 3088582,
+        "stop": 3088966,
+        "task": "Med[267]",
+        "time": 3088582.0
+      },
+      {
+        "label": "search: Med[267]",
+        "start": 3088582.0,
+        "task": "Med[267]",
+        "time": 3088582.0
+      },
+      {
+        "duration": 13,
+        "label": "blocking: 13",
+        "start": 3088979,
+        "stop": 3088992.0,
+        "task": "Med[267]",
+        "time": 3088979.0
+      },
+      {
+        "core": "Core_0",
+        "duration": 117,
+        "label": "execution: dur=117 core=Core_0",
+        "start": 3088979,
+        "stop": 3089096,
+        "task": "Med[267]",
+        "time": 3088979.0
+      },
+      {
+        "label": "search: Med[267]",
+        "start": 3088979.0,
+        "task": "Med[267]",
+        "time": 3088979.0
+      },
+      {
+        "duration": 13,
+        "label": "blocking: 13",
+        "start": 3089109,
+        "stop": 3089122.0,
+        "task": "Med[267]",
+        "time": 3089109.0
+      },
+      {
+        "core": "Core_0",
+        "duration": 117,
+        "label": "execution: dur=117 core=Core_0",
+        "start": 3089109,
+        "stop": 3089226,
+        "task": "Med[267]",
+        "time": 3089109.0
+      },
+      {
+        "label": "search: Med[267]",
+        "start": 3089109.0,
+        "task": "Med[267]",
+        "time": 3089109.0
+      },
+      {
+        "duration": 13,
+        "label": "blocking: 13",
+        "start": 3089239,
+        "stop": 3089252.0,
+        "task": "Med[267]",
+        "time": 3089239.0
+      },
+      {
+        "core": "Core_0",
+        "duration": 117,
+        "label": "execution: dur=117 core=Core_0",
+        "start": 3089239,
+        "stop": 3089356,
+        "task": "Med[267]",
+        "time": 3089239.0
+      },
+      {
+        "label": "search: Med[267]",
+        "start": 3089239.0,
+        "task": "Med[267]",
+        "time": 3089239.0
+      },
+      {
+        "duration": 13,
+        "label": "blocking: 13",
+        "start": 3089369,
+        "stop": 3089382.0,
+        "task": "Med[267]",
+        "time": 3089369.0
+      }
+    ],
+    "evidence_chain": "## Evidence\n\n- **[WARNING] Off-CPU / scheduling-delay candidates** (`id=blocking`)\n  - Tasks with the most off-CPU gaps: Med[267] (n=1741, Max 34.924 ms), Low[266] (n=873, Max 64.274 ms), CS[13] (n=741, Max 5.369 ms), CS[12] (n=739, Max 5.676 ms), CS[11] (n=732, Max 5.267 ms). Cross-check Preemption Chain and Mutex/Semaphore. Off-CPU time is not necessarily resource blocking.",
+    "evidence_coverage": {
+      "bar": "\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 95%",
+      "claims": 20,
+      "directly_observed": "19/20",
+      "metric_verified": 5,
+      "percent": 95,
+      "timeline_verified": 13,
+      "unverified_assumptions": 1
+    },
+    "evidence_quality": {
+      "band": "medium-high",
+      "bar": "\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591 Medium-High",
+      "breakdown": [
+        {
+          "delta": 40,
+          "label": "Direct evidence times (jump:TIME)"
+        },
+        {
+          "delta": 25,
+          "label": "Timeline correlation"
+        },
+        {
+          "delta": 15,
+          "label": "Metric correlation"
+        },
+        {
+          "delta": -10,
+          "label": "2 alternative(s) untested"
+        }
+      ],
+      "confidence_label": "Medium-High",
+      "flags": {
+        "alternative_tested": "partial",
+        "direct_evidence": true,
+        "metric_correlation": true,
+        "timeline_correlation": true
+      },
+      "label": "Evidence Quality",
+      "score": 70
+    },
+    "evidence_quality_bar": "\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591 Medium-High",
+    "evidence_score": 70,
+    "evidence_score_bar": "\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591\u2591 70%",
+    "evidence_score_breakdown": [
+      {
+        "delta": 40,
+        "label": "Direct evidence times (jump:TIME)"
+      },
+      {
+        "delta": 25,
+        "label": "Timeline correlation"
+      },
+      {
+        "delta": 15,
+        "label": "Metric correlation"
+      },
+      {
+        "delta": -10,
+        "label": "2 alternative(s) untested"
+      }
+    ],
+    "falsification": {
+      "conclusion": "Off-CPU / scheduling-delay candidates",
+      "disprove": [
+        "No corresponding mutex hold episode in the window",
+        "Latency spike occurs while the task is runnable (on-CPU)",
+        "Another task causes the majority of blocking"
+      ],
+      "next_check": "Inspect mutex hold / Blocking Max around the cited jump:TIME",
+      "supporting": [],
+      "would_disprove": [
+        "No corresponding mutex hold episode in the window",
+        "Latency spike occurs while the task is runnable (on-CPU)",
+        "Another task causes the majority of blocking"
+      ]
+    },
+    "falsify": {
+      "conclusion": "Correlated events: Med[267]",
+      "disprove": [
+        "Cited jump:TIME is outside the cursor region",
+        "Named task does not appear in scoped Statistics",
+        "The metric named in the conclusion is not present"
+      ],
+      "next_check": "Inspect the strongest jump:TIME on the timeline",
+      "supporting": [
+        "execution: dur=335 core=Core_0 jump:3087568.0",
+        "search: Med[267] jump:3087568.0",
+        "blocking: 679 jump:3088582.0",
+        "execution: dur=384 core=Core_0 jump:3088582.0",
+        "search: Med[267] jump:3088582.0",
+        "blocking: 13 jump:3088979.0",
+        "execution: dur=117 core=Core_0 jump:3088979.0",
+        "search: Med[267] jump:3088979.0"
+      ],
+      "would_disprove": [
+        "Cited jump:TIME is outside the cursor region",
+        "Named task does not appear in scoped Statistics",
+        "The metric named in the conclusion is not present"
+      ]
+    },
+    "graph_mermaid": "graph TD\nF[Correlated events: Med267]\nE0{{execution: dur=335 core=Core_0 jump:3087568}}\nE1{{search: Med267 jump:3087568}}\nE2{{blocking: 679 jump:3088582}}\nE3{{execution: dur=384 core=Core_0 jump:3088582}}\nE4{{search: Med267 jump:3088582}}\nE5{{blocking: 13 jump:3088979}}\nE6{{execution: dur=117 core=Core_0 jump:3088979}}\nE7{{search: Med267 jump:3088979}}\nE8{{blocking: 13 jump:3089109}}\nE9{{execution: dur=117 core=Core_0 jump:3089109}}\nE10{{search: Med267 jump:3089109}}\nE11{{blocking: 13 jump:3089239}}\nF --> E0\nF --> E1\nF --> E2\nF --> E3\nF --> E4\nF --> E5\nF --> E6\nF --> E7\nF --> E8\nF --> E9\nF --> E10\nF --> E11",
+    "hypotheses": [
+      {
+        "confidence": 40,
+        "evidence_count": 0,
+        "hypothesis": "Off-CPU blocking / mutex wait",
+        "id": "h1",
+        "status": "possible",
+        "why": "Blocking gaps dominate latency"
+      },
+      {
+        "confidence": 18,
+        "evidence_count": 0,
+        "hypothesis": "Preemption chain interference",
+        "id": "h2",
+        "status": "need_evidence",
+        "why": "Higher-priority work stretches wait"
+      },
+      {
+        "confidence": 14,
+        "evidence_count": 0,
+        "hypothesis": "Long execution slices / WCET spike",
+        "id": "h3",
+        "status": "need_evidence",
+        "why": "Max vs typical execution diverge"
+      }
+    ],
+    "hypotheses_managed": [
+      {
+        "confidence": 40,
+        "evidence_count": 0,
+        "hypothesis": "Off-CPU blocking / mutex wait",
+        "id": "h1",
+        "status": "possible",
+        "why": "Blocking gaps dominate latency"
+      },
+      {
+        "confidence": 18,
+        "evidence_count": 0,
+        "hypothesis": "Preemption chain interference",
+        "id": "h2",
+        "status": "need_evidence",
+        "why": "Higher-priority work stretches wait"
+      },
+      {
+        "confidence": 14,
+        "evidence_count": 0,
+        "hypothesis": "Long execution slices / WCET spike",
+        "id": "h3",
+        "status": "need_evidence",
+        "why": "Max vs typical execution diverge"
+      }
+    ],
+    "investigation_case": {
+      "alternatives_rejected": [],
+      "conclusion": "Off-CPU / scheduling-delay candidates",
+      "confidence": "Low",
+      "confidence_history": [
+        {
+          "band": "insufficient",
+          "note": "Initial investigation context",
+          "score": 15,
+          "tool": "investigate"
+        },
+        {
+          "note": "40 correlated event(s) for Med[267] (truncated)",
+          "tool": "correlate_events"
+        },
+        {
+          "note": "20 step critical path for Med[267]",
+          "tool": "find_critical_path"
+        },
+        {
+          "note": "confirmed",
+          "tool": "verify_claim"
+        },
+        {
+          "note": "Alternatives to mutex_blocking: other, execution, migration, scheduler",
+          "tool": "challenge_conclusion"
+        },
+        {
+          "band": "insufficient",
+          "note": "Investigation context for blocking (4 hypotheses, 4 suggested tools)",
+          "score": 15,
+          "tool": "investigate"
+        },
+        {
+          "note": "40 correlated event(s) for Med[267] (truncated)",
+          "tool": "correlate_events"
+        },
+        {
+          "note": "confirmed",
+          "tool": "verify_claim"
+        },
+        {
+          "note": "Alternatives to mutex_blocking: other, execution, migration, scheduler",
+          "tool": "challenge_conclusion"
+        },
+        {
+          "note": "29 correlated event(s) for Med[267]",
+          "tool": "correlate_events"
+        }
+      ],
+      "coverage": {
+        "bar": "\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 95%",
+        "claims": 20,
+        "directly_observed": "19/20",
+        "metric_verified": 5,
+        "percent": 95,
+        "timeline_verified": 13,
+        "unverified_assumptions": 1
+      },
+      "evidence": [
+        {
+          "label": "dur=335 core=Core_0",
+          "time": 3087568.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3087568.0
+        },
+        {
+          "label": "679",
+          "time": 3088582.0
+        },
+        {
+          "label": "dur=384 core=Core_0",
+          "time": 3088582.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3088582.0
+        },
+        {
+          "label": "13",
+          "time": 3088979.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3088979.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3088979.0
+        },
+        {
+          "label": "13",
+          "time": 3089109.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089109.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089109.0
+        },
+        {
+          "label": "13",
+          "time": 3089239.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089239.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089239.0
+        },
+        {
+          "label": "13",
+          "time": 3089369.0
+        },
+        {
+          "label": "dur=143 core=Core_0",
+          "time": 3089369.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089369.0
+        },
+        {
+          "label": "13",
+          "time": 3089525.0
+        },
+        {
+          "label": "dur=116 core=Core_0",
+          "time": 3089525.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089525.0
+        },
+        {
+          "label": "14",
+          "time": 3089655.0
+        },
+        {
+          "label": "dur=116 core=Core_0",
+          "time": 3089655.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089655.0
+        },
+        {
+          "label": "13",
+          "time": 3089784.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089784.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089784.0
+        },
+        {
+          "label": "13",
+          "time": 3089914.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089914.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089914.0
+        },
+        {
+          "label": "13",
+          "time": 3090044.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3090044.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3090044.0
+        },
+        {
+          "label": "13",
+          "time": 3090174.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3090174.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3090174.0
+        },
+        {
+          "label": "13",
+          "time": 3090304.0
+        },
+        {
+          "label": "dur=143 core=Core_0",
+          "time": 3090304.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3090304.0
+        },
+        {
+          "label": "13",
+          "time": 3090460.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3090460.0
+        },
+        {
+          "label": "Blocked / off-CPU: 679",
+          "time": 3088582.0
+        },
+        {
+          "label": "On-CPU execution: dur=384 core=Core_0",
+          "time": 3088582.0
+        },
+        {
+          "label": "Timeline match: Med[267]",
+          "time": 3088582.0
+        },
+        {
+          "label": "Blocked / off-CPU: 13",
+          "time": 3088979.0
+        },
+        {
+          "label": "On-CPU execution: dur=117 core=Core_0",
+          "time": 3088979.0
+        },
+        {
+          "label": "Timeline match: Med[267]",
+          "time": 3088979.0
+        },
+        {
+          "label": "Blocked / off-CPU: 13",
+          "time": 3089109.0
+        },
+        {
+          "label": "On-CPU execution: dur=117 core=Core_0",
+          "time": 3089109.0
+        },
+        {
+          "label": "Timeline match: Med[267]",
+          "time": 3089109.0
+        },
+        {
+          "label": "Blocked / off-CPU: 13",
+          "time": 3089239.0
+        },
+        {
+          "label": "On-CPU execution: dur=117 core=Core_0",
+          "time": 3089239.0
+        },
+        {
+          "label": "Timeline match: Med[267]",
+          "time": 3089239.0
+        },
+        {
+          "label": "Blocked / off-CPU: 13",
+          "time": 3089369.0
+        },
+        {
+          "label": "On-CPU execution: dur=143 core=Core_0",
+          "time": 3089369.0
+        },
+        {
+          "label": "Timeline match: Med[267]",
+          "time": 3089369.0
+        },
+        {
+          "label": "Blocked / off-CPU: 13",
+          "time": 3089525.0
+        },
+        {
+          "label": "On-CPU execution: dur=116 core=Core_0",
+          "time": 3089525.0
+        },
+        {
+          "label": "Timeline match: Med[267]",
+          "time": 3089525.0
+        },
+        {
+          "label": "On-CPU execution: dur=335 core=Core_0",
+          "time": 3087568.0
+        },
+        {
+          "label": "Timeline match: Med[267]",
+          "time": 3087568.0
+        },
+        {
+          "label": "dur=335 core=Core_0",
+          "time": 3087568.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3087568.0
+        },
+        {
+          "label": "679",
+          "time": 3088582.0
+        },
+        {
+          "label": "dur=384 core=Core_0",
+          "time": 3088582.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3088582.0
+        },
+        {
+          "label": "13",
+          "time": 3088979.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3088979.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3088979.0
+        },
+        {
+          "label": "13",
+          "time": 3089109.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089109.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089109.0
+        },
+        {
+          "label": "13",
+          "time": 3089239.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089239.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089239.0
+        },
+        {
+          "label": "13",
+          "time": 3089369.0
+        },
+        {
+          "label": "dur=143 core=Core_0",
+          "time": 3089369.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089369.0
+        },
+        {
+          "label": "13",
+          "time": 3089525.0
+        },
+        {
+          "label": "dur=116 core=Core_0",
+          "time": 3089525.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089525.0
+        },
+        {
+          "label": "14",
+          "time": 3089655.0
+        },
+        {
+          "label": "dur=116 core=Core_0",
+          "time": 3089655.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089655.0
+        },
+        {
+          "label": "13",
+          "time": 3089784.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089784.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089784.0
+        },
+        {
+          "label": "13",
+          "time": 3089914.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089914.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089914.0
+        },
+        {
+          "label": "13",
+          "time": 3090044.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3090044.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3090044.0
+        },
+        {
+          "label": "13",
+          "time": 3090174.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3090174.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3090174.0
+        },
+        {
+          "label": "13",
+          "time": 3090304.0
+        },
+        {
+          "label": "dur=143 core=Core_0",
+          "time": 3090304.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3090304.0
+        },
+        {
+          "label": "13",
+          "time": 3090460.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3090460.0
+        },
+        {
+          "label": "dur=335 core=Core_0",
+          "time": 3087568.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3087568.0
+        },
+        {
+          "label": "679",
+          "time": 3088582.0
+        },
+        {
+          "label": "dur=384 core=Core_0",
+          "time": 3088582.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3088582.0
+        },
+        {
+          "label": "13",
+          "time": 3088979.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3088979.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3088979.0
+        },
+        {
+          "label": "13",
+          "time": 3089109.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089109.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089109.0
+        },
+        {
+          "label": "13",
+          "time": 3089239.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089239.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089239.0
+        },
+        {
+          "label": "13",
+          "time": 3089369.0
+        },
+        {
+          "label": "dur=143 core=Core_0",
+          "time": 3089369.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089369.0
+        },
+        {
+          "label": "13",
+          "time": 3089525.0
+        },
+        {
+          "label": "dur=116 core=Core_0",
+          "time": 3089525.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089525.0
+        },
+        {
+          "label": "14",
+          "time": 3089655.0
+        },
+        {
+          "label": "dur=116 core=Core_0",
+          "time": 3089655.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089655.0
+        },
+        {
+          "label": "13",
+          "time": 3089784.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089784.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089784.0
+        },
+        {
+          "label": "13",
+          "time": 3089914.0
+        },
+        {
+          "label": "dur=117 core=Core_0",
+          "time": 3089914.0
+        },
+        {
+          "label": "Med[267]",
+          "time": 3089914.0
+        }
+      ],
+      "evidence_coverage": {
+        "bar": "\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 95%",
+        "claims": 20,
+        "directly_observed": "19/20",
+        "metric_verified": 5,
+        "percent": 95,
+        "timeline_verified": 13,
+        "unverified_assumptions": 1
+      },
+      "evidence_graph": {
+        "edges": [
+          {
+            "from": "F",
+            "rel": "chain",
+            "to": "C0"
+          },
+          {
+            "from": "C0",
+            "rel": "chain",
+            "to": "C1"
+          },
+          {
+            "from": "C1",
+            "rel": "chain",
+            "to": "C2"
+          },
+          {
+            "from": "C2",
+            "rel": "chain",
+            "to": "C3"
+          },
+          {
+            "from": "C3",
+            "rel": "chain",
+            "to": "C4"
+          },
+          {
+            "from": "C4",
+            "rel": "chain",
+            "to": "C5"
+          },
+          {
+            "from": "C5",
+            "rel": "chain",
+            "to": "C6"
+          },
+          {
+            "from": "F",
+            "rel": "hypothesizes",
+            "to": "H0"
+          },
+          {
+            "from": "F",
+            "rel": "hypothesizes",
+            "to": "H1"
+          },
+          {
+            "from": "F",
+            "rel": "hypothesizes",
+            "to": "H2"
+          }
+        ],
+        "mermaid": "graph TD\nF[Off-CPU / scheduling-delay candidates]\nC0[Finding: Off-CPU / scheduling-delay candidates]\nC1[Focus task Med267]\nC2[Off-CPU / blocking gap]\nC3[Synchronization hold]\nC4[Execution / WCET spike]\nC5[Likely long critical section or preemption stretch]\nC6[Verify on timeline]\nH0(Off-CPU blocking / mutex wait)\nH1(Preemption chain interference)\nH2(Long execution slices / WCET spike)\nF --> C0\nC0 --> C1\nC1 --> C2\nC2 --> C3\nC3 --> C4\nC4 --> C5\nC5 --> C6\nF -- hypothesizes --> H0\nF -- hypothesizes --> H1\nF -- hypothesizes --> H2",
+        "nodes": [
+          {
+            "id": "F",
+            "kind": "finding",
+            "label": "Off-CPU / scheduling-delay candidates",
+            "time": null
+          },
+          {
+            "id": "C0",
+            "kind": "finding",
+            "label": "Finding: Off-CPU / scheduling-delay candidates",
+            "time": null
+          },
+          {
+            "id": "C1",
+            "kind": "task",
+            "label": "Focus task Med267",
+            "time": null
+          },
+          {
+            "id": "C2",
+            "kind": "step",
+            "label": "Off-CPU / blocking gap",
+            "time": null
+          },
+          {
+            "id": "C3",
+            "kind": "step",
+            "label": "Synchronization hold",
+            "time": null
+          },
+          {
+            "id": "C4",
+            "kind": "step",
+            "label": "Execution / WCET spike",
+            "time": null
+          },
+          {
+            "id": "C5",
+            "kind": "cause",
+            "label": "Likely long critical section or preemption stretch",
+            "time": null
+          },
+          {
+            "id": "C6",
+            "kind": "ui",
+            "label": "Verify on timeline",
+            "time": null
+          },
+          {
+            "id": "H0",
+            "kind": "hypothesis",
+            "label": "Off-CPU blocking / mutex wait",
+            "status": "possible",
+            "time": null
+          },
+          {
+            "id": "H1",
+            "kind": "hypothesis",
+            "label": "Preemption chain interference",
+            "status": "need_evidence",
+            "time": null
+          },
+          {
+            "id": "H2",
+            "kind": "hypothesis",
+            "label": "Long execution slices / WCET spike",
+            "status": "need_evidence",
+            "time": null
+          }
+        ]
+      },
+      "evidence_quality": {
+        "band": "insufficient",
+        "bar": "\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 Insufficient",
+        "breakdown": [
+          {
+            "delta": 25,
+            "label": "Timeline correlation"
+          },
+          {
+            "delta": -10,
+            "label": "2 alternative(s) untested"
+          }
+        ],
+        "confidence_label": "Low",
+        "flags": {
+          "alternative_tested": "partial",
+          "direct_evidence": false,
+          "metric_correlation": false,
+          "timeline_correlation": true
+        },
+        "label": "Evidence Quality",
+        "score": 15
+      },
+      "evidence_timeline": [],
+      "falsification": {
+        "conclusion": "Off-CPU / scheduling-delay candidates",
+        "disprove": [
+          "No corresponding mutex hold episode in the window",
+          "Latency spike occurs while the task is runnable (on-CPU)",
+          "Another task causes the majority of blocking"
+        ],
+        "next_check": "Inspect mutex hold / Blocking Max around the cited jump:TIME",
+        "supporting": [],
+        "would_disprove": [
+          "No corresponding mutex hold episode in the window",
+          "Latency spike occurs while the task is runnable (on-CPU)",
+          "Another task causes the majority of blocking"
+        ]
+      },
+      "falsify": {
+        "conclusion": "Off-CPU / scheduling-delay candidates",
+        "disprove": [
+          "No corresponding mutex hold episode in the window",
+          "Latency spike occurs while the task is runnable (on-CPU)",
+          "Another task causes the majority of blocking"
+        ],
+        "next_check": "Inspect mutex hold / Blocking Max around the cited jump:TIME",
+        "supporting": [],
+        "would_disprove": [
+          "No corresponding mutex hold episode in the window",
+          "Latency spike occurs while the task is runnable (on-CPU)",
+          "Another task causes the majority of blocking"
+        ]
+      },
+      "graph_mermaid": "graph TD\nF[Off-CPU / scheduling-delay candidates]\nC0[Finding: Off-CPU / scheduling-delay candidates]\nC1[Focus task Med267]\nC2[Off-CPU / blocking gap]\nC3[Synchronization hold]\nC4[Execution / WCET spike]\nC5[Likely long critical section or preemption stretch]\nC6[Verify on timeline]\nH0(Off-CPU blocking / mutex wait)\nH1(Preemption chain interference)\nH2(Long execution slices / WCET spike)\nF --> C0\nC0 --> C1\nC1 --> C2\nC2 --> C3\nC3 --> C4\nC4 --> C5\nC5 --> C6\nF -- hypothesizes --> H0\nF -- hypothesizes --> H1\nF -- hypothesizes --> H2",
+      "hypotheses": [
+        {
+          "confidence": 40,
+          "evidence_count": 0,
+          "hypothesis": "Off-CPU blocking / mutex wait",
+          "id": "h1",
+          "status": "possible",
+          "why": "Blocking gaps dominate latency"
+        },
+        {
+          "confidence": 18,
+          "evidence_count": 0,
+          "hypothesis": "Preemption chain interference",
+          "id": "h2",
+          "status": "need_evidence",
+          "why": "Higher-priority work stretches wait"
+        },
+        {
+          "confidence": 14,
+          "evidence_count": 0,
+          "hypothesis": "Long execution slices / WCET spike",
+          "id": "h3",
+          "status": "need_evidence",
+          "why": "Max vs typical execution diverge"
+        }
+      ],
+      "mode": "diagnose",
+      "plan": {
+        "goal": "Investigate: Off-CPU / scheduling-delay candidates",
+        "steps": [
+          {
+            "id": "findings",
+            "label": "Read Analysis Findings",
+            "status": "done"
+          },
+          {
+            "id": "hypotheses",
+            "label": "Rank hypotheses",
+            "status": "done"
+          },
+          {
+            "id": "metrics",
+            "label": "Query metrics / timeline",
+            "status": "active"
+          },
+          {
+            "id": "narrow",
+            "label": "Narrow cursors / zoom",
+            "status": "pending"
+          },
+          {
+            "id": "related",
+            "label": "Inspect related tasks / sync",
+            "status": "pending"
+          },
+          {
+            "id": "validate",
+            "label": "Validate root cause",
+            "status": "pending"
+          },
+          {
+            "id": "recommend",
+            "label": "Recommend mitigation",
+            "status": "pending"
+          }
+        ]
+      },
+      "question": "Off-CPU / scheduling-delay candidates",
+      "recommended_action": "Inspect mutex hold / Blocking Max around the cited jump:TIME",
+      "schema": "btf-investigation-case",
+      "scope": {
+        "cores": [],
+        "cursor_hi": null,
+        "cursor_lo": null,
+        "tasks": [
+          "Med[267]"
+        ],
+        "trace": ""
+      },
+      "suspected_findings": [
+        {
+          "evidence": [],
+          "id": "blocking",
+          "severity": "warning",
+          "task": "Med[267]",
+          "text": "Tasks with the most off-CPU gaps: Med[267] (n=1741, Max 34.924 ms), Low[266] (n=873, Max 64.274 ms), CS[13] (n=741, Max 5.369 ms), CS[12] (n=739, Max 5.676 ms), CS[11] (n=732, Max 5.267 ms). Cross-check Preemption Chain and Mutex/Semaphore. Off-CPU time is not necessarily resource blocking.",
+          "title": "Off-CPU / scheduling-delay candidates"
+        }
+      ],
+      "tool_reasons": [
+        {
+          "reason": "Pull a scoped per-task series instead of guessing numbers. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "query_raw_metric"
+        },
+        {
+          "reason": "Pull a scoped per-task series instead of guessing numbers. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "query_raw_metric"
+        },
+        {
+          "reason": "Pull a scoped per-task series instead of guessing numbers. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "query_raw_metric"
+        },
+        {
+          "reason": "Run highlight_task as part of the investigation plan. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "highlight_task"
+        },
+        {
+          "reason": "Check whether blocking, migrations, and sync overlap the spike. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "correlate_events"
+        },
+        {
+          "reason": "Walk preempt / block / mutex around the evidence time. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "find_critical_path"
+        },
+        {
+          "reason": "Check a causal claim against findings and scope. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "verify_claim"
+        },
+        {
+          "reason": "List alternatives and missing evidence. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "challenge_conclusion"
+        },
+        {
+          "reason": "Build hypotheses and an evidence chain for the focus finding. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "investigate"
+        },
+        {
+          "reason": "Check whether blocking, migrations, and sync overlap the spike. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "correlate_events"
+        },
+        {
+          "reason": "Check a causal claim against findings and scope. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "verify_claim"
+        },
+        {
+          "reason": "List alternatives and missing evidence. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "challenge_conclusion"
+        },
+        {
+          "reason": "Check whether blocking, migrations, and sync overlap the spike. Finding: Off-CPU / scheduling-delay candidates.",
+          "tool": "correlate_events"
+        }
+      ],
+      "tools_executed": [
+        "query_raw_metric",
+        "query_raw_metric",
+        "query_raw_metric",
+        "highlight_task",
+        "correlate_events",
+        "find_critical_path",
+        "verify_claim",
+        "challenge_conclusion",
+        "investigate"
+      ],
+      "validation": {},
+      "version": 1
+    },
+    "next_steps": [
+      {
+        "kind": "investigate",
+        "label": "Collect missing evidence",
+        "prompt": "Collect evidence for Correlated events: Med[267]. Missing: No corresponding mutex hold episode in the window. Preserve the current Scope. Call correlate_events or query_raw_metric for any missing jump:TIME values.",
+        "reason": "No corresponding mutex hold episode in the window"
+      },
+      {
+        "kind": "statistics",
+        "label": "Inspect mutex hold / Blocking Max around the\u2026",
+        "prompt": "Inspect mutex hold / Blocking Max around the cited jump:TIME Preserve the current Investigation Case, Context, and Scope.",
+        "reason": "Recommended next check from the current case."
+      },
+      {
+        "kind": "statistics",
+        "label": "Off-CPU / scheduling-delay candidates",
+        "prompt": "Investigate remaining finding Off-CPU / scheduling-delay candidates (id=blocking). Inspect mutex hold / Blocking Max around the cited jump:TIME Call investigate(finding_id=blocking) if more evidence is needed. Preserve the current Investigation Case, Context, and Scope.",
+        "reason": "Inspect mutex hold / Blocking Max around the cited jump:TIME"
+      }
+    ],
+    "prose_nextsteps": [
+      "Collect evidence for Correlated events: Med[267]. Missing: No corresponding mutex hold episode in the window. Preserve the current Scope. Call correlate_events or query_raw_metric for any missing jump:TIME values.",
+      "Inspect mutex hold / Blocking Max around the cited jump:TIME Preserve the current Investigation Case, Context, and Scope."
+    ],
+    "root_cause_chain": [
+      {
+        "detail": "Tasks with the most off-CPU gaps: Med[267] (n=1741, Max 34.924 ms), Low[266] (n=873, Max 64.274 ms), CS[13] (n=741, Max 5.369 ms), CS[12] (n=739, Max 5.676 ms), CS[11] (n=732, Max 5.267 ms). Cross-check Preemption Chain and Mutex/Semaphore.",
+        "kind": "finding",
+        "label": "Finding: Off-CPU / scheduling-delay candidates",
+        "task": "Med[267]"
+      },
+      {
+        "detail": "Extracted from finding text",
+        "kind": "task",
+        "label": "Focus task Med[267]",
+        "task": "Med[267]"
+      },
+      {
+        "detail": "Inspect Blocking Time + STI wait",
+        "kind": "step",
+        "label": "Off-CPU / blocking gap",
+        "task": "Med[267]"
+      },
+      {
+        "detail": "Check mutex/semaphore owner",
+        "kind": "step",
+        "label": "Synchronization hold",
+        "task": "Med[267]"
+      },
+      {
+        "detail": "Jump to Max slice",
+        "kind": "step",
+        "label": "Execution / WCET spike",
+        "task": "Med[267]"
+      },
+      {
+        "detail": "",
+        "kind": "cause",
+        "label": "Likely long critical section or preemption stretch",
+        "task": "Med[267]"
+      },
+      {
+        "detail": "set_cursors + zoom_to_range + highlight_task",
+        "kind": "ui",
+        "label": "Verify on timeline",
+        "task": "Med[267]"
+      }
+    ],
+    "stop_reason": null,
+    "subtitle": "Tasks with the most off-CPU gaps: Med[267] (n=1741, Max 34.924 ms), Low[266] (n=873, Max 64.274 ms), CS[13] (n=741, Max 5.369 ms), CS[12] (n=739, Max 5.676 ms), CS[11] (n=732, Max 5.267 ms). Cross-check Preemption Chain and Mutex/Semaphore. Off-CPU time is not necessarily resource blocking.",
+    "tool_reasons": [
+      {
+        "reason": "Pull a scoped per-task series instead of guessing numbers. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "query_raw_metric"
+      },
+      {
+        "reason": "Pull a scoped per-task series instead of guessing numbers. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "query_raw_metric"
+      },
+      {
+        "reason": "Pull a scoped per-task series instead of guessing numbers. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "query_raw_metric"
+      },
+      {
+        "reason": "Run highlight_task as part of the investigation plan. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "highlight_task"
+      },
+      {
+        "reason": "Check whether blocking, migrations, and sync overlap the spike. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "correlate_events"
+      },
+      {
+        "reason": "Walk preempt / block / mutex around the evidence time. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "find_critical_path"
+      },
+      {
+        "reason": "Check a causal claim against findings and scope. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "verify_claim"
+      },
+      {
+        "reason": "List alternatives and missing evidence. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "challenge_conclusion"
+      },
+      {
+        "reason": "Build hypotheses and an evidence chain for the focus finding. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "investigate"
+      },
+      {
+        "reason": "Check whether blocking, migrations, and sync overlap the spike. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "correlate_events"
+      },
+      {
+        "reason": "Check a causal claim against findings and scope. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "verify_claim"
+      },
+      {
+        "reason": "List alternatives and missing evidence. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "challenge_conclusion"
+      },
+      {
+        "reason": "Check whether blocking, migrations, and sync overlap the spike. Finding: Off-CPU / scheduling-delay candidates.",
+        "tool": "correlate_events"
+      }
+    ],
+    "validation": {
+      "claims": [
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3087568.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3090460.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3088582.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3089784.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3090044.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3089261.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3088979.0
+        },
+        {
+          "detail": "timestamp before cursor window",
+          "kind": "jump",
+          "ok": false,
+          "value": 309109.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3089239.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3089369.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3089525.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3089914.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3090174.0
+        },
+        {
+          "detail": "",
+          "kind": "jump",
+          "ok": true,
+          "value": 3090304.0
+        },
+        {
+          "detail": "",
+          "kind": "task",
+          "ok": true,
+          "value": "Med[267]"
+        },
+        {
+          "detail": "",
+          "kind": "metric",
+          "ok": true,
+          "value": "blocking"
+        },
+        {
+          "detail": "",
+          "kind": "metric",
+          "ok": true,
+          "value": "contention"
+        },
+        {
+          "detail": "",
+          "kind": "metric",
+          "ok": true,
+          "value": "cpu"
+        },
+        {
+          "detail": "",
+          "kind": "metric",
+          "ok": true,
+          "value": "execution"
+        },
+        {
+          "detail": "",
+          "kind": "metric",
+          "ok": true,
+          "value": "mutex"
+        }
+      ],
+      "flags": [
+        "jump:309109.0 outside cursor window"
+      ],
+      "message": "1 claim(s) could not be verified against trace data",
+      "ok": false,
+      "unverified": 1
+    }
+  },
+  "plan": null,
+  "v": 1
+}

@@ -194,7 +194,10 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
             sync_issues=[],
             tick={"tick_count": 0},
         )
-        self.assertTrue(any(f["title"].startswith("No analysis heuristics") for f in findings))
+        self.assertTrue(
+            any(f["title"] == "No findings under the current rules" for f in findings))
+        self.assertFalse(
+            any(f["title"].startswith("No analysis heuristics") for f in findings))
 
     def test_analysis_dialog_uses_ui_font_size(self):
         from PySide6.QtWidgets import QApplication, QListWidgetItem

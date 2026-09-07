@@ -76,7 +76,13 @@ class TooltipThemeConsistencyTests(unittest.TestCase):
     def test_rich_text_tooltip_matches_plain_tooltip_font_size(self) -> None:
         self._make_win()
         html = qt_wrap_tooltip("Some help text that wraps across lines.")
-        expected_px = QToolTip.font().pixelSize()
+        # Mirror _tooltip_font_css(): a font sized in points (offscreen QPA,
+        # some CI) reports pixelSize() == -1, so fall back via pointSize().
+        font = QToolTip.font()
+        expected_px = font.pixelSize()
+        if expected_px <= 0:
+            pt = font.pointSize()
+            expected_px = round(pt * 4 / 3) if pt > 0 else 13
         self.assertGreater(expected_px, 0)
         self.assertIn(f"font-size:{expected_px}px", html)
         # font-family must be single-quoted: it sits inside an already
