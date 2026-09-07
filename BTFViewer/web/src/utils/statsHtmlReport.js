@@ -6,7 +6,8 @@ import { htmlSectionSlug } from './htmlReport.js'
 
 export const STATS_TOC_GROUPS = [
   ['Overview and Findings', [
-    'Analysis Scope', 'Evidence Refs', 'Analysis Findings', 'Trace Metadata',
+    'Analysis Scope', 'Evidence Refs', 'Analysis Findings',
+    'Trace Health Check', 'Investigation', 'Trace Metadata',
   ]],
   ['CPU and Scheduling', [
     'Core Utilisation', 'Trace Health (TICK)', 'Core Time Breakdown',
@@ -36,6 +37,7 @@ export const STATS_TOC_GROUPS = [
 export const STATS_DEFAULT_EXPANDED = [
   'Analysis Scope',
   'Analysis Findings',
+  'Trace Health Check',
   'Core Utilisation (excl. IDLE/TICK)',
   'Trace Health (TICK)',
   'Investigate Anomalies',
@@ -87,6 +89,15 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; 
 .findings-list { margin: 8px 0 0 18px; padding: 0; }
 .findings-list li { margin: 8px 0; line-height: 1.45; }
 .analysis-findings { border-left: 4px solid #c0392b; }
+.trace-health { border-left: 4px solid var(--accent); }
+.trace-health-status { font-size: 14px; font-weight: 600; margin: 6px 0 10px; }
+.trace-health-check { margin: 6px 0; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.trace-health-check:last-of-type { border-bottom: 0; }
+.trace-health-check > summary { cursor: pointer; line-height: 1.45; }
+.trace-health-check .finding-meta { margin-left: 16px; }
+.investigation { border-left: 4px solid #7a5cc0; }
+.investigation .finding-meta ul { margin: 4px 0 0 16px; padding: 0; }
+.investigation h3.sub { margin-top: 16px; }
 .finding-cards { display: grid; gap: 10px; }
 .finding-card {
   border: 1px solid var(--line);
@@ -271,6 +282,22 @@ export function htmlDiagnosticKpiGrid(kpis) {
   return `<section class="kpi-grid">${kpis.map(k => htmlKpi(k.label, k.value, k)).join('')}</section>`
 }
 
+/**
+ * `[{name,value,unit,sample_count?}]` → "Name value unit (n=…)" list.
+ * Kept separate from finding display text so exports stay reproducible.
+ */
+function formatMeasuredValues(values) {
+  if (!Array.isArray(values)) return ''
+  const parts = []
+  for (const mv of values) {
+    if (!mv || typeof mv !== 'object' || !('name' in mv) || !('value' in mv)) continue
+    let chunk = `${mv.name} ${mv.value}${mv.unit || ''}`.trimEnd()
+    if (mv.sample_count != null) chunk += ` (n=${mv.sample_count})`
+    parts.push(chunk)
+  }
+  return parts.join('; ')
+}
+
 export function htmlFindingCards(findings, scopeTitle = '') {
   if (!findings?.length) return ''
   const cards = findings.map((f) => {
@@ -287,11 +314,15 @@ export function htmlFindingCards(findings, scopeTitle = '') {
       evidence = f.evidence.filter(Boolean).map(String).join('; ')
     }
     const conf = String(f.confidence || '').trim()
+    const basis = String(f.comparison_basis || '').trim()
+    const measured = formatMeasuredValues(f.measured_values)
     const sev = String(f.severity || 'info')
     return `<article class="finding-card ${cls}">`
       + `<h3>${esc(sev[0].toUpperCase() + sev.slice(1))} · ${esc(f.title || 'Finding')}</h3>`
       + `<p>${esc(f.text || '')}</p>`
       + (impact ? `<div class="finding-meta"><strong>Impact:</strong> ${esc(impact)}</div>` : '')
+      + (measured ? `<div class="finding-meta"><strong>Measured:</strong> ${esc(measured)}</div>` : '')
+      + (basis ? `<div class="finding-meta"><strong>Basis:</strong> ${esc(basis)}</div>` : '')
       + (evidence ? `<div class="finding-meta"><strong>Evidence:</strong> ${esc(evidence)}</div>` : '')
       + inspectHtml
       + (conf ? `<div class="finding-meta"><strong>Confidence:</strong> ${esc(conf)}</div>` : '')
@@ -301,6 +332,184 @@ export function htmlFindingCards(findings, scopeTitle = '') {
     + `<h2>Analysis Findings${esc(scopeTitle)}</h2>`
     + '<p class="detail-note">Heuristic summary of load balance, CPU consumers, off-CPU gaps, thrashing, deadlines, tick health, and sync. Exported links open the matching report section; they do not jump back into BTFViewer.</p>'
     + `<div class="finding-cards">${cards}</div></section>`
+}
+
+const TRACE_HEALTH_STATUS_META = {
+  pass: ['finding-ok', 'Pass'],
+  caution: ['sev-warning', 'Caution'],
+  insufficient: ['sev-error', 'Insufficient data'],
+}
+
+/**
+ * Structural Trace Health section (status + per-check detail + limited metrics).
+ * Distinct from *Trace Health (TICK)*. Keep in sync with
+ * ``btf_viewer_pkg/stats_html.py:html_trace_health_card``.
+ */
+export function htmlTraceHealthCard(result, { formatNs = null, scopeTitle = '' } = {}) {
+  if (!result) return ''
+  const status = String(result.status || 'pass')
+  const [cls, label] = TRACE_HEALTH_STATUS_META[status] || ['finding-info', status]
+  const checks = result.checks || []
+  const n = Number(result.issueCount ?? result.issue_count ?? 0)
+  const fmt = (v) => {
+    if (typeof formatNs === 'function') {
+      try { return String(formatNs(Number(v))) } catch { return String(v) }
+    }
+    return String(v)
+  }
+  const rows = checks.map((c) => {
+    const sev = String(c.severity || 'info')
+    const sevCls = sev === 'error' ? 'sev-error' : sev === 'warning' ? 'sev-warning' : 'finding-info'
+    const bits = []
+    const rng = c.affectedRange || c.affected_range
+    if (rng && rng.start != null) {
+      bits.push(`<strong>Range:</strong> ${esc(fmt(rng.start))} – ${esc(fmt(rng.end))}`)
+    }
+    const ents = (c.affectedEntities || c.affected_entities || []).map(String).filter(Boolean)
+    if (ents.length) bits.push(`<strong>Affected:</strong> ${esc(ents.slice(0, 12).join(', '))}`)
+    const refs = (c.evidenceRefs || c.evidence_refs || []).map(String).filter(Boolean)
+    if (refs.length) bits.push(`<strong>Evidence:</strong> ${esc(refs.join('; '))}`)
+    const lims = (c.metricLimitations || c.metric_limitations || []).map(String).filter(Boolean)
+    if (lims.length) bits.push(`<strong>Limited:</strong> ${esc(lims.join(', '))}`)
+    const meta = bits.map(b => `<div class="finding-meta">${b}</div>`).join('')
+    return `<details class="trace-health-check ${sevCls}">`
+      + `<summary>${esc(sev[0].toUpperCase() + sev.slice(1))} · ${esc(c.summary || '')}</summary>`
+      + `${meta}</details>`
+  }).join('')
+  const detail = checks.length
+    ? rows
+    : '<p class="detail-note">No structural inconsistencies found in the parsed event model under the current checks.</p>'
+  const limitations = (result.metricLimitations || result.metric_limitations || []).map(String).filter(Boolean)
+  let limHtml = ''
+  if (limitations.length) {
+    const lis = limitations.map(m => `<li>${esc(m)}</li>`).join('')
+    limHtml = '<h3 class="sub">Limited metrics</h3>'
+      + '<p class="detail-note">These sections may show <em>Insufficient data</em> or a limitation notice instead of a value.</p>'
+      + `<ul>${lis}</ul>`
+  }
+  return '<section class="report-card notes trace-health">'
+    + `<h2>Trace Health Check${esc(scopeTitle)}</h2>`
+    + '<p class="detail-note">Deterministic structural checks on the parsed event model. '
+    + 'Independent of AI and of <em>Trace Health (TICK)</em>, which only measures tick regularity.</p>'
+    + `<p class="trace-health-status"><span class="${cls}">Status: ${esc(label)}</span> &middot; ${n} issue(s)</p>`
+    + `${detail}${limHtml}</section>`
+}
+
+const BM_TYPE_LABELS = {
+  observation: 'Observation',
+  hypothesis: 'Hypothesis',
+  supporting: 'Supporting evidence',
+  contradicting: 'Contradicting evidence',
+  verification: 'Verification step',
+  conclusion: 'Conclusion',
+}
+const FACT_TYPES = ['observation', 'supporting', 'verification']
+
+function fmtRef(ref, formatNs) {
+  const kind = String(ref.kind || '')
+  const f = (v) => {
+    if (typeof formatNs === 'function') { try { return String(formatNs(Math.trunc(v))) } catch { return String(v) } }
+    return String(v)
+  }
+  if (kind === 'finding') return `finding <code>${esc(ref.rule_id || ref.label || '?')}</code>`
+  if (kind === 'metric') return `metric “${esc(ref.metric || ref.label || '?')}”`
+  if (kind === 'entity') return `entity <code>${esc(ref.entity || ref.label || '?')}</code>`
+  if (kind === 'range' || kind === 'evidence') {
+    const rng = ref.range || {}
+    if (rng.start != null) return `range ${esc(f(rng.start))} – ${esc(f(rng.end))}`
+    if (ref.time != null) return `time ${esc(f(ref.time))}`
+  }
+  return esc(ref.label || kind || 'ref')
+}
+
+/**
+ * Investigation Bookmarks and Evidence Chain section.
+ * Keep in sync with btf_viewer_pkg/stats_html.py:html_investigation_section.
+ */
+export function htmlInvestigationSection(investigation, {
+  formatNs = null, brokenRefs = null, chains = null, scopeTitle = '',
+} = {}) {
+  if (!investigation) return ''
+  const bookmarks = investigation.bookmarks || []
+  if (!bookmarks.length && !String(investigation.conclusion || '').trim()) return ''
+
+  const broken = brokenRefs || {}
+  const brokenByBm = {}
+  for (const iss of broken.issues || []) {
+    (brokenByBm[String(iss.bookmark_id)] = brokenByBm[String(iss.bookmark_id)] || []).push(iss)
+  }
+  const chainsById = {}
+  for (const c of chains || []) if (c && typeof c === 'object') chainsById[String(c.conclusion_id)] = c
+
+  const bmCard = (b) => {
+    const bid = String(b.id || '')
+    const refs = b.refs || []
+    const refHtml = refs.length
+      ? `<div class="finding-meta"><strong>References:</strong><ul>${refs.map(r => `<li>${fmtRef(r, formatNs)}</li>`).join('')}</ul></div>`
+      : ''
+    const note = String(b.note || '').trim()
+    const noteHtml = note ? `<p>${esc(note)}</p>` : ''
+    const bad = brokenByBm[bid] || []
+    const badHtml = bad.length
+      ? `<div class="finding-meta sev-warning"><strong>Stale:</strong> ${bad.map(i => esc(i.reason || 'stale reference')).join('; ')}</div>`
+      : ''
+    return `<article class="finding-card"><h3>${esc(BM_TYPE_LABELS[b.type] || 'Bookmark')} · ${esc(b.title || 'Bookmark')}</h3>${noteHtml}${refHtml}${badHtml}</article>`
+  }
+  const group = (title, types) => {
+    const rows = bookmarks.filter(b => types.includes(b.type)).map(bmCard)
+    return rows.length ? `<h3 class="sub">${esc(title)}</h3><div class="finding-cards">${rows.join('')}</div>` : ''
+  }
+
+  const facts = group('Facts', FACT_TYPES)
+  const hyps = group('Hypotheses', ['hypothesis'])
+  const contra = group('Contradicting evidence', ['contradicting'])
+
+  const conclRows = []
+  for (const b of bookmarks) {
+    if (b.type !== 'conclusion') continue
+    const chain = chainsById[String(b.id)]
+    let chainHtml = ''
+    if (chain && (chain.evidence || []).length) {
+      chainHtml = `<div class="finding-meta"><strong>Backed by:</strong><ul>${chain.evidence.map(e => `<li>${esc(BM_TYPE_LABELS[e.type] || 'Bookmark')}: ${esc(e.title || e.id)}</li>`).join('')}</ul></div>`
+    } else if (chain != null) {
+      chainHtml = '<div class="finding-meta sev-warning"><strong>Not grounded:</strong> no linked evidence.</div>'
+    }
+    conclRows.push(`<article class="finding-card finding-ok"><h3>Conclusion · ${esc(b.title || 'Conclusion')}</h3>`
+      + (String(b.note || '').trim() ? `<p>${esc(b.note)}</p>` : '') + chainHtml + '</article>')
+  }
+  const freeConcl = String(investigation.conclusion || '').trim()
+  if (freeConcl) {
+    conclRows.push(`<article class="finding-card finding-ok"><h3>Conclusion</h3><p>${esc(freeConcl)}</p></article>`)
+  }
+  const conclHtml = conclRows.length
+    ? `<h3 class="sub">Conclusions</h3><div class="finding-cards">${conclRows.join('')}</div>` : ''
+
+  const questions = (investigation.unresolved_questions || []).map(String).filter(q => q.trim())
+  const qHtml = questions.length
+    ? `<h3 class="sub">Unresolved questions</h3><ul>${questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul>` : ''
+
+  const staleBanner = broken.stale_trace
+    ? '<p class="detail-note sev-warning">The source trace changed since these notes were written — references may not line up.</p>'
+    : ''
+
+  const ident = investigation.trace_identity || {}
+  const rng = investigation.analysis_range || {}
+  const identBits = []
+  if (ident.file) identBits.push(`Trace: ${esc(ident.file)}`)
+  if (rng && rng.start != null && typeof formatNs === 'function') {
+    try { identBits.push(`Range: ${esc(String(formatNs(Math.trunc(rng.start))))} – ${esc(String(formatNs(Math.trunc(rng.end))))}`) } catch { /* ignore */ }
+  }
+  const identHtml = identBits.length ? `<p class="detail-note">${identBits.join(' · ')}</p>` : ''
+  const title = String(investigation.title || '').trim()
+
+  return '<section class="report-card notes investigation">'
+    + `<h2>Investigation${esc(scopeTitle)}</h2>`
+    + (title ? `<p class="detail-note"><strong>${esc(title)}</strong></p>` : '')
+    + '<p class="detail-note">User-authored bookmarks and the evidence chain. '
+    + 'Facts, hypotheses, contradicting evidence and conclusions are separated; notes never change measured values.</p>'
+    + staleBanner + identHtml
+    + facts + hyps + contra + conclHtml + qHtml
+    + '</section>'
 }
 
 function heatColor(frac) {

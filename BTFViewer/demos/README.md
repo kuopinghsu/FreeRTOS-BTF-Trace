@@ -17,7 +17,7 @@ Each complete demo has its own folder with the XML script, a frozen trace, narra
 4. [Timeline and view actions](#timeline-and-view-actions)
 5. [Live UI targets](#live-ui-targets)
 6. [Audio and voice packs](#audio-and-voice-packs)
-7. [Shareable XTF packs](#shareable-xtf-packs)
+7. [Shareable demo packages](#shareable-demo-packages)
 8. [Runner behavior](#runner-behavior)
 
 <a id="demo-layout" name="demo-layout">&#x200B;</a>
@@ -30,12 +30,20 @@ Each complete demo has its own folder with the XML script, a frozen trace, narra
 
 ### `demo_8cores/` folder
 
+The folder mirrors the `.btfw` package layout — it **is** a valid unpacked
+`.btfw` demo package (`manifest.json` → `"kind": "demo"`). `zip -r
+demo_8cores.btfw .` from inside it produces a working package; `make demo-pack`
+builds the lean release pack (AAC, language-filtered).
+
 | Path | Purpose |
 |------|---------|
-| [`demo_8cores/demo_8cores.xml`](demo_8cores/demo_8cores.xml) | Runner script (steps / actions) |
-| [`demo_8cores/demo_8cores.btf.gz`](demo_8cores/demo_8cores.btf.gz) | Frozen trace (stable vs `tracedata/`) |
-| [`demo_8cores/text/<lang>/`](demo_8cores/text/en/) | Narration scripts (`.txt`), one folder per language |
-| [`demo_8cores/voice/<lang>/`](demo_8cores/voice/en/) | TTS audio + `voice.json`, one folder per language |
+| [`demo_8cores/manifest.json`](demo_8cores/manifest.json) | Package manifest (`kind: "demo"`, languages) |
+| [`demo_8cores/demo/script.xml`](demo_8cores/demo/script.xml) | Runner script (steps / actions) |
+| [`demo_8cores/trace/source.btf.gz`](demo_8cores/trace/source.btf.gz) | Frozen trace (stable vs `tracedata/`) |
+| [`demo_8cores/investigation/ai_case.json`](demo_8cores/investigation/ai_case.json) | Pre-seeded AI investigation (loads with the tour) |
+| [`demo_8cores/attachments/text/<lang>/`](demo_8cores/attachments/text/en/) | Narration scripts (`.txt`) + `voice.json`, one folder per language |
+| [`demo_8cores/demo/voice/<lang>/`](demo_8cores/demo/voice/en/) | TTS audio + `voice.json`, one folder per language |
+| `demo_8cores/demo/voice-female/<lang>/` | Alternate render (`render --gender`); a build input, not shipped by `demo-pack` |
 
 <a id="run-the-demo" name="run-the-demo">&#x200B;</a>
 
@@ -47,17 +55,17 @@ Build the bundled application once, then start the demo with `make demo`. Use `D
 cd BTFViewer
 make bundle   # once — demo launches builds/btf_viewer.py
 make demo
-# Chinese narration if voice/zh-tw/*.mp3 exist (else English fallback):
+# Chinese narration if demo/voice/zh-tw/*.mp3 exist (else English fallback):
 make demo DEMO_LANG=zh-tw
-# Shareable zip pack (Open / drag in the viewer):
-make demo-pack                    # → builds/demo_8cores.xtf (en + zh-tw)
+# Lean release package (Open / drag in the viewer):
+make demo-pack                    # → builds/demo_8cores.btfw (en + zh-tw)
 
-# Or run the tools directly:
-python3 builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
-BTFVIEWER_DEMO_LANG=zh-tw python3 builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
-python3 builds/btf_viewer.py builds/demo_8cores.xtf
+# Or run the tools directly (open the folder — it is an unpacked .btfw):
+python3 builds/btf_viewer.py demos/demo_8cores
+BTFVIEWER_DEMO_LANG=zh-tw python3 builds/btf_viewer.py demos/demo_8cores
+python3 builds/btf_viewer.py builds/demo_8cores.btfw
 python3 scripts/demo_voice.py status demos/demo_8cores
-python3 scripts/demo_pack.py demos/demo_8cores -o builds/demo_8cores.xtf --lang en,zh-tw
+python3 scripts/demo_pack.py demos/demo_8cores -o builds/demo_8cores.btfw --lang en,zh-tw
 ```
 
 Settings for the demo session are stored in `builds/btf_viewer.rc` (next to the bundled app).
@@ -232,20 +240,20 @@ Statistics section ids match the desktop panel (`health`, `cores`, `tasks`,
 <stop_audio/>
 ```
 
-Convert `text/<lang>/*.txt` → `voice/<lang>/*.mp3` with your TTS tool (or
-`python3 scripts/demo_voice.py render …`). Write **Free-RTOS** (with a hyphen)
-so speech engines pronounce it correctly. The runner also tries common
-extensions (`.wav`, `.m4a`, `.aiff`, …).
+Convert `attachments/text/<lang>/*.txt` → `demo/voice/<lang>/*.mp3` with your
+TTS tool (or `python3 scripts/demo_voice.py render …`). Write **Free-RTOS**
+(with a hyphen) so speech engines pronounce it correctly. The runner also
+tries common extensions (`.wav`, `.m4a`, `.aiff`, …).
 
 ### Voice packs
 
 Every language uses the same layout. XML paths stay
-`voice/01_title.mp3`; the runner looks in `voice/<lang>/` first.
+`voice/01_title.mp3`; the runner looks in `demo/voice/<lang>/` first.
 
 ```
-text/<lang>/01_title.txt
-voice/<lang>/01_title.mp3
-voice/<lang>/voice.json
+attachments/text/<lang>/01_title.txt
+demo/voice/<lang>/01_title.mp3
+demo/voice/<lang>/voice.json
 ```
 
 Shareable zip (install/export) is always:
@@ -257,7 +265,7 @@ voice/01_title.mp3
 ```
 
 ```bash
-# English is already in text/en/ and voice/en/
+# English is already in attachments/text/en/ and demo/voice/en/
 python3 scripts/demo_voice.py status demos/demo_8cores
 
 # Add a language from a zip or a folder of .txt/.mp3 files
@@ -275,37 +283,44 @@ python3 scripts/demo_voice.py sync-xml demos/demo_8cores
 ```
 
 `install` also accepts a folder that is already `text/<lang>/` + `voice/<lang>/`,
-or loose `*.txt` / `*.mp3` with `--lang`. Playback order is `voice/<lang>/<file>`,
-then flat `voice/<file>` (legacy), then `voice/<default>/<file>`. Web shows a
+or loose `*.txt` / `*.mp3` with `--lang` (it lands under `attachments/text/<lang>/`
++ `demo/voice/<lang>/`). Playback order is `demo/voice/<lang>/<file>`, then flat
+`voice/<file>` (legacy), then `demo/voice/<default>/<file>`. Web shows a
 **Voice** menu on the demo bar when more than one language is listed or
 discovered. Desktop: `--lang zh-tw`, `make demo DEMO_LANG=zh-tw`, or
 `BTFVIEWER_DEMO_LANG`. Otherwise the XML ``<languages default>`` is used
 (English for `demo_8cores`).
 
-<a id="shareable-xtf-packs" name="shareable-xtf-packs">&#x200B;</a>
+<a id="shareable-demo-packages" name="shareable-demo-packages">&#x200B;</a>
 
-## Shareable XTF packs
+## Shareable demo packages
 
 ```bash
 make demo-pack                              # en + zh-tw (default)
 make demo-pack DEMO_LANGS=en                # English only
-make demo-pack DEMO_LANGS=all               # every voice/<lang>/
+make demo-pack DEMO_LANGS=all               # every demo/voice/<lang>/
 # or:
 python3 scripts/demo_pack.py demos/demo_8cores --list-voices
-python3 scripts/demo_pack.py demos/demo_8cores --voice en -o builds/demo_8cores-en.xtf
+python3 scripts/demo_pack.py demos/demo_8cores --voice en -o builds/demo_8cores-en.btfw
 python3 scripts/demo_pack.py demos/demo_8cores --voice en --voice zh-tw
-python3 scripts/demo_pack.py demos/demo_8cores --all-voices -o builds/demo_8cores.xtf
+python3 scripts/demo_pack.py demos/demo_8cores --all-voices -o builds/demo_8cores.btfw
 ```
 
-The command creates an `.xtf` zip archive with:
+The source folder already **is** an unpacked package — a plain `zip -r
+demo_8cores.btfw .` from inside it opens in the viewer. `demo-pack` builds the
+lean release variant of the same tree:
 
-- the language-filtered XML;
-- the frozen `.btf.gz` trace;
-- the selected voice packs.
+- `demo/script.xml` — the `<languages>`-filtered XML (audio paths → `.aac`);
+- `trace/source.btf.gz` — the frozen trace, bytes verbatim;
+- `demo/voice/<lang>/` — the selected voice packs, MP3 → 32 kHz mono AAC (`--keep-mp3` to skip);
+- `attachments/text/<lang>/` — the narration scripts for the kept languages;
+- `investigation/ai_case.json` — the pre-seeded AI investigation, when it exists;
+- `manifest.json` — regenerated with sizes / hashes.
 
-By default, MP3 narration is converted to 24 kHz mono AAC and the packed XML is updated to use the AAC files. Use `--keep-mp3` to keep the original MP3 files.
-
-Open or drag the `.xtf` file into the **Web** or **Desktop** viewer to play the tour.
+Open or drag the `.btfw` file (or the folder) into the **Web** or **Desktop**
+viewer to play the tour; if it carries an AI case, the Assistant loads it
+alongside the tour. It is the same container as a portable workspace — see
+[`btf_viewer_pkg/workspace.py`](../btf_viewer_pkg/workspace.py).
 
 Declare languages in `<meta>` (or generate that block with `sync-xml`):
 

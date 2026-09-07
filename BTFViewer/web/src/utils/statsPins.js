@@ -259,6 +259,44 @@ export function findStatsSections(query) {
   return out
 }
 
+// Href / palette prefixes an AI or a link may wrap a section reference in.
+const STATS_SECTION_REF_PREFIXES = [
+  'btfstats:section/', 'btfstats:', 'stats-section:', 'stats:section/',
+  'section/', 'stats/', 'cat:',
+]
+
+/**
+ * Map an AI / link string to a canonical Statistics section id, or ''. Accepts
+ * an exact id, a header title (`Ready-Gap (Starvation)`), a
+ * `btfstats:section/<id>` href, or a loose spelling (`ready-gap`, `ready gap`).
+ * Keep lockstep with btf_viewer_pkg/config.py `resolve_stats_section_id`.
+ * @param {string} raw
+ * @returns {string}
+ */
+export function resolveStatsSectionId(raw) {
+  let s = String(raw || '').trim()
+  if (!s) return ''
+  let low = s.toLowerCase()
+  for (const pre of STATS_SECTION_REF_PREFIXES) {
+    if (low.startsWith(pre)) {
+      s = s.slice(pre.length).trim().replace(/^\/+|\/+$/g, '')
+      low = s.toLowerCase()
+      break
+    }
+  }
+  if (STATS_PINNABLE_SECTIONS.includes(s)) return s
+  if (STATS_PINNABLE_SECTIONS.includes(low)) return low
+  const snake = low.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  if (STATS_PINNABLE_SECTIONS.includes(snake)) return snake
+  for (const [sid, title] of Object.entries(STATS_SECTION_TITLES)) {
+    if (String(title).toLowerCase() === low) return sid
+  }
+  for (const { id } of findStatsSections(s)) {
+    if (!String(id).startsWith('cat:')) return id
+  }
+  return ''
+}
+
 /** Synthetic command-palette rows: ``stats-section:<id>`` → ``Stats: <title>``.
  *  @returns {[string, string][]} */
 export function commandPaletteStatsSectionActions() {

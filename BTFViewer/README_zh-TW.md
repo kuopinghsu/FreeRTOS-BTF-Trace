@@ -96,7 +96,7 @@ make web
 | `.btf.bz2`、`.bz2` | 經 Bzip2 壓縮的 BTF 追蹤檔 |
 | `.btf.zip`、`.zip` | 含有一份或多份 BTF 追蹤檔的壓縮檔；每份檔案會在個別分頁中開啟 |
 | `.xml` | Web 應用程式使用的示範指令稿 |
-| `.xtf` | 包含指令稿、追蹤資料及選用語音的可攜式示範套件 |
+| `.btfw` | 可攜式套件：可以是已儲存的調查工作區，或可分享的示範導覽（指令稿、追蹤資料及選用語音）。以 manifest 的 `kind` 區分。 |
 
 `tracedata/` 內提供範例追蹤檔，包括 `example-2cores.btf.gz`。
 
@@ -119,14 +119,14 @@ make demo DEMO_LANG=zh-tw
 也可以直接開啟以下任一套件：
 
 ```bash
-python builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
-python builds/btf_viewer.py builds/demo_8cores.xtf
+python builds/btf_viewer.py demos/demo_8cores
+python builds/btf_viewer.py builds/demo_8cores.btfw
 ```
 
 Web：
 
 - 選取工具列上的 **Demo**，載入內建導覽。
-- 開啟 `demo_8cores.xtf`，或將它拖放至 BTFViewer。
+- 開啟 `demo_8cores.btfw`，或將它拖放至 BTFViewer。
 - 開啟示範 XML 檔案，並在系統要求時選取其套件資料夾。
 
 預設語音為英文。可從示範列的 **Voice** 選單選取其他語言。按 **Space** 可暫停或繼續；在 2.5 秒內按兩次 **Esc** 可停止示範。
@@ -138,7 +138,7 @@ make demo-pack
 make demo-pack DEMO_LANGS=en,zh-tw
 ```
 
-產生的 `builds/demo_8cores.xtf` 包含指令稿、追蹤資料及選取的語音檔，可在 Desktop 或 Web 應用程式中開啟。建立、錄製及維護示範的說明，請參閱 [demos/README.md](demos/README.md)。
+產生的 `builds/demo_8cores.btfw` 包含指令稿、追蹤資料及選取的語音檔，可在 Desktop 或 Web 應用程式中開啟。建立、錄製及維護示範的說明，請參閱 [demos/README.md](demos/README.md)。
 
 <a id="viewer-controls" name="viewer-controls">&#x200B;</a>
 
@@ -154,7 +154,7 @@ Desktop 與 Web 版本共用同一套版面配置。
 
 | # | 區域 | 說明 |
 |---|---|---|
-| 1 | **活動列（Activity rail）** | 開啟與時間軸並列的工具——**Migration heatmap**、**Analysis Findings** 與 **Snapshot editor**——底部為 **Help** 與 **Settings**。 |
+| 1 | **活動列（Activity rail）** | 開啟與時間軸並列的工具——**Migration heatmap**、**Analysis Findings**、**Investigation notebook**、**Compare traces** 與 **Snapshot editor**——底部為 **Help** 與 **Settings**。 |
 | 2 | **工具列（Toolbar）** | 分組控制項——開啟、版面方向、縮放、View Mode、**Load**、佈景主題、示範、錄影。將滑鼠移到圖示上可看到名稱與快捷鍵；視窗過窄時會將分組收進 **More (⋯)**。詳見[主要控制項目](#主要控制項目)。 |
 | 3 | **Trace 分頁（Trace tabs）** | 每份開啟的 trace 各一個分頁，並各自保留 Scope、Filters、View Mode、縮放、游標與標記。 |
 | 4 | **圖例／工作清單（Legend / task list）** | 各列的顏色對照。將滑鼠移到項目上為 **Highlight**，點選為 **Selection**；在 Core View 中，**Cores** 核取方塊即為 Core Filter。 |
@@ -187,7 +187,7 @@ Desktop 與 Web 版本共用同一套版面配置。
 
 | 群組 | 控制項目 | 用途 |
 |---|---|---|
-| 開啟 | **Open** | 開啟一或多份 BTF trace、示範 XML 檔案或 `.xtf` 示範套件 |
+| 開啟 | **Open** | 開啟一或多份 BTF trace、示範 XML 檔案或 `.btfw` 示範套件 |
 | 擷取與匯出 | **Snapshot editor**、**Save SVG**、**Export Perfetto**、**Save cursor range as BTF** | 擷取目前畫面或匯出追蹤資料；儲存 BTF 範圍前至少需要兩個游標 |
 | 版面 | **Horizontal / Vertical** | 讓時間軸由左至右或由上至下顯示 |
 | 縮放 | **Zoom in / Zoom out**、**1:1**、**Fit Trace**、**Fit Cursors**、縮放預設值 | 調整可見時間範圍，或選擇固定的每像素時間尺度 |

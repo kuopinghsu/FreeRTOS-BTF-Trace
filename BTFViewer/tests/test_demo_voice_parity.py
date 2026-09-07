@@ -20,7 +20,8 @@ from pathlib import Path
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
 DEMO_DIR = BTF_ROOT / "demos" / "demo_8cores"
-DEMO_XML = DEMO_DIR / "demo_8cores.xml"
+DEMO_XML = DEMO_DIR / "demo" / "script.xml"
+TEXT_DIR = DEMO_DIR / "attachments" / "text"
 WEB_VOICE = BTF_ROOT / "web" / "src" / "utils" / "demoVoice.js"
 WEB_XML = BTF_ROOT / "web" / "src" / "utils" / "demoXml.js"
 WEB_RUNNER = BTF_ROOT / "web" / "src" / "utils" / "demoRunner.js"
@@ -107,7 +108,7 @@ def _node_voice_eval() -> dict:
         "import { normalizeVoiceLang, pickVoiceLang, voicePathCandidates, mergeVoiceLangs }"
         " from './src/utils/demoVoice.js'\n"
         "import { parseDemoXml, buildVariables, parseXmlRoot } from './src/utils/demoXml.js'\n"
-        "const xml = readFileSync('../demos/demo_8cores/demo_8cores.xml', 'utf8')\n"
+        "const xml = readFileSync('../demos/demo_8cores/demo/script.xml', 'utf8')\n"
         "const demo = parseDemoXml(xml, { xmlDir: '/pack' })\n"
         "const vars = buildVariables(parseXmlRoot(xml), { xmlDir: '/pack' })\n"
         f"const normalizeIn = {json.dumps([s for s, _ in NORMALIZE_CASES])}\n"
@@ -251,7 +252,7 @@ class DemoVoicePackParityTests(unittest.TestCase):
         self.assertEqual(ids, list(PACK_LANGS))
         by_id = {x["id"]: x["label"] for x in langs["list"]}
         for lang in PACK_LANGS:
-            man_path = DEMO_DIR / "text" / lang / "voice.json"
+            man_path = TEXT_DIR / lang / "voice.json"
             self.assertTrue(man_path.is_file(), man_path)
             data = json.loads(man_path.read_text(encoding="utf-8"))
             self.assertEqual(data["schema"], "btf-demo-voice")
@@ -259,12 +260,12 @@ class DemoVoicePackParityTests(unittest.TestCase):
             self.assertEqual(data["label"], by_id[lang])
 
     def test_translation_stems_match_english(self) -> None:
-        en = sorted(p.name for p in (DEMO_DIR / "text" / "en").glob("*.txt"))
+        en = sorted(p.name for p in (TEXT_DIR / "en").glob("*.txt"))
         self.assertTrue(en)
         for lang in PACK_LANGS:
-            got = sorted(p.name for p in (DEMO_DIR / "text" / lang).glob("*.txt"))
+            got = sorted(p.name for p in (TEXT_DIR / lang).glob("*.txt"))
             self.assertEqual(got, en, lang)
-            self.assertTrue((DEMO_DIR / "text" / lang / "voice.json").is_file(), lang)
+            self.assertTrue((TEXT_DIR / lang / "voice.json").is_file(), lang)
 
     def test_xml_audio_stems_match_english_scripts(self) -> None:
         xml = DEMO_XML.read_text(encoding="utf-8")
@@ -272,12 +273,12 @@ class DemoVoicePackParityTests(unittest.TestCase):
             Path(m).stem
             for m in re.findall(r'voice/([A-Za-z0-9_.-]+\.mp3)"', xml)
         ]
-        scripts = sorted(p.stem for p in (DEMO_DIR / "text" / "en").glob("*.txt"))
+        scripts = sorted(p.stem for p in (TEXT_DIR / "en").glob("*.txt"))
         self.assertEqual(sorted(stems), scripts)
 
     def test_step1_says_web_in_every_language(self) -> None:
-        en = (DEMO_DIR / "text" / "en" / "01_title.txt").read_text(encoding="utf-8")
-        zh = (DEMO_DIR / "text" / "zh-tw" / "01_title.txt").read_text(encoding="utf-8")
+        en = (TEXT_DIR / "en" / "01_title.txt").read_text(encoding="utf-8")
+        zh = (TEXT_DIR / "zh-tw" / "01_title.txt").read_text(encoding="utf-8")
         self.assertIn("web version", en.lower())
         self.assertNotIn("use the desktop app", en.lower())
         self.assertIn("網頁版", zh)

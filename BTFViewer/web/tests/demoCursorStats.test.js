@@ -19,7 +19,7 @@ import { buildTaskLifecycleRows } from '../src/utils/lifecycleAnalysis.js'
 import { buildCoreAffinityRows } from '../src/utils/coreAffinityAnalysis.js'
 import { computeDeadlineViolations } from '../src/utils/deadlineAnalysis.js'
 const TRACE_PATH = fileURLToPath(
-  new URL('../../demos/demo_8cores/demo_8cores.btf.gz', import.meta.url),
+  new URL('../../demos/demo_8cores/trace/source.btf.gz', import.meta.url),
 )
 
 describe('demo_8cores cursor-scoped stats', () => {

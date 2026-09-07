@@ -27,6 +27,8 @@ export function createTraceTab(name) {
     openPlot: null,
     scopeToCursors: true,
     statsSectionCollapsed: null,
+    investigation: null,
+    notebookHistory: { stack: [], index: -1 },
     taskFilterText: '',
     migratedOnlyFilter: false,
     taskFilterKeys: null,
@@ -134,6 +136,8 @@ export function useTraceTabs() {
     tab.migratedOnlyFilter = false
     tab.taskFilterKeys = null
     tab.heatmapFilterLabel = null
+    tab.investigation = null
+    tab.notebookHistory = { stack: [], index: -1 }
     Object.assign(tab.timelineViewport, _emptyViewport())
   }
 

@@ -262,6 +262,85 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
 )
 
+# Namespace / prose junk models sometimes glue onto a tool name. ``nextstep:`` is
+# the big one: the model confuses the ``nextstep:{action}`` prose follow-up
+# convention with an actual tool call and emits e.g. ``nextstep:open_statistics``.
+_TOOL_NAME_PREFIX_JUNK: Tuple[str, ...] = (
+    "nextstep:", "next_step:", "next-step:", "nextstep_", "nextstep.",
+    "functions.", "default_api.", "default_api:", "tool:", "tool.", "btftool:",
+    "btf:", "viewer:", "function:", "api.",
+)
+_NEXTSTEP_PREFIXES: Tuple[str, ...] = (
+    "nextstep:", "next_step:", "next-step:", "nextstep_",
+)
+# Common near-miss names, incl. ones safe to accept even from a ``nextstep:`` line.
+_TOOL_NAME_ALIASES: Dict[str, str] = {
+    "open_statistics": AI_TOOL_OPEN_STATS_SECTION,
+    "open_stats": AI_TOOL_OPEN_STATS_SECTION,
+    "open_stats_section": AI_TOOL_OPEN_STATS_SECTION,
+    "open_statistics_section": AI_TOOL_OPEN_STATS_SECTION,
+    "statistics_section": AI_TOOL_OPEN_STATS_SECTION,
+    "stats_section": AI_TOOL_OPEN_STATS_SECTION,
+    "goto_statistics": AI_TOOL_OPEN_STATS_SECTION,
+    "show_statistics": AI_TOOL_OPEN_STATS_SECTION,
+    "open_statistics_page": AI_TOOL_OPEN_STATS_SECTION,
+    "set_cursor": AI_TOOL_SET_CURSORS,
+    "place_cursors": AI_TOOL_SET_CURSORS,
+    "place_cursor": AI_TOOL_SET_CURSORS,
+    "add_cursors": AI_TOOL_SET_CURSORS,
+    "zoom_range": AI_TOOL_ZOOM_TO_RANGE,
+    "zoom_to": AI_TOOL_ZOOM_TO_RANGE,
+    "view_mode": AI_TOOL_SET_VIEW_MODE,
+    "annotate": AI_TOOL_ADD_ANNOTATION,
+    "search": AI_TOOL_SEARCH_TIMELINE,
+}
+
+
+def looks_like_nextstep_pseudo_tool(name: Any) -> bool:
+    """True if *name* is a ``nextstep:{action}`` suggestion mis-sent as a tool."""
+    n = str(name or "").strip().lower().replace(" ", "")
+    return n.startswith(_NEXTSTEP_PREFIXES)
+
+
+def canonical_tool_name(name: Any) -> str:
+    """Best-effort map a model-emitted tool name onto a real one.
+
+    Strips namespace / ``nextstep:`` junk and normalises separators, then matches
+    exactly or via a small alias table. For an ordinary namespaced name it also
+    accepts a unique prefix (``open_statistics`` → ``open_statistics_section``);
+    a ``nextstep:{action}`` pseudo-call is resolved only by exact / alias match
+    (it is prose by convention), so an unrelated one stays unresolved and is
+    dropped rather than mis-routed. Returns the cleaned name unchanged when
+    nothing resolves.
+    """
+    n = str(name or "").strip()
+    if not n:
+        return ""
+    low = n.lower()
+    from_nextstep = False
+    for pre in _TOOL_NAME_PREFIX_JUNK:
+        if low.startswith(pre):
+            from_nextstep = pre in _NEXTSTEP_PREFIXES
+            n = n[len(pre):].strip().lstrip(":._-/ ").strip()
+            break
+    n = re.sub(r"[\s\-]+", "_", n).strip("_")  # tool names are snake_case
+    low = n.lower()
+    if n in AI_VIEWER_TOOL_NAMES:
+        return n
+    if low in AI_VIEWER_TOOL_NAMES:
+        return low
+    if low in _TOOL_NAME_ALIASES:
+        return _TOOL_NAME_ALIASES[low]
+    if low and not from_nextstep:
+        matches = {
+            t for t in AI_VIEWER_TOOL_NAMES
+            if t == low or t.startswith(low) or low.startswith(t)
+        }
+        if len(matches) == 1:
+            return next(iter(matches))
+    return n
+
+
 AI_BOOKMARK_KINDS: Tuple[str, ...] = (
     "root_cause", "evidence", "correlated", "reference",
 )
@@ -2054,7 +2133,7 @@ def ensure_gemini_thought_signatures(
     return out
 
 
-def _tool_call_name(obj: Any) -> str:
+def _raw_tool_call_name(obj: Any) -> str:
     """Function name from OpenAI / Gemini OpenAI-compat / extra_content shapes."""
     if not isinstance(obj, dict):
         return ""
@@ -2082,6 +2161,12 @@ def _tool_call_name(obj: Any) -> str:
             if name:
                 return name
     return ""
+
+
+def _tool_call_name(obj: Any) -> str:
+    """Canonical tool name (namespace / ``nextstep:`` junk stripped, near-misses
+    mapped) — the name every downstream consumer should see."""
+    return canonical_tool_name(_raw_tool_call_name(obj))
 
 
 def _tool_call_id(obj: Any, index: int) -> str:
@@ -2121,9 +2206,13 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
             if not isinstance(call, dict):
                 continue
             fn = call.get("function") if isinstance(call.get("function"), dict) else {}
-            name = _tool_call_name(call)
+            raw_name = _raw_tool_call_name(call)
+            name = canonical_tool_name(raw_name)
             if not name:
                 continue
+            if (name not in AI_VIEWER_TOOL_NAMES
+                    and looks_like_nextstep_pseudo_tool(raw_name)):
+                continue  # a "nextstep:{action}" suggestion mis-sent as a tool
             args = parse_tool_arguments(
                 fn.get("arguments",
                        call.get("arguments", call.get("args", call.get("input"))))
@@ -2136,12 +2225,18 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
             ))
     legacy = message.get("function_call")
     if isinstance(legacy, dict) and legacy.get("name"):
-        out.append(_extracted_tool_call(
-            cid=str(legacy.get("id") or "call_0"),
-            name=str(legacy["name"]).strip(),
-            arguments=parse_tool_arguments(legacy.get("arguments")),
-            signature=thought_signature_from_obj(legacy),
-        ))
+        legacy_raw = str(legacy["name"]).strip()
+        legacy_name = canonical_tool_name(legacy_raw)
+        if legacy_name and not (
+            legacy_name not in AI_VIEWER_TOOL_NAMES
+            and looks_like_nextstep_pseudo_tool(legacy_raw)
+        ):
+            out.append(_extracted_tool_call(
+                cid=str(legacy.get("id") or "call_0"),
+                name=legacy_name,
+                arguments=parse_tool_arguments(legacy.get("arguments")),
+                signature=thought_signature_from_obj(legacy),
+            ))
     # Anthropic-style / Gemini parts mixed into content.
     content = message.get("content")
     if isinstance(content, list):
@@ -2160,8 +2255,12 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
                 and not (isinstance(nested, dict) and nested.get("name"))
             ):
                 continue
-            name = _tool_call_name(part)
+            part_raw = _raw_tool_call_name(part)
+            name = canonical_tool_name(part_raw)
             if not name:
+                continue
+            if (name not in AI_VIEWER_TOOL_NAMES
+                    and looks_like_nextstep_pseudo_tool(part_raw)):
                 continue
             nested_args = nested if isinstance(nested, dict) else {}
             args = parse_tool_arguments(
@@ -2239,6 +2338,7 @@ def _tool_call_from_obj(obj: Any, idx: int) -> Optional[Dict[str, Any]]:
                 k: v for k, v in obj.items()
                 if k not in ("name", "tool", "function", "id", "type")
             }
+    name = canonical_tool_name(name)
     if name not in AI_VIEWER_TOOL_NAMES:
         return None
     ok, err = validate_tool_call(name, args)
@@ -2609,6 +2709,10 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         section = str(a.get("section") or a.get("section_id") or "").strip()
         if not section:
             return None, "section must be a non-empty Statistics section id or title"
+        # AI often passes the header *title* ("Ready-Gap (Starvation)") or a
+        # loose spelling; resolve to the canonical id so it actually expands.
+        from .config import resolve_stats_section_id
+        section = resolve_stats_section_id(section) or section
         return {"section": section}, ""
     if name == AI_TOOL_ADD_ANNOTATION:
         t = _as_scalar_float(a.get("time"))
@@ -3130,7 +3234,9 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         return "Open corridor inspector"
     if name == AI_TOOL_OPEN_STATS_SECTION:
         sec = str(a.get("section") or a.get("section_id") or "").strip() or "section"
-        return f"Open Statistics: {sec}"
+        from .config import resolve_stats_section_id, stats_section_title
+        sid = resolve_stats_section_id(sec)
+        return f"Open Statistics: {stats_section_title(sid) if sid else sec}"
     if name == AI_TOOL_ADD_ANNOTATION:
         note = str(a.get("note") or "").strip() or "annotation"
         try:

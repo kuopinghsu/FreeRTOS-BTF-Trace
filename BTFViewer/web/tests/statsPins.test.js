@@ -13,6 +13,7 @@ import {
   mergeSectionCollapsed,
   normalizeStatsPins,
   normalizeStatsSectionOrder,
+  resolveStatsSectionId,
   statsCategoryBadgeColors,
   statsSectionTitle,
   statsTraceIsSmpActive,
@@ -155,5 +156,24 @@ describe('statsPins', () => {
     const hits = findStatsSections('starvation')
     assert.ok(hits.some(h => h.id === 'ready_gap'))
     assert.deepEqual(findStatsSections(''), [])
+  })
+
+  it('resolveStatsSectionId maps titles / hrefs / loose spellings to ids', () => {
+    for (const [raw, want] of [
+      ['ready_gap', 'ready_gap'],
+      ['Ready-Gap (Starvation)', 'ready_gap'],
+      ['ready-gap', 'ready_gap'],
+      ['ready gap', 'ready_gap'],
+      ['Starvation', 'ready_gap'],
+      ['btfstats:section/ready_gap', 'ready_gap'],
+      ['stats-section:activation', 'activation'],
+      ['Activation Latency', 'activation'],
+      ['Mutex Blocking', 'mutex_block'],
+      ['no such section', ''],
+      ['TIMING', ''],
+      ['', ''],
+    ]) {
+      assert.equal(resolveStatsSectionId(raw), want, raw)
+    }
   })
 })

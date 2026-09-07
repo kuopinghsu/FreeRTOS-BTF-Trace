@@ -24,8 +24,8 @@
       v-if="!useFsaOpen"
       class="tb-btn file-btn"
       data-demo-target="toolbar_open"
-      title="Open a BTF trace, demo XML, or .xtf pack (Ctrl+O)"
-      aria-label="Open a BTF trace, demo XML, or .xtf pack (Ctrl+O)"
+      title="Open a BTF trace, demo XML, or .btfw package (workspace or demo) (Ctrl+O)"
+      aria-label="Open a BTF trace, demo XML, or .btfw package (workspace or demo) (Ctrl+O)"
     >
       <svg
         viewBox="0 0 16 16"
@@ -52,8 +52,8 @@
       v-else
       class="tb-btn"
       data-demo-target="toolbar_open"
-      title="Open a BTF trace, demo XML, or .xtf pack (Ctrl+O)"
-      aria-label="Open a BTF trace, demo XML, or .xtf pack (Ctrl+O)"
+      title="Open a BTF trace, demo XML, or .btfw package (workspace or demo) (Ctrl+O)"
+      aria-label="Open a BTF trace, demo XML, or .btfw package (workspace or demo) (Ctrl+O)"
       @click="onOpenClick"
     >
       <svg
@@ -102,8 +102,8 @@
         <button
           v-if="traceInfo"
           class="tb-btn"
-          title="Export Perfetto (Chrome Trace JSON for ui.perfetto.dev) (Ctrl+Shift+E)"
-          @click="emit('exportPerfetto')"
+          title="Export… — workspace (.btfw), Perfetto JSON, or cursor-range BTF (Ctrl+Shift+E)"
+          @click="emit('openExport')"
         >
           <svg
             viewBox="0 0 16 16"
@@ -114,28 +114,7 @@
           >
             <path
               fill-rule="evenodd"
-              :d="IC.perfetto"
-            />
-          </svg>
-        </button>
-        <button
-          v-if="traceInfo"
-          class="tb-btn"
-          :class="{ disabled: !rangeEnabled }"
-          :disabled="!rangeEnabled"
-          title="Save cursor range as BTF (C1–Cn)"
-          @click="rangeEnabled && emit('exportSlice')"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fill-rule="evenodd"
-              :d="IC.exportSlice"
+              :d="IC.exportOut"
             />
           </svg>
         </button>
@@ -710,8 +689,7 @@ const emit = defineEmits([
   'demoFolder',
   'toggleRecord', 'zoom', 'fit', 'zoomPreset',
   'zoom1to1', 'zoomRange', 'showFind',
-  'expandAll', 'collapseAll', 'addMark', 'exportSvg', 'exportPerfetto',
-  'exportSlice',
+  'expandAll', 'collapseAll', 'addMark', 'exportSvg', 'openExport', 'workspace-file',
   'showAbout',
   'clearTaskFilter', 'clearFilters', 'file-error', 'toggleLimit',
 ])
@@ -765,6 +743,10 @@ async function emitPickedOpen(picked) {
       startIn: picked.startIn || null,
       files: picked.files || null,
     })
+    return
+  }
+  if (picked.kind === 'workspace' && picked.file) {
+    emit('workspace-file', picked.file)
     return
   }
   if (picked.kind === 'btf' && picked.file) await emitLoadedEntries(picked.file)

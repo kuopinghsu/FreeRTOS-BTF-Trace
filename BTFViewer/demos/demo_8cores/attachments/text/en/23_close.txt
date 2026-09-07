@@ -6,4 +6,6 @@ Use AI after the evidence is visible. Follow its jump:TIME links, check the same
 
 The workflow stays the same from beginning to end: find the evidence, narrow the scope, investigate the cause, verify it against the trace, test a change, and compare a new measurement.
 
+Record the observations, evidence, and conclusion in the Investigation Notebook as you go. It travels inside the HTML report and the portable workspace, so the next reader sees why, not just what.
+
 Open demo folder yourself in BTFViewer, and walk through every step at your own pace.

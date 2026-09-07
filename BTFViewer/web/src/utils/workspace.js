@@ -28,8 +28,13 @@ export const WORKSPACE_VERSION = 1
 export const WORKSPACE_SCHEMA = `${WORKSPACE_SCHEMA_PREFIX}${WORKSPACE_VERSION}`
 export const WORKSPACE_EXT = '.btfw'
 
+// manifest.json → "kind"
+export const KIND_WORKSPACE = 'workspace'
+export const KIND_DEMO = 'demo'
+
 export const MANIFEST = 'manifest.json'
-export const TRACE_MEMBER = 'trace/source.btf'
+export const TRACE_DIR = 'trace/'
+export const TRACE_MEMBER = 'trace/source.btf'  // canonical; reader also accepts trace/source.*
 export const STATE_VIEW = 'state/view.json'
 export const ANALYSIS_HEALTH = 'analysis/health.json'
 export const ANALYSIS_FINDINGS = 'analysis/findings.json'
@@ -37,6 +42,9 @@ export const INVESTIGATION_BOOKMARKS = 'investigation/bookmarks.json'
 export const INVESTIGATION_AI_CASE = 'investigation/ai_case.json'
 export const REPORT_HTML = 'reports/report.html'
 export const ATTACHMENTS_PREFIX = 'attachments/'
+export const DEMO_PREFIX = 'demo/'
+export const DEMO_SCRIPT = 'demo/script.xml'
+export const DEMO_VOICE_PREFIX = 'demo/voice/'
 
 const KNOWN_MEMBERS = [
   MANIFEST, TRACE_MEMBER, STATE_VIEW, ANALYSIS_HEALTH,
@@ -141,14 +149,16 @@ function sanitizeAttachmentName(name) {
 
 // ---------------------------------------------------------------------------
 export function buildManifest({
-  btfviewerVersion = '', traceName = '', traceSize = 0, traceSha256 = '',
+  btfviewerVersion = '', kind = KIND_WORKSPACE,
+  traceName = '', traceSize = 0, traceSha256 = '',
   traceEmbedded = true, traceRef = '', analysisSettings = null,
-  ruleSetVersion = '', locale = '', report = null, attachments = null,
+  ruleSetVersion = '', locale = '', report = null, demo = null, attachments = null,
   contents = null, created = null, modified = null,
 } = {}) {
   const stamp = nowIso()
   return {
     schema: WORKSPACE_SCHEMA,
+    kind: String(kind || KIND_WORKSPACE),
     btfviewer_version: String(btfviewerVersion || ''),
     created: String(created || stamp),
     modified: String(modified || stamp),
@@ -165,6 +175,7 @@ export function buildManifest({
     },
     locale: String(locale || ''),
     report: (report && typeof report === 'object') ? { ...report } : null,
+    demo: (demo && typeof demo === 'object') ? { ...demo } : null,
     attachments: [...(attachments || [])],
     contents: [...new Set(contents || [])].sort(),
   }
@@ -200,15 +211,19 @@ export function migrateManifest(manifest) {
 
 // --- save ----------------------------------------------------------------
 export function buildWorkspaceBlob({
+  kind = KIND_WORKSPACE,
   traceBytes = null, traceRef = '', traceName = '', traceSha256 = '',
-  traceSize = null, embedTrace = true,
+  traceSize = null, traceMember = TRACE_MEMBER, embedTrace = true,
   viewState = null, health = null, findings = null, investigation = null,
   aiCase = null,
-  reportHtml = null, attachments = null, analysisSettings = null,
+  reportHtml = null, demoXml = null, demoVoices = null, demoDefaultLanguage = '',
+  attachments = null, analysisSettings = null,
   ruleSetVersion = '', locale = '', btfviewerVersion = '',
   created = null, modified = null,
 } = {}) {
   const embedded = !!(embedTrace && traceBytes)
+  let tmem = String(traceMember || TRACE_MEMBER)
+  if (!(tmem.startsWith(TRACE_DIR) && isSafeMember(tmem))) tmem = TRACE_MEMBER
   let sha = traceSha256
   let size = traceSize
   if (embedded) {
@@ -222,13 +237,38 @@ export function buildWorkspaceBlob({
   const attManifest = []
   const seen = new Set()
   for (const [rawName, blob] of Object.entries(attachments || {})) {
-    let nm = sanitizeAttachmentName(rawName)
-    while (seen.has(nm)) nm = '_' + nm
+    const raw = String(rawName || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+    let nm
+    if (raw.includes('/') && isSafeMember(raw) && !raw.split('/').includes('..')) {
+      nm = raw // keep the relative sub-path (e.g. text/en/01_title.txt)
+    } else {
+      nm = sanitizeAttachmentName(rawName)
+      while (seen.has(nm)) nm = '_' + nm
+    }
     seen.add(nm)
     const data = blob instanceof Uint8Array ? blob : strToU8(String(blob))
     attItems.push([ATTACHMENTS_PREFIX + nm, data])
     attManifest.push({ name: nm, size: data.length, sha256: workspaceSha256Hex(data) })
   }
+
+  // Demo tour members: demo/script.xml + demo/voice/<lang>/<relname>.
+  const demoItems = []
+  if (demoXml != null) {
+    demoItems.push([DEMO_SCRIPT, demoXml instanceof Uint8Array ? demoXml : strToU8(String(demoXml))])
+  }
+  const demoLangs = []
+  for (const [lang, langFiles] of Object.entries(demoVoices || {})) {
+    const lid = String(lang || '').trim()
+    if (!lid || !langFiles || typeof langFiles !== 'object') continue
+    demoLangs.push(lid)
+    for (const [relname, blob] of Object.entries(langFiles)) {
+      const rel = String(relname || '').replace(/\\/g, '/').replace(/^\/+/, '')
+      if (!rel) continue
+      const data = blob instanceof Uint8Array ? blob : strToU8(String(blob))
+      demoItems.push([`${DEMO_VOICE_PREFIX}${lid}/${rel}`, data])
+    }
+  }
+  const demoLangsSorted = [...new Set(demoLangs)].sort()
 
   const contents = []
   if (viewState != null) contents.push(STATE_VIEW)
@@ -237,7 +277,8 @@ export function buildWorkspaceBlob({
   if (investigation != null) contents.push(INVESTIGATION_BOOKMARKS)
   if (aiCase != null) contents.push(INVESTIGATION_AI_CASE)
   if (reportHtml != null) contents.push(REPORT_HTML)
-  if (embedded) contents.push(TRACE_MEMBER)
+  if (embedded) contents.push(tmem)
+  for (const [nm] of demoItems) contents.push(nm)
   for (const [nm] of attItems) contents.push(nm)
 
   let reportMeta = null
@@ -246,8 +287,20 @@ export function buildWorkspaceBlob({
     reportMeta = { path: REPORT_HTML, size: rb.length, sha256: workspaceSha256Hex(rb) }
   }
 
+  let demoMeta = null
+  if (demoXml != null || demoLangsSorted.length) {
+    let defaultLang = String(demoDefaultLanguage || locale || '').trim()
+    if (!demoLangsSorted.includes(defaultLang)) defaultLang = demoLangsSorted[0] || defaultLang
+    demoMeta = {
+      script: demoXml != null ? DEMO_SCRIPT : '',
+      languages: demoLangsSorted,
+      default_language: defaultLang,
+    }
+  }
+
   const manifest = buildManifest({
     btfviewerVersion,
+    kind,
     traceName: traceName || (traceRef ? traceRef.split('/').pop() : ''),
     traceSize: size,
     traceSha256: sha,
@@ -257,6 +310,7 @@ export function buildWorkspaceBlob({
     ruleSetVersion,
     locale,
     report: reportMeta,
+    demo: demoMeta,
     attachments: attManifest,
     contents,
     created,
@@ -264,13 +318,14 @@ export function buildWorkspaceBlob({
   })
 
   const files = { [MANIFEST]: [dumps(manifest), { mtime: FIXED_MTIME }] }
-  if (embedded) files[TRACE_MEMBER] = [traceBytes, { mtime: FIXED_MTIME }]
+  if (embedded) files[tmem] = [traceBytes, { mtime: FIXED_MTIME }]
   if (viewState != null) files[STATE_VIEW] = [dumps(viewState), { mtime: FIXED_MTIME }]
   if (health != null) files[ANALYSIS_HEALTH] = [dumps(health), { mtime: FIXED_MTIME }]
   if (findings != null) files[ANALYSIS_FINDINGS] = [dumps([...findings]), { mtime: FIXED_MTIME }]
   if (investigation != null) files[INVESTIGATION_BOOKMARKS] = [dumps(loadInvestigation(investigation)), { mtime: FIXED_MTIME }]
   if (aiCase != null) files[INVESTIGATION_AI_CASE] = [dumps(aiCase), { mtime: FIXED_MTIME }]
   if (reportHtml != null) files[REPORT_HTML] = [strToU8(reportHtml), { mtime: FIXED_MTIME }]
+  for (const [nm, data] of demoItems) files[nm] = [data, { mtime: FIXED_MTIME }]
   for (const [nm, data] of attItems) files[nm] = [data, { mtime: FIXED_MTIME }]
 
   return { blob: zipSync(files, { level: 6 }), manifest }
@@ -317,24 +372,55 @@ export function openWorkspaceBlob(bytes, {
 
   const traceMeta = manifest.trace || {}
   let traceBytes = null
-  if (traceMeta.embedded && (TRACE_MEMBER in members)) {
-    traceBytes = members[TRACE_MEMBER]
-    if (traceMeta.sha256 && workspaceSha256Hex(traceBytes) !== traceMeta.sha256) {
-      warnings.push('embedded trace hash does not match the manifest')
+  if (traceMeta.embedded) {
+    // Canonical member first, else the first trace/* file (so a package built
+    // by zipping a folder can keep trace/source.btf.gz).
+    const tname = (TRACE_MEMBER in members)
+      ? TRACE_MEMBER
+      : Object.keys(members).sort().find(n => n.startsWith(TRACE_DIR) && !n.endsWith('/'))
+    if (tname) {
+      traceBytes = members[tname]
+      if (traceMeta.sha256 && workspaceSha256Hex(traceBytes) !== traceMeta.sha256) {
+        warnings.push('embedded trace hash does not match the manifest')
+      }
     }
   }
 
   const rawInv = readJsonMember(members, INVESTIGATION_BOOKMARKS)
+  const kind = String(manifest.kind || KIND_WORKSPACE)
+
+  // Demo tour subtree (demo/*) → a flat { relpath: Uint8Array } map plus a
+  // pointer at the entry script. Present for kind === 'demo' packages.
+  const demoFiles = {}
+  for (const name of Object.keys(members).sort()) {
+    if (name.startsWith(DEMO_PREFIX) && !name.endsWith('/')) {
+      demoFiles[name.slice(DEMO_PREFIX.length)] = members[name]
+    }
+  }
+  let demo = null
+  if (Object.keys(demoFiles).length || kind === KIND_DEMO) {
+    const scriptRel = DEMO_SCRIPT.slice(DEMO_PREFIX.length) // 'script.xml'
+    demo = {
+      script: demoFiles[scriptRel] || null,
+      script_name: scriptRel,
+      files: demoFiles,
+      manifest: manifest.demo || {},
+    }
+    if (!demo.script) warnings.push('demo package has no demo/script.xml')
+  }
+
   const attachments = {}
   const extra = []
   for (const name of Object.keys(members).sort()) {
     if (name.startsWith(ATTACHMENTS_PREFIX)) attachments[name.slice(ATTACHMENTS_PREFIX.length)] = members[name]
+    else if (name.startsWith(DEMO_PREFIX) || name.startsWith(TRACE_DIR)) { /* handled above */ }
     else if (!KNOWN_MEMBERS.includes(name)) extra.push(name)
   }
 
   return {
     manifest,
     schema: manifest.schema,
+    kind,
     read_only: readOnly,
     migrated,
     trace_bytes: traceBytes,
@@ -345,6 +431,7 @@ export function openWorkspaceBlob(bytes, {
     findings: readJsonMember(members, ANALYSIS_FINDINGS),
     investigation: rawInv != null ? loadInvestigation(rawInv) : null,
     ai_case: readJsonMember(members, INVESTIGATION_AI_CASE),
+    demo,
     report_html: (loadReport && (REPORT_HTML in members)) ? strFromU8(members[REPORT_HTML]) : null,
     attachments,
     extra_members: extra.sort(),

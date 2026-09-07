@@ -12,7 +12,7 @@ import { buildRowLayout } from '../src/renderer/TimelineRenderer.js'
 import { taskMergeKey } from '../src/utils/colors.js'
 
 const TRACE_PATH = fileURLToPath(
-  new URL('../../demos/demo_8cores/demo_8cores.btf.gz', import.meta.url),
+  new URL('../../demos/demo_8cores/trace/source.btf.gz', import.meta.url),
 )
 
 async function loadTrace() {

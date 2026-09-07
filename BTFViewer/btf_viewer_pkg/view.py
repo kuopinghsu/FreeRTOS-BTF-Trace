@@ -895,6 +895,7 @@ class TimelineView(QGraphicsView):
     bookmark_requested          = Signal(int)   # ns at right-click position
     annotation_requested        = Signal(int)   # ns at right-click position
     explain_region_requested    = Signal()      # explain cursor region with AI
+    add_region_to_investigation_requested = Signal()  # bookmark C1–Cn range in the notebook
     ask_ai_event_requested       = Signal(object)  # {task, core, start, stop, ns}
     clear_bookmarks_requested   = Signal()      # clear all bookmarks
     clear_annotations_requested = Signal()      # clear all annotations
@@ -3560,6 +3561,11 @@ class TimelineView(QGraphicsView):
                 lambda: self.explain_region_requested.emit()
             )
             self._style_ai_menu_action(act_region)
+            menu.addAction(
+                _svg_icon("M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2z", _icon_color),
+                "Add region to investigation",
+                lambda: self.add_region_to_investigation_requested.emit()
+            )
         if self._scene._trace is not None:
             menu.addSeparator()
             # Bookmark icon - flag/ribbon shape

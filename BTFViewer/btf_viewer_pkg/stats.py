@@ -58,11 +58,25 @@ from .stats_html import (
     html_glossary,
     html_health_bars,
     html_investigate_anomalies,
+    html_investigation_section,
     html_matrix_heatmap,
     html_percentile_bars,
     html_scope_identity_card,
     html_tag_overview,
+    html_trace_health_card,
     html_trace_metadata_card,
+)
+from .trace_health import build_trace_health_result, trace_health_status_label
+from .investigation_findings import (
+    NO_FINDINGS_UNDER_RULES,
+    build_investigation_findings,
+    investigation_finding_export,
+)
+from .investigation_notebook import (
+    conclusion_evidence_chains,
+    detect_broken_references,
+    load_investigation,
+    trace_identity,
 )
 from .ai_planner import analysis_dashboard, format_analysis_story
 from .empty_state import empty_state_message, stats_empty_label
@@ -9447,12 +9461,19 @@ def _finding(
     inspect_href: str = "",
     confidence: str = "",
     evidence_text: str = "",
+    comparison_basis: str = "",
+    measured_values: Optional[list] = None,
+    limitations: Optional[list] = None,
 ) -> dict:
     out = {
         "severity": severity,
         "title": title,
         "text": text,
         "id": fid or "",
+        # rule_id is the stable, report-independent identity of the rule that
+        # produced this finding (``id`` is slugged per report and may gain a
+        # ``-2`` suffix). InvestigationFinding normalisation keys off this.
+        "rule_id": fid or "",
         "task": task or "",
         "evidence": list(evidence or []),
         "impact": impact or "",
@@ -9460,6 +9481,9 @@ def _finding(
         "inspect_href": inspect_href or "",
         "confidence": confidence or "",
         "evidence_text": evidence_text or "",
+        "comparison_basis": comparison_basis or "",
+        "measured_values": list(measured_values or []),
+        "limitations": list(limitations or []),
     }
     return out
 
@@ -9504,6 +9528,13 @@ def _build_workflow_analysis_findings(
         gini = float(lb["gini"])
         sigma = float(lb["stddev"])
         metrics = f"Load Balance Score {score:.0f}% (σ={sigma:.1f}%, G={gini:.3f})"
+        _lb_mv = [
+            {"name": "Load Balance Score", "value": round(score, 1), "unit": "%",
+             "sample_count": len(pcts)},
+            {"name": "σ", "value": round(sigma, 1), "unit": "%",
+             "threshold": _WF_LOAD_SIGMA_WARN},
+            {"name": "G", "value": round(gini, 3), "unit": ""},
+        ]
         if score < _WF_LOAD_SCORE_WARN or sigma > _WF_LOAD_SIGMA_WARN:
             findings.append(_finding(
                 "warning",
@@ -9515,6 +9546,10 @@ def _build_workflow_analysis_findings(
                 inspect="Core Utilisation (excl. IDLE/TICK)",
                 confidence="High — derived from measured core utilisation",
                 evidence_text=metrics,
+                comparison_basis=(
+                    f"Load Balance Score < {_WF_LOAD_SCORE_WARN:.0f}% or "
+                    f"σ > {_WF_LOAD_SIGMA_WARN:.0f}%"),
+                measured_values=_lb_mv,
             ))
         elif score >= _WF_LOAD_SCORE_OK:
             findings.append(_finding(
@@ -9691,6 +9726,13 @@ def _build_workflow_analysis_findings(
                 fid="tick_health",
                 inspect="Trace Health (TICK)",
                 confidence="High — measured TICK intervals",
+                comparison_basis="TICK interval CV / large gaps vs the nominal period",
+                measured_values=[
+                    {"name": "CV", "value": round(float(tick.get("tick_cv") or 0) * 100, 2),
+                     "unit": "%"},
+                    {"name": "missed", "value": missed, "unit": "",
+                     "sample_count": int(tick.get("tick_count") or 0)},
+                ],
             ))
         elif missed > 0:
             findings.append(_finding(
@@ -9748,9 +9790,9 @@ def _build_workflow_analysis_findings(
     if not actionable and not any(f.get("id") == "top_cpu" for f in findings):
         findings.append(_finding(
             "info",
-            "No analysis heuristics flagged",
-            "No load-imbalance, thrashing, deadline, tick, or sync warnings "
-            "in the current scope. Review the tables below for detail.",
+            NO_FINDINGS_UNDER_RULES,
+            "No rule produced a finding in the current scope. This is not a "
+            "clean bill of health — review the tables below for detail.",
             fid="none",
         ))
 
@@ -9770,7 +9812,7 @@ def _format_analysis_findings_text(
     )
     lines.append("")
     if not findings:
-        lines.append("No findings for the current scope")
+        lines.append(NO_FINDINGS_UNDER_RULES)
     else:
         for i, f in enumerate(findings, 1):
             sev = str(f.get("severity", "info")).upper()
@@ -9887,6 +9929,7 @@ class _AnalysisFindingsDialog(QDialog):
                  on_show_evidence=None, on_ai_query=None,
                  triage_state: Optional[dict] = None,
                  on_triage_change=None, on_add_to_case=None,
+                 on_add_to_investigation=None,
                  on_undo_investigate=None,
                  current_limit: bool = False,
                  current_cursor_lo: Optional[float] = None,
@@ -9925,6 +9968,7 @@ class _AnalysisFindingsDialog(QDialog):
         self._on_ai_query = on_ai_query
         self._on_triage_change = on_triage_change
         self._on_add_to_case = on_add_to_case
+        self._on_add_to_investigation = on_add_to_investigation
         self._on_undo_investigate = on_undo_investigate
         self._current_limit = bool(current_limit)
         self._current_cursor_lo = current_cursor_lo
@@ -10213,7 +10257,11 @@ class _AnalysisFindingsDialog(QDialog):
         self._done_btn = QPushButton("Done")
         self._dismiss_btn = QPushButton("Dismiss…")
         self._case_btn = QPushButton("Add to case")
-        for b in (self._done_btn, self._dismiss_btn, self._case_btn):
+        self._investigation_btn = QPushButton("Add to investigation")
+        self._investigation_btn.setToolTip(
+            "Add this finding as an observation in the Investigation notebook")
+        for b in (self._done_btn, self._dismiss_btn, self._case_btn,
+                  self._investigation_btn):
             b.setFont(ui_font)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(_bbtn)
@@ -10222,6 +10270,7 @@ class _AnalysisFindingsDialog(QDialog):
         self._done_btn.clicked.connect(self._toggle_done)
         self._dismiss_btn.clicked.connect(self._toggle_dismiss)
         self._case_btn.clicked.connect(self._add_to_case)
+        self._investigation_btn.clicked.connect(self._add_to_investigation_notebook)
 
         # Bottom block — web `.analysis-footer`: full-width scope hint, then a
         # single button line with scope actions left, Ask AI / More / Close right.
@@ -10827,6 +10876,8 @@ class _AnalysisFindingsDialog(QDialog):
         self._done_btn.setEnabled(enabled)
         self._dismiss_btn.setEnabled(enabled)
         self._case_btn.setEnabled(enabled)
+        self._investigation_btn.setEnabled(
+            enabled and callable(self._on_add_to_investigation))
         self._done_btn.setText("Undo" if reviewed else "Done")
         self._dismiss_btn.setText("Restore" if dismissed else "Dismiss…")
         self._case_btn.setText("Remove from case" if in_case else "Add to case")
@@ -10871,6 +10922,11 @@ class _AnalysisFindingsDialog(QDialog):
             self._apply_triage_action(self._triage_state, fid, "case"))
         if callable(self._on_add_to_case):
             self._on_add_to_case(finding)
+
+    def _add_to_investigation_notebook(self) -> None:
+        finding = self._selected_finding()
+        if finding and callable(self._on_add_to_investigation):
+            self._on_add_to_investigation(finding)
 
     def _refresh_scope_hint(self) -> None:
         lbl = getattr(self, "_scope_lbl", None)
@@ -15434,7 +15490,15 @@ class _StatsPanel(QWidget):
                 return name
         return "trace"
 
-    def write_statistics_html_report(self, path: str) -> None:
+    def build_statistics_html(self) -> str:
+        """Return the full statistics HTML report as a string (no file write).
+
+        Backs :meth:`write_statistics_html_report` and the ``.btfw`` workspace
+        export.
+        """
+        return self.write_statistics_html_report(None, return_html=True)
+
+    def write_statistics_html_report(self, path, return_html: bool = False):
         trace = self._trace
         if trace is None:
             raise ValueError("no trace loaded")
@@ -16369,6 +16433,35 @@ class _StatsPanel(QWidget):
             ]
         analysis_html = _render_workflow_analysis_html(analysis_findings, scope_title)
 
+        def _health_fmt(ns):
+            return _format_time_trim(int(ns), trace.time_scale)
+
+        trace_health_result = build_trace_health_result(
+            trace, lo, hi, format_ns=_health_fmt)
+        trace_health_html = html_trace_health_card(
+            trace_health_result, format_ns=_health_fmt, scope_title=scope_title)
+
+        # Investigation Bookmarks and Evidence Chain (optional — rendered only
+        # when the GUI/CLI attached a saved investigation).
+        investigation_html = ""
+        _inv = getattr(self, "_export_investigation", None)
+        if isinstance(_inv, dict) and (_inv.get("bookmarks") or _inv.get("conclusion")):
+            try:
+                _inv_span = int(hi if hi is not None else trace.time_max) - int(
+                    lo if lo is not None else trace.time_min)
+            except (TypeError, ValueError):
+                _inv_span = None
+            _inv_findings = build_investigation_findings(
+                analysis_findings, total_span_ns=_inv_span)
+            _cur_ident = trace_identity(trace, trace_name)
+            _broken = detect_broken_references(
+                _inv, trace=trace,
+                known_rule_ids=[c.get("rule_id") for c in _inv_findings],
+                current_identity=_cur_ident)
+            investigation_html = html_investigation_section(
+                _inv, format_ns=_health_fmt, broken_refs=_broken,
+                chains=conclusion_evidence_chains(_inv), scope_title=scope_title)
+
         warn_n = sum(1 for f in analysis_findings if f.get("severity") == "warning")
         err_n = sum(1 for f in analysis_findings if f.get("severity") == "error")
         status_kind = "error" if err_n else ("warn" if warn_n else "ok")
@@ -16397,8 +16490,13 @@ class _StatsPanel(QWidget):
         dl_n = 0
         if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
             dl_n = len(_dl_viols.get("slice_violations") or []) + len(_dl_viols.get("cpu_violations") or [])
+        _th_status = str(trace_health_result.get("status") or "pass")
+        _th_kind = {"insufficient": "error", "caution": "warn"}.get(_th_status, "ok")
         kpis = [
             {"label": "Overall status", "value": status_value, "kind": status_kind},
+            {"label": "Trace health", "value": trace_health_status_label(_th_status),
+             "hint": f"{trace_health_result.get('issue_count', 0)} structural issue(s)",
+             "kind": _th_kind},
             {"label": "Load balance", "value": lb_txt, "hint": lb_hint,
              "kind": "warn" if _lb and (_lb["score"] < 70 or _lb["stddev"] > 30) else "ok"},
             {"label": "Core utilisation range",
@@ -16509,6 +16607,8 @@ class _StatsPanel(QWidget):
         {scope_html}
         {evidence_refs_html}
         {analysis_html}
+        {trace_health_html}
+        {investigation_html}
         {meta_html}
     {core_util_html}
     {tick_health_html}
@@ -16584,8 +16684,11 @@ class _StatsPanel(QWidget):
         if getattr(self, "_export_anonymize", False):
             out = _anon(out)
 
+        if return_html or path is None:
+            return out
         with open(path, "w", encoding="utf-8") as f:
             f.write(out)
+        return None
 
     def _export_html(self) -> None:
         if self._trace is None:
@@ -16728,7 +16831,7 @@ class _StatsPanel(QWidget):
                         _f_ev,
                     ])
             else:
-                writer.writerow(["", "", "No findings for the current scope", "", ""])
+                writer.writerow(["", "", NO_FINDINGS_UNDER_RULES, "", ""])
 
             writer.writerow([])
             writer.writerow([f"Core Utilisation (excl. IDLE/TICK){scope_suffix}"])
@@ -17530,6 +17633,19 @@ class _StatsPanel(QWidget):
             findings, _ = self.build_analysis_findings()
         except Exception:
             findings = []
+        _span_ns = None
+        try:
+            _lo = lo if lo is not None else trace.time_min
+            _hi = hi if hi is not None else trace.time_max
+            if _hi is not None and _lo is not None and _hi > _lo:
+                _span_ns = int(_hi) - int(_lo)
+        except (TypeError, ValueError):
+            _span_ns = None
+        try:
+            investigation_findings = build_investigation_findings(
+                findings, total_span_ns=_span_ns)
+        except Exception:
+            investigation_findings = []
         _anon, _ = self._make_export_anonymizer()
 
         _u2ns = {"ns": 1.0, "us": 1e3, "µs": 1e3, "μs": 1e3, "ms": 1e6, "s": 1e9}
@@ -17546,8 +17662,18 @@ class _StatsPanel(QWidget):
         def _top_by(rows: list, max_idx: int, n: int = 10) -> list:
             return sorted(rows, key=lambda r: _t2ns(r[max_idx]), reverse=True)[:n]
 
+        def _anon_investigation(f: dict) -> dict:
+            g = investigation_finding_export(f)
+            g["observation"] = _anon(g.get("observation") or "")
+            g["entities"] = [_anon(e) for e in g.get("entities") or []]
+            g["evidence_refs"] = [
+                {**r, "label": _anon(str(r.get("label") or ""))}
+                for r in g.get("evidence_refs") or []
+            ]
+            return g
+
         payload = {
-            "schema": "btf-viewer-stats/1",
+            "schema": "btf-viewer-stats/2",
             "generator": f"BTFViewer {_APP_VERSION}",
             "generated": datetime.datetime.now(datetime.timezone.utc)
             .isoformat(timespec="seconds"),
@@ -17572,10 +17698,14 @@ class _StatsPanel(QWidget):
                 {
                     "severity": f.get("severity", "info"),
                     "id": f.get("id") or "",
+                    "rule_id": f.get("rule_id") or f.get("id") or "",
                     "title": _anon(f.get("title", "")),
                     "text": _anon(f.get("text", "")),
                 }
                 for f in findings
+            ],
+            "investigation_findings": [
+                _anon_investigation(f) for f in investigation_findings
             ],
             "core_utilisation": [
                 {"core": c, "pct": round(p, 2)} for c, p in core_rows
@@ -17608,6 +17738,24 @@ class _StatsPanel(QWidget):
                 for r in sync_rows
             ],
         }
+        _inv = getattr(self, "_export_investigation", None)
+        if isinstance(_inv, dict) and (_inv.get("bookmarks") or _inv.get("conclusion")):
+            _inv_norm = load_investigation(_inv)
+            for _b in _inv_norm.get("bookmarks") or []:
+                _b["title"] = _anon(_b.get("title") or "")
+                _b["note"] = _anon(_b.get("note") or "")
+            _inv_norm["title"] = _anon(_inv_norm.get("title") or "")
+            _inv_norm["conclusion"] = _anon(_inv_norm.get("conclusion") or "")
+            _inv_norm["chains"] = conclusion_evidence_chains(_inv_norm)
+            _inv_norm["broken_references"] = detect_broken_references(
+                _inv_norm, trace=trace,
+                known_rule_ids=[
+                    f.get("rule_id") or f.get("id")
+                    for f in investigation_findings
+                ],
+                current_identity=trace_identity(
+                    trace, self._resolve_export_trace_name()))
+            payload["investigation"] = _inv_norm
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2, sort_keys=True, default=str)
             fh.write("\n")
@@ -22850,6 +22998,11 @@ class SnapshotEditorDialog(QDialog):
     _DASHABLE = ('rect', 'circle', 'line', 'arrow', 'dblarrow', 'dash')
     _NO_OUTLINE = ('highlight', 'badge', 'blur', 'crop')
     _HISTORY_LIMIT = 100
+    # Absolute cap on the size the editor opens at, regardless of what the
+    # window system reports as available (guards against oversized / off-screen
+    # windows on multi-monitor and WSLg setups). The user can still resize.
+    _MAX_OPEN_W = 1600
+    _MAX_OPEN_H = 1000
     _TOOL_LABELS = {
         'select':   'Select / move  (V)',
         'arrow':    'Arrow  (A)',
@@ -23236,7 +23389,13 @@ class SnapshotEditorDialog(QDialog):
         else:
             gw, gh = h0 * _PHI, h0
         scr = _widget_available_geometry(self)
-        max_w, max_h = scr.width() - 40, scr.height() - 80
+        # Cap the opening size to a sane maximum as well as to the reported
+        # screen. Some multi-monitor / WSLg setups report an available
+        # geometry much larger than the actually-visible area, which would
+        # otherwise open the dialog partly (or wholly) off-screen with no way
+        # to drag it back.
+        max_w = min(scr.width() - 40, self._MAX_OPEN_W)
+        max_h = min(scr.height() - 80, self._MAX_OPEN_H)
         if gw > max_w:
             gw = max_w
             gh = gw / _PHI
@@ -23244,6 +23403,7 @@ class SnapshotEditorDialog(QDialog):
             gh = max_h
             gw = gh * _PHI
         self.resize(int(round(gw)), int(round(gh)))
+        self._recenter_on_screen()
         QTimer.singleShot(0, self._canvas.setFocus)
 
     # ---- inspector -----------------------------------------------------
@@ -24031,6 +24191,32 @@ class SnapshotEditorDialog(QDialog):
     def closeEvent(self, event) -> None:  # noqa: N802
         self._commit_text_edit()
         super().closeEvent(event)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # Once shown, the real frame (incl. title bar) is known — clamp it fully
+        # inside the available screen area so the title bar can always be
+        # grabbed, even when the window system reported a wrong / oversized
+        # available geometry. Do it now and once more after the event loop
+        # settles (some WMs report decoration sizes asynchronously).
+        self._recenter_on_screen()
+        QTimer.singleShot(0, self._recenter_on_screen)
+
+    def _recenter_on_screen(self) -> None:
+        scr = _widget_available_geometry(self)
+        frame = self.frameGeometry() if self.isVisible() else self.geometry()
+        w = min(frame.width(), scr.width())
+        h = min(frame.height(), scr.height())
+        if w != frame.width() or h != frame.height():
+            # Shrink the client area by the same delta so the frame fits.
+            self.resize(max(320, self.width() - (frame.width() - w)),
+                        max(240, self.height() - (frame.height() - h)))
+            frame = self.frameGeometry() if self.isVisible() else self.geometry()
+        x = min(max(frame.x(), scr.x()), scr.x() + scr.width() - frame.width())
+        y = min(max(frame.y(), scr.y()), scr.y() + scr.height() - frame.height())
+        if (x, y) != (frame.x(), frame.y()):
+            # move() positions the frame's top-left on X11/Wayland/WSLg.
+            self.move(x, y)
 
     def _text_edit_active(self) -> bool:
         return self._text_input.isVisible()

@@ -786,7 +786,7 @@ class AiToolsTests(unittest.TestCase):
         install()
         from btf_viewer_pkg.parser import _parse_btf  # noqa: WPS433
 
-        btf = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.btf.gz"
+        btf = BTF_ROOT / "demos" / "demo_8cores" / "trace" / "source.btf.gz"
         if not btf.is_file():
             self.skipTest(f"missing demo trace: {btf}")
         trace = _parse_btf(str(btf))

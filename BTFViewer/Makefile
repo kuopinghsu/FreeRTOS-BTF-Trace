@@ -31,14 +31,14 @@ PANDOC ?= pandoc
 MARP ?= npx --yes @marp-team/marp-cli
 DOCS := docs
 
-DEMO_XML ?= demos/demo_8cores/demo_8cores.xml
+DEMO ?= demos/demo_8cores
 DEMO_LANG ?=
 DEMO_LANGS ?= en,zh-tw
-DEMO_XTF ?= $(BUILDS)/demo_8cores.xtf
+DEMO_PACK ?= $(BUILDS)/demo_8cores.btfw
 # Folder demo-pack reads clips FROM (default: the live voice/ tree). Set to
 # voice-male / voice-female to pack a rendered-but-not-yet-live take — see
-# scripts/demo_voice.py render --gender. The archive always stores clips
-# under voice/<lang>/ internally either way.
+# scripts/demo_voice.py render --gender. The .btfw package always stores clips
+# under demo/voice/<lang>/ internally either way.
 DEMO_VOICE_FOLDER ?=
 AI_DATASET ?= tests/ai
 AI_FAIL_UNDER ?= 70
@@ -64,9 +64,9 @@ help:
 	@echo "  make check-builds check-bundle + check-web"
 	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (+ zh-TW) → docs/*.pdf"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
-	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO_XML, DEMO_LANG)"
-	@echo "  make demo-voice   Voice pack status (DEMO_XML). See scripts/demo_voice.py"
-	@echo "  make demo-pack    Pack demos/demo_8cores → builds/demo_8cores.xtf (DEMO_LANGS=en,zh-tw or all)"
+	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO, DEMO_LANG)"
+	@echo "  make demo-voice   Voice pack status (DEMO). See scripts/demo_voice.py"
+	@echo "  make demo-pack    Pack demos/demo_8cores → builds/demo_8cores.btfw (DEMO_LANGS=en,zh-tw or all)"
 	@echo "                    DEMO_VOICE_FOLDER=voice-male|voice-female packs a rendered take, not voice/"
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
 	@echo "  make test-web     Web unit tests (node --test)"
@@ -84,7 +84,7 @@ help:
 	@echo "  make ci           Alias for ci-gate"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  MARP=$(MARP)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO_XML=$(DEMO_XML)  DEMO_LANG=$(DEMO_LANG)  DEMO_LANGS=$(DEMO_LANGS)  DEMO_VOICE_FOLDER=$(DEMO_VOICE_FOLDER)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)  AI_CASES=$(AI_CASES)  AI_CONTEXT=$(AI_CONTEXT)  AI_REPLACE=$(AI_REPLACE)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  MARP=$(MARP)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO=$(DEMO)  DEMO_LANG=$(DEMO_LANG)  DEMO_LANGS=$(DEMO_LANGS)  DEMO_VOICE_FOLDER=$(DEMO_VOICE_FOLDER)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)  AI_CASES=$(AI_CASES)  AI_CONTEXT=$(AI_CONTEXT)  AI_REPLACE=$(AI_REPLACE)"
 
 
 all: web bundle
@@ -104,18 +104,18 @@ test:
 	$(PYTHON) -m unittest discover -s tests -v
 
 demo: $(OUT)
-	BTFVIEWER_DEMO_LANG="$(DEMO_LANG)" $(PYTHON) $(OUT) $(DEMO_XML)
+	BTFVIEWER_DEMO_LANG="$(DEMO_LANG)" $(PYTHON) $(OUT) $(DEMO)
 
 demo-voice:
-	$(PYTHON) scripts/demo_voice.py status $(DEMO_XML)
+	$(PYTHON) scripts/demo_voice.py status $(DEMO)
 
 demo-pack:
 	mkdir -p $(BUILDS)
 	@if [ "$(DEMO_LANGS)" = "all" ]; then \
-		$(PYTHON) scripts/demo_pack.py demos/demo_8cores -o $(DEMO_XTF) --all-voices \
+		$(PYTHON) scripts/demo_pack.py demos/demo_8cores -o $(DEMO_PACK) --all-voices \
 			$(if $(DEMO_VOICE_FOLDER),--voice-folder $(DEMO_VOICE_FOLDER)); \
 	else \
-		$(PYTHON) scripts/demo_pack.py demos/demo_8cores -o $(DEMO_XTF) --voice $(DEMO_LANGS) \
+		$(PYTHON) scripts/demo_pack.py demos/demo_8cores -o $(DEMO_PACK) --voice $(DEMO_LANGS) \
 			$(if $(DEMO_VOICE_FOLDER),--voice-folder $(DEMO_VOICE_FOLDER)); \
 	fi
 

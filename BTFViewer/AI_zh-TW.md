@@ -134,6 +134,8 @@ AI 可整理與解釋證據、比對事件關聯、排序可能原因並檢查�
 
 ​
 
+<a id="ai-topic-scope" name="ai-topic-scope">&#x200B;</a>
+
 ### 界定事件或區段
 
 
@@ -215,6 +217,8 @@ flowchart TD
 
 ​
 
+<a id="ai-topic-actions" name="ai-topic-actions">&#x200B;</a>
+
 ### 內建操作
 
 請依照想回答的問題選擇操作。第一欄使用固定錨點，可供程式產生內容相關說明連結。
@@ -222,34 +226,34 @@ flowchart TD
 
 | 操作                     | 適用情況                  | 可獲得的資訊                                          |
 | ---------------------- | --------------------- | ----------------------------------------------- |
-| **Analysis Findings**  | 需要以量測結果作為分析起點         | 目前由固定規則產生的分析結果，以及支持各項結果的 Statistics 區段          |
-| **Triage findings**    | 同時有多個問題，不確定先看哪一項      | 問題優先順序與第一個應檢查的證據                                |
-| **Investigate**        | 已選定分析結果或症狀            | 可能原因、相關證據、尚缺的檢查與下一步                             |
-| **Explain region**     | C1–Cn 已包住問題事件         | 僅針對該區段的工作、事件與統計結果進行說明                           |
-| **Verify finding**     | 需要檢驗某個可能原因            | 支持與矛盾證據、替代解釋及驗證結論                               |
-| **Root cause**         | 已有可疑原因或受影響工作          | 依證據建立因果、相關或時間先後鏈，不會超出證據強度                       |
-| **Explain evidence**   | 不清楚某項分析結果的文字或重要性      | 與該結果相連的快速、技術或深入說明                               |
-| **Auto investigate**   | 希望由引導流程選擇下一項檢查        | 分階段收集證據的調查；資料不足時會指出需要補充的內容                      |
-| **Task profile**       | 分析焦點是一項工作             | CPU、執行時間尾端、阻塞、週期、核心遷移、同步與優先權資訊                  |
-| **Highest latency**    | 關注回應、阻塞、派送或執行時間過長     | 最長的相關事件與其證據連結                                   |
-| **WCET / hot CPU**     | 懷疑最大觀測執行時間或 CPU 使用量過高 | 觀測到的最大值與 CPU 集中情形；不能證明理論上的 WCET                 |
-| **Migration thrash**   | 工作反覆在核心之間移動           | 遷移次數、頻率、停留時間、往返遷移、handoff 啟發式（不是快取行搬移）、配置與親和性證據 |
-| **Core balance**       | 核心負載看起來不平均            | 各核心使用率、Task × Core 配置與負載隨時間變化                   |
-| **Tick health**        | TICK 時序或大間隔看起來異常      | 規律性、無週期滴答行為、間隔證據與遺漏 TICK 估計                     |
-| **Priority inversion** | 阻塞可能與優先權行為互相影響        | 優先權提升、L/M/H 型態、互斥鎖證據與搶占檢查                       |
-| **Deadline / budget**  | 工作有時限或 CPU 預算         | 量測值與設定或提供門檻的比較結果                                |
-| **Trace Compare**      | 已開啟兩份可比較的追蹤資料         | 實際量測的 A/B 差異與主要退步類型                             |
-| **What-if**            | 想先估算一項具體修改            | 啟發式的修改前後估算，仍需用新追蹤資料驗證                           |
-| **Optimize**           | 已有可能原因，且有多個實驗方向       | 依證據、預期影響與風險排列的改善實驗                              |
-| **Diagnostic report**  | 調查結果已可分享              | 包含範圍、分析結果、證據、結論、替代解釋與下一步的結構化摘要                  |
+| <a id="ai-action-findings" name="ai-action-findings"></a>**Analysis Findings**  | 需要以量測結果作為分析起點         | 目前由固定規則產生的分析結果，以及支持各項結果的 Statistics 區段          |
+| <a id="ai-action-triage" name="ai-action-triage"></a>**Triage findings**    | 同時有多個問題，不確定先看哪一項      | 問題優先順序與第一個應檢查的證據                                |
+| <a id="ai-action-investigate" name="ai-action-investigate"></a>**Investigate**        | 已選定分析結果或症狀            | 可能原因、相關證據、尚缺的檢查與下一步                             |
+| <a id="ai-action-explain_region" name="ai-action-explain_region"></a>**Explain region**     | C1–Cn 已包住問題事件         | 僅針對該區段的工作、事件與統計結果進行說明                           |
+| <a id="ai-action-verify" name="ai-action-verify"></a>**Verify finding**     | 需要檢驗某個可能原因            | 支持與矛盾證據、替代解釋及驗證結論                               |
+| <a id="ai-action-root_cause" name="ai-action-root_cause"></a>**Root cause**         | 已有可疑原因或受影響工作          | 依證據建立因果、相關或時間先後鏈，不會超出證據強度                       |
+| <a id="ai-action-explain_finding" name="ai-action-explain_finding"></a>**Explain evidence**   | 不清楚某項分析結果的文字或重要性      | 與該結果相連的快速、技術或深入說明                               |
+| <a id="ai-action-auto_investigate" name="ai-action-auto_investigate"></a>**Auto investigate**   | 希望由引導流程選擇下一項檢查        | 分階段收集證據的調查；資料不足時會指出需要補充的內容                      |
+| <a id="ai-action-task_profile" name="ai-action-task_profile"></a>**Task profile**       | 分析焦點是一項工作             | CPU、執行時間尾端、阻塞、週期、核心遷移、同步與優先權資訊                  |
+| <a id="ai-action-latency" name="ai-action-latency"></a>**Highest latency**    | 關注回應、阻塞、派送或執行時間過長     | 最長的相關事件與其證據連結                                   |
+| <a id="ai-action-wcet" name="ai-action-wcet"></a>**WCET / hot CPU**     | 懷疑最大觀測執行時間或 CPU 使用量過高 | 觀測到的最大值與 CPU 集中情形；不能證明理論上的 WCET                 |
+| <a id="ai-action-migrations" name="ai-action-migrations"></a>**Migration thrash**   | 工作反覆在核心之間移動           | 遷移次數、頻率、停留時間、往返遷移、handoff 啟發式（不是快取行搬移）、配置與親和性證據 |
+| <a id="ai-action-balance" name="ai-action-balance"></a>**Core balance**       | 核心負載看起來不平均            | 各核心使用率、Task × Core 配置與負載隨時間變化                   |
+| <a id="ai-action-tick" name="ai-action-tick"></a>**Tick health**        | TICK 時序或大間隔看起來異常      | 規律性、無週期滴答行為、間隔證據與遺漏 TICK 估計                     |
+| <a id="ai-action-priority" name="ai-action-priority"></a>**Priority inversion** | 阻塞可能與優先權行為互相影響        | 優先權提升、L/M/H 型態、互斥鎖證據與搶占檢查                       |
+| <a id="ai-action-deadlines" name="ai-action-deadlines"></a>**Deadline / budget**  | 工作有時限或 CPU 預算         | 量測值與設定或提供門檻的比較結果                                |
+| <a id="ai-action-compare" name="ai-action-compare"></a>**Trace Compare**      | 已開啟兩份可比較的追蹤資料         | 實際量測的 A/B 差異與主要退步類型                             |
+| <a id="ai-action-what_if" name="ai-action-what_if"></a>**What-if**            | 想先估算一項具體修改            | 啟發式的修改前後估算，仍需用新追蹤資料驗證                           |
+| <a id="ai-action-optimize" name="ai-action-optimize"></a>**Optimize**           | 已有可能原因，且有多個實驗方向       | 依證據、預期影響與風險排列的改善實驗                              |
+| <a id="ai-action-diagnostic_report" name="ai-action-diagnostic_report"></a>**Diagnostic report**  | 調查結果已可分享              | 包含範圍、分析結果、證據、結論、替代解釋與下一步的結構化摘要                  |
 
 
 其他進入方式也提供固定連結：
 
-- **Ask AI about this event** 使用所選的單一時間軸執行區段。
-- 從分布圖執行 **Query with AI…** 時，使用圖表目前顯示的樣本。
-- 從 Trace Compare 執行 **Query with AI…** 時，使用所選的比較表格。
-- 從 Migration & Corridor Inspector 執行 **Investigate with AI** 時，使用 `migrations` 範本，並帶入路徑、ping-pong、停留時間與 handoff 結構化內容。除非你另外選擇檢視器動作，否則不會篩選時間軸或移動游標。
+- <a id="ai-action-ask_event" name="ai-action-ask_event"></a>**Ask AI about this event** 使用所選的單一時間軸執行區段。
+- <a id="ai-action-query_distribution" name="ai-action-query_distribution"></a>從分布圖執行 **Query with AI…** 時，使用圖表目前顯示的樣本。
+- <a id="ai-action-query_compare" name="ai-action-query_compare"></a>從 Trace Compare 執行 **Query with AI…** 時，使用所選的比較表格。
+- <a id="ai-action-query_corridor" name="ai-action-query_corridor"></a>從 Migration & Corridor Inspector 執行 **Investigate with AI** 時，使用 `migrations` 範本，並帶入路徑、ping-pong、停留時間與 handoff 結構化內容。除非你另外選擇檢視器動作，否則不會篩選時間軸或移動游標。
 
 ​
 
@@ -296,6 +300,8 @@ flowchart TD
 請啟用 **Limit to C1–Cn**，讓 **Statistics**、Findings 與 `query_raw_metric` 都使用相同的時間範圍。若點選某個 `jump:TIME` 後發現它位於游標範圍之外，通常表示模型虛構了時間，或誤用了完整追蹤資料的時間。這種結果應捨棄，並使用游標與限定範圍的 Findings 重新提問。
 
 ​
+
+<a id="what-if-and-optimize-workflow" name="what-if-and-optimize-workflow">&#x200B;</a>
 
 ### What-if 與 Optimize 流程
 
@@ -480,6 +486,8 @@ AI 的輸出是對量測證據的解讀。接受結論前，應先確認證據�
 ​
 ​
 
+<a id="workflows-and-use-cases" name="workflows-and-use-cases">&#x200B;</a>
+
 <a id="ai-topic-configuration" name="ai-topic-configuration">&#x200B;</a>
 <a id="configuration-models-and-privacy" name="configuration-models-and-privacy">&#x200B;</a>
 
@@ -543,6 +551,8 @@ Live `ai-test` XML 可以使用 `<api-key env="VAR">`。完整範例請參閱 [R
 
 ​
 
+<a id="ai-topic-models" name="ai-topic-models">&#x200B;</a>
+
 ### 選擇模型
 
 
@@ -577,6 +587,8 @@ Live `ai-test` XML 可以使用 `<api-key env="VAR">`。完整範例請參閱 [R
 需要進行大量調查的範本，建議使用 `qwen3.5:9b` 這類具備穩定工具呼叫能力的模型，才能可靠串接多個工具呼叫。
 
 ​
+
+<a id="ai-topic-privacy" name="ai-topic-privacy">&#x200B;</a>
 
 ### 認證資訊儲存（Credential storage）
 
@@ -968,6 +980,7 @@ BTFViewer 使用同一套 AI 分析流程與控制方式，使用者看到的行
 | Chat Probe Timeout / `The read operation timed out`  | `GET /models` 只列出 ID；推論本身過慢或卡住                        | **Test connection** 會以非串流 POST 呼叫 `/chat/completions`，逾時時間為 120 秒。先執行 `ollama run MODEL` 預熱，再重試。可使用下方 curl 測試除錯；若 curl 也卡住，代表閘道上游的聊天服務卡住。非串流沒有回應時可嘗試 `"stream": true`。本機顯示記憶體不足時，請降低內容長度 |
 | Model not found                                      | 輸入的模型 ID 並非目前服務端點所提供                                  | 重新整理模型清單或執行 **Test connection**，再從下拉選單選擇可用 ID；Ollama 可先執行 `ollama pull`                                                                                                                  |
 | Gemini HTTP 400 `thought_signature`                  | Gemini 3 的後續工具呼叫需要 Thought Blob                       | 重新送出問題；BTFViewer 會回傳 Gemini Thought Signature                                                                                                                                            |
+| Gemini HTTP 400 `function_response.name`             | OpenAI 相容格式的後續呼叫，`tool_calls[].id` 為空                 | BTFViewer 會在下一輪前補上 id 與 `role=tool` 名稱。請重試該案例。                                                                                                                                          |
 | 空白回覆（`functioncallfilter` / `malformedfunctioncall`） | Gemini（尤其 Flash-Lite）產生了被 API 拒絕的工具呼叫                 | 檢視器會改以無工具再打一輪。若仍失敗，改用較完整的模型（例如 `gemini-2.5-flash`）或縮小 Statistics 範圍                                                                                                                      |
 | 顯示原始 `btftool` JSON，而不是原生工具呼叫                        | 模型不支援或略過函式呼叫                                          | BTFViewer 仍會顯示相同卡片。選擇 **Apply**，或啟用 **Auto-apply GUI actions**。需要穩定的原生呼叫時，使用 `qwen3.5:9b` 或支援工具呼叫的雲端模型                                                                                   |
 | Ask 超過 120 秒逾時，或一直停在 Waiting…                        | 冷啟動、CPU 卸載或顯示記憶體溢出                                    | 按 **Stop**，使用 `ollama run MODEL` 預熱後重試。長對話之間可使用 **Clear**。Findings 卡片太大時，改用較小模型或縮小 **Statistics** 範圍                                                                                     |
@@ -1025,17 +1038,7 @@ curl -s -D - -o /dev/null -H "Origin: null" http://localhost:11434/v1/models \
   | grep -iE "^HTTP|access-control-allow-origin"
 ```
 
-如果 `file://` 頁面仍被拒絕，可明確允許 `null` Origin：
-
-```bash
-OLLAMA_ORIGINS="*,null"
-```
-
-請注意，`*` 代表**任何你瀏覽的網頁都可以連線到本機模型**。使用完畢後建議取消：
-
-```bash
-launchctl unsetenv OLLAMA_ORIGINS
-```
+如果 `file://` 頁面仍被拒絕，可用 `OLLAMA_ORIGINS="*,null"` 明確允許 `null` Origin。請注意，`*` 代表**任何你瀏覽的網頁都可以連線到本機模型**；使用完畢後請以 `launchctl unsetenv OLLAMA_ORIGINS` 取消。
 
 ---
 
@@ -1089,9 +1092,7 @@ BTFViewer 內建離線評估工具 `ai-test` / `runOfflineBenchmark`。
 
 線上測試呼叫模型時，如果遇到暫時性錯誤，最多重試 **10 次**，每次間隔 **10 秒**。例如 HTTP 429 / 503、逾時或空白回覆。認證錯誤與找不到模型則不會重試。
 
-前面的能力矩陣是定性比較；評估套件則將這些預期轉成可重複量測的結果。
-
-> **目標不是找出最大或「最聰明」的模型，而是找出能最可靠完成 BTFViewer 追蹤分析的模型。**
+前面的能力矩陣是定性比較（小型本機模型 vs 9B+ vs 雲端）；評估套件則將這些預期轉成可重複量測的結果：**哪個模型最能可靠完成 BTFViewer 追蹤分析**，而不是哪個模型最大或最「聰明」。
 
 ​
 
@@ -1410,9 +1411,7 @@ Qwen3.5 9B        （內建預設）
 Qwen3.8 27B
 ```
 
-真正需要回答的問題是：
-
-> **增加 Local Model 容量所帶來的 Investigation Quality 改善，是否足以抵銷額外的 Memory 與 Latency？**
+增加本機容量所帶來的分析品質改善，是否足以抵銷額外的記憶體與延遲？
 
 
 
@@ -1478,11 +1477,7 @@ python builds/btf_viewer.py ai-test --dataset tests/ai --fail-under 70
 
 ## 調查規劃器（Investigation Planner）
 
-這是 主程式端 Planner，核心原則是：
-
-> **先取得成本最低的證據（Cheapest Evidence First）。**
-
-使用者操作流程請參閱 [README → Investigation planner](README_zh-TW.md#investigation-planner)。
+主程式端 Planner，核心原則是**先取得成本最低的證據（Cheapest Evidence First）**。使用者操作流程請參閱 [README → Investigation planner](README_zh-TW.md#investigation-planner)。
 
 ```mermaid
 flowchart TD
@@ -1566,6 +1561,8 @@ flowchart TD
 
 ​
 
+<a id="engine-limits" name="engine-limits">&#x200B;</a>
+
 ### 引擎限制（Engine limits）
 
 
@@ -1609,6 +1606,8 @@ flowchart TD
 
 ​
 
+<a id="analysis-vs-ai-tools" name="analysis-vs-ai-tools">&#x200B;</a>
+
 ### Analysis 與 AI 工具的分工（Analysis vs AI tools）
 
 事實應優先來自 BTF Statistics Page。AI 的工作是對這些事實進行**排序、解釋與導覽**。
@@ -1644,14 +1643,7 @@ flowchart TD
 
 ### 共用案例／證據引擎（Shared Case / Evidence engines）
 
-BTFViewer 使用同一套案例、證據、規劃器、因果分析、工具與 Mermaid 實作。
-
-AI UI 修改後執行：
-
-```bash
-make -C BTFViewer bundle
-make -C BTFViewer web
-```
+BTFViewer 使用同一套案例、證據、規劃器、因果分析、工具與 Mermaid 實作。修改 AI UI 後，請使用專案的建置目標重新產生發佈用的檢視器產物。
 
 **UI Lockstep：**
 
@@ -1662,6 +1654,7 @@ make -C BTFViewer web
 - Disabled Chip / Menu Item 使用 `#8a96a8`。
 - Findings 的 **Investigate…** 使用與其他 Analysis Footer Button 相同的 Outline Style，不使用 Accent / Primary Style。
 - **More** Template 在 2-column Overlay 中使用相同 Group。
+- Findings 的 **Save recipe…** 與 **Story…** 仍留在該對話框。
 - Trace Compare 從工具列 **Compare** 開啟，而不是 Statistics Footer。
 - Composer 上方有可收合的 **Context** 列；Apply 卡片標示 Navigation／Scope／Filter／Annotation／Export／Calculation；**Undo** 還原 Scope 與 Filters。
 

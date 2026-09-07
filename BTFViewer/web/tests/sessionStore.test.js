@@ -2,10 +2,13 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  applyTabState,
   isRestorableViewport,
   sanitizeTabFilters,
   snapshotTabFilters,
+  snapshotTabState,
 } from '../src/utils/sessionStore.js'
+import { newInvestigation, addBookmark } from '../src/utils/investigationNotebook.js'
 
 describe('sessionStore filters', () => {
   it('snapshotTabFilters keeps legend filters and drops heatmap spotlight', () => {
@@ -74,5 +77,38 @@ describe('isRestorableViewport', () => {
       canvasW: 800,
       canvasH: 600,
     }, trace), true)
+  })
+})
+
+describe('sessionStore investigation notebook persistence', () => {
+  const baseTab = () => ({
+    name: 't.btf',
+    trace: { timeMin: 0, timeMax: 100 },
+    timelineViewport: { timeStart: 0, timeEnd: 1, scrollY: 0, scrollX: 0, canvasW: 1, canvasH: 1 },
+    cursors: [null, null, null, null],
+    marks: [],
+  })
+
+  it('snapshots a non-empty notebook and applyTabState restores it', () => {
+    const tab = baseTab()
+    let inv = newInvestigation({ title: 'Case' })
+    inv = addBookmark(inv, { type: 'observation', title: 'spike', bookmarkId: 'o1' })
+    tab.investigation = inv
+
+    const snap = snapshotTabState(tab)
+    assert.ok(snap.investigation)
+    assert.equal(snap.investigation.bookmarks.length, 1)
+
+    const fresh = baseTab()
+    applyTabState(fresh, snap)
+    assert.equal(fresh.investigation.title, 'Case')
+    assert.deepEqual(fresh.investigation.bookmarks.map(b => b.id), ['o1'])
+  })
+
+  it('drops an empty notebook from the snapshot', () => {
+    const tab = baseTab()
+    tab.investigation = newInvestigation({ title: 'Empty' })
+    assert.equal(snapshotTabState(tab).investigation, null)
+    assert.equal(snapshotTabState(baseTab()).investigation, null)
   })
 })

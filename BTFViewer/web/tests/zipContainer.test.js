@@ -42,8 +42,8 @@ describe('readZipContainer', () => {
 
   it('rejects a non-zip input', () => {
     assert.throws(
-      () => readZipContainer(new TextEncoder().encode('not a zip'), { containerDesc: 'zip / .xtf' }),
-      /not a zip \/ .xtf container/,
+      () => readZipContainer(new TextEncoder().encode('not a zip'), { containerDesc: '.btfw / ZIP' }),
+      /not a .btfw \/ ZIP container/,
     )
   })
 

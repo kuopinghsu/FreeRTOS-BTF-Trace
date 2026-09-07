@@ -545,12 +545,109 @@ Baseline 與 Candidate 代表等效條件，目標指標已重新量測，而且
 
 - 使用 Bookmark 與 Annotation 標示重要時間點；
 - 產生含註解的 Snapshot 或時間軸 SVG；
-- 使用 **Save cursor range as BTF** 儲存所選事件；
+- 使用 **Export…**（工具列，或 Ctrl+Shift+E）——單一對話框即可儲存**可攜式工作區（`.btfw`）**、**Perfetto / Chrome Trace JSON**，或將**游標範圍（C1–Cn）存為 `.btf` 切片**；
 - 使用 Statistics **Export HTML**（含可搜尋表格的自包含報告）；
 - 使用 Trace Compare **Export HTML**；以及
 - 使用 AI 時產生診斷報告或 Investigation Case。
 
 請保留原始追蹤資料。匯出報告可以摘要證據，但無法保留所有互動式時間軸操作。
+
+**Trace Health 標記**——狀態列會顯示精簡的結構健康狀態（Pass / Caution / Insufficient data）；點擊可展開每項檢查的細節。它回報已解析的事件模型是否夠一致，足以信任由此衍生的統計——與 AI 及 *Trace Health (TICK)* 無關。
+
+### 調查筆記（Investigation notebook）
+
+筆記記錄的是你**為什麼**得到某個結論，而不只是你看了什麼。可從左側活動列（**Investigation notebook**）或命令選盤開啟；它是逐追蹤的文件，會隨匯出的 HTML 報告與可攜式工作區一起帶走。
+
+**書籤類型。** 每則項目屬於六種之一，報告會將它們分區呈現，讓審閱者分得清事實與詮釋：
+
+| 類型 | 用途 |
+|---|---|
+| **Observation** | 追蹤中量測到的現象——尖峰、離群值、間隙。不對成因下任何判斷。 |
+| **Hypothesis** | 針對這些觀察的候選解釋。 |
+| **Supporting evidence** | 使某個假設更可能成立的量測。 |
+| **Contradicting evidence** | 反對某個假設的量測。 |
+| **Verification step** | 你已執行（或應執行）以確認或排除假設的檢查。 |
+| **Conclusion** | 證據所支持的解釋，連同信心水準與未解問題。 |
+
+**參照而非複製文字。** 每則書籤可附上穩定識別碼而非敘述文字：某個 **finding**（其 rule id）、某個 **metric / Statistics 區段**、某個 **entity**（工作或核心），以及某個 **time range**。因為這些是識別碼而非文字，所以在追蹤或統計改變後，註記仍具意義，過期者也仍可被偵測。點擊範圍或證據參照可將時間軸跳至該處。
+
+**建立證據鏈。**
+
+- 從對話框**新增**書籤：選類型與標題、加註記，可選擇附上目前游標範圍並連結某個 finding。
+- 在任一 Analysis 發現上按 **Add to investigation**，即可將它以 Observation 形式加入，並附帶該發現與目前游標範圍；時間軸右鍵選單上的 **Add region to investigation** 對 C1–Cn 視窗執行同樣的動作。
+- **✦ Scaffold** 可一次建立整個結構：為每個可處理的發現各建一則 Observation（error 排在 warning 之前，並各自帶上該發現 / 實體 / 範圍 / 指標的參照），再加上一則 Hypothesis 與一則 Verification step 草稿供填寫。它會略過筆記中已有的發現，因此在新發現出現時可安全地重跑。
+- 書籤的編輯可以復原（筆記各自的 Undo / Redo，與時間軸的復原堆疊互不相干）。
+
+**連結與證據鏈。** 以關係連結兩則書籤——`supports`、`contradicts`、`verifies`、`concludes` 或 `relates`。每個 **Conclusion** 便會列出支持它的書籤（透過明確連結**或**共用的參照）；沒有支持證據的結論會標示為 **not grounded**。報告會在每個 grounded 結論之後呈現其證據鏈。
+
+**過期參照。** 當來源追蹤改變（內容雜湊或事件數）或被參照的實體／時間範圍不再存在時，受影響的書籤會在對話框與報告中被標示，讓審閱者知道哪些註記需要重新檢查。
+
+**結論與未解問題。** 結論是與量測書籤分開的自由文字欄位。未解問題是一份簡短清單，會隨調查一起帶走，讓下一位讀者知道還有什麼沒解決。
+
+**保存與再利用。**
+
+- **Export… / Import…** 可單獨將筆記存成 / 載入 JSON（`btf-viewer-investigation/1` schema：`title`、`trace_identity`、`analysis_range`、`bookmarks[]`、`links[]`、`conclusion`、`unresolved_questions[]`）。
+- 它會內嵌在可攜式工作區中（`investigation/bookmarks.json`），並以匯出 HTML 報告的 **Investigation** 區段呈現——單一自包含離線檔案。
+- **Evidence pack…** 會從筆記，加上目前的問題、範圍、trace health 狀態、findings 與必要統計，建立一份精簡、與供應商無關的 AI 證據包（`.json`），並附上 token 估計，讓模型只拿到回答所需的證據，並帶有可引用的穩定識別碼。無介面的對應指令為 `btfviewer report trace.btf --ai-package pkg.json --question "…"`。
+
+Headless：`btfviewer report trace.btf --investigation notes.json -o report.html` 會從已存的筆記 JSON 加入該區段；報告的 JSON 輸出會以解析後的 `chains` 與 `broken_references` 回填。
+
+### 可攜式工作區（`.btfw`）
+
+若要將整份調查以單一檔案交接，可儲存**可攜式工作區**——GUI 中選 **Export… → Portable workspace（`.btfw`）**，或使用下方的無介面指令。`.btfw` 是一般 ZIP 容器——任何 ZIP 工具都能檢視，不依賴已安裝的 BTFViewer 或任何線上服務——並具有明確的版面配置：
+
+```text
+manifest.json                 格式與 BTFViewer 版本、時間戳記、追蹤名稱／大小／SHA-256、locale、rule-set 版本
+trace/source.btf              追蹤本身，預設內嵌（或以路徑參照以節省空間）
+state/view.json               游標、標記、視窗範圍、篩選條件
+analysis/health.json          Trace Health Check 結果
+analysis/findings.json        Investigation Findings
+investigation/bookmarks.json  上述調查筆記
+investigation/ai_case.json    AI 調查工作階段（證據負載 + 計畫 + 對話），存在時才寫入
+reports/report.html           匯出的報告（選用）
+attachments/                  選用
+```
+
+開啟工作區會還原調查，且不改變任何量測值。系統會先檢查儲存的追蹤 SHA-256，因此在信任快取分析前即可偵測到追蹤資料遭修改或遺失。儲存為原子操作（中斷的儲存不會破壞先前的檔案）。解壓縮會拒絕絕對路徑與 `..` 片段、限制項目數與解壓大小，且絕不執行工作區內容。以較新格式寫入的工作區會以唯讀開啟；未知欄位會予以保留。
+
+Headless：
+
+| 指令 | 效果 |
+|---|---|
+| `btfviewer report trace.btf --investigation notes.json --save-workspace inv.btfw -o report.html` | 產生報告**並**將所有內容打包進 `inv.btfw` |
+| `btfviewer report … --save-workspace inv.btfw --no-embed-trace` | 以路徑參照追蹤，而非內嵌 |
+| `btfviewer workspace inv.btfw` | 印出 manifest 與內容清單 |
+| `btfviewer workspace inv.btfw --extract DIR` | 安全地將所有成員解壓到 `DIR` |
+| `btfviewer workspace inv.btfw --report OUT.html` | 將內嵌報告寫入 `OUT.html` |
+
+### 無介面驗證（CI 關卡）
+
+`btfviewer verify trace.btf --rules project-rules.json` 依明確的逐項門檻檢查追蹤，並以穩定的結束碼結束，可直接放進不需視窗伺服器的流水線：
+
+| 結束碼 | 意義 |
+|---|---|
+| `0` | 所有規則通過（僅 **warning** 等級的規則失敗時，除非加 `--strict` 否則仍視為通過） |
+| `1` | 一項以上 **error** 等級的門檻失敗 |
+| `2` | 規則檔無效、指標未知，或該指標資料不足 |
+| `3` | 內部處理錯誤 |
+
+規則檔為帶版本的 JSON：
+
+```json
+{
+  "schema_version": 1,
+  "rules": [
+    { "metric": "load_balance_score", "min": 70, "severity": "error" },
+    { "metric": "migrations", "max": 500, "severity": "warning" },
+    { "metric": "gap_max_us", "maximum_us": 50 },
+    { "metric": "trace_health", "expect_one_of": ["pass", "caution"] }
+  ]
+}
+```
+
+門檻可用 `min` / `max`（原生單位）、`minimum_us` / `maximum_us`（亦支援 `_ms` / `_ns`）用於時間指標，或 `expect` / `expect_one_of` 用於狀態指標。`btfviewer verify --list-metrics` 會列出所有支援的指標名稱。`--lo` / `--hi` 可將檢查限定在游標範圍；`--json` 會輸出完整結果供建置紀錄使用。本版涵蓋全追蹤與結構健康指標；限定到 `entity` 的逐工作時序指標會回報為資料錯誤（結束碼 2）。
+
+若要以基準線做回歸比較而非固定門檻，請使用 `btfviewer analyze candidate.btf --baseline baseline.btf --fail-on-regression`（以 `--save-baseline base.json` 記錄基準線）。
 
 ## 完整操作範例
 

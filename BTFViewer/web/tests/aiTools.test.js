@@ -17,6 +17,8 @@ import {
   parseBtfJumpHref,
   parseBtfRangeHref,
   extractToolCalls,
+  canonicalToolName,
+  looksLikeNextstepPseudoTool,
   ensureGeminiThoughtSignatures,
   isMalformedFunctionCallFinish,
   mergeToolCalls,
@@ -49,6 +51,27 @@ describe('aiTools', () => {
     assert.ok(names.includes('add_annotation'))
     assert.ok(names.includes('query_raw_metric'))
     assert.ok(names.includes('export_report'))
+  })
+
+  it('canonicalises near-miss tool names and drops nextstep: prose', () => {
+    // Reported bug: `unknown tool "nextstep:open_statistics"`.
+    for (const raw of ['nextstep:open_statistics', 'nextstep:open statistics',
+      'nextstep: open statistics', 'open_statistics', 'open_stats']) {
+      assert.equal(canonicalToolName(raw), 'open_statistics_section', raw)
+    }
+    assert.equal(canonicalToolName('functions.set_cursors'), 'set_cursors')
+    assert.equal(canonicalToolName('zoom'), 'zoom_to_range')
+    assert.ok(!AI_VIEWER_TOOL_NAMES.includes(canonicalToolName('nextstep:verify the boost')))
+    assert.ok(!AI_VIEWER_TOOL_NAMES.includes(canonicalToolName('nextstep:zoom')))
+    assert.equal(looksLikeNextstepPseudoTool('nextstep:zoom'), true)
+    assert.equal(looksLikeNextstepPseudoTool('zoom'), false)
+
+    const got = extractToolCalls({ tool_calls: [{ function: {
+      name: 'nextstep:open statistics', arguments: JSON.stringify({ section: 'cores' }) } }] })
+    assert.deepEqual(got.map(c => c.name), ['open_statistics_section'])
+    const dropped = extractToolCalls({ tool_calls: [{ function: {
+      name: 'nextstep:verify the boost', arguments: '{}' } }] })
+    assert.deepEqual(dropped, [])
   })
 
   it('validates set_cursors and zoom_to_range', () => {

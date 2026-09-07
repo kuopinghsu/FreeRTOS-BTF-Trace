@@ -96,7 +96,7 @@ make web
 | `.btf.bz2`, `.bz2` | Bzip2-compressed trace |
 | `.btf.zip`, `.zip` | Archive containing one or more BTF traces; each trace opens in a separate tab |
 | `.xml` | Demo script used by the Web application |
-| `.xtf` | Portable demo package containing a script, trace, and optional narration |
+| `.btfw` | Portable package: either a saved investigation workspace, or a shareable demo tour (script, trace, and optional narration). Distinguished by its manifest `kind`. |
 
 Sample traces are available in `tracedata/`, including `example-2cores.btf.gz`.
 
@@ -119,14 +119,14 @@ make demo DEMO_LANG=zh-tw
 You can also open either package directly:
 
 ```bash
-python builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
-python builds/btf_viewer.py builds/demo_8cores.xtf
+python builds/btf_viewer.py demos/demo_8cores
+python builds/btf_viewer.py builds/demo_8cores.btfw
 ```
 
 Web:
 
 - Select **Demo** on the toolbar to load the bundled tour.
-- Open or drag `demo_8cores.xtf` into the viewer.
+- Open or drag `demo_8cores.btfw` into the viewer.
 - Open the demo XML file and select its package folder when requested.
 
 English is the default narration language. Select another language from the demo bar **Voice** menu. Press **Space** to pause or resume. Press **Esc** twice within 2.5 seconds to stop.
@@ -138,7 +138,7 @@ make demo-pack
 make demo-pack DEMO_LANGS=en,zh-tw
 ```
 
-The generated `builds/demo_8cores.xtf` contains the script, trace, and selected voice files. Open it in either application. See [demos/README.md](demos/README.md) for instructions on creating, recording, and maintaining demos.
+The generated `builds/demo_8cores.btfw` contains the script, trace, and selected voice files. Open it in either application. See [demos/README.md](demos/README.md) for instructions on creating, recording, and maintaining demos.
 
 <a id="viewer-controls" name="viewer-controls">&#x200B;</a>
 
@@ -154,7 +154,7 @@ The Desktop and Web builds share one layout.
 
 | # | Region | What it does |
 |---|---|---|
-| 1 | **Activity rail** | Opens the tools that work alongside the timeline — **Migration heatmap**, **Analysis Findings**, and the **Snapshot editor** — with **Help** and **Settings** at the bottom. |
+| 1 | **Activity rail** | Opens the tools that work alongside the timeline — **Migration heatmap**, **Analysis Findings**, the **Investigation notebook**, **Compare traces**, and the **Snapshot editor** — with **Help** and **Settings** at the bottom. |
 | 2 | **Toolbar** | Grouped controls — Open, layout, zoom, View Mode, **Load**, theme, demo, record. Hover an icon for its name and shortcut; a narrow window folds groups into **More (⋯)**. See [Main controls](#main-controls). |
 | 3 | **Trace tabs** | One tab per open trace. Each tab keeps its own Scope, Filters, View Mode, zoom, cursors, and marks. |
 | 4 | **Legend / task list** | Colour key for the rows. Hover an entry for **Highlight**, click it for **Selection**; in Core View the **Cores** checkboxes act as the Core Filter. |
@@ -187,7 +187,7 @@ The toolbar groups related controls. Hover over an icon to see its name and shor
 
 | Group | Controls | Purpose |
 |---|---|---|
-| Open | **Open** | Open one or more BTF traces, a demo XML file, or an `.xtf` demo package |
+| Open | **Open** | Open one or more BTF traces, a demo XML file, or a `.btfw` demo package |
 | Capture and export | **Snapshot editor**, **Save SVG**, **Export Perfetto**, **Save cursor range as BTF** | Capture the current view or export trace data. Saving a BTF range requires at least two cursors |
 | Layout | **Horizontal / Vertical** | Run the time axis from left to right or from top to bottom |
 | Zoom | **Zoom in / Zoom out**, **1:1**, **Fit Trace**, **Fit Cursors**, zoom preset | Change the visible time range or select a fixed time-per-pixel scale |

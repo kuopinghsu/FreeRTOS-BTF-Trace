@@ -76,6 +76,8 @@ function finding(severity, title, text, extra = {}) {
     title,
     text,
     id: extra.id || '',
+    // Stable, report-independent rule identity (id is slugged per report).
+    rule_id: extra.id || '',
     task: extra.task || '',
     evidence: extra.evidence || [],
     impact: extra.impact || '',
@@ -83,6 +85,9 @@ function finding(severity, title, text, extra = {}) {
     inspect_href: extra.inspect_href || extra.inspectHref || '',
     confidence: extra.confidence || '',
     evidence_text: extra.evidence_text || extra.evidenceText || '',
+    comparison_basis: extra.comparison_basis || '',
+    measured_values: extra.measured_values || [],
+    limitations: extra.limitations || [],
   }
 }
 
@@ -111,6 +116,11 @@ export function buildWorkflowAnalysisFindings({
     const gini = lb.gini
     const sigma = lb.stddev
     const metrics = `Load Balance Score ${score.toFixed(0)}% (σ=${sigma.toFixed(1)}%, G=${gini.toFixed(3)})`
+    const lbMv = [
+      { name: 'Load Balance Score', value: Math.round(score * 10) / 10, unit: '%', sample_count: pcts.length },
+      { name: 'σ', value: Math.round(sigma * 10) / 10, unit: '%', threshold: LOAD_SIGMA_WARN },
+      { name: 'G', value: Math.round(gini * 1000) / 1000, unit: '' },
+    ]
     if (score < LOAD_SCORE_WARN || sigma > LOAD_SIGMA_WARN) {
       findings.push(finding(
         'warning',
@@ -122,6 +132,8 @@ export function buildWorkflowAnalysisFindings({
           inspect: 'Core Utilisation (excl. IDLE/TICK)',
           confidence: 'High — derived from measured core utilisation',
           evidence_text: metrics,
+          comparison_basis: `Load Balance Score < ${LOAD_SCORE_WARN.toFixed(0)}% or σ > ${LOAD_SIGMA_WARN.toFixed(0)}%`,
+          measured_values: lbMv,
         },
       ))
     } else if (score >= LOAD_SCORE_OK) {
@@ -298,7 +310,14 @@ export function buildWorkflowAnalysisFindings({
         health === 'bad' ? 'error' : 'warning',
         `Trace Health (TICK) = ${health.toUpperCase()}`,
         `Mode=${tick.isTickless ? 'TICKLESS' : 'TICK'}, CV=${((tick.tickCv || 0) * 100).toFixed(2)}%, missed≈${missed}. Investigate large TICK gaps and long slices.`,
-        { id: 'tick_health' },
+        {
+          id: 'tick_health',
+          comparison_basis: 'TICK interval CV / large gaps vs the nominal period',
+          measured_values: [
+            { name: 'CV', value: Math.round((tick.tickCv || 0) * 100 * 100) / 100, unit: '%' },
+            { name: 'missed', value: missed, unit: '', sample_count: tick.tickCount || 0 },
+          ],
+        },
       ))
     } else if (missed > 0) {
       findings.push(finding(
@@ -352,8 +371,8 @@ export function buildWorkflowAnalysisFindings({
   if (!actionable.length && !findings.some(f => f.id === 'top_cpu')) {
     findings.push(finding(
       'info',
-      'No analysis heuristics flagged',
-      'No load-imbalance, thrashing, deadline, tick, or sync warnings in the current scope. Review the tables below for detail.',
+      'No findings under the current rules',
+      'No rule produced a finding in the current scope. This is not a clean bill of health — review the tables below for detail.',
       { id: 'none' },
     ))
   }
@@ -379,7 +398,7 @@ export function formatAnalysisFindingsText(findings, scopeSuffix = '', {
     '',
   )
   if (!findings?.length) {
-    lines.push('No findings for the current scope')
+    lines.push('No findings under the current rules')
   } else {
     findings.forEach((f, i) => {
       const sev = String(f.severity || 'info').toUpperCase()

@@ -76,6 +76,29 @@ import os
 import sys
 import threading
 
+# --- Headless / GPU-less software-GL fallback -----------------------------
+# Runs before the first PySide6 import. On Linux with no DRM render node
+# (WSL2, containers, CI, plain SSH) Qt's OpenGL and QtWebEngine's Chromium GPU
+# process fail noisily and fall back to software anyway; select software
+# rendering up front so the fallback is clean and silent. A real GPU or any
+# explicit override is left untouched. This block is duplicated verbatim in
+# btf_viewer_pkg/_imports.py and scripts/bundle_viewer.py (SHARED_IMPORTS),
+# checked by tests/test_gpu_fallback.py.
+if sys.platform.startswith("linux") and not os.environ.get("BTFVIEWER_NO_GL_FALLBACK"):
+    try:
+        _dri_nodes = os.listdir("/dev/dri")
+    except OSError:
+        _dri_nodes = []
+    if not any(_n.startswith("renderD") for _n in _dri_nodes):
+        os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+        _have = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").split()
+        for _flag in ("--disable-gpu", "--disable-gpu-compositing"):
+            if _flag not in _have:
+                _have.append(_flag)
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(_have)
+        del _have, _flag
+    del _dri_nodes
+
 import argparse
 import base64
 import configparser
@@ -141,7 +164,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog, QCompleter,
     QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget,
+    QPushButton, QRadioButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
     QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
     QPlainTextEdit, QTextBrowser, QTextEdit,
@@ -1046,6 +1069,46 @@ def find_stats_sections(query: str) -> List[Tuple[str, str]]:
     return out
 
 
+# Href / palette prefixes an AI or a link may wrap a section reference in.
+_STATS_SECTION_REF_PREFIXES: Tuple[str, ...] = (
+    "btfstats:section/", "btfstats:", "stats-section:", "stats:section/",
+    "section/", "stats/", "cat:",
+)
+
+
+def resolve_stats_section_id(raw: str) -> str:
+    """Map an AI / link string to a canonical Statistics section id, or ``""``.
+
+    Accepts an exact id, a header title (``Ready-Gap (Starvation)``), a
+    ``btfstats:section/<id>`` / ``stats-section:<id>`` href, or a loose spelling
+    (``ready-gap``, ``ready gap``). Keep lockstep with
+    ``web/src/utils/statsPins.js`` ``resolveStatsSectionId``.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    low = s.lower()
+    for pre in _STATS_SECTION_REF_PREFIXES:
+        if low.startswith(pre):
+            s = s[len(pre):].strip().strip("/")
+            low = s.lower()
+            break
+    if s in STATS_PINNABLE_SECTIONS:
+        return s
+    if low in STATS_PINNABLE_SECTIONS:
+        return low
+    snake = re.sub(r"[^a-z0-9]+", "_", low).strip("_")
+    if snake in STATS_PINNABLE_SECTIONS:
+        return snake
+    for sid, title in STATS_SECTION_TITLES.items():
+        if title.lower() == low:
+            return sid
+    for sid, _title in find_stats_sections(s):
+        if not sid.startswith("cat:"):
+            return sid
+    return ""
+
+
 def command_palette_stats_section_actions() -> List[Tuple[str, str]]:
     """Synthetic palette rows: ``stats-section:<id>`` → ``Stats: <title>``."""
     return [
@@ -1936,6 +1999,8 @@ _RG_HEATMAP  = ('<rect x="3.5" y="3.5" width="7" height="7" rx="1"/>'
                 '<rect x="13.5" y="13.5" width="7" height="7" rx="1"/>')
 _RG_ANALYSIS = ('<path d="M9 3h6M10 3v5l-5 9.2A2 2 0 0 0 6.8 20h10.4a2 2 0 0 0 '
                 '1.8-2.8L14 8V3"/>')
+_RG_NOTEBOOK = ('<path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V5'
+                'a2 2 0 0 1 2-2z"/><path d="M4 8h3M4 12h3M4 16h3M10 8h5M10 12h5"/>')
 _RG_COMPARE  = ('<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/>'
                 '<path d="M6 15.5V9a3 3 0 0 1 3-3h4M18 8.5V15a3 3 0 0 1-3 3h-4"/>'
                 '<path d="m11 4 2 2-2 2M13 20l-2-2 2-2"/>')
@@ -1991,6 +2056,14 @@ _IC_PERFETTO = (
     "v-9A1.5 1.5 0 0 0 13.5 2h-11zm0 1h11a.5.5 0 0 1 .5.5V5H2V3.5a.5.5 0 0 1 .5-.5z"
     "M2 6h12v6.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V6zm2 1.5v1h2v-1H4zm3 0v1h2v-1H7z"
     "m3 0v1h2v-1h-2zM4 10v1h5v-1H4z"
+)
+# Unified Export (tray + up arrow). Keep in sync with web/src/utils/toolbarIcons.js
+# ``exportOut``.
+_IC_EXPORT_OUT = (
+    "M8 1a.5.5 0 0 1 .354.146l3 3a.5.5 0 0 1-.708.708L8.5 2.707V10.5a.5.5 0 0 1-1 0"
+    "V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3A.5.5 0 0 1 8 1zM3 9.5a.5.5 0 0 1 .5.5"
+    "v3a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 1 1 0v3A1.5 1.5 0 0 1 12 15H4"
+    "a1.5 1.5 0 0 1-1.5-1.5v-3a.5.5 0 0 1 .5-.5z"
 )
 # Cursor-range BTF slice (crop). Keep in sync with web/src/utils/toolbarIcons.js.
 _IC_EXPORT_SLICE = (
@@ -2410,6 +2483,146 @@ _STI_COLORS: Dict[str, QColor] = {
     # Unknown notes are assigned dynamically by _sti_color().
 }
 
+# ===========================================================================
+# zip_container
+# ===========================================================================
+
+# Shared limits. A ``.btfw`` package is small; these leave generous headroom.
+CONTAINER_MAX_ENTRIES = 4096
+CONTAINER_MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+CONTAINER_MAX_COMPRESSION_RATIO = 250
+CONTAINER_BOMB_MIN_SIZE = 64 * 1024
+
+_Source = Union[str, bytes, bytearray]
+
+
+def is_safe_member(name: str) -> bool:
+    """True if *name* is a plain relative POSIX path with no traversal / root.
+
+    Container members always use ``/`` separators; anything else is rejected.
+    """
+    n = str(name or "")
+    if not n or n != n.strip():
+        return False
+    if "\\" in n or "\x00" in n:
+        return False
+    if n.startswith("/") or n.startswith("~"):
+        return False
+    # Windows drive / UNC (``C:\\...``).
+    if len(n) >= 2 and n[1] == ":":
+        return False
+    parts = n.split("/")
+    for i, p in enumerate(parts):
+        if p in (".", ".."):
+            return False
+        if p == "" and i != len(parts) - 1:
+            return False  # empty segment except a single trailing "" (dir entry)
+    return True
+
+
+def _is_zip_source(source: _Source) -> bool:
+    if isinstance(source, (bytes, bytearray)):
+        return zipfile.is_zipfile(io.BytesIO(bytes(source)))
+    return zipfile.is_zipfile(source)
+
+
+def _as_zipfile(source: _Source) -> zipfile.ZipFile:
+    if isinstance(source, (bytes, bytearray)):
+        return zipfile.ZipFile(io.BytesIO(bytes(source)), "r")
+    return zipfile.ZipFile(source, "r")
+
+
+def validate_zip_container(
+    zf: zipfile.ZipFile,
+    *,
+    max_entries: int = CONTAINER_MAX_ENTRIES,
+    max_uncompressed: int = CONTAINER_MAX_UNCOMPRESSED_BYTES,
+    max_ratio: int = CONTAINER_MAX_COMPRESSION_RATIO,
+    bomb_min_size: int = CONTAINER_BOMB_MIN_SIZE,
+) -> List[str]:
+    """Enforce the container limits. Returns warnings for skipped unsafe names."""
+    warnings: List[str] = []
+    infos = zf.infolist()
+    if len(infos) > max_entries:
+        raise ValueError(
+            f"archive has too many entries ({len(infos)} > {max_entries})")
+    total = 0
+    for zi in infos:
+        if zi.is_dir():
+            continue
+        total += zi.file_size
+        if total > max_uncompressed:
+            raise ValueError("archive decompressed size exceeds the limit")
+        if (zi.file_size > bomb_min_size and zi.compress_size > 0
+                and zi.file_size / zi.compress_size > max_ratio):
+            raise ValueError(
+                f"archive entry {zi.filename!r} looks like a compression bomb")
+        if not is_safe_member(zi.filename):
+            warnings.append(f"skipped unsafe member name: {zi.filename!r}")
+    bad = zf.testzip()
+    if bad is not None:
+        raise ValueError(f"archive entry {bad!r} is corrupt")
+    return warnings
+
+
+def read_zip_container(
+    source: _Source,
+    *,
+    container_desc: str = "ZIP",
+    max_entries: int = CONTAINER_MAX_ENTRIES,
+    max_uncompressed: int = CONTAINER_MAX_UNCOMPRESSED_BYTES,
+    max_ratio: int = CONTAINER_MAX_COMPRESSION_RATIO,
+    bomb_min_size: int = CONTAINER_BOMB_MIN_SIZE,
+) -> Dict[str, object]:
+    """Open *source* (a path or raw bytes) as a hardened ZIP container.
+
+    Returns ``{"members": {name: bytes}, "warnings": [...]}`` holding only the
+    safe-named, non-directory members. Raises ``ValueError`` for a non-ZIP input
+    or any limit breach.
+    """
+    if not _is_zip_source(source):
+        raise ValueError(f"not a {container_desc} container")
+    members: Dict[str, bytes] = {}
+    with _as_zipfile(source) as zf:
+        warnings = validate_zip_container(
+            zf, max_entries=max_entries, max_uncompressed=max_uncompressed,
+            max_ratio=max_ratio, bomb_min_size=bomb_min_size)
+        for zi in zf.infolist():
+            if zi.is_dir() or not is_safe_member(zi.filename):
+                continue
+            members[zi.filename] = zf.read(zi)
+    return {"members": members, "warnings": warnings}
+
+
+def safe_extract_all(
+    source: _Source,
+    dest_dir: str,
+    *,
+    container_desc: str = "ZIP",
+    max_entries: int = CONTAINER_MAX_ENTRIES,
+    max_uncompressed: int = CONTAINER_MAX_UNCOMPRESSED_BYTES,
+) -> List[str]:
+    """Extract every safe member of *source* under *dest_dir*. Returns the paths.
+
+    The resolved target of each member is re-checked to stay under *dest_dir*
+    (defence in depth on top of :func:`is_safe_member`).
+    """
+    container = read_zip_container(
+        source, container_desc=container_desc,
+        max_entries=max_entries, max_uncompressed=max_uncompressed)
+    dest_root = os.path.realpath(dest_dir)
+    os.makedirs(dest_root, exist_ok=True)
+    written: List[str] = []
+    for name, data in container["members"].items():
+        target = os.path.realpath(os.path.join(dest_root, name))
+        if target != dest_root and not target.startswith(dest_root + os.sep):
+            raise ValueError(
+                f"refusing to extract outside destination: {name!r}")
+        os.makedirs(os.path.dirname(target) or dest_root, exist_ok=True)
+        with open(target, "wb") as fh:
+            fh.write(data)
+        written.append(target)
+    return written
 # ===========================================================================
 # HTML report chrome
 # ===========================================================================
@@ -3293,7 +3506,8 @@ def html_apply_collapsible_toc(
 
 STATS_TOC_GROUPS = (
     ("Overview and Findings", (
-        "Analysis Scope", "Evidence Refs", "Analysis Findings", "Trace Metadata",
+        "Analysis Scope", "Evidence Refs", "Analysis Findings",
+        "Trace Health Check", "Investigation", "Trace Metadata",
     )),
     ("CPU and Scheduling", (
         "Core Utilisation", "Trace Health (TICK)", "Core Time Breakdown",
@@ -3323,6 +3537,7 @@ STATS_TOC_GROUPS = (
 STATS_DEFAULT_EXPANDED = (
     "Analysis Scope",
     "Analysis Findings",
+    "Trace Health Check",
     "Core Utilisation (excl. IDLE/TICK)",
     "Trace Health (TICK)",
     "Investigate Anomalies",
@@ -3374,6 +3589,15 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; 
 .findings-list { margin: 8px 0 0 18px; padding: 0; }
 .findings-list li { margin: 8px 0; line-height: 1.45; }
 .analysis-findings { border-left: 4px solid #c0392b; }
+.trace-health { border-left: 4px solid var(--accent); }
+.trace-health-status { font-size: 14px; font-weight: 600; margin: 6px 0 10px; }
+.trace-health-check { margin: 6px 0; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.trace-health-check:last-of-type { border-bottom: 0; }
+.trace-health-check > summary { cursor: pointer; line-height: 1.45; }
+.trace-health-check .finding-meta { margin-left: 16px; }
+.investigation { border-left: 4px solid #7a5cc0; }
+.investigation .finding-meta ul { margin: 4px 0 0 16px; padding: 0; }
+.investigation h3.sub { margin-top: 16px; }
 .finding-cards { display: grid; gap: 10px; }
 .finding-card {
   border: 1px solid var(--line);
@@ -3611,6 +3835,26 @@ def html_diagnostic_kpi_grid(kpis: Sequence[dict]) -> str:
     return f'<section class="kpi-grid">{"".join(parts)}</section>' if parts else ""
 
 
+def _format_measured_values(values) -> str:
+    """``[{name,value,unit,sample_count?}]`` → "Name value unit (n=…)" list.
+
+    Kept separate from finding display text so exports stay reproducible and
+    localizable (Investigation Findings data model).
+    """
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        return ""
+    parts = []
+    for mv in values:
+        if not isinstance(mv, dict) or "name" not in mv or "value" not in mv:
+            continue
+        unit = str(mv.get("unit") or "")
+        chunk = f"{mv['name']} {mv['value']}{unit}".rstrip()
+        if mv.get("sample_count") is not None:
+            chunk += f" (n={mv['sample_count']})"
+        parts.append(chunk)
+    return "; ".join(parts)
+
+
 def html_finding_cards(findings: Sequence[dict], scope_title: str = "") -> str:
     if not findings:
         return ""
@@ -3642,11 +3886,15 @@ def html_finding_cards(findings: Sequence[dict], scope_title: str = "") -> str:
             elif ev:
                 evidence = str(ev)
         conf = str(f.get("confidence") or "").strip()
+        basis = str(f.get("comparison_basis") or "").strip()
+        measured = _format_measured_values(f.get("measured_values"))
         cards.append(
             f'<article class="finding-card {cls}">'
             f'<h3>{_esc(sev.title())} · {_esc(f.get("title") or "Finding")}</h3>'
             f'<p>{_esc(f.get("text") or "")}</p>'
             + (f'<div class="finding-meta"><strong>Impact:</strong> {_esc(impact)}</div>' if impact else "")
+            + (f'<div class="finding-meta"><strong>Measured:</strong> {_esc(measured)}</div>' if measured else "")
+            + (f'<div class="finding-meta"><strong>Basis:</strong> {_esc(basis)}</div>' if basis else "")
             + (f'<div class="finding-meta"><strong>Evidence:</strong> {_esc(evidence)}</div>' if evidence else "")
             + inspect_html
             + (f'<div class="finding-meta"><strong>Confidence:</strong> {_esc(conf)}</div>' if conf else "")
@@ -3659,6 +3907,106 @@ def html_finding_cards(findings: Sequence[dict], scope_title: str = "") -> str:
         "off-CPU gaps, thrashing, deadlines, tick health, and sync. "
         "Exported links open the matching report section; they do not jump back into BTFViewer.</p>"
         f'<div class="finding-cards">{"".join(cards)}</div></section>'
+    )
+
+
+_TRACE_HEALTH_STATUS_META = {
+    "pass": ("finding-ok", "Pass"),
+    "caution": ("sev-warning", "Caution"),
+    "insufficient": ("sev-error", "Insufficient data"),
+}
+
+
+def html_trace_health_card(
+    result: dict,
+    *,
+    format_ns=None,
+    scope_title: str = "",
+) -> str:
+    """Structural Trace Health section (status + per-check detail + limitations).
+
+    Distinct from *Trace Health (TICK)*: this reports whether the parsed event
+    model is internally consistent enough to trust the derived statistics.
+    Keep in sync with ``web/src/utils/statsHtmlReport.js``.
+    """
+    if not result:
+        return ""
+    status = str(result.get("status") or "pass")
+    cls, label = _TRACE_HEALTH_STATUS_META.get(status, ("finding-info", status.title()))
+    checks = list(result.get("checks") or [])
+    n = int(result.get("issue_count") or 0)
+
+    def _fmt(v) -> str:
+        if callable(format_ns):
+            try:
+                return str(format_ns(int(v)))
+            except Exception:
+                return str(v)
+        return str(v)
+
+    rows = []
+    for c in checks:
+        sev = str(c.get("severity") or "info")
+        sev_cls = {"error": "sev-error", "warning": "sev-warning"}.get(sev, "finding-info")
+        meta_bits = []
+        rng = c.get("affected_range")
+        if isinstance(rng, dict) and rng.get("start") is not None:
+            meta_bits.append(
+                f"<strong>Range:</strong> {_esc(_fmt(rng.get('start')))} – "
+                f"{_esc(_fmt(rng.get('end')))}"
+            )
+        ents = [str(e) for e in (c.get("affected_entities") or []) if str(e)]
+        if ents:
+            meta_bits.append(
+                f"<strong>Affected:</strong> {_esc(', '.join(ents[:12]))}"
+            )
+        refs = [str(r) for r in (c.get("evidence_refs") or []) if str(r)]
+        if refs:
+            meta_bits.append(
+                f"<strong>Evidence:</strong> {_esc('; '.join(refs))}"
+            )
+        lims = [str(m) for m in (c.get("metric_limitations") or []) if str(m)]
+        if lims:
+            meta_bits.append(
+                f"<strong>Limited:</strong> {_esc(', '.join(lims))}"
+            )
+        meta_html = "".join(
+            f'<div class="finding-meta">{bit}</div>' for bit in meta_bits
+        )
+        rows.append(
+            f'<details class="trace-health-check {sev_cls}">'
+            f"<summary>{_esc(sev.title())} · {_esc(c.get('summary') or '')}</summary>"
+            f"{meta_html}</details>"
+        )
+
+    if checks:
+        detail = "".join(rows)
+    else:
+        detail = (
+            '<p class="detail-note">No structural inconsistencies found in the '
+            "parsed event model under the current checks.</p>"
+        )
+
+    limitations = [str(m) for m in (result.get("metric_limitations") or []) if str(m)]
+    lim_html = ""
+    if limitations:
+        lis = "".join(f"<li>{_esc(m)}</li>" for m in limitations)
+        lim_html = (
+            '<h3 class="sub">Limited metrics</h3>'
+            '<p class="detail-note">These sections may show <em>Insufficient data</em> '
+            "or a limitation notice instead of a value.</p>"
+            f"<ul>{lis}</ul>"
+        )
+
+    return (
+        '<section class="report-card notes trace-health">'
+        f"<h2>Trace Health Check{_esc(scope_title)}</h2>"
+        '<p class="detail-note">Deterministic structural checks on the parsed '
+        "event model. Independent of AI and of <em>Trace Health (TICK)</em>, "
+        "which only measures tick regularity.</p>"
+        f'<p class="trace-health-status"><span class="{cls}">Status: {_esc(label)}</span>'
+        f" &middot; {n} issue(s)</p>"
+        f"{detail}{lim_html}</section>"
     )
 
 
@@ -3894,6 +4242,178 @@ def _sparkline(vals: Sequence[float], *, width: int = 420, height: int = 48) -> 
     )
 
 
+_BM_TYPE_LABELS = {
+    "observation": "Observation",
+    "hypothesis": "Hypothesis",
+    "supporting": "Supporting evidence",
+    "contradicting": "Contradicting evidence",
+    "verification": "Verification step",
+    "conclusion": "Conclusion",
+}
+_FACT_TYPES = ("observation", "supporting", "verification")
+
+
+def _fmt_ref(ref: dict, format_ns=None) -> str:
+    kind = str(ref.get("kind") or "")
+    if kind == "finding":
+        return f"finding <code>{_esc(ref.get('rule_id') or ref.get('label') or '?')}</code>"
+    if kind == "metric":
+        return f"metric “{_esc(ref.get('metric') or ref.get('label') or '?')}”"
+    if kind == "entity":
+        return f"entity <code>{_esc(ref.get('entity') or ref.get('label') or '?')}</code>"
+    if kind in ("range", "evidence"):
+        rng = ref.get("range") or {}
+        def _f(v):
+            if callable(format_ns):
+                try:
+                    return str(format_ns(int(v)))
+                except Exception:
+                    return str(v)
+            return str(v)
+        if rng.get("start") is not None:
+            return f"range {_esc(_f(rng['start']))} – {_esc(_f(rng['end']))}"
+        if ref.get("time") is not None:
+            return f"time {_esc(_f(ref['time']))}"
+    return _esc(ref.get("label") or kind or "ref")
+
+
+def html_investigation_section(
+    investigation: dict,
+    *,
+    format_ns=None,
+    broken_refs: dict = None,
+    chains: "Sequence[dict]" = None,
+    scope_title: str = "",
+) -> str:
+    """Investigation Bookmarks and Evidence Chain section for the HTML report.
+
+    Facts, hypotheses, contradicting evidence and conclusions are kept in
+    separate blocks; every conclusion lists the bookmarks that back it. Stale
+    references are flagged. Keep in sync with
+    ``web/src/utils/statsHtmlReport.js:htmlInvestigationSection``.
+    """
+    if not investigation:
+        return ""
+    bookmarks = list(investigation.get("bookmarks") or [])
+    if not bookmarks and not str(investigation.get("conclusion") or "").strip():
+        return ""
+
+    broken = broken_refs or {}
+    broken_by_bm: dict = {}
+    for iss in broken.get("issues") or []:
+        broken_by_bm.setdefault(str(iss.get("bookmark_id")), []).append(iss)
+
+    chains_by_id = {
+        str(c.get("conclusion_id")): c for c in (chains or [])
+        if isinstance(c, dict)
+    }
+
+    def _bm_card(b: dict) -> str:
+        bid = str(b.get("id") or "")
+        refs = b.get("refs") or []
+        ref_html = ""
+        if refs:
+            items = "".join(f"<li>{_fmt_ref(r, format_ns)}</li>" for r in refs)
+            ref_html = f'<div class="finding-meta"><strong>References:</strong><ul>{items}</ul></div>'
+        note = str(b.get("note") or "").strip()
+        note_html = f"<p>{_esc(note)}</p>" if note else ""
+        bad = broken_by_bm.get(bid) or []
+        bad_html = ""
+        if bad:
+            reasons = "; ".join(_esc(i.get("reason") or "stale reference") for i in bad)
+            bad_html = f'<div class="finding-meta sev-warning"><strong>Stale:</strong> {reasons}</div>'
+        return (
+            f'<article class="finding-card">'
+            f'<h3>{_esc(_BM_TYPE_LABELS.get(b.get("type"), "Bookmark"))} · {_esc(b.get("title") or "Bookmark")}</h3>'
+            f"{note_html}{ref_html}{bad_html}</article>"
+        )
+
+    def _group(title: str, types) -> str:
+        rows = [_bm_card(b) for b in bookmarks if b.get("type") in types]
+        if not rows:
+            return ""
+        return f'<h3 class="sub">{_esc(title)}</h3><div class="finding-cards">{"".join(rows)}</div>'
+
+    facts = _group("Facts", _FACT_TYPES)
+    hyps = _group("Hypotheses", ("hypothesis",))
+    contra = _group("Contradicting evidence", ("contradicting",))
+
+    # Conclusions + their evidence chains.
+    concl_rows = []
+    for b in bookmarks:
+        if b.get("type") != "conclusion":
+            continue
+        chain = chains_by_id.get(str(b.get("id")))
+        chain_html = ""
+        if chain and chain.get("evidence"):
+            items = "".join(
+                f"<li>{_esc(_BM_TYPE_LABELS.get(e.get('type'), 'Bookmark'))}: {_esc(e.get('title') or e.get('id'))}</li>"
+                for e in chain["evidence"]
+            )
+            chain_html = f'<div class="finding-meta"><strong>Backed by:</strong><ul>{items}</ul></div>'
+        elif chain is not None:
+            chain_html = '<div class="finding-meta sev-warning"><strong>Not grounded:</strong> no linked evidence.</div>'
+        concl_rows.append(
+            f'<article class="finding-card finding-ok">'
+            f'<h3>Conclusion · {_esc(b.get("title") or "Conclusion")}</h3>'
+            + (f"<p>{_esc(b.get('note'))}</p>" if str(b.get("note") or "").strip() else "")
+            + chain_html + "</article>"
+        )
+    free_concl = str(investigation.get("conclusion") or "").strip()
+    if free_concl:
+        concl_rows.append(
+            f'<article class="finding-card finding-ok"><h3>Conclusion</h3>'
+            f"<p>{_esc(free_concl)}</p></article>"
+        )
+    concl_html = (
+        f'<h3 class="sub">Conclusions</h3><div class="finding-cards">{"".join(concl_rows)}</div>'
+        if concl_rows else ""
+    )
+
+    questions = [str(q) for q in (investigation.get("unresolved_questions") or []) if str(q).strip()]
+    q_html = ""
+    if questions:
+        lis = "".join(f"<li>{_esc(q)}</li>" for q in questions)
+        q_html = f'<h3 class="sub">Unresolved questions</h3><ul>{lis}</ul>'
+
+    stale_banner = ""
+    if broken.get("stale_trace"):
+        stale_banner = (
+            '<p class="detail-note sev-warning">The source trace changed since '
+            "these notes were written — references may not line up.</p>"
+        )
+
+    ident = investigation.get("trace_identity") or {}
+    rng = investigation.get("analysis_range") or {}
+    ident_bits = []
+    if ident.get("file"):
+        ident_bits.append(f"Trace: {_esc(ident['file'])}")
+    if isinstance(rng, dict) and rng.get("start") is not None and callable(format_ns):
+        try:
+            ident_bits.append(
+                f"Range: {_esc(str(format_ns(int(rng['start']))))} – "
+                f"{_esc(str(format_ns(int(rng['end']))))}")
+        except Exception:
+            pass
+    ident_html = (
+        f'<p class="detail-note">{" · ".join(ident_bits)}</p>' if ident_bits else ""
+    )
+
+    title = str(investigation.get("title") or "").strip()
+    heading = f"Investigation{_esc(scope_title)}"
+    return (
+        '<section class="report-card notes investigation">'
+        f"<h2>{heading}</h2>"
+        + (f'<p class="detail-note"><strong>{_esc(title)}</strong></p>' if title else "")
+        + '<p class="detail-note">User-authored bookmarks and the evidence chain. '
+        "Facts, hypotheses, contradicting evidence and conclusions are separated; "
+        "notes never change measured values.</p>"
+        + stale_banner + ident_html
+        + facts + hyps + contra + concl_html + q_html
+        + "</section>"
+    )
+
+
 def html_investigate_anomalies(
     *,
     anomalies_table: str,
@@ -4073,63 +4593,22 @@ class SyncIssueRef:
 
 _MAX_TRACE_FILE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB guard vs. memory exhaustion on a huge/adversarial file
 
-# Open dialog / drag-drop accept list (plain + compressed BTF + demo packs).
-# Put *.xtf in the *first* filter: macOS/Qt remember the last selected filter, so
-# a BTF-only default leaves .xtf grayed until the user switches once.
+# Open dialog / drag-drop accept list (plain + compressed BTF + packages).
+# A ``.btfw`` package is both the portable workspace and the shareable demo
+# tour (told apart by its manifest ``kind``). Keep it in the *first* filter:
+# macOS/Qt remember the last selected filter, so a BTF-only default would leave
+# .btfw grayed until the user switches once.
 _BTF_OPEN_FILTER = (
-    "BTF traces and demo packs "
-    "(*.btf *.btf.gz *.btf.bz2 *.btf.zip *.xtf *.xml *.gz *.bz2 *.zip);;"
-    "Demo packs (*.xtf *.xml);;"
+    "BTF traces, workspaces and demo packs "
+    "(*.btf *.btf.gz *.btf.bz2 *.btf.zip *.btfw *.xml *.gz *.bz2 *.zip);;"
+    "Portable workspace / demo pack (*.btfw);;"
+    "Demo script (*.xml);;"
     "All files (*)"
 )
 _BTF_NAME_EXTS = (".btf", ".btf.gz", ".btf.bz2", ".btf.zip", ".gz", ".bz2", ".zip")
 
 # Virtual path for a BTF member inside a zip: ``/path/archive.zip::subdir/a.btf``
 _ZIP_MEMBER_SEP = "::"
-
-
-def is_xtf_open_path(path: str) -> bool:
-    """True if *path* is a shareable demo tour pack (``.xtf`` zip)."""
-    return (path or "").lower().endswith(".xtf")
-
-
-def extract_xtf_pack(path: str, dest_dir: Optional[str] = None) -> Tuple[str, str]:
-    """Extract a ``.xtf`` zip. Returns ``(xml_path, btf_path)`` under *dest_dir*."""
-    import tempfile
-
-    src = os.path.abspath(os.path.expanduser(path))
-    if not os.path.isfile(src):
-        raise FileNotFoundError(src)
-    if not zipfile.is_zipfile(src):
-        raise ValueError(f"not a zip/.xtf archive: {src}")
-    out = dest_dir or tempfile.mkdtemp(prefix="btf_xtf_")
-    os.makedirs(out, exist_ok=True)
-    with zipfile.ZipFile(src, "r") as zf:
-        zf.extractall(out)
-
-    xml_path = ""
-    xmls = []
-    btfs = []
-    for root, _dirs, files in os.walk(out):
-        for name in files:
-            full = os.path.join(root, name)
-            lower = name.lower()
-            if lower.endswith(".xml"):
-                xmls.append(full)
-            elif is_btf_open_path(full) and not lower.endswith(".xtf"):
-                # Prefer real BTF containers over treating nested zips oddly.
-                btfs.append(full)
-    if not xmls:
-        raise ValueError(f"no .xml demo script inside {src}")
-    demoish = [p for p in xmls if "demo" in os.path.basename(p).lower()]
-    xml_path = sorted(demoish or xmls)[0]
-    if not btfs:
-        raise ValueError(f"no .btf / .btf.gz inside {src}")
-    # Prefer the BTF next to the XML when several exist.
-    xml_dir = os.path.dirname(xml_path)
-    same = [p for p in btfs if os.path.dirname(p) == xml_dir]
-    btf_path = sorted(same or btfs)[0]
-    return xml_path, btf_path
 
 
 def is_btf_open_path(path: str) -> bool:
@@ -18920,6 +19399,7 @@ class TimelineView(QGraphicsView):
     bookmark_requested          = Signal(int)   # ns at right-click position
     annotation_requested        = Signal(int)   # ns at right-click position
     explain_region_requested    = Signal()      # explain cursor region with AI
+    add_region_to_investigation_requested = Signal()  # bookmark C1–Cn range in the notebook
     ask_ai_event_requested       = Signal(object)  # {task, core, start, stop, ns}
     clear_bookmarks_requested   = Signal()      # clear all bookmarks
     clear_annotations_requested = Signal()      # clear all annotations
@@ -21585,6 +22065,11 @@ class TimelineView(QGraphicsView):
                 lambda: self.explain_region_requested.emit()
             )
             self._style_ai_menu_action(act_region)
+            menu.addAction(
+                _svg_icon("M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2z", _icon_color),
+                "Add region to investigation",
+                lambda: self.add_region_to_investigation_requested.emit()
+            )
         if self._scene._trace is not None:
             menu.addSeparator()
             # Bookmark icon - flag/ribbon shape
@@ -35505,6 +35990,85 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
 )
 
+# Namespace / prose junk models sometimes glue onto a tool name. ``nextstep:`` is
+# the big one: the model confuses the ``nextstep:{action}`` prose follow-up
+# convention with an actual tool call and emits e.g. ``nextstep:open_statistics``.
+_TOOL_NAME_PREFIX_JUNK: Tuple[str, ...] = (
+    "nextstep:", "next_step:", "next-step:", "nextstep_", "nextstep.",
+    "functions.", "default_api.", "default_api:", "tool:", "tool.", "btftool:",
+    "btf:", "viewer:", "function:", "api.",
+)
+_NEXTSTEP_PREFIXES: Tuple[str, ...] = (
+    "nextstep:", "next_step:", "next-step:", "nextstep_",
+)
+# Common near-miss names, incl. ones safe to accept even from a ``nextstep:`` line.
+_TOOL_NAME_ALIASES: Dict[str, str] = {
+    "open_statistics": AI_TOOL_OPEN_STATS_SECTION,
+    "open_stats": AI_TOOL_OPEN_STATS_SECTION,
+    "open_stats_section": AI_TOOL_OPEN_STATS_SECTION,
+    "open_statistics_section": AI_TOOL_OPEN_STATS_SECTION,
+    "statistics_section": AI_TOOL_OPEN_STATS_SECTION,
+    "stats_section": AI_TOOL_OPEN_STATS_SECTION,
+    "goto_statistics": AI_TOOL_OPEN_STATS_SECTION,
+    "show_statistics": AI_TOOL_OPEN_STATS_SECTION,
+    "open_statistics_page": AI_TOOL_OPEN_STATS_SECTION,
+    "set_cursor": AI_TOOL_SET_CURSORS,
+    "place_cursors": AI_TOOL_SET_CURSORS,
+    "place_cursor": AI_TOOL_SET_CURSORS,
+    "add_cursors": AI_TOOL_SET_CURSORS,
+    "zoom_range": AI_TOOL_ZOOM_TO_RANGE,
+    "zoom_to": AI_TOOL_ZOOM_TO_RANGE,
+    "view_mode": AI_TOOL_SET_VIEW_MODE,
+    "annotate": AI_TOOL_ADD_ANNOTATION,
+    "search": AI_TOOL_SEARCH_TIMELINE,
+}
+
+
+def looks_like_nextstep_pseudo_tool(name: Any) -> bool:
+    """True if *name* is a ``nextstep:{action}`` suggestion mis-sent as a tool."""
+    n = str(name or "").strip().lower().replace(" ", "")
+    return n.startswith(_NEXTSTEP_PREFIXES)
+
+
+def canonical_tool_name(name: Any) -> str:
+    """Best-effort map a model-emitted tool name onto a real one.
+
+    Strips namespace / ``nextstep:`` junk and normalises separators, then matches
+    exactly or via a small alias table. For an ordinary namespaced name it also
+    accepts a unique prefix (``open_statistics`` → ``open_statistics_section``);
+    a ``nextstep:{action}`` pseudo-call is resolved only by exact / alias match
+    (it is prose by convention), so an unrelated one stays unresolved and is
+    dropped rather than mis-routed. Returns the cleaned name unchanged when
+    nothing resolves.
+    """
+    n = str(name or "").strip()
+    if not n:
+        return ""
+    low = n.lower()
+    from_nextstep = False
+    for pre in _TOOL_NAME_PREFIX_JUNK:
+        if low.startswith(pre):
+            from_nextstep = pre in _NEXTSTEP_PREFIXES
+            n = n[len(pre):].strip().lstrip(":._-/ ").strip()
+            break
+    n = re.sub(r"[\s\-]+", "_", n).strip("_")  # tool names are snake_case
+    low = n.lower()
+    if n in AI_VIEWER_TOOL_NAMES:
+        return n
+    if low in AI_VIEWER_TOOL_NAMES:
+        return low
+    if low in _TOOL_NAME_ALIASES:
+        return _TOOL_NAME_ALIASES[low]
+    if low and not from_nextstep:
+        matches = {
+            t for t in AI_VIEWER_TOOL_NAMES
+            if t == low or t.startswith(low) or low.startswith(t)
+        }
+        if len(matches) == 1:
+            return next(iter(matches))
+    return n
+
+
 AI_BOOKMARK_KINDS: Tuple[str, ...] = (
     "root_cause", "evidence", "correlated", "reference",
 )
@@ -37297,7 +37861,7 @@ def ensure_gemini_thought_signatures(
     return out
 
 
-def _tool_call_name(obj: Any) -> str:
+def _raw_tool_call_name(obj: Any) -> str:
     """Function name from OpenAI / Gemini OpenAI-compat / extra_content shapes."""
     if not isinstance(obj, dict):
         return ""
@@ -37325,6 +37889,12 @@ def _tool_call_name(obj: Any) -> str:
             if name:
                 return name
     return ""
+
+
+def _tool_call_name(obj: Any) -> str:
+    """Canonical tool name (namespace / ``nextstep:`` junk stripped, near-misses
+    mapped) — the name every downstream consumer should see."""
+    return canonical_tool_name(_raw_tool_call_name(obj))
 
 
 def _tool_call_id(obj: Any, index: int) -> str:
@@ -37364,9 +37934,13 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
             if not isinstance(call, dict):
                 continue
             fn = call.get("function") if isinstance(call.get("function"), dict) else {}
-            name = _tool_call_name(call)
+            raw_name = _raw_tool_call_name(call)
+            name = canonical_tool_name(raw_name)
             if not name:
                 continue
+            if (name not in AI_VIEWER_TOOL_NAMES
+                    and looks_like_nextstep_pseudo_tool(raw_name)):
+                continue  # a "nextstep:{action}" suggestion mis-sent as a tool
             args = parse_tool_arguments(
                 fn.get("arguments",
                        call.get("arguments", call.get("args", call.get("input"))))
@@ -37379,12 +37953,18 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
             ))
     legacy = message.get("function_call")
     if isinstance(legacy, dict) and legacy.get("name"):
-        out.append(_extracted_tool_call(
-            cid=str(legacy.get("id") or "call_0"),
-            name=str(legacy["name"]).strip(),
-            arguments=parse_tool_arguments(legacy.get("arguments")),
-            signature=thought_signature_from_obj(legacy),
-        ))
+        legacy_raw = str(legacy["name"]).strip()
+        legacy_name = canonical_tool_name(legacy_raw)
+        if legacy_name and not (
+            legacy_name not in AI_VIEWER_TOOL_NAMES
+            and looks_like_nextstep_pseudo_tool(legacy_raw)
+        ):
+            out.append(_extracted_tool_call(
+                cid=str(legacy.get("id") or "call_0"),
+                name=legacy_name,
+                arguments=parse_tool_arguments(legacy.get("arguments")),
+                signature=thought_signature_from_obj(legacy),
+            ))
     # Anthropic-style / Gemini parts mixed into content.
     content = message.get("content")
     if isinstance(content, list):
@@ -37403,8 +37983,12 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
                 and not (isinstance(nested, dict) and nested.get("name"))
             ):
                 continue
-            name = _tool_call_name(part)
+            part_raw = _raw_tool_call_name(part)
+            name = canonical_tool_name(part_raw)
             if not name:
+                continue
+            if (name not in AI_VIEWER_TOOL_NAMES
+                    and looks_like_nextstep_pseudo_tool(part_raw)):
                 continue
             nested_args = nested if isinstance(nested, dict) else {}
             args = parse_tool_arguments(
@@ -37482,6 +38066,7 @@ def _tool_call_from_obj(obj: Any, idx: int) -> Optional[Dict[str, Any]]:
                 k: v for k, v in obj.items()
                 if k not in ("name", "tool", "function", "id", "type")
             }
+    name = canonical_tool_name(name)
     if name not in AI_VIEWER_TOOL_NAMES:
         return None
     ok, err = validate_tool_call(name, args)
@@ -37852,6 +38437,10 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         section = str(a.get("section") or a.get("section_id") or "").strip()
         if not section:
             return None, "section must be a non-empty Statistics section id or title"
+        # AI often passes the header *title* ("Ready-Gap (Starvation)") or a
+        # loose spelling; resolve to the canonical id so it actually expands.
+        resolve_stats_section_id = globals().get("resolve_stats_section_id")
+        section = resolve_stats_section_id(section) or section
         return {"section": section}, ""
     if name == AI_TOOL_ADD_ANNOTATION:
         t = _as_scalar_float(a.get("time"))
@@ -38373,7 +38962,10 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         return "Open corridor inspector"
     if name == AI_TOOL_OPEN_STATS_SECTION:
         sec = str(a.get("section") or a.get("section_id") or "").strip() or "section"
-        return f"Open Statistics: {sec}"
+        resolve_stats_section_id = globals().get("resolve_stats_section_id")
+        stats_section_title = globals().get("stats_section_title")
+        sid = resolve_stats_section_id(sec)
+        return f"Open Statistics: {stats_section_title(sid) if sid else sec}"
     if name == AI_TOOL_ADD_ANNOTATION:
         note = str(a.get("note") or "").strip() or "annotation"
         try:
@@ -49392,18 +49984,14 @@ def create_ai_assistant_panel(
             except Exception:
                 pass
 
-        def _restore_investigation_session(self) -> None:
-            if not get_settings:
-                return
-            try:
-                cfg = get_settings() or {}
-            except Exception:
-                return
-            parsed = parse_investigation_session(cfg.get("investigation_session"))
-            msgs = parsed.get("messages") or []
+        def _apply_investigation_session(self, parsed: Dict[str, Any]) -> bool:
+            """Apply a parsed investigation session (payload + plan + chat).
+            Returns True if it carried a real chat. Shared by localStorage
+            restore and .btfw workspace restore."""
+            msgs = (parsed or {}).get("messages") or []
             if not investigation_session_has_chat(msgs):
                 self._refresh_guide_ui()
-                return
+                return False
             if parsed.get("payload"):
                 self._evidence_payload = parsed["payload"]
             if parsed.get("plan"):
@@ -49419,6 +50007,38 @@ def create_ai_assistant_panel(
                     self._refresh_log()
             self._refresh_guide_ui()
             self._refresh_intent_landing()
+            return True
+
+        def _restore_investigation_session(self) -> None:
+            if not get_settings:
+                return
+            try:
+                cfg = get_settings() or {}
+            except Exception:
+                return
+            self._apply_investigation_session(
+                parse_investigation_session(cfg.get("investigation_session")))
+
+        def workspace_ai_case(self) -> Optional[Dict[str, Any]]:
+            """The AI investigation session as a JSON-serialisable dict for a
+            ``.btfw`` workspace, or None when there is no chat yet."""
+            try:
+                blob = self._investigation_session_blob()
+                parsed = parse_investigation_session(blob)
+                if not investigation_session_has_chat(parsed.get("messages") or []):
+                    return None
+                return json.loads(blob)
+            except Exception:
+                return None
+
+        def restore_workspace_ai_case(self, data: Any) -> bool:
+            """Restore the AI investigation session from a ``.btfw`` workspace."""
+            try:
+                blob = data if isinstance(data, str) else json.dumps(data)
+                return self._apply_investigation_session(
+                    parse_investigation_session(blob))
+            except Exception:
+                return False
 
         def _refresh_guide_ui(self) -> None:
             # Keep the header mode/scope chips fresh (runs after every turn,
@@ -49896,7 +50516,11 @@ def create_ai_assistant_panel(
             for c in calls:
                 if not isinstance(c, dict):
                     continue
-                name = str(c.get("name") or "")
+                raw_name = str(c.get("name") or "")
+                name = canonical_tool_name(raw_name)
+                if (name not in AI_VIEWER_TOOL_NAMES
+                        and looks_like_nextstep_pseudo_tool(raw_name)):
+                    continue  # "nextstep:{action}" prose mis-sent as a tool call
                 args = c.get("arguments") if isinstance(c.get("arguments"), dict) else {}
                 ok_args, err = validate_tool_call(name, args)
                 tools_norm.append({
@@ -55383,6 +56007,2099 @@ def format_triage_audit_text(
             lines.append(f"  - {_title(fid)} (id={fid}): {reason}")
         lines.append("")
     return "\n".join(lines).rstrip()
+# ===========================================================================
+# investigation_findings
+# ===========================================================================
+
+# Empty-state wording — the spec is explicit: "No findings under the current
+# rules", never "No problems".
+NO_FINDINGS_UNDER_RULES = "No findings under the current rules"
+
+FINDING_STATUS_NEW = "new"
+FINDING_STATUS_REVIEWED = "reviewed"
+FINDING_STATUS_BOOKMARKED = "bookmarked"
+FINDING_STATUS_DISMISSED = "dismissed"
+FINDING_STATUSES = (
+    FINDING_STATUS_NEW,
+    FINDING_STATUS_REVIEWED,
+    FINDING_STATUS_BOOKMARKED,
+    FINDING_STATUS_DISMISSED,
+)
+
+_QUEUE_TO_STATUS = {
+    QUEUE_DONE: FINDING_STATUS_REVIEWED,
+    QUEUE_CASE: FINDING_STATUS_BOOKMARKED,
+    QUEUE_DISMISSED: FINDING_STATUS_DISMISSED,
+}
+
+_SEVERITY_WEIGHT = {"error": 1.0, "warning": 0.66, "info": 0.33, "ask": 0.15}
+_EVIDENCE_QUALITY = {"direct": 1.0, "derived": 0.6, "estimated": 0.3, "configured": 0.6}
+_MAGNITUDE_BY_SEVERITY = {"error": 0.85, "warning": 0.55, "info": 0.25, "ask": 0.15}
+
+# Ranking blend. Severity dominates; the rest break ties and float bounded
+# observations up. Weights sum to 1.
+_W_SEVERITY = 0.50
+_W_MAGNITUDE = 0.25
+_W_DURATION = 0.15
+_W_EVIDENCE = 0.10
+
+# A range covering this fraction of the analysed span earns full duration weight.
+_DURATION_FULL_FRACTION = 0.25
+
+_CORE_RE = re.compile(r"\bCore[_ ]?\d+\b", re.I)
+_UNIT = r"(?P<unit>%|ns|µs|us|μs|ms|s)?"
+# Two conservative forms only:
+#   1. explicit "key=value" / "key: value"  (key is a short token, no spaces/parens)
+#   2. a whitelisted label followed by a number ("Max 10us", "CV 4.2%", "n 42")
+_MEASURE_RE = re.compile(
+    r"(?:(?P<n1>[A-Za-zµσ][\w./%-]{0,23})\s*[=:]\s*(?P<v1>-?\d+(?:\.\d+)?)\s*" + _UNIT + r")"
+    r"|(?:\b(?P<n2>Max|Min|Avg|Mean|Median|CV|G|σ|n|p50|p95|p99|Count|Migr|"
+    r"Rate|Score|Dwell|Ping|missed|Gap)\s+(?P<v2>-?\d+(?:\.\d+)?)\s*" + _UNIT.replace("unit", "unit2") + r")"
+)
+_UNIT_CANON = {"us": "µs", "μs": "µs", "µs": "µs"}
+
+
+class RuleSpec:  # lightweight; a plain dict would do but this documents the shape
+    __slots__ = ("rule_id", "severity", "category", "observation_kind",
+                 "comparison_basis", "metric")
+
+    def __init__(self, rule_id, severity, category, observation_kind,
+                 comparison_basis, metric):
+        self.rule_id = rule_id
+        self.severity = severity
+        self.category = category
+        self.observation_kind = observation_kind
+        self.comparison_basis = comparison_basis
+        self.metric = metric
+
+    def as_dict(self) -> Dict[str, str]:
+        return {
+            "rule_id": self.rule_id,
+            "severity": self.severity,
+            "category": self.category,
+            "observation_kind": self.observation_kind,
+            "comparison_basis": self.comparison_basis,
+            "metric": self.metric,
+        }
+
+
+def _spec(*args) -> RuleSpec:
+    return RuleSpec(*args)
+
+
+# The deterministic rule interface: every rule_id the Analysis Findings engine
+# can emit, with a stable comparison basis and target metric. Producers attach
+# ``rule_id`` to their findings; consumers look the rest up here.
+RULE_CATALOG: Dict[str, RuleSpec] = {
+    r.rule_id: r for r in (
+        _spec("load_imbalance", "warning", "load", "load_spike",
+              "Gini of per-core utilisation vs even distribution",
+              "Core Utilisation (excl. IDLE/TICK)"),
+        _spec("load_balance_ok", "info", "load", "load_spike",
+              "Gini of per-core utilisation vs even distribution",
+              "Core Utilisation (excl. IDLE/TICK)"),
+        _spec("load_balance_moderate", "info", "load", "load_spike",
+              "Gini of per-core utilisation vs even distribution",
+              "Core Utilisation (excl. IDLE/TICK)"),
+        _spec("top_cpu", "info", "execution", "execution_time_high",
+              "share of active CPU time in scope",
+              "Top Tasks by CPU (excl. IDLE/TICK)"),
+        _spec("exec_max", "info", "execution", "execution_time_high",
+              "observed slice maxima (not proven WCET)",
+              "Execution Time Per Slice"),
+        _spec("wcet_anomaly", "warning", "execution", "execution_time_high",
+              "slice Max vs the entity's own average",
+              "Execution Time Per Slice"),
+        _spec("exec_p95_exceeded", "warning", "execution", "execution_time_high",
+              "slice duration vs the entity's p95",
+              "Execution Time Per Slice"),
+        _spec("blocking", "info", "blocking", "latency_outlier",
+              "off-CPU gap count and Max vs peers",
+              "Off-CPU Time (Blocking Time)"),
+        _spec("wakeup_latency_outlier", "warning", "dispatch", "latency_outlier",
+              "ready-to-run delay vs the entity's p95",
+              "Dispatch / Scheduling Latency"),
+        _spec("priority_inversion", "warning", "blocking", "latency_outlier",
+              "L/M/H priority pattern around a held mutex",
+              "Priority Inheritance"),
+        _spec("thrashing", "warning", "migration", "migration_frequent",
+              "migration rate / dwell / ping-pong vs heuristic thresholds",
+              "Core Migrations"),
+        _spec("hot_pairs", "warning", "migration", "migration_frequent",
+              "directed core-pair traffic and lock-bounce share",
+              "Core-Pair Migration Summary"),
+        _spec("migration_burst_anomaly", "warning", "migration", "load_spike",
+              "migration rate in a window vs the trace mean",
+              "Core Migrations"),
+        _spec("period_instability", "warning", "jitter", "period_instability",
+              "inter-arrival CV and missed/extra activations vs nominal period",
+              "Period / Jitter"),
+        _spec("deadlines", "error", "deadline", "execution_time_high",
+              "measured slice / CPU budget vs the configured limit",
+              "Deadlines / CPU budget"),
+        _spec("tick_health", "warning", "health", "period_instability",
+              "TICK interval CV and large gaps vs the nominal period",
+              "Trace Health (TICK)"),
+        _spec("missed_ticks", "warning", "health", "long_gap",
+              "large TICK gaps vs the nominal period",
+              "Trace Health (TICK)"),
+        _spec("long_gap", "info", "general", "long_gap",
+              "longest unscheduled interval vs the analysed span",
+              "Scheduling Load Over Time"),
+        _spec("sync_bounce", "warning", "sync", "migration_frequent",
+              "sync-object core bounces vs zero",
+              "Mutex / Semaphore"),
+        _spec("sync_issues", "warning", "sync", "missing_evidence",
+              "unpaired take/give STI events vs zero",
+              "Mutex / Semaphore"),
+        _spec("baseline_regression", "warning", "general", "regression",
+              "current metric vs the saved baseline value",
+              "Trace Compare"),
+        _spec("missing_evidence", "info", "general", "missing_evidence",
+              "event types required by the metric vs what the trace contains",
+              "Trace Health Check"),
+        _spec("none", "info", "general", "missing_evidence",
+              "no rule produced a finding in scope", "Analysis Findings"),
+    )
+}
+
+RULE_IDS = tuple(RULE_CATALOG.keys())
+
+
+def rule_spec(rule_id: str) -> Optional[RuleSpec]:
+    return RULE_CATALOG.get(str(rule_id or "").strip())
+
+
+# ---------------------------------------------------------------------------
+# Measured-value extraction
+# ---------------------------------------------------------------------------
+def _canon_unit(u: Optional[str]) -> str:
+    if not u:
+        return ""
+    return _UNIT_CANON.get(u, u)
+
+
+def parse_measured_values(text: str) -> List[Dict[str, Any]]:
+    """Best-effort ``{name, value, unit}`` list from an evidence string.
+
+    Deterministic: same string always yields the same list. Used only as a
+    fallback when a rule did not attach structured ``measured_values``.
+    """
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for m in _MEASURE_RE.finditer(str(text or "")):
+        name = (m.group("n1") or m.group("n2") or "").strip(" .:=-") or "value"
+        raw = m.group("v1") or m.group("v2")
+        unit = _canon_unit(m.group("unit") or m.group("unit2"))
+        try:
+            value: Any = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if value.is_integer():
+            value = int(value)
+        key = (name.lower(), value, unit)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": name, "value": value, "unit": unit})
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _normalize_measured_values(raw: Any, fallback_text: str) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        for mv in raw:
+            if not isinstance(mv, dict):
+                continue
+            if "name" not in mv or "value" not in mv:
+                continue
+            item = {
+                "name": str(mv["name"]),
+                "value": mv["value"],
+                "unit": _canon_unit(str(mv.get("unit") or "")) or "",
+            }
+            if mv.get("sample_count") is not None:
+                try:
+                    item["sample_count"] = int(mv["sample_count"])
+                except (TypeError, ValueError):
+                    pass
+            if mv.get("threshold") is not None:
+                item["threshold"] = mv["threshold"]
+            items.append(item)
+    if items:
+        return items
+    return parse_measured_values(fallback_text)
+
+
+# ---------------------------------------------------------------------------
+# Entities / range / evidence
+# ---------------------------------------------------------------------------
+def _entities(raw: Dict[str, Any]) -> List[str]:
+    ents = raw.get("entities")
+    out: List[str] = []
+    if isinstance(ents, Sequence) and not isinstance(ents, (str, bytes)):
+        out = [str(e).strip() for e in ents if str(e).strip()]
+    if not out:
+        task = str(raw.get("task") or "").strip()
+        if task:
+            out.append(task)
+    if not out:
+        blob = f"{raw.get('title') or ''} {raw.get('text') or ''} {raw.get('evidence_text') or ''}"
+        for m in _CORE_RE.finditer(blob):
+            tok = m.group(0).replace(" ", "_")
+            if tok not in out:
+                out.append(tok)
+    # Preserve first-seen order, drop dups.
+    seen: set = set()
+    uniq: List[str] = []
+    for e in out:
+        if e not in seen:
+            seen.add(e)
+            uniq.append(e)
+    return uniq
+
+
+def _evidence_refs(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+    refs: List[Dict[str, Any]] = []
+    for ev in raw.get("evidence") or []:
+        if isinstance(ev, dict):
+            label = str(ev.get("label") or ev.get("text") or "evidence")
+            t = ev.get("time")
+            if t is None:
+                for k in ("start", "ns", "stop"):
+                    if ev.get(k) is not None:
+                        t = ev.get(k)
+                        break
+            ref: Dict[str, Any] = {"label": label}
+            if t is not None:
+                try:
+                    ref["time"] = int(float(t))
+                except (TypeError, ValueError):
+                    pass
+            refs.append(ref)
+        elif ev:
+            refs.append({"label": str(ev)})
+    return refs
+
+
+def _affected_range(raw: Dict[str, Any], refs: List[Dict[str, Any]]) -> Optional[Dict[str, int]]:
+    rng = raw.get("affected_range")
+    if isinstance(rng, dict) and rng.get("start") is not None and rng.get("end") is not None:
+        try:
+            return {"start": int(rng["start"]), "end": int(rng["end"])}
+        except (TypeError, ValueError):
+            pass
+    times = sorted(r["time"] for r in refs if "time" in r)
+    if not times:
+        return None
+    return {"start": int(times[0]), "end": int(times[-1])}
+
+
+def _limitations(raw: Dict[str, Any]) -> List[str]:
+    lims = raw.get("limitations")
+    if isinstance(lims, Sequence) and not isinstance(lims, (str, bytes)):
+        out = [str(x).strip() for x in lims if str(x).strip()]
+        if out:
+            return out
+    conf = str(raw.get("confidence") or "").strip()
+    low = conf.lower()
+    if low.startswith(("low", "medium")) or "heuristic" in low or "estimate" in low:
+        return [f"Confidence: {conf}"] if conf else ["Heuristic — verify on the timeline."]
+    return []
+
+
+def _status(raw: Dict[str, Any], fid: str, triage_state: Optional[Dict[str, Any]]) -> str:
+    if triage_state is not None and fid:
+        q = finding_queue_status(fid, triage_state)
+        return _QUEUE_TO_STATUS.get(q, FINDING_STATUS_NEW)
+    st = str(raw.get("status") or "").strip().lower()
+    return st if st in FINDING_STATUSES else FINDING_STATUS_NEW
+
+
+# ---------------------------------------------------------------------------
+# Normalisation
+# ---------------------------------------------------------------------------
+def normalize_investigation_finding(
+    raw: Dict[str, Any],
+    *,
+    triage_state: Optional[Dict[str, Any]] = None,
+    total_span_ns: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Upgrade a loose finding dict to the canonical ``InvestigationFinding``.
+
+    Original keys are preserved (spread first) so existing consumers keep
+    working; the canonical keys are then set/overwritten.
+    """
+    raw = dict(raw or {})
+    fid = str(raw.get("id") or "").strip()
+    rule_id = str(raw.get("rule_id") or raw.get("fid") or fid or "").strip()
+    if rule_id and rule_id not in RULE_CATALOG:
+        # Ids are slugged per-report ("thrashing-2"); fold the numeric suffix.
+        base = re.sub(r"-\d+$", "", rule_id)
+        if base in RULE_CATALOG:
+            rule_id = base
+    spec = RULE_CATALOG.get(rule_id)
+
+    severity = str(raw.get("severity") or (spec.severity if spec else "info")).lower()
+    observation = str(
+        raw.get("observation") or raw.get("text") or raw.get("title") or ""
+    ).strip()
+    fallback_text = f"{raw.get('evidence_text') or ''} {raw.get('text') or ''}"
+    refs = _evidence_refs(raw)
+    rng = _affected_range(raw, refs)
+    ev_strength = str(
+        raw.get("evidence_strength") or finding_evidence_strength(raw)
+    ).lower()
+
+    out = {
+        **raw,
+        "id": fid or rule_id,
+        "rule_id": rule_id or "general",
+        "severity": severity,
+        "observation": observation,
+        "affected_range": rng,
+        "entities": _entities(raw),
+        "measured_values": _normalize_measured_values(
+            raw.get("measured_values"), fallback_text),
+        "comparison_basis": str(
+            raw.get("comparison_basis")
+            or (spec.comparison_basis if spec else "")
+        ),
+        "evidence_refs": refs,
+        "limitations": _limitations(raw),
+        "status": _status(raw, fid, triage_state),
+        "category": str(raw.get("category") or (spec.category if spec else finding_category(raw))),
+        "observation_kind": str(
+            raw.get("observation_kind") or (spec.observation_kind if spec else "general")
+        ),
+        "evidence_strength": ev_strength,
+    }
+    out["rank_score"] = _rank_score(out, total_span_ns)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Ranking
+# ---------------------------------------------------------------------------
+def _magnitude(finding: Dict[str, Any]) -> float:
+    base = _MAGNITUDE_BY_SEVERITY.get(str(finding.get("severity") or "info"), 0.25)
+    for mv in finding.get("measured_values") or []:
+        name = str(mv.get("name") or "").lower()
+        if name in ("ratio", "excess", "ratio_over_avg", "over"):
+            try:
+                return max(0.0, min(1.0, float(mv["value"]) / 10.0))
+            except (TypeError, ValueError, KeyError):
+                pass
+        if mv.get("threshold") not in (None, 0):
+            try:
+                r = abs(float(mv["value"]) / float(mv["threshold"]))
+                # A structured threshold refines magnitude but never sinks a
+                # finding far below its same-severity peers.
+                return max(0.5 * base, min(1.0, (r - 1.0)))
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+    n_ev = len(finding.get("evidence_refs") or [])
+    return min(1.0, base + min(0.10, 0.02 * n_ev))
+
+
+def _duration_norm(finding: Dict[str, Any], total_span_ns: Optional[int]) -> float:
+    rng = finding.get("affected_range")
+    if not (isinstance(rng, dict) and total_span_ns and total_span_ns > 0):
+        return 0.0
+    try:
+        span = max(0, int(rng["end"]) - int(rng["start"]))
+    except (TypeError, ValueError, KeyError):
+        return 0.0
+    frac = span / float(total_span_ns)
+    return max(0.0, min(1.0, frac / _DURATION_FULL_FRACTION))
+
+
+def _rank_score(finding: Dict[str, Any], total_span_ns: Optional[int]) -> float:
+    sev = _SEVERITY_WEIGHT.get(str(finding.get("severity") or "info"), 0.33)
+    mag = _magnitude(finding)
+    dur = _duration_norm(finding, total_span_ns)
+    evq = _EVIDENCE_QUALITY.get(str(finding.get("evidence_strength") or "estimated"), 0.3)
+    score = (_W_SEVERITY * sev + _W_MAGNITUDE * mag
+             + _W_DURATION * dur + _W_EVIDENCE * evq)
+    return round(score, 6)
+
+
+def rank_investigation_findings(
+    findings: Sequence[Dict[str, Any]],
+    *,
+    total_span_ns: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Sort by composite rank (desc), then id (asc) for a stable order."""
+    items = []
+    for f in findings or []:
+        if not isinstance(f, dict):
+            continue
+        g = dict(f)
+        g["rank_score"] = _rank_score(g, total_span_ns)
+        items.append(g)
+    items.sort(key=lambda f: (-float(f.get("rank_score") or 0.0), str(f.get("id") or "")))
+    return items
+
+
+# ---------------------------------------------------------------------------
+# Deduplication
+# ---------------------------------------------------------------------------
+_SEV_RANK = {"error": 3, "warning": 2, "info": 1, "ask": 0}
+
+
+def _ranges_overlap(a: Optional[Dict[str, int]], b: Optional[Dict[str, int]]) -> bool:
+    if a is None or b is None:
+        return True  # a rule+entity match with no range on either side = same signal
+    return int(a["start"]) <= int(b["end"]) and int(b["start"]) <= int(a["end"])
+
+
+def _entities_intersect(a: Sequence[str], b: Sequence[str]) -> bool:
+    if not a or not b:
+        return not a and not b
+    return bool(set(a) & set(b))
+
+
+def _merge_pair(keep: Dict[str, Any], drop: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(keep)
+    out["entities"] = sorted(set(keep.get("entities") or []) | set(drop.get("entities") or []))
+    a, b = keep.get("affected_range"), drop.get("affected_range")
+    if a and b:
+        out["affected_range"] = {
+            "start": min(int(a["start"]), int(b["start"])),
+            "end": max(int(a["end"]), int(b["end"])),
+        }
+    elif b and not a:
+        out["affected_range"] = b
+    seen = {(r.get("label"), r.get("time")) for r in keep.get("evidence_refs") or []}
+    merged_refs = list(keep.get("evidence_refs") or [])
+    for r in drop.get("evidence_refs") or []:
+        k = (r.get("label"), r.get("time"))
+        if k not in seen:
+            seen.add(k)
+            merged_refs.append(r)
+    out["evidence_refs"] = merged_refs
+    out["merged_count"] = int(keep.get("merged_count") or 1) + int(drop.get("merged_count") or 1)
+    return out
+
+
+def _prefer(a: Dict[str, Any], b: Dict[str, Any]) -> tuple:
+    """Sort key: the finding that should survive a merge sorts first."""
+    return (
+        -_SEV_RANK.get(str(a.get("severity") or "info"), 1),
+        -float(a.get("rank_score") or 0.0),
+        -len(a.get("evidence_refs") or []),
+        str(a.get("id") or ""),
+    )
+
+
+def dedupe_investigation_findings(
+    findings: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Collapse findings with the same ``rule_id`` + intersecting entities +
+    overlapping ``affected_range`` into one, keeping the strongest.
+
+    Deterministic: input is stably pre-sorted, survivors keep input order.
+    """
+    items = [dict(f) for f in (findings or []) if isinstance(f, dict)]
+    # Stable base order so the survivor pick and output order are reproducible.
+    items.sort(key=lambda f: (str(f.get("rule_id") or ""), str(f.get("id") or "")))
+
+    survivors: List[Dict[str, Any]] = []
+    for f in items:
+        rid = str(f.get("rule_id") or "")
+        merged = False
+        for i, s in enumerate(survivors):
+            if str(s.get("rule_id") or "") != rid:
+                continue
+            if not _entities_intersect(f.get("entities") or [], s.get("entities") or []):
+                continue
+            if not _ranges_overlap(s.get("affected_range"), f.get("affected_range")):
+                continue
+            keep, drop = (s, f) if _prefer(s, f) <= _prefer(f, s) else (f, s)
+            survivors[i] = _merge_pair(keep, drop)
+            merged = True
+            break
+        if not merged:
+            survivors.append(dict(f, merged_count=int(f.get("merged_count") or 1)))
+    return survivors
+
+
+# ---------------------------------------------------------------------------
+# Pipeline
+# ---------------------------------------------------------------------------
+def build_investigation_findings(
+    raw_findings: Sequence[Dict[str, Any]],
+    *,
+    triage_state: Optional[Dict[str, Any]] = None,
+    total_span_ns: Optional[int] = None,
+    dedupe: bool = True,
+) -> List[Dict[str, Any]]:
+    """normalise → (dedupe) → rank. Returns canonical InvestigationFindings."""
+    norm = [
+        normalize_investigation_finding(
+            f, triage_state=triage_state, total_span_ns=total_span_ns)
+        for f in (raw_findings or [])
+        if isinstance(f, dict)
+    ]
+    if dedupe:
+        norm = dedupe_investigation_findings(norm)
+    return rank_investigation_findings(norm, total_span_ns=total_span_ns)
+
+
+def investigation_finding_export(finding: Dict[str, Any]) -> Dict[str, Any]:
+    """Trim a normalised finding to the fields worth serialising in reports."""
+    return {
+        "id": finding.get("id") or "",
+        "rule_id": finding.get("rule_id") or "general",
+        "severity": finding.get("severity") or "info",
+        "status": finding.get("status") or FINDING_STATUS_NEW,
+        "observation": finding.get("observation") or "",
+        "category": finding.get("category") or "general",
+        "comparison_basis": finding.get("comparison_basis") or "",
+        "affected_range": finding.get("affected_range"),
+        "entities": list(finding.get("entities") or []),
+        "measured_values": list(finding.get("measured_values") or []),
+        "evidence_refs": list(finding.get("evidence_refs") or []),
+        "limitations": list(finding.get("limitations") or []),
+        "rank_score": finding.get("rank_score"),
+    }
+# ===========================================================================
+# investigation_notebook
+# ===========================================================================
+
+INVESTIGATION_SCHEMA = "btf-viewer-investigation/1"
+
+# --- Bookmark types --------------------------------------------------------
+BM_OBSERVATION = "observation"
+BM_HYPOTHESIS = "hypothesis"
+BM_SUPPORTING = "supporting"
+BM_CONTRADICTING = "contradicting"
+BM_VERIFICATION = "verification"
+BM_CONCLUSION = "conclusion"
+BOOKMARK_TYPES = (
+    BM_OBSERVATION, BM_HYPOTHESIS, BM_SUPPORTING,
+    BM_CONTRADICTING, BM_VERIFICATION, BM_CONCLUSION,
+)
+BOOKMARK_TYPE_LABELS = {
+    BM_OBSERVATION: "Observation",
+    BM_HYPOTHESIS: "Hypothesis",
+    BM_SUPPORTING: "Supporting evidence",
+    BM_CONTRADICTING: "Contradicting evidence",
+    BM_VERIFICATION: "Verification step",
+    BM_CONCLUSION: "Conclusion",
+}
+# For the "clearly separate facts, hypotheses, contradictory evidence and
+# conclusions" requirement of the HTML export.
+FACT_TYPES = (BM_OBSERVATION, BM_SUPPORTING, BM_VERIFICATION)
+INTERPRETATION_TYPES = (BM_HYPOTHESIS, BM_CONCLUSION)
+
+# --- Reference kinds -----------------------------------------------------
+REF_FINDING = "finding"
+REF_METRIC = "metric"
+REF_ENTITY = "entity"
+REF_RANGE = "range"
+REF_EVIDENCE = "evidence"
+REF_KINDS = (REF_FINDING, REF_METRIC, REF_ENTITY, REF_RANGE, REF_EVIDENCE)
+
+# --- Link relations ----------------------------------------------------
+LINK_RELATIONS = ("supports", "contradicts", "verifies", "concludes", "relates")
+# Which link relations a reviewer follows backwards from a conclusion to reach
+# its evidence.
+_CHAIN_RELATIONS = ("supports", "verifies", "contradicts", "concludes", "relates")
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _slug(text: str, used: set, prefix: str = "bm") -> str:
+    base = _SLUG_RE.sub("-", str(text or "").lower()).strip("-")[:40] or prefix
+    cand = base
+    n = 2
+    while cand in used:
+        cand = f"{base}-{n}"
+        n += 1
+    used.add(cand)
+    return cand
+
+
+# ---------------------------------------------------------------------------
+# Trace identity
+# ---------------------------------------------------------------------------
+def trace_identity(trace: Any, filename: str = "") -> Dict[str, Any]:
+    """Stable fingerprint of a parsed trace for broken-reference detection."""
+    if trace is None:
+        return {"file": str(filename or ""), "hash": "", "time_scale": "",
+                "event_count": 0, "span": None}
+    segs = list(getattr(trace, "segments", None) or [])
+    sti = list(getattr(trace, "sti_events", None) or [])
+    t_min = getattr(trace, "time_min", None)
+    t_max = getattr(trace, "time_max", None)
+    h = hashlib.sha256()
+    h.update(str(getattr(trace, "time_scale", "")).encode())
+    h.update(f"|{t_min}|{t_max}|{len(segs)}|{len(sti)}".encode())
+    for name in sorted(str(x) for x in (getattr(trace, "tasks", None) or []))[:200]:
+        h.update(b"|")
+        h.update(name.encode())
+    return {
+        "file": str(filename or ""),
+        "hash": h.hexdigest()[:16],
+        "time_scale": str(getattr(trace, "time_scale", "")),
+        "event_count": len(segs) + len(sti),
+        "span": ({"start": int(t_min), "end": int(t_max)}
+                 if t_min is not None and t_max is not None else None),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Construction / editing (each returns a NEW investigation dict)
+# ---------------------------------------------------------------------------
+def new_investigation(
+    *,
+    title: str = "",
+    trace_identity: Optional[Dict[str, Any]] = None,  # noqa: A002 - domain term
+    analysis_range: Optional[Dict[str, int]] = None,
+) -> Dict[str, Any]:
+    rng = None
+    if isinstance(analysis_range, dict) and analysis_range.get("start") is not None:
+        rng = {"start": int(analysis_range["start"]), "end": int(analysis_range["end"])}
+    return {
+        "schema": INVESTIGATION_SCHEMA,
+        "title": str(title or "").strip(),
+        "trace_identity": dict(trace_identity or {}),
+        "analysis_range": rng,
+        "bookmarks": [],
+        "links": [],
+        "conclusion": "",
+        "unresolved_questions": [],
+        "next_seq": 1,
+    }
+
+
+def _clone(inv: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(inv, dict):
+        return new_investigation()
+    out = dict(inv)
+    out["bookmarks"] = [dict(b) for b in (inv.get("bookmarks") or [])]
+    for b in out["bookmarks"]:
+        b["refs"] = [dict(r) for r in (b.get("refs") or [])]
+    out["links"] = [dict(link) for link in (inv.get("links") or [])]
+    out["unresolved_questions"] = list(inv.get("unresolved_questions") or [])
+    out["trace_identity"] = dict(inv.get("trace_identity") or {})
+    return out
+
+
+def normalize_ref(ref: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(ref, dict):
+        return None
+    kind = str(ref.get("kind") or "").strip().lower()
+    if kind not in REF_KINDS:
+        return None
+    out: Dict[str, Any] = {"kind": kind, "label": str(ref.get("label") or "").strip()}
+    if kind == REF_FINDING:
+        out["rule_id"] = str(ref.get("rule_id") or ref.get("id") or "").strip()
+    elif kind == REF_METRIC:
+        out["metric"] = str(ref.get("metric") or ref.get("label") or "").strip()
+    elif kind == REF_ENTITY:
+        out["entity"] = str(ref.get("entity") or ref.get("label") or "").strip()
+    elif kind in (REF_RANGE, REF_EVIDENCE):
+        rng = ref.get("range")
+        if isinstance(rng, dict) and rng.get("start") is not None and rng.get("end") is not None:
+            out["range"] = {"start": int(rng["start"]), "end": int(rng["end"])}
+        if ref.get("time") is not None:
+            try:
+                out["time"] = int(float(ref["time"]))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def add_bookmark(
+    inv: Optional[Dict[str, Any]],
+    *,
+    type: str,  # noqa: A002 - matches spec ("Bookmark Types")
+    title: str,
+    note: str = "",
+    refs: Optional[Sequence[Dict[str, Any]]] = None,
+    bookmark_id: str = "",
+) -> Dict[str, Any]:
+    out = _clone(inv)
+    btype = str(type or "").strip().lower()
+    if btype not in BOOKMARK_TYPES:
+        btype = BM_OBSERVATION
+    used = {str(b.get("id")) for b in out["bookmarks"]}
+    bid = str(bookmark_id or "").strip()
+    if not bid or bid in used:
+        bid = _slug(f"{btype}-{title}", used)
+    else:
+        used.add(bid)
+    seq = int(out.get("next_seq") or 1)
+    out["next_seq"] = seq + 1
+    clean_refs = [r for r in (normalize_ref(x) for x in (refs or [])) if r]
+    out["bookmarks"].append({
+        "id": bid,
+        "type": btype,
+        "title": str(title or "").strip() or BOOKMARK_TYPE_LABELS[btype],
+        "note": str(note or ""),
+        "refs": clean_refs,
+        "seq": seq,
+    })
+    return out
+
+
+def update_bookmark(
+    inv: Optional[Dict[str, Any]],
+    bookmark_id: str,
+    **changes: Any,
+) -> Dict[str, Any]:
+    out = _clone(inv)
+    bid = str(bookmark_id or "").strip()
+    for b in out["bookmarks"]:
+        if str(b.get("id")) != bid:
+            continue
+        if "type" in changes:
+            t = str(changes["type"] or "").strip().lower()
+            if t in BOOKMARK_TYPES:
+                b["type"] = t
+        if "title" in changes:
+            b["title"] = str(changes["title"] or "").strip() or b["title"]
+        if "note" in changes:
+            b["note"] = str(changes["note"] or "")
+        if "refs" in changes:
+            b["refs"] = [r for r in (normalize_ref(x) for x in (changes["refs"] or [])) if r]
+        break
+    return out
+
+
+def remove_bookmark(inv: Optional[Dict[str, Any]], bookmark_id: str) -> Dict[str, Any]:
+    out = _clone(inv)
+    bid = str(bookmark_id or "").strip()
+    out["bookmarks"] = [b for b in out["bookmarks"] if str(b.get("id")) != bid]
+    out["links"] = [
+        link for link in out["links"]
+        if str(link.get("from")) != bid and str(link.get("to")) != bid
+    ]
+    return out
+
+
+def link_bookmarks(
+    inv: Optional[Dict[str, Any]],
+    from_id: str,
+    to_id: str,
+    relation: str = "relates",
+) -> Dict[str, Any]:
+    out = _clone(inv)
+    a, b = str(from_id or "").strip(), str(to_id or "").strip()
+    rel = str(relation or "relates").strip().lower()
+    if rel not in LINK_RELATIONS:
+        rel = "relates"
+    ids = {str(x.get("id")) for x in out["bookmarks"]}
+    if a == b or a not in ids or b not in ids:
+        return out
+    for link in out["links"]:
+        if str(link.get("from")) == a and str(link.get("to")) == b:
+            link["relation"] = rel
+            return out
+    out["links"].append({"from": a, "to": b, "relation": rel})
+    return out
+
+
+def unlink_bookmarks(
+    inv: Optional[Dict[str, Any]], from_id: str, to_id: str
+) -> Dict[str, Any]:
+    out = _clone(inv)
+    a, b = str(from_id or "").strip(), str(to_id or "").strip()
+    out["links"] = [
+        link for link in out["links"]
+        if not (str(link.get("from")) == a and str(link.get("to")) == b)
+    ]
+    return out
+
+
+def set_conclusion(inv: Optional[Dict[str, Any]], text: str) -> Dict[str, Any]:
+    out = _clone(inv)
+    out["conclusion"] = str(text or "").strip()
+    return out
+
+
+def add_unresolved_question(inv: Optional[Dict[str, Any]], text: str) -> Dict[str, Any]:
+    out = _clone(inv)
+    q = str(text or "").strip()
+    if q and q not in out["unresolved_questions"]:
+        out["unresolved_questions"].append(q)
+    return out
+
+
+def remove_unresolved_question(inv: Optional[Dict[str, Any]], text: str) -> Dict[str, Any]:
+    out = _clone(inv)
+    out["unresolved_questions"] = [
+        q for q in out["unresolved_questions"] if q != str(text or "").strip()
+    ]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Undo / redo (snapshot stack — investigations are small)
+# ---------------------------------------------------------------------------
+def empty_notebook_history() -> Dict[str, Any]:
+    return {"stack": [], "index": -1}
+
+
+def _hist_index(out: Dict[str, Any]) -> int:
+    raw = out.get("index")
+    return -1 if raw is None else int(raw)
+
+
+def push_notebook_state(
+    history: Optional[Dict[str, Any]], inv: Dict[str, Any], *, limit: int = 100
+) -> Dict[str, Any]:
+    out = dict(history or empty_notebook_history())
+    stack = [dict(s) for s in (out.get("stack") or [])]
+    idx = _hist_index(out)
+    if 0 <= idx < len(stack) - 1:
+        stack = stack[: idx + 1]
+    snap = json.loads(dump_investigation(inv))
+    if stack and stack[-1] == snap:
+        out["stack"] = stack
+        out["index"] = len(stack) - 1
+        return out
+    stack.append(snap)
+    if len(stack) > max(2, int(limit)):
+        stack = stack[-int(limit):]
+    out["stack"] = stack
+    out["index"] = len(stack) - 1
+    return out
+
+
+def notebook_undo(history: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    out = dict(history or empty_notebook_history())
+    out["index"] = max(0, _hist_index(out) - 1) if out.get("stack") else -1
+    return out
+
+
+def notebook_redo(history: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    out = dict(history or empty_notebook_history())
+    stack = out.get("stack") or []
+    out["index"] = min(len(stack) - 1, _hist_index(out) + 1)
+    return out
+
+
+def notebook_history_state(history: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    out = dict(history or empty_notebook_history())
+    stack = list(out.get("stack") or [])
+    idx = _hist_index(out)
+    return {
+        "can_undo": idx > 0,
+        "can_redo": 0 <= idx < len(stack) - 1,
+        "current": dict(stack[idx]) if 0 <= idx < len(stack) else None,
+        "count": len(stack),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Broken-reference detection
+# ---------------------------------------------------------------------------
+def _ref_in_range(rng: Optional[Dict[str, int]], span: Optional[Dict[str, int]]) -> bool:
+    if not isinstance(rng, dict) or not isinstance(span, dict):
+        return True
+    return int(rng["start"]) >= int(span["start"]) and int(rng["end"]) <= int(span["end"])
+
+
+_ENTITY_LEAD_BRACKET_RE = re.compile(r"^\[[^\]]*\]")
+_ENTITY_TAIL_ID_RE = re.compile(r"[\[(][^\])]*[\])]$")
+
+
+def _entity_bare(name: Any) -> str:
+    """Reduce a task label to its bare name for existence checks.
+
+    ``[0/1]Worker`` / ``Worker[8]`` / ``Worker(0x9)`` and the merge key
+    ``\\x001\\x00Worker`` all reduce to ``Worker`` — so an entity reference
+    still resolves whichever decorated form it was stored in (Desktop vs. Web,
+    pre/post Anonymize).
+    """
+    s = str(name or "")
+    if s[:1] == "\x00":
+        j = s.rfind("\x00")
+        if j > 0:
+            s = s[j + 1:]
+    s = _ENTITY_LEAD_BRACKET_RE.sub("", s)
+    s = _ENTITY_TAIL_ID_RE.sub("", s)
+    return s.strip()
+
+
+def _entity_vocabulary(trace: Any, known_entities: Optional[Sequence[str]]) -> set:
+    """Every accepted spelling of every task / core in scope (decorated + bare)."""
+    ents: set = set()
+    for e in known_entities or []:
+        ents.add(str(e))
+        b = _entity_bare(e)
+        if b:
+            ents.add(b)
+    if trace is not None:
+        repr_map = getattr(trace, "task_repr", None)
+        if isinstance(repr_map, dict) and repr_map:
+            for mk, raw in repr_map.items():
+                for form in (mk, raw):
+                    ents.add(str(form))
+                    b = _entity_bare(form)
+                    if b:
+                        ents.add(b)
+        else:
+            for mk in (getattr(trace, "tasks", None) or []):
+                ents.add(str(mk))
+                b = _entity_bare(mk)
+                if b:
+                    ents.add(b)
+        for c in (getattr(trace, "core_names", None) or []):
+            ents.add(str(c))
+    return ents
+
+
+def detect_broken_references(
+    inv: Optional[Dict[str, Any]],
+    *,
+    trace: Any = None,
+    known_rule_ids: Optional[Sequence[str]] = None,
+    known_entities: Optional[Sequence[str]] = None,
+    current_identity: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Report references that no longer resolve against the current trace.
+
+    Returns ``{"stale_trace": bool, "issues": [{bookmark_id, ref_index,
+    kind, reason}]}``.
+    """
+    inv = inv or new_investigation()
+    issues: List[Dict[str, Any]] = []
+
+    rule_ids = set(str(r) for r in (known_rule_ids or []))
+    entities = _entity_vocabulary(trace, known_entities)
+    span = None
+    if current_identity and isinstance(current_identity.get("span"), dict):
+        span = current_identity["span"]
+    elif trace is not None:
+        t_min = getattr(trace, "time_min", None)
+        t_max = getattr(trace, "time_max", None)
+        if t_min is not None and t_max is not None:
+            span = {"start": int(t_min), "end": int(t_max)}
+
+    stale_trace = False
+    saved_id = inv.get("trace_identity") or {}
+    if current_identity and saved_id.get("hash") and current_identity.get("hash"):
+        stale_trace = saved_id["hash"] != current_identity["hash"]
+
+    for b in inv.get("bookmarks") or []:
+        bid = str(b.get("id") or "")
+        for i, ref in enumerate(b.get("refs") or []):
+            kind = str(ref.get("kind") or "")
+            reason = ""
+            if kind == REF_FINDING and rule_ids and ref.get("rule_id") not in rule_ids:
+                reason = f"rule '{ref.get('rule_id')}' is no longer produced"
+            elif kind == REF_ENTITY and entities:
+                ent = str(ref.get("entity") or "")
+                if ent not in entities and _entity_bare(ent) not in entities:
+                    reason = f"entity '{ent}' is not in the trace"
+            elif kind in (REF_RANGE, REF_EVIDENCE):
+                if not _ref_in_range(ref.get("range"), span):
+                    reason = "time range falls outside the trace span"
+                t = ref.get("time")
+                if t is not None and isinstance(span, dict) and not (
+                    int(span["start"]) <= int(t) <= int(span["end"])
+                ):
+                    reason = "timestamp falls outside the trace span"
+            if reason:
+                issues.append({
+                    "bookmark_id": bid, "ref_index": i,
+                    "kind": kind, "reason": reason,
+                })
+    return {"stale_trace": stale_trace, "issues": issues}
+
+
+# ---------------------------------------------------------------------------
+# Conclusion → evidence chain
+# ---------------------------------------------------------------------------
+def _shared_ref(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    def keyset(bm):
+        out = set()
+        for r in bm.get("refs") or []:
+            k = r.get("kind")
+            if k == REF_FINDING and r.get("rule_id"):
+                out.add(("finding", r["rule_id"]))
+            elif k == REF_METRIC and r.get("metric"):
+                out.add(("metric", r["metric"]))
+            elif k == REF_ENTITY and r.get("entity"):
+                out.add(("entity", r["entity"]))
+        return out
+    return bool(keyset(a) & keyset(b))
+
+
+def conclusion_evidence_chains(inv: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """For every conclusion bookmark, the bookmarks that back it.
+
+    A bookmark backs a conclusion when a link connects them (either direction)
+    or they share a stable reference. Guarantees every conclusion is traceable
+    to its evidence.
+    """
+    inv = inv or new_investigation()
+    by_id = {str(b.get("id")): b for b in inv.get("bookmarks") or []}
+    adj: Dict[str, set] = {bid: set() for bid in by_id}
+    for link in inv.get("links") or []:
+        a, b = str(link.get("from")), str(link.get("to"))
+        if a in adj and b in adj:
+            adj[a].add(b)
+            adj[b].add(a)
+    for a in by_id:
+        for b in by_id:
+            if a != b and _shared_ref(by_id[a], by_id[b]):
+                adj[a].add(b)
+
+    chains: List[Dict[str, Any]] = []
+    for bid, bm in by_id.items():
+        if bm.get("type") != BM_CONCLUSION:
+            continue
+        seen = {bid}
+        queue = list(adj.get(bid, ()))
+        support: List[Dict[str, Any]] = []
+        while queue:
+            nid = queue.pop(0)
+            if nid in seen:
+                continue
+            seen.add(nid)
+            nb = by_id.get(nid)
+            if not nb:
+                continue
+            support.append({"id": nid, "type": nb.get("type"), "title": nb.get("title")})
+            queue.extend(adj.get(nid, ()))
+        support.sort(key=lambda x: (INTERPRETATION_TYPES.count(x["type"]), str(x["id"])))
+        chains.append({
+            "conclusion_id": bid,
+            "title": bm.get("title"),
+            "evidence": support,
+            "grounded": bool(support),
+        })
+    return chains
+
+
+# ---------------------------------------------------------------------------
+# Serialisation
+# ---------------------------------------------------------------------------
+def dump_investigation(inv: Optional[Dict[str, Any]]) -> str:
+    return json.dumps(load_investigation(inv), sort_keys=True, indent=2)
+
+
+def load_investigation(raw: Any) -> Dict[str, Any]:
+    """Coerce *raw* (dict or JSON text) to a valid investigation.
+
+    Unknown top-level keys are preserved for forward compatibility.
+    """
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    base = new_investigation(
+        title=str(raw.get("title") or ""),
+        trace_identity=raw.get("trace_identity") if isinstance(raw.get("trace_identity"), dict) else {},
+        analysis_range=raw.get("analysis_range") if isinstance(raw.get("analysis_range"), dict) else None,
+    )
+    used: set = set()
+    bookmarks: List[Dict[str, Any]] = []
+    max_seq = 0
+    for b in raw.get("bookmarks") or []:
+        if not isinstance(b, dict):
+            continue
+        btype = str(b.get("type") or "").strip().lower()
+        if btype not in BOOKMARK_TYPES:
+            btype = BM_OBSERVATION
+        bid = str(b.get("id") or "").strip()
+        if not bid or bid in used:
+            bid = _slug(f"{btype}-{b.get('title') or ''}", used)
+        else:
+            used.add(bid)
+        try:
+            seq = int(b.get("seq") or 0)
+        except (TypeError, ValueError):
+            seq = 0
+        max_seq = max(max_seq, seq)
+        bookmarks.append({
+            "id": bid,
+            "type": btype,
+            "title": str(b.get("title") or "").strip() or BOOKMARK_TYPE_LABELS[btype],
+            "note": str(b.get("note") or ""),
+            "refs": [r for r in (normalize_ref(x) for x in (b.get("refs") or [])) if r],
+            "seq": seq or (len(bookmarks) + 1),
+        })
+    bookmarks.sort(key=lambda b: (b["seq"], b["id"]))
+    ids = {b["id"] for b in bookmarks}
+    links = []
+    seen_links: set = set()
+    for link in raw.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        a, b = str(link.get("from") or ""), str(link.get("to") or "")
+        rel = str(link.get("relation") or "relates").strip().lower()
+        if rel not in LINK_RELATIONS:
+            rel = "relates"
+        if a in ids and b in ids and a != b and (a, b) not in seen_links:
+            seen_links.add((a, b))
+            links.append({"from": a, "to": b, "relation": rel})
+
+    out = dict(raw)  # preserve unknown keys
+    out.update(base)
+    out["bookmarks"] = bookmarks
+    out["links"] = links
+    out["conclusion"] = str(raw.get("conclusion") or "").strip()
+    out["unresolved_questions"] = [
+        str(q).strip() for q in (raw.get("unresolved_questions") or []) if str(q).strip()
+    ]
+    out["next_seq"] = max(int(base["next_seq"]), max_seq + 1)
+    out["schema"] = INVESTIGATION_SCHEMA
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Bridge: build an Investigation from the Findings triage "case" list
+# ---------------------------------------------------------------------------
+def investigation_from_case(
+    *,
+    case_finding_ids: Sequence[str],
+    findings: Sequence[Dict[str, Any]],
+    trace_identity: Optional[Dict[str, Any]] = None,  # noqa: A002
+    analysis_range: Optional[Dict[str, int]] = None,
+    title: str = "",
+) -> Dict[str, Any]:
+    """Seed an Investigation from findings the user added to the case.
+
+    Each cased finding becomes a *supporting evidence* bookmark that references
+    the finding's stable ``rule_id``, its entities, and its range.
+    """
+    want = [str(x).strip() for x in (case_finding_ids or []) if str(x).strip()]
+    by_id = {str(f.get("id") or ""): f for f in findings if isinstance(f, dict)}
+    inv = new_investigation(
+        title=title or "Investigation",
+        trace_identity=trace_identity or {},
+        analysis_range=analysis_range,
+    )
+    for fid in want:
+        f = by_id.get(fid)
+        if not f:
+            continue
+        refs: List[Dict[str, Any]] = [{
+            "kind": REF_FINDING,
+            "rule_id": str(f.get("rule_id") or fid),
+            "label": str(f.get("title") or f.get("observation") or fid),
+        }]
+        for ent in f.get("entities") or []:
+            refs.append({"kind": REF_ENTITY, "entity": str(ent), "label": str(ent)})
+        rng = f.get("affected_range")
+        if isinstance(rng, dict) and rng.get("start") is not None:
+            refs.append({"kind": REF_RANGE, "range": rng, "label": "evidence window"})
+        metric = str(f.get("inspect") or "").strip()
+        if metric:
+            refs.append({"kind": REF_METRIC, "metric": metric, "label": metric})
+        inv = add_bookmark(
+            inv,
+            type=(BM_CONTRADICTING
+                  if str(f.get("severity")) == "info" and "no findings" in str(f.get("title", "")).lower()
+                  else BM_SUPPORTING),
+            title=str(f.get("observation") or f.get("title") or fid),
+            note=str(f.get("text") or ""),
+            refs=refs,
+        )
+    return inv
+
+
+_SEV_RANK = {"error": 0, "warning": 1, "info": 2}
+
+
+def scaffold_investigation_from_findings(
+    inv: Optional[Dict[str, Any]],
+    *,
+    findings: Optional[Sequence[Dict[str, Any]]] = None,
+    cursor_range: Optional[Dict[str, int]] = None,
+    limit: int = 8,
+    include_info: bool = False,
+) -> Dict[str, Any]:
+    """Merge a starter structure into *inv* from the current analysis findings.
+
+    Every actionable finding becomes an Observation (with finding / entity /
+    range / metric refs); when the notebook was empty a Hypothesis and a
+    Verification-step stub are appended so the evidence chain has somewhere to
+    go. Findings already referenced by a bookmark are skipped — safe to re-run.
+    """
+    out = inv if isinstance(inv, dict) else new_investigation()
+    was_empty = not (out.get("bookmarks") or [])
+
+    already = set()
+    for b in out.get("bookmarks") or []:
+        for r in b.get("refs") or []:
+            if r.get("kind") == REF_FINDING and r.get("rule_id"):
+                already.add(str(r["rule_id"]))
+
+    rows = [f for f in (findings or []) if isinstance(f, dict)]
+    if not include_info:
+        rows = [f for f in rows if str(f.get("severity") or "info") != "info"]
+    rows.sort(key=lambda f: _SEV_RANK.get(str(f.get("severity")), 3))
+
+    added = 0
+    for f in rows:
+        if added >= limit:
+            break
+        rule_id = str(f.get("rule_id") or f.get("id") or "").strip()
+        if not rule_id or rule_id in already:
+            continue
+        already.add(rule_id)
+        refs: List[Dict[str, Any]] = [{
+            "kind": REF_FINDING, "rule_id": rule_id,
+            "label": str(f.get("title") or rule_id),
+        }]
+        for ent in f.get("entities") or []:
+            refs.append({"kind": REF_ENTITY, "entity": str(ent), "label": str(ent)})
+        rng = f.get("affected_range")
+        if not (isinstance(rng, dict) and rng.get("start") is not None):
+            rng = cursor_range if isinstance(cursor_range, dict) and cursor_range.get("start") is not None else None
+        if rng:
+            refs.append({"kind": REF_RANGE,
+                         "range": {"start": rng["start"], "end": rng["end"]},
+                         "label": "evidence window"})
+        metric = str(f.get("inspect") or f.get("inspect_href") or "").strip()
+        if metric:
+            refs.append({"kind": REF_METRIC, "metric": metric, "label": metric})
+        out = add_bookmark(
+            out, type=BM_OBSERVATION,
+            title=str(f.get("title") or f.get("observation") or rule_id),
+            note=str(f.get("text") or f.get("impact") or ""),
+            refs=refs)
+        added += 1
+
+    if was_empty:
+        out = add_bookmark(
+            out, type=BM_HYPOTHESIS, title="Likely cause — edit this",
+            note=("What single explanation best fits the observations above? "
+                  "Link the observations that support it."))
+        out = add_bookmark(
+            out, type=BM_VERIFICATION, title="How to confirm — edit this",
+            note=("Which measurement, cursor window, or experiment would confirm "
+                  "or rule out the hypothesis?"))
+    return out
+# ===========================================================================
+# ai_evidence_package
+# ===========================================================================
+
+EVIDENCE_PACKAGE_SCHEMA = "btf-viewer-evidence/1"
+
+RESPONSE_CONTRACT = [
+    "Confirmed observations",
+    "Possible explanations",
+    "Contradicting or missing evidence",
+    "Recommended verification steps",
+    "Evidence references",
+]
+
+_INSTRUCTIONS = (
+    "Answer only from the evidence below. Separate confirmed observations from "
+    "inferences, and name missing evidence explicitly. Every claim must cite an "
+    "evidence id or a time/value from this package; mark any uncited statement "
+    "as unverified. If the evidence is insufficient, say so."
+)
+
+
+def _redact_name(name: str, redact: bool, alias_map: Dict[str, str]) -> str:
+    if not redact or not name:
+        return name
+    if name not in alias_map:
+        alias_map[name] = f"task_{len(alias_map) + 1}"
+    return alias_map[name]
+
+
+def build_evidence_package(
+    *,
+    question: str,
+    scope: str = "",
+    analysis_range: Optional[Dict[str, int]] = None,
+    trace_name: str = "",
+    trace_summary: Optional[Dict[str, Any]] = None,
+    health: Optional[Dict[str, Any]] = None,
+    findings: Optional[Sequence[Dict[str, Any]]] = None,
+    investigation: Optional[Dict[str, Any]] = None,
+    entities: Optional[Sequence[str]] = None,
+    cores: Optional[Sequence[str]] = None,
+    statistics: Optional[Sequence[Dict[str, Any]]] = None,
+    event_context: Optional[Sequence[Dict[str, Any]]] = None,
+    redact_names: bool = False,
+) -> Dict[str, Any]:
+    """Build a compact, provider-independent evidence package dict."""
+    alias_map: Dict[str, str] = {}
+
+    def red(v: str) -> str:
+        return _redact_name(str(v or ""), redact_names, alias_map)
+
+    fnd = []
+    for i, f in enumerate(findings or []):
+        if not isinstance(f, dict):
+            continue
+        fnd.append({
+            "id": f"F{i + 1}",
+            "rule_id": str(f.get("rule_id") or f.get("id") or ""),
+            "severity": str(f.get("severity") or "info"),
+            "observation": str(f.get("observation") or f.get("title") or f.get("text") or ""),
+            "entities": [red(e) for e in (f.get("entities") or [])],
+            "measured_values": list(f.get("measured_values") or []),
+            "comparison_basis": str(f.get("comparison_basis") or ""),
+            "limitations": list(f.get("limitations") or []),
+        })
+
+    bms = []
+    inv = investigation if isinstance(investigation, dict) else {}
+    for b in inv.get("bookmarks", []) or []:
+        if not isinstance(b, dict):
+            continue
+        bms.append({
+            "id": str(b.get("id") or ""),
+            "type": str(b.get("type") or "observation"),
+            "title": str(b.get("title") or ""),
+            "note": str(b.get("note") or ""),
+            "refs": [dict(r) for r in (b.get("refs") or []) if isinstance(r, dict)],
+        })
+
+    stats = []
+    for s in statistics or []:
+        if not isinstance(s, dict):
+            continue
+        stats.append({
+            "name": str(s.get("name") or ""),
+            "value": s.get("value"),
+            "unit": str(s.get("unit") or ""),
+            "sample_count": s.get("sample_count"),
+            "entity": red(s.get("entity") or ""),
+        })
+
+    evc = []
+    for e in event_context or []:
+        if not isinstance(e, dict):
+            continue
+        evc.append({
+            "time": e.get("time"),
+            "kind": str(e.get("kind") or ""),
+            "detail": red(e.get("detail") or e.get("task") or ""),
+            "core": str(e.get("core") or ""),
+        })
+
+    health_block = None
+    if isinstance(health, dict):
+        health_block = {
+            "status": str(health.get("status") or ""),
+            "issue_count": int(health.get("issue_count", health.get("issueCount", 0)) or 0),
+            "limitations": list(
+                health.get("metric_limitations") or health.get("metricLimitations") or []),
+        }
+
+    package: Dict[str, Any] = {
+        "schema": EVIDENCE_PACKAGE_SCHEMA,
+        "question": str(question or "").strip(),
+        "scope": str(scope or "").strip(),
+        "analysis_range": (
+            {"start": int(analysis_range["start"]), "end": int(analysis_range["end"])}
+            if isinstance(analysis_range, dict) and analysis_range.get("start") is not None
+            else None
+        ),
+        "trace": {
+            "name": "(redacted)" if redact_names else str(trace_name or ""),
+            "summary": _compact_summary(trace_summary),
+        },
+        "trace_health": health_block,
+        "entities": [red(e) for e in (entities or [])],
+        "cores": [str(c) for c in (cores or [])],
+        "statistics": stats,
+        "event_context": evc,
+        "findings": fnd,
+        "bookmarks": bms,
+        "conclusion_so_far": str(inv.get("conclusion") or ""),
+        "unresolved_questions": [str(q) for q in (inv.get("unresolved_questions") or [])],
+        "instructions": _INSTRUCTIONS,
+        "response_contract": list(RESPONSE_CONTRACT),
+        "redacted": bool(redact_names),
+    }
+    if redact_names and alias_map:
+        package["alias_note"] = "Task names replaced with task_N aliases for privacy."
+    return package
+
+
+_SUMMARY_KEYS = (
+    "span_ns", "tasks", "segments", "sti_events", "context_switches",
+    "gap_avg_ns", "gap_max_ns", "migrations", "migrated_tasks",
+    "load_balance_score", "load_balance_sigma", "tick_health", "missed_ticks",
+    "time_scale",
+)
+
+
+def _compact_summary(summary: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(summary, dict):
+        return {}
+    return {k: summary[k] for k in _SUMMARY_KEYS if k in summary and summary[k] is not None}
+
+
+# --------------------------------------------------------------------------
+def estimate_tokens(package: Dict[str, Any]) -> int:
+    """Rough token estimate for the serialised package (~4 chars/token)."""
+    text = json.dumps(package, ensure_ascii=False, sort_keys=True)
+    return max(1, (len(text) + 3) // 4)
+
+
+def evidence_package_size(package: Dict[str, Any]) -> Dict[str, int]:
+    text = json.dumps(package, ensure_ascii=False, sort_keys=True)
+    return {
+        "bytes": len(text.encode("utf-8")),
+        "chars": len(text),
+        "approx_tokens": estimate_tokens(package),
+        "findings": len(package.get("findings") or []),
+        "bookmarks": len(package.get("bookmarks") or []),
+        "statistics": len(package.get("statistics") or []),
+        "event_context": len(package.get("event_context") or []),
+    }
+
+
+def format_evidence_package_preview(package: Dict[str, Any]) -> str:
+    """Human-readable preview of exactly what would be sent."""
+    lines: List[str] = []
+    size = evidence_package_size(package)
+    lines.append(f"Evidence package — ~{size['approx_tokens']} tokens, "
+                 f"{size['bytes']:,} bytes"
+                 + ("  (task names redacted)" if package.get("redacted") else ""))
+    lines.append("")
+    lines.append(f"Question: {package.get('question') or '(none)'}")
+    if package.get("scope"):
+        lines.append(f"Scope: {package['scope']}")
+    rng = package.get("analysis_range")
+    if rng:
+        lines.append(f"Range: {rng['start']} – {rng['end']}")
+    th = package.get("trace_health")
+    if th:
+        lim = f"; limited: {', '.join(th['limitations'])}" if th.get("limitations") else ""
+        lines.append(f"Trace health: {th['status']} ({th['issue_count']} issue(s)){lim}")
+    if package.get("entities"):
+        lines.append(f"Entities: {', '.join(package['entities'][:20])}")
+    if package.get("statistics"):
+        lines.append(f"Statistics ({len(package['statistics'])}):")
+        for s in package["statistics"][:20]:
+            sc = f", n={s['sample_count']}" if s.get("sample_count") is not None else ""
+            ent = f" [{s['entity']}]" if s.get("entity") else ""
+            lines.append(f"  - {s['name']}{ent} = {s['value']} {s['unit']}{sc}".rstrip())
+    if package.get("findings"):
+        lines.append(f"Findings ({len(package['findings'])}):")
+        for f in package["findings"]:
+            lines.append(f"  [{f['id']}] {f['severity']}: {f['observation']}")
+    if package.get("bookmarks"):
+        lines.append(f"Bookmarks ({len(package['bookmarks'])}):")
+        for b in package["bookmarks"]:
+            lines.append(f"  ({b['type']}) {b['title']}")
+    if package.get("event_context"):
+        lines.append(f"Event context: {len(package['event_context'])} event(s) "
+                     "around the range")
+    if package.get("conclusion_so_far"):
+        lines.append(f"Conclusion so far: {package['conclusion_so_far']}")
+    lines.append("")
+    lines.append("Response contract: " + " · ".join(package.get("response_contract", [])))
+    lines.append(package.get("instructions", ""))
+    return "\n".join(lines) + "\n"
+# ===========================================================================
+# anonymize_export
+# ===========================================================================
+
+ANON_PREFIX = "Task-"
+
+
+def build_task_alias_map(names: Iterable[str]) -> Dict[str, str]:
+    """``{real_name: "Task-N"}`` for the unique, sorted, non-empty *names*."""
+    uniq = sorted({str(n).strip() for n in (names or [])
+                   if n is not None and str(n).strip()})
+    return {n: f"{ANON_PREFIX}{i}" for i, n in enumerate(uniq, 1)}
+
+
+def _alias_regex(names: Iterable[str]):
+    # Longest first so a longer name wins over a prefix of it.
+    ordered = sorted((re.escape(str(n)) for n in names if str(n)), key=len,
+                     reverse=True)
+    if not ordered:
+        return None
+    # No word char / hyphen / dot on either side → whole-identifier match only.
+    return re.compile(r"(?<![\w.\-])(?:" + "|".join(ordered) + r")(?![\w.\-])")
+
+
+def anonymize_with_map(text: str, alias_map: Dict[str, str]) -> str:
+    """Replace every whole-token task name in *text* with its ``Task-N`` alias."""
+    if not text or not alias_map:
+        return text if text is not None else ""
+    rx = _alias_regex(alias_map.keys())
+    if rx is None:
+        return text
+    return rx.sub(lambda m: alias_map.get(m.group(0), m.group(0)), str(text))
+
+
+# Raw BTF text and Perfetto/JSON strings use the same whole-token substitution.
+anonymize_btf_text = anonymize_with_map
+
+
+def anonymize_json_strings(obj: Any, alias_map: Dict[str, str]) -> Any:
+    """Recursively rewrite every string value in a JSON-able structure."""
+    if isinstance(obj, str):
+        return anonymize_with_map(obj, alias_map)
+    if isinstance(obj, list):
+        return [anonymize_json_strings(v, alias_map) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(anonymize_json_strings(v, alias_map) for v in obj)
+    if isinstance(obj, dict):
+        return {k: anonymize_json_strings(v, alias_map) for k, v in obj.items()}
+    return obj
+WORKSPACE_SCHEMA_PREFIX = "btf-viewer-workspace/"
+WORKSPACE_VERSION = 1
+WORKSPACE_SCHEMA = f"{WORKSPACE_SCHEMA_PREFIX}{WORKSPACE_VERSION}"
+WORKSPACE_EXT = ".btfw"
+
+# manifest.json → "kind"
+KIND_WORKSPACE = "workspace"
+KIND_DEMO = "demo"
+
+MANIFEST = "manifest.json"
+TRACE_DIR = "trace/"
+TRACE_MEMBER = "trace/source.btf"  # canonical; the reader also accepts trace/source.*
+STATE_VIEW = "state/view.json"
+ANALYSIS_HEALTH = "analysis/health.json"
+ANALYSIS_FINDINGS = "analysis/findings.json"
+INVESTIGATION_BOOKMARKS = "investigation/bookmarks.json"
+INVESTIGATION_AI_CASE = "investigation/ai_case.json"
+REPORT_HTML = "reports/report.html"
+ATTACHMENTS_PREFIX = "attachments/"
+DEMO_PREFIX = "demo/"
+DEMO_SCRIPT = "demo/script.xml"
+DEMO_VOICE_PREFIX = "demo/voice/"
+
+_KNOWN_MEMBERS = (
+    MANIFEST, TRACE_MEMBER, STATE_VIEW, ANALYSIS_HEALTH,
+    ANALYSIS_FINDINGS, INVESTIGATION_BOOKMARKS, INVESTIGATION_AI_CASE, REPORT_HTML,
+)
+
+# Extraction limits — the archive-level caps come from the shared reader
+# (:mod:`btf_viewer_pkg.zip_container`); only the manifest cap is workspace-only.
+MAX_ENTRIES = CONTAINER_MAX_ENTRIES
+MAX_UNCOMPRESSED_BYTES = CONTAINER_MAX_UNCOMPRESSED_BYTES
+MAX_COMPRESSION_RATIO = CONTAINER_MAX_COMPRESSION_RATIO
+MANIFEST_MAX_BYTES = 1 * 1024 * 1024
+
+_CONTAINER_DESC = ".btfw / ZIP"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def workspace_sha256(data: bytes) -> str:
+    return hashlib.sha256(data or b"").hexdigest()
+
+
+def now_iso(when: Optional[datetime.datetime] = None) -> str:
+    dt = when or datetime.datetime.now(datetime.timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.astimezone(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def _dumps(obj: Any) -> bytes:
+    return (json.dumps(obj, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+def _sanitize_attachment_name(name: str) -> str:
+    base = str(name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    base = base.lstrip(".") or "attachment"
+    return "".join(c for c in base if c.isalnum() or c in "-._ ()").strip() or "attachment"
+
+
+# ---------------------------------------------------------------------------
+# Manifest
+# ---------------------------------------------------------------------------
+def build_manifest(
+    *,
+    btfviewer_version: str = "",
+    kind: str = KIND_WORKSPACE,
+    trace_name: str = "",
+    trace_size: int = 0,
+    trace_sha256: str = "",
+    trace_embedded: bool = True,
+    trace_ref: str = "",
+    analysis_settings: Optional[Dict[str, Any]] = None,
+    rule_set_version: str = "",
+    locale: str = "",
+    report: Optional[Dict[str, Any]] = None,
+    demo: Optional[Dict[str, Any]] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    contents: Optional[List[str]] = None,
+    created: Optional[str] = None,
+    modified: Optional[str] = None,
+) -> Dict[str, Any]:
+    stamp = now_iso()
+    return {
+        "schema": WORKSPACE_SCHEMA,
+        "kind": str(kind or KIND_WORKSPACE),
+        "btfviewer_version": str(btfviewer_version or ""),
+        "created": str(created or stamp),
+        "modified": str(modified or stamp),
+        "trace": {
+            "name": str(trace_name or ""),
+            "size": int(trace_size or 0),
+            "sha256": str(trace_sha256 or ""),
+            "embedded": bool(trace_embedded),
+            "ref": "" if trace_embedded else str(trace_ref or ""),
+        },
+        "analysis": {
+            "settings": dict(analysis_settings or {}),
+            "rule_set_version": str(rule_set_version or ""),
+        },
+        "locale": str(locale or ""),
+        "report": dict(report) if isinstance(report, dict) else None,
+        "demo": dict(demo) if isinstance(demo, dict) else None,
+        "attachments": list(attachments or []),
+        "contents": sorted(set(contents or [])),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Migration
+# ---------------------------------------------------------------------------
+def _schema_version(schema: str) -> Optional[int]:
+    s = str(schema or "")
+    if not s.startswith(WORKSPACE_SCHEMA_PREFIX):
+        return None
+    try:
+        return int(s[len(WORKSPACE_SCHEMA_PREFIX):])
+    except ValueError:
+        return None
+
+
+# {from_version: fn(manifest) -> manifest}. Each step bumps by one.
+_MIGRATIONS: Dict[int, Any] = {}
+
+
+def migrate_manifest(manifest: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    """Return ``(manifest, changed)`` migrated up to ``WORKSPACE_VERSION``.
+
+    Unknown/newer schemas are returned untouched (callers open them read-only).
+    """
+    out = dict(manifest or {})
+    ver = _schema_version(out.get("schema"))
+    if ver is None or ver >= WORKSPACE_VERSION:
+        return out, False
+    changed = False
+    while ver < WORKSPACE_VERSION and ver in _MIGRATIONS:
+        out = _MIGRATIONS[ver](dict(out))
+        ver += 1
+        out["schema"] = f"{WORKSPACE_SCHEMA_PREFIX}{ver}"
+        changed = True
+    if ver < WORKSPACE_VERSION:
+        # No migration path; stamp current and let the caller validate.
+        out["schema"] = WORKSPACE_SCHEMA
+        changed = True
+    return out, changed
+
+
+# ---------------------------------------------------------------------------
+# Save (atomic)
+# ---------------------------------------------------------------------------
+def save_workspace(
+    path: str,
+    *,
+    kind: str = KIND_WORKSPACE,
+    trace_bytes: Optional[bytes] = None,
+    trace_ref: str = "",
+    trace_name: str = "",
+    trace_sha256: str = "",
+    trace_size: Optional[int] = None,
+    trace_member: str = TRACE_MEMBER,
+    embed_trace: bool = True,
+    view_state: Optional[Dict[str, Any]] = None,
+    health: Optional[Dict[str, Any]] = None,
+    findings: Optional[List[Dict[str, Any]]] = None,
+    investigation: Optional[Dict[str, Any]] = None,
+    ai_case: Optional[Dict[str, Any]] = None,
+    report_html: Optional[str] = None,
+    demo_xml: Optional[bytes] = None,
+    demo_voices: Optional[Dict[str, Dict[str, bytes]]] = None,
+    demo_default_language: str = "",
+    attachments: Optional[Dict[str, bytes]] = None,
+    analysis_settings: Optional[Dict[str, Any]] = None,
+    rule_set_version: str = "",
+    locale: str = "",
+    btfviewer_version: str = "",
+    created: Optional[str] = None,
+    modified: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Write a ``.btfw`` to *path* atomically. Returns the manifest written.
+
+    Pass ``created`` (from an earlier manifest) to preserve the original
+    creation time across re-saves.
+
+    A ``kind="demo"`` package additionally carries ``demo_xml`` (the overlay
+    tour script → ``demo/script.xml``) and ``demo_voices`` — a mapping
+    ``{lang: {relname: bytes}}`` written under ``demo/voice/<lang>/``.
+
+    ``trace_member`` names the embedded-trace member (default
+    ``trace/source.btf``); pass e.g. ``trace/source.btf.gz`` to keep the real
+    extension. ``attachments`` keys may contain ``/`` — a plain relative POSIX
+    sub-path is preserved under ``attachments/`` (each segment traversal-checked);
+    a bare name is sanitised as before.
+    """
+    embedded = bool(embed_trace and trace_bytes is not None)
+    trace_member = str(trace_member or TRACE_MEMBER)
+    if not (trace_member.startswith(TRACE_DIR) and is_safe_member(trace_member)):
+        trace_member = TRACE_MEMBER
+    if embedded:
+        trace_size = len(trace_bytes)
+        if not trace_sha256:
+            trace_sha256 = workspace_sha256(trace_bytes)
+    else:
+        trace_size = int(trace_size or 0)
+
+    att_items: List[Tuple[str, bytes]] = []
+    att_manifest: List[Dict[str, Any]] = []
+    seen_att: set = set()
+    for raw_name, blob in (attachments or {}).items():
+        raw = str(raw_name or "").replace("\\", "/").strip("/")
+        if "/" in raw and is_safe_member(raw) and ".." not in raw.split("/"):
+            nm = raw  # keep the relative sub-path
+        else:
+            nm = _sanitize_attachment_name(raw_name)
+            while nm in seen_att:
+                nm = "_" + nm
+        seen_att.add(nm)
+        data = blob if isinstance(blob, (bytes, bytearray)) else str(blob).encode("utf-8")
+        att_items.append((ATTACHMENTS_PREFIX + nm, bytes(data)))
+        att_manifest.append({"name": nm, "size": len(data),
+                             "sha256": workspace_sha256(bytes(data))})
+
+    # Demo tour members: demo/script.xml + demo/voice/<lang>/<relname>.
+    demo_items: List[Tuple[str, bytes]] = []
+    if demo_xml is not None:
+        demo_items.append((DEMO_SCRIPT, bytes(demo_xml)))
+    demo_langs: List[str] = []
+    for lang, files in (demo_voices or {}).items():
+        lid = str(lang or "").strip()
+        if not lid or not isinstance(files, dict):
+            continue
+        demo_langs.append(lid)
+        for relname, blob in files.items():
+            rel = str(relname or "").replace("\\", "/").lstrip("/")
+            if not rel:
+                continue
+            data = blob if isinstance(blob, (bytes, bytearray)) else str(blob).encode("utf-8")
+            demo_items.append((f"{DEMO_VOICE_PREFIX}{lid}/{rel}", bytes(data)))
+    demo_langs = sorted(set(demo_langs))
+
+    contents = [STATE_VIEW] if view_state is not None else []
+    if health is not None:
+        contents.append(ANALYSIS_HEALTH)
+    if findings is not None:
+        contents.append(ANALYSIS_FINDINGS)
+    if investigation is not None:
+        contents.append(INVESTIGATION_BOOKMARKS)
+    if ai_case is not None:
+        contents.append(INVESTIGATION_AI_CASE)
+    if report_html is not None:
+        contents.append(REPORT_HTML)
+    if embedded:
+        contents.append(trace_member)
+    contents.extend(nm for nm, _ in demo_items)
+    contents.extend(nm for nm, _ in att_items)
+
+    report_meta = None
+    if report_html is not None:
+        rb = report_html.encode("utf-8")
+        report_meta = {"path": REPORT_HTML, "size": len(rb),
+                       "sha256": workspace_sha256(rb)}
+
+    demo_meta = None
+    if demo_xml is not None or demo_langs:
+        default_lang = str(demo_default_language or locale or "").strip()
+        if default_lang not in demo_langs:
+            default_lang = demo_langs[0] if demo_langs else default_lang
+        demo_meta = {
+            "script": DEMO_SCRIPT if demo_xml is not None else "",
+            "languages": demo_langs,
+            "default_language": default_lang,
+        }
+
+    manifest = build_manifest(
+        btfviewer_version=btfviewer_version,
+        kind=kind,
+        trace_name=trace_name or (os.path.basename(trace_ref) if trace_ref else ""),
+        trace_size=trace_size,
+        trace_sha256=trace_sha256,
+        trace_embedded=embedded,
+        trace_ref=trace_ref,
+        analysis_settings=analysis_settings,
+        rule_set_version=rule_set_version,
+        locale=locale,
+        report=report_meta,
+        demo=demo_meta,
+        attachments=att_manifest,
+        contents=contents,
+        created=created,
+        modified=modified,
+    )
+
+    members: List[Tuple[str, bytes]] = [(MANIFEST, _dumps(manifest))]
+    if embedded:
+        members.append((trace_member, bytes(trace_bytes)))
+    if view_state is not None:
+        members.append((STATE_VIEW, _dumps(view_state)))
+    if health is not None:
+        members.append((ANALYSIS_HEALTH, _dumps(health)))
+    if findings is not None:
+        members.append((ANALYSIS_FINDINGS, _dumps(list(findings))))
+    if investigation is not None:
+        members.append((INVESTIGATION_BOOKMARKS, _dumps(load_investigation(investigation))))
+    if ai_case is not None:
+        members.append((INVESTIGATION_AI_CASE, _dumps(ai_case)))
+    if report_html is not None:
+        members.append((REPORT_HTML, report_html.encode("utf-8")))
+    members.extend(demo_items)
+    members.extend(att_items)
+
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            # Fixed timestamp keeps saves reproducible.
+            for name, data in members:
+                zi = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                zi.compress_type = zipfile.ZIP_DEFLATED
+                zi.external_attr = 0o644 << 16
+                zf.writestr(zi, data)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return manifest
+
+
+# ---------------------------------------------------------------------------
+# Open (hardened, read-only, in-memory)
+# ---------------------------------------------------------------------------
+def _read_json_member(members: Dict[str, bytes], name: str) -> Any:
+    blob = members.get(name)
+    if blob is None:
+        return None
+    try:
+        return json.loads(blob.decode("utf-8"))
+    except (ValueError, KeyError):
+        return None
+
+
+def read_manifest(path: str) -> Dict[str, Any]:
+    """Read + migrate just the manifest (fast inspection)."""
+    if not zipfile.is_zipfile(path):
+        raise ValueError("not a .btfw / ZIP container")
+    with zipfile.ZipFile(path, "r") as zf:
+        if MANIFEST not in zf.namelist():
+            raise ValueError("workspace has no manifest.json")
+        info = zf.getinfo(MANIFEST)
+        if info.file_size > MANIFEST_MAX_BYTES:
+            raise ValueError("manifest.json is implausibly large")
+        raw = json.loads(zf.read(MANIFEST).decode("utf-8"))
+    manifest, _ = migrate_manifest(raw)
+    return manifest
+
+
+def open_workspace(
+    path: str,
+    *,
+    max_entries: int = MAX_ENTRIES,
+    max_uncompressed: int = MAX_UNCOMPRESSED_BYTES,
+    load_report: bool = True,
+) -> Dict[str, Any]:
+    """Open a ``.btfw`` safely. Reads members into memory; never writes or execs.
+
+    The archive is read through the shared hardened container reader
+    (:func:`btf_viewer_pkg.zip_container.read_zip_container`); everything below is
+    ``.btfw`` interpretation on top of the safe member map it returns.
+    """
+    container = read_zip_container(
+        path, container_desc=_CONTAINER_DESC,
+        max_entries=max_entries, max_uncompressed=max_uncompressed)
+    return _interpret_workspace_members(
+        container["members"], list(container["warnings"]), load_report=load_report)
+
+
+def read_workspace_dir(dir_path: str, *, load_report: bool = True) -> Dict[str, Any]:
+    """Open an *unpacked* ``.btfw`` — a directory laid out like the archive.
+
+    Same interpretation as :func:`open_workspace`; the demo folder
+    ``demos/demo_8cores/`` is itself a valid unpacked package.
+    """
+    root = os.path.realpath(os.path.expanduser(str(dir_path)))
+    if not os.path.isdir(root):
+        raise ValueError(f"not a directory: {dir_path}")
+    members: Dict[str, bytes] = {}
+    total = 0
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            if not is_safe_member(rel):
+                continue
+            with open(full, "rb") as fh:
+                blob = fh.read()
+            total += len(blob)
+            if total > MAX_UNCOMPRESSED_BYTES:
+                raise ValueError("unpacked workspace exceeds the size limit")
+            members[rel] = blob
+    return _interpret_workspace_members(members, [], load_report=load_report)
+
+
+def _interpret_workspace_members(
+    members: Dict[str, bytes], warnings: List[str], *, load_report: bool = True,
+) -> Dict[str, Any]:
+    """Turn a safe ``{member: bytes}`` map (from a ``.btfw`` archive or an
+    unpacked directory) into the ``open_workspace`` result dict."""
+    if MANIFEST not in members:
+        raise ValueError("workspace has no manifest.json")
+    if len(members[MANIFEST]) > MANIFEST_MAX_BYTES:
+        raise ValueError("manifest.json is implausibly large")
+    raw_manifest = json.loads(members[MANIFEST].decode("utf-8"))
+
+    raw_ver = _schema_version(raw_manifest.get("schema"))
+    read_only = raw_ver is not None and raw_ver > WORKSPACE_VERSION
+    manifest, migrated = migrate_manifest(raw_manifest)
+
+    trace_bytes = None
+    trace_meta = manifest.get("trace") or {}
+    if bool(trace_meta.get("embedded")):
+        # Canonical member first, else the first ``trace/*`` file (so a package
+        # built by zipping a folder can keep ``trace/source.btf.gz``).
+        tname = TRACE_MEMBER if TRACE_MEMBER in members else next(
+            (n for n in sorted(members)
+             if n.startswith(TRACE_DIR) and not n.endswith("/")), None)
+        if tname is not None:
+            trace_bytes = members[tname]
+            if trace_meta.get("sha256") and workspace_sha256(trace_bytes) != trace_meta["sha256"]:
+                warnings.append("embedded trace hash does not match the manifest")
+
+    view_state = _read_json_member(members, STATE_VIEW)
+    health = _read_json_member(members, ANALYSIS_HEALTH)
+    findings = _read_json_member(members, ANALYSIS_FINDINGS)
+    raw_inv = _read_json_member(members, INVESTIGATION_BOOKMARKS)
+    investigation = load_investigation(raw_inv) if raw_inv is not None else None
+    ai_case = _read_json_member(members, INVESTIGATION_AI_CASE)
+
+    report_html = None
+    if load_report and REPORT_HTML in members:
+        report_html = members[REPORT_HTML].decode("utf-8", "replace")
+
+    kind = str(manifest.get("kind") or KIND_WORKSPACE)
+
+    # Demo tour subtree (``demo/*``) → a flat {relpath: bytes} map plus a
+    # pointer at the entry script. Present for ``kind == "demo"`` packages.
+    demo_files: Dict[str, bytes] = {}
+    for n in sorted(members):
+        if n.startswith(DEMO_PREFIX) and not n.endswith("/"):
+            demo_files[n[len(DEMO_PREFIX):]] = members[n]
+    demo = None
+    if demo_files or kind == KIND_DEMO:
+        script_rel = DEMO_SCRIPT[len(DEMO_PREFIX):]  # "script.xml"
+        demo = {
+            "script": demo_files.get(script_rel),
+            "script_name": script_rel,
+            "files": demo_files,
+            "manifest": manifest.get("demo") or {},
+        }
+        if demo["script"] is None:
+            warnings.append("demo package has no demo/script.xml")
+
+    attachments: Dict[str, bytes] = {}
+    for n in sorted(members):
+        if n.startswith(ATTACHMENTS_PREFIX) and not n.endswith("/"):
+            attachments[n[len(ATTACHMENTS_PREFIX):]] = members[n]
+
+    extra_members = sorted(
+        n for n in members
+        if n not in _KNOWN_MEMBERS
+        and not n.startswith(ATTACHMENTS_PREFIX)
+        and not n.startswith(DEMO_PREFIX)
+        and not n.startswith(TRACE_DIR)
+    )
+
+    return {
+        "manifest": manifest,
+        "schema": manifest.get("schema"),
+        "kind": kind,
+        "read_only": read_only,
+        "migrated": migrated,
+        "trace_bytes": trace_bytes,
+        "trace_embedded": bool(trace_meta.get("embedded")),
+        "trace_ref": str(trace_meta.get("ref") or ""),
+        "view_state": view_state,
+        "health": health,
+        "findings": findings,
+        "investigation": investigation,
+        "ai_case": ai_case,
+        "demo": demo,
+        "report_html": report_html,
+        "attachments": attachments,
+        "extra_members": extra_members,
+        "warnings": warnings,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Trace freshness
+# ---------------------------------------------------------------------------
+def workspace_trace_status(
+    manifest: Dict[str, Any],
+    *,
+    current_sha256: str = "",
+    current_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Whether the workspace's cached analysis can still be trusted for a trace.
+
+    ``matches`` is ``True``/``False`` when it can be decided, ``None`` when
+    there is nothing to compare against (no stored hash, or no current trace).
+    """
+    trace = (manifest or {}).get("trace") or {}
+    stored_hash = str(trace.get("sha256") or "")
+    embedded = bool(trace.get("embedded"))
+    ref = str(trace.get("ref") or "")
+
+    if not current_sha256 and current_size is None:
+        return {"embedded": embedded, "referenced": ref, "matches": None,
+                "reason": "no current trace to compare"}
+    if not stored_hash:
+        return {"embedded": embedded, "referenced": ref, "matches": None,
+                "reason": "workspace stored no trace hash"}
+    if current_sha256:
+        if current_sha256 == stored_hash:
+            return {"embedded": embedded, "referenced": ref, "matches": True,
+                    "reason": "trace hash matches"}
+        return {"embedded": embedded, "referenced": ref, "matches": False,
+                "reason": "trace content changed since the workspace was saved"}
+    if current_size is not None and int(current_size) != int(trace.get("size") or -1):
+        return {"embedded": embedded, "referenced": ref, "matches": False,
+                "reason": "trace size changed since the workspace was saved"}
+    return {"embedded": embedded, "referenced": ref, "matches": None,
+            "reason": "size matches but content not verified"}
+
+
+# ---------------------------------------------------------------------------
+# Safe extraction to disk (opt-in helper; the GUI/CLI can offer this)
+# ---------------------------------------------------------------------------
+def extract_workspace(path: str, dest_dir: str, *, max_entries: int = MAX_ENTRIES,
+                      max_uncompressed: int = MAX_UNCOMPRESSED_BYTES) -> List[str]:
+    """Extract every safe member under *dest_dir*. Returns the written paths.
+
+    Thin wrapper over the shared :func:`btf_viewer_pkg.zip_container.safe_extract_all`.
+    """
+    return safe_extract_all(
+        path, dest_dir, container_desc=_CONTAINER_DESC,
+        max_entries=max_entries, max_uncompressed=max_uncompressed)
 # ===========================================================================
 # Statistics symptom shortcuts
 # ===========================================================================
@@ -64713,12 +67430,19 @@ def _finding(
     inspect_href: str = "",
     confidence: str = "",
     evidence_text: str = "",
+    comparison_basis: str = "",
+    measured_values: Optional[list] = None,
+    limitations: Optional[list] = None,
 ) -> dict:
     out = {
         "severity": severity,
         "title": title,
         "text": text,
         "id": fid or "",
+        # rule_id is the stable, report-independent identity of the rule that
+        # produced this finding (``id`` is slugged per report and may gain a
+        # ``-2`` suffix). InvestigationFinding normalisation keys off this.
+        "rule_id": fid or "",
         "task": task or "",
         "evidence": list(evidence or []),
         "impact": impact or "",
@@ -64726,6 +67450,9 @@ def _finding(
         "inspect_href": inspect_href or "",
         "confidence": confidence or "",
         "evidence_text": evidence_text or "",
+        "comparison_basis": comparison_basis or "",
+        "measured_values": list(measured_values or []),
+        "limitations": list(limitations or []),
     }
     return out
 
@@ -64770,6 +67497,13 @@ def _build_workflow_analysis_findings(
         gini = float(lb["gini"])
         sigma = float(lb["stddev"])
         metrics = f"Load Balance Score {score:.0f}% (σ={sigma:.1f}%, G={gini:.3f})"
+        _lb_mv = [
+            {"name": "Load Balance Score", "value": round(score, 1), "unit": "%",
+             "sample_count": len(pcts)},
+            {"name": "σ", "value": round(sigma, 1), "unit": "%",
+             "threshold": _WF_LOAD_SIGMA_WARN},
+            {"name": "G", "value": round(gini, 3), "unit": ""},
+        ]
         if score < _WF_LOAD_SCORE_WARN or sigma > _WF_LOAD_SIGMA_WARN:
             findings.append(_finding(
                 "warning",
@@ -64781,6 +67515,10 @@ def _build_workflow_analysis_findings(
                 inspect="Core Utilisation (excl. IDLE/TICK)",
                 confidence="High — derived from measured core utilisation",
                 evidence_text=metrics,
+                comparison_basis=(
+                    f"Load Balance Score < {_WF_LOAD_SCORE_WARN:.0f}% or "
+                    f"σ > {_WF_LOAD_SIGMA_WARN:.0f}%"),
+                measured_values=_lb_mv,
             ))
         elif score >= _WF_LOAD_SCORE_OK:
             findings.append(_finding(
@@ -64957,6 +67695,13 @@ def _build_workflow_analysis_findings(
                 fid="tick_health",
                 inspect="Trace Health (TICK)",
                 confidence="High — measured TICK intervals",
+                comparison_basis="TICK interval CV / large gaps vs the nominal period",
+                measured_values=[
+                    {"name": "CV", "value": round(float(tick.get("tick_cv") or 0) * 100, 2),
+                     "unit": "%"},
+                    {"name": "missed", "value": missed, "unit": "",
+                     "sample_count": int(tick.get("tick_count") or 0)},
+                ],
             ))
         elif missed > 0:
             findings.append(_finding(
@@ -65014,9 +67759,9 @@ def _build_workflow_analysis_findings(
     if not actionable and not any(f.get("id") == "top_cpu" for f in findings):
         findings.append(_finding(
             "info",
-            "No analysis heuristics flagged",
-            "No load-imbalance, thrashing, deadline, tick, or sync warnings "
-            "in the current scope. Review the tables below for detail.",
+            NO_FINDINGS_UNDER_RULES,
+            "No rule produced a finding in the current scope. This is not a "
+            "clean bill of health — review the tables below for detail.",
             fid="none",
         ))
 
@@ -65036,7 +67781,7 @@ def _format_analysis_findings_text(
     )
     lines.append("")
     if not findings:
-        lines.append("No findings for the current scope")
+        lines.append(NO_FINDINGS_UNDER_RULES)
     else:
         for i, f in enumerate(findings, 1):
             sev = str(f.get("severity", "info")).upper()
@@ -65153,6 +67898,7 @@ class _AnalysisFindingsDialog(QDialog):
                  on_show_evidence=None, on_ai_query=None,
                  triage_state: Optional[dict] = None,
                  on_triage_change=None, on_add_to_case=None,
+                 on_add_to_investigation=None,
                  on_undo_investigate=None,
                  current_limit: bool = False,
                  current_cursor_lo: Optional[float] = None,
@@ -65199,6 +67945,7 @@ class _AnalysisFindingsDialog(QDialog):
         self._on_ai_query = on_ai_query
         self._on_triage_change = on_triage_change
         self._on_add_to_case = on_add_to_case
+        self._on_add_to_investigation = on_add_to_investigation
         self._on_undo_investigate = on_undo_investigate
         self._current_limit = bool(current_limit)
         self._current_cursor_lo = current_cursor_lo
@@ -65487,7 +68234,11 @@ class _AnalysisFindingsDialog(QDialog):
         self._done_btn = QPushButton("Done")
         self._dismiss_btn = QPushButton("Dismiss…")
         self._case_btn = QPushButton("Add to case")
-        for b in (self._done_btn, self._dismiss_btn, self._case_btn):
+        self._investigation_btn = QPushButton("Add to investigation")
+        self._investigation_btn.setToolTip(
+            "Add this finding as an observation in the Investigation notebook")
+        for b in (self._done_btn, self._dismiss_btn, self._case_btn,
+                  self._investigation_btn):
             b.setFont(ui_font)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(_bbtn)
@@ -65496,6 +68247,7 @@ class _AnalysisFindingsDialog(QDialog):
         self._done_btn.clicked.connect(self._toggle_done)
         self._dismiss_btn.clicked.connect(self._toggle_dismiss)
         self._case_btn.clicked.connect(self._add_to_case)
+        self._investigation_btn.clicked.connect(self._add_to_investigation_notebook)
 
         # Bottom block — web `.analysis-footer`: full-width scope hint, then a
         # single button line with scope actions left, Ask AI / More / Close right.
@@ -66101,6 +68853,8 @@ class _AnalysisFindingsDialog(QDialog):
         self._done_btn.setEnabled(enabled)
         self._dismiss_btn.setEnabled(enabled)
         self._case_btn.setEnabled(enabled)
+        self._investigation_btn.setEnabled(
+            enabled and callable(self._on_add_to_investigation))
         self._done_btn.setText("Undo" if reviewed else "Done")
         self._dismiss_btn.setText("Restore" if dismissed else "Dismiss…")
         self._case_btn.setText("Remove from case" if in_case else "Add to case")
@@ -66145,6 +68899,11 @@ class _AnalysisFindingsDialog(QDialog):
             self._apply_triage_action(self._triage_state, fid, "case"))
         if callable(self._on_add_to_case):
             self._on_add_to_case(finding)
+
+    def _add_to_investigation_notebook(self) -> None:
+        finding = self._selected_finding()
+        if finding and callable(self._on_add_to_investigation):
+            self._on_add_to_investigation(finding)
 
     def _refresh_scope_hint(self) -> None:
         lbl = getattr(self, "_scope_lbl", None)
@@ -70706,7 +73465,15 @@ class _StatsPanel(QWidget):
                 return name
         return "trace"
 
-    def write_statistics_html_report(self, path: str) -> None:
+    def build_statistics_html(self) -> str:
+        """Return the full statistics HTML report as a string (no file write).
+
+        Backs :meth:`write_statistics_html_report` and the ``.btfw`` workspace
+        export.
+        """
+        return self.write_statistics_html_report(None, return_html=True)
+
+    def write_statistics_html_report(self, path, return_html: bool = False):
         trace = self._trace
         if trace is None:
             raise ValueError("no trace loaded")
@@ -71641,6 +74408,35 @@ class _StatsPanel(QWidget):
             ]
         analysis_html = _render_workflow_analysis_html(analysis_findings, scope_title)
 
+        def _health_fmt(ns):
+            return _format_time_trim(int(ns), trace.time_scale)
+
+        trace_health_result = build_trace_health_result(
+            trace, lo, hi, format_ns=_health_fmt)
+        trace_health_html = html_trace_health_card(
+            trace_health_result, format_ns=_health_fmt, scope_title=scope_title)
+
+        # Investigation Bookmarks and Evidence Chain (optional — rendered only
+        # when the GUI/CLI attached a saved investigation).
+        investigation_html = ""
+        _inv = getattr(self, "_export_investigation", None)
+        if isinstance(_inv, dict) and (_inv.get("bookmarks") or _inv.get("conclusion")):
+            try:
+                _inv_span = int(hi if hi is not None else trace.time_max) - int(
+                    lo if lo is not None else trace.time_min)
+            except (TypeError, ValueError):
+                _inv_span = None
+            _inv_findings = build_investigation_findings(
+                analysis_findings, total_span_ns=_inv_span)
+            _cur_ident = trace_identity(trace, trace_name)
+            _broken = detect_broken_references(
+                _inv, trace=trace,
+                known_rule_ids=[c.get("rule_id") for c in _inv_findings],
+                current_identity=_cur_ident)
+            investigation_html = html_investigation_section(
+                _inv, format_ns=_health_fmt, broken_refs=_broken,
+                chains=conclusion_evidence_chains(_inv), scope_title=scope_title)
+
         warn_n = sum(1 for f in analysis_findings if f.get("severity") == "warning")
         err_n = sum(1 for f in analysis_findings if f.get("severity") == "error")
         status_kind = "error" if err_n else ("warn" if warn_n else "ok")
@@ -71669,8 +74465,13 @@ class _StatsPanel(QWidget):
         dl_n = 0
         if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
             dl_n = len(_dl_viols.get("slice_violations") or []) + len(_dl_viols.get("cpu_violations") or [])
+        _th_status = str(trace_health_result.get("status") or "pass")
+        _th_kind = {"insufficient": "error", "caution": "warn"}.get(_th_status, "ok")
         kpis = [
             {"label": "Overall status", "value": status_value, "kind": status_kind},
+            {"label": "Trace health", "value": trace_health_status_label(_th_status),
+             "hint": f"{trace_health_result.get('issue_count', 0)} structural issue(s)",
+             "kind": _th_kind},
             {"label": "Load balance", "value": lb_txt, "hint": lb_hint,
              "kind": "warn" if _lb and (_lb["score"] < 70 or _lb["stddev"] > 30) else "ok"},
             {"label": "Core utilisation range",
@@ -71781,6 +74582,8 @@ class _StatsPanel(QWidget):
         {scope_html}
         {evidence_refs_html}
         {analysis_html}
+        {trace_health_html}
+        {investigation_html}
         {meta_html}
     {core_util_html}
     {tick_health_html}
@@ -71856,8 +74659,11 @@ class _StatsPanel(QWidget):
         if getattr(self, "_export_anonymize", False):
             out = _anon(out)
 
+        if return_html or path is None:
+            return out
         with open(path, "w", encoding="utf-8") as f:
             f.write(out)
+        return None
 
     def _export_html(self) -> None:
         if self._trace is None:
@@ -72000,7 +74806,7 @@ class _StatsPanel(QWidget):
                         _f_ev,
                     ])
             else:
-                writer.writerow(["", "", "No findings for the current scope", "", ""])
+                writer.writerow(["", "", NO_FINDINGS_UNDER_RULES, "", ""])
 
             writer.writerow([])
             writer.writerow([f"Core Utilisation (excl. IDLE/TICK){scope_suffix}"])
@@ -72802,6 +75608,19 @@ class _StatsPanel(QWidget):
             findings, _ = self.build_analysis_findings()
         except Exception:
             findings = []
+        _span_ns = None
+        try:
+            _lo = lo if lo is not None else trace.time_min
+            _hi = hi if hi is not None else trace.time_max
+            if _hi is not None and _lo is not None and _hi > _lo:
+                _span_ns = int(_hi) - int(_lo)
+        except (TypeError, ValueError):
+            _span_ns = None
+        try:
+            investigation_findings = build_investigation_findings(
+                findings, total_span_ns=_span_ns)
+        except Exception:
+            investigation_findings = []
         _anon, _ = self._make_export_anonymizer()
 
         _u2ns = {"ns": 1.0, "us": 1e3, "µs": 1e3, "μs": 1e3, "ms": 1e6, "s": 1e9}
@@ -72818,8 +75637,18 @@ class _StatsPanel(QWidget):
         def _top_by(rows: list, max_idx: int, n: int = 10) -> list:
             return sorted(rows, key=lambda r: _t2ns(r[max_idx]), reverse=True)[:n]
 
+        def _anon_investigation(f: dict) -> dict:
+            g = investigation_finding_export(f)
+            g["observation"] = _anon(g.get("observation") or "")
+            g["entities"] = [_anon(e) for e in g.get("entities") or []]
+            g["evidence_refs"] = [
+                {**r, "label": _anon(str(r.get("label") or ""))}
+                for r in g.get("evidence_refs") or []
+            ]
+            return g
+
         payload = {
-            "schema": "btf-viewer-stats/1",
+            "schema": "btf-viewer-stats/2",
             "generator": f"BTFViewer {_APP_VERSION}",
             "generated": datetime.datetime.now(datetime.timezone.utc)
             .isoformat(timespec="seconds"),
@@ -72844,10 +75673,14 @@ class _StatsPanel(QWidget):
                 {
                     "severity": f.get("severity", "info"),
                     "id": f.get("id") or "",
+                    "rule_id": f.get("rule_id") or f.get("id") or "",
                     "title": _anon(f.get("title", "")),
                     "text": _anon(f.get("text", "")),
                 }
                 for f in findings
+            ],
+            "investigation_findings": [
+                _anon_investigation(f) for f in investigation_findings
             ],
             "core_utilisation": [
                 {"core": c, "pct": round(p, 2)} for c, p in core_rows
@@ -72880,6 +75713,24 @@ class _StatsPanel(QWidget):
                 for r in sync_rows
             ],
         }
+        _inv = getattr(self, "_export_investigation", None)
+        if isinstance(_inv, dict) and (_inv.get("bookmarks") or _inv.get("conclusion")):
+            _inv_norm = load_investigation(_inv)
+            for _b in _inv_norm.get("bookmarks") or []:
+                _b["title"] = _anon(_b.get("title") or "")
+                _b["note"] = _anon(_b.get("note") or "")
+            _inv_norm["title"] = _anon(_inv_norm.get("title") or "")
+            _inv_norm["conclusion"] = _anon(_inv_norm.get("conclusion") or "")
+            _inv_norm["chains"] = conclusion_evidence_chains(_inv_norm)
+            _inv_norm["broken_references"] = detect_broken_references(
+                _inv_norm, trace=trace,
+                known_rule_ids=[
+                    f.get("rule_id") or f.get("id")
+                    for f in investigation_findings
+                ],
+                current_identity=trace_identity(
+                    trace, self._resolve_export_trace_name()))
+            payload["investigation"] = _inv_norm
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2, sort_keys=True, default=str)
             fh.write("\n")
@@ -78122,6 +80973,11 @@ class SnapshotEditorDialog(QDialog):
     _DASHABLE = ('rect', 'circle', 'line', 'arrow', 'dblarrow', 'dash')
     _NO_OUTLINE = ('highlight', 'badge', 'blur', 'crop')
     _HISTORY_LIMIT = 100
+    # Absolute cap on the size the editor opens at, regardless of what the
+    # window system reports as available (guards against oversized / off-screen
+    # windows on multi-monitor and WSLg setups). The user can still resize.
+    _MAX_OPEN_W = 1600
+    _MAX_OPEN_H = 1000
     _TOOL_LABELS = {
         'select':   'Select / move  (V)',
         'arrow':    'Arrow  (A)',
@@ -78508,7 +81364,13 @@ class SnapshotEditorDialog(QDialog):
         else:
             gw, gh = h0 * _PHI, h0
         scr = _widget_available_geometry(self)
-        max_w, max_h = scr.width() - 40, scr.height() - 80
+        # Cap the opening size to a sane maximum as well as to the reported
+        # screen. Some multi-monitor / WSLg setups report an available
+        # geometry much larger than the actually-visible area, which would
+        # otherwise open the dialog partly (or wholly) off-screen with no way
+        # to drag it back.
+        max_w = min(scr.width() - 40, self._MAX_OPEN_W)
+        max_h = min(scr.height() - 80, self._MAX_OPEN_H)
         if gw > max_w:
             gw = max_w
             gh = gw / _PHI
@@ -78516,6 +81378,7 @@ class SnapshotEditorDialog(QDialog):
             gh = max_h
             gw = gh * _PHI
         self.resize(int(round(gw)), int(round(gh)))
+        self._recenter_on_screen()
         QTimer.singleShot(0, self._canvas.setFocus)
 
     # ---- inspector -----------------------------------------------------
@@ -79303,6 +82166,32 @@ class SnapshotEditorDialog(QDialog):
     def closeEvent(self, event) -> None:  # noqa: N802
         self._commit_text_edit()
         super().closeEvent(event)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # Once shown, the real frame (incl. title bar) is known — clamp it fully
+        # inside the available screen area so the title bar can always be
+        # grabbed, even when the window system reported a wrong / oversized
+        # available geometry. Do it now and once more after the event loop
+        # settles (some WMs report decoration sizes asynchronously).
+        self._recenter_on_screen()
+        QTimer.singleShot(0, self._recenter_on_screen)
+
+    def _recenter_on_screen(self) -> None:
+        scr = _widget_available_geometry(self)
+        frame = self.frameGeometry() if self.isVisible() else self.geometry()
+        w = min(frame.width(), scr.width())
+        h = min(frame.height(), scr.height())
+        if w != frame.width() or h != frame.height():
+            # Shrink the client area by the same delta so the frame fits.
+            self.resize(max(320, self.width() - (frame.width() - w)),
+                        max(240, self.height() - (frame.height() - h)))
+            frame = self.frameGeometry() if self.isVisible() else self.geometry()
+        x = min(max(frame.x(), scr.x()), scr.x() + scr.width() - frame.width())
+        y = min(max(frame.y(), scr.y()), scr.y() + scr.height() - frame.height())
+        if (x, y) != (frame.x(), frame.y()):
+            # move() positions the frame's top-left on X11/Wayland/WSLg.
+            self.move(x, y)
 
     def _text_edit_active(self) -> bool:
         return self._text_input.isVisible()
@@ -80207,12 +83096,12 @@ class StatsReferenceViewer(QDialog):
         self._back_btn.setEnabled(self._history_index > 0)
         self._fwd_btn.setEnabled(self._history_index < len(self._history) - 1)
 
-        if self._view is None:
-            return
         if not self._pages and not self._load_pages():
             self._breadcrumb.setText(f"{crumb}  (reference not built)")
             return
         self._sync_toc_subsections(section_id)
+        if self._view is None:
+            return
         if self._doc_loaded:
             self._scroll_to(section_id)
         else:
@@ -81793,6 +84682,813 @@ def trace_quality_report(trace: Optional["BtfTrace"]) -> Dict[str, Any]:
         ],
     }
 # ===========================================================================
+# trace_health
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Status + check identifiers (stable — persisted in exports and referenced by
+# tests, so do not rename without a schema bump).
+# ---------------------------------------------------------------------------
+STATUS_PASS = "pass"
+STATUS_CAUTION = "caution"
+STATUS_INSUFFICIENT = "insufficient"
+
+_STATUS_LABELS = {
+    STATUS_PASS: "Pass",
+    STATUS_CAUTION: "Caution",
+    STATUS_INSUFFICIENT: "Insufficient data",
+}
+
+CHECK_EMPTY_TRACE = "empty_trace"
+CHECK_TIMESTAMP_UNITS = "timestamp_units"
+CHECK_TIMESTAMP_SKIPS = "timestamp_skips"
+CHECK_CORE_INTERVAL_OVERLAP = "core_interval_overlap"
+CHECK_UNKNOWN_CORE = "unknown_core"
+CHECK_MISSING_TASK_IDENTITY = "missing_task_identity"
+CHECK_UNMATCHED_INTERVALS = "unmatched_intervals"
+CHECK_SYNC_PAIRING = "sync_pairing_issues"
+CHECK_CAPTURE_TRUNCATION = "capture_truncation"
+CHECK_LONG_GAP = "long_data_gap"
+CHECK_METRIC_PREREQUISITES = "metric_prerequisites"
+
+TRACE_HEALTH_CHECK_IDS = (
+    CHECK_EMPTY_TRACE,
+    CHECK_TIMESTAMP_UNITS,
+    CHECK_TIMESTAMP_SKIPS,
+    CHECK_CORE_INTERVAL_OVERLAP,
+    CHECK_UNKNOWN_CORE,
+    CHECK_MISSING_TASK_IDENTITY,
+    CHECK_UNMATCHED_INTERVALS,
+    CHECK_SYNC_PAIRING,
+    CHECK_CAPTURE_TRUNCATION,
+    CHECK_LONG_GAP,
+    CHECK_METRIC_PREREQUISITES,
+)
+
+_SEVERITY_RANK = {"info": 0, "warning": 1, "error": 2}
+
+_KNOWN_TIME_SCALES = ("ps", "ns", "us", "µs", "ms", "s")
+
+# A gap in scheduled activity is only reported when it is a large fraction of
+# the analysed span — deterministic and unit-independent.
+_LONG_GAP_SPAN_FRACTION = 0.20
+
+# Fraction of a core's slices that may overlap before the timeline is treated
+# as structurally broken (error) rather than merely suspicious (warning).
+_OVERLAP_ERROR_RATIO = 0.02
+
+# Evidence timestamps kept per check (keeps exports compact).
+_EVIDENCE_CAP = 4
+
+_VALID_CORE_RE = re.compile(r"^(?:Core_|CPU|C)(\d{1,2})$", re.IGNORECASE)
+_PLACEHOLDER_TASK_RE = re.compile(r"^\[[^\]]*\]\s*$")
+
+
+def trace_health_status_label(status: str) -> str:
+    """Human label for a status token."""
+    return _STATUS_LABELS.get(str(status or ""), "Unknown")
+
+
+def _fmt(format_ns: Optional[Callable[[int], Any]], value: int) -> str:
+    if callable(format_ns):
+        try:
+            return str(format_ns(int(value)))
+        except Exception:  # pragma: no cover - defensive
+            return str(int(value))
+    return str(int(value))
+
+
+def _scoped_segments(trace: Any, lo: Optional[int], hi: Optional[int]) -> list:
+    segs = list(getattr(trace, "segments", None) or [])
+    if lo is None and hi is None:
+        return segs
+    lo_v = -math.inf if lo is None else lo
+    hi_v = math.inf if hi is None else hi
+    return [s for s in segs if s.end > lo_v and s.start < hi_v]
+
+
+def _scoped_times(times: Any, lo: Optional[int], hi: Optional[int]) -> list:
+    seq = list(times or [])
+    if lo is None and hi is None:
+        return seq
+    lo_v = -math.inf if lo is None else lo
+    hi_v = math.inf if hi is None else hi
+    return [t for t in seq if lo_v <= t <= hi_v]
+
+
+def _check(
+    cid: str,
+    severity: str,
+    summary: str,
+    *,
+    affected_range: Optional[Dict[str, int]] = None,
+    affected_entities: Optional[List[str]] = None,
+    evidence_refs: Optional[List[str]] = None,
+    metric_limitations: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    return {
+        "id": cid,
+        "severity": severity,
+        "summary": summary,
+        "affected_range": affected_range,
+        "affected_entities": list(affected_entities or []),
+        "evidence_refs": list(evidence_refs or []),
+        "metric_limitations": list(metric_limitations or []),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Individual checks — each returns a check dict or ``None``.
+# ---------------------------------------------------------------------------
+def _check_empty(segs: list, sti_events: list) -> Optional[dict]:
+    if segs or sti_events:
+        return None
+    return _check(
+        CHECK_EMPTY_TRACE, "error",
+        "No task slices or STI events in the analysed range.",
+        metric_limitations=["All statistics"],
+    )
+
+
+def _check_units(trace: Any) -> Optional[dict]:
+    scale = str(getattr(trace, "time_scale", "") or "").strip().lower()
+    if not scale or scale in _KNOWN_TIME_SCALES:
+        return None
+    return _check(
+        CHECK_TIMESTAMP_UNITS, "error",
+        f"Unrecognised timestamp unit '{scale}'. Tick/cycle-to-time conversion "
+        "cannot be verified, so every time-based value is unreliable.",
+        metric_limitations=["All time-based statistics"],
+    )
+
+
+def _check_skips(trace: Any) -> Optional[dict]:
+    meta = getattr(trace, "meta", None) or {}
+    raw = meta.get("_skipped_lines") or meta.get("skippedLines") or 0
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return None
+    return _check(
+        CHECK_TIMESTAMP_SKIPS, "warning",
+        f"{n:,} trace line(s) had an unparseable timestamp and were dropped "
+        "before analysis.",
+        metric_limitations=["Event counts", "Timeline coverage"],
+    )
+
+
+def _check_core_overlap(
+    trace: Any, segs: list, format_ns: Optional[Callable[[int], Any]]
+) -> Optional[dict]:
+    by_core: Dict[str, list] = {}
+    for s in segs:
+        by_core.setdefault(s.core, []).append(s)
+    overlaps = 0
+    total = 0
+    ev: List[str] = []
+    cores: List[str] = []
+    rng_lo: Optional[int] = None
+    rng_hi: Optional[int] = None
+    for core, cs in by_core.items():
+        cs_sorted = sorted(cs, key=lambda s: (s.start, s.end))
+        total += len(cs_sorted)
+        prev_end = None
+        core_hit = False
+        for s in cs_sorted:
+            if prev_end is not None and s.start < prev_end:
+                overlaps += 1
+                core_hit = True
+                lo_ov, hi_ov = s.start, min(prev_end, s.end)
+                rng_lo = lo_ov if rng_lo is None else min(rng_lo, lo_ov)
+                rng_hi = hi_ov if rng_hi is None else max(rng_hi, hi_ov)
+                if len(ev) < _EVIDENCE_CAP:
+                    ev.append(f"{core} @ {_fmt(format_ns, s.start)}")
+            if prev_end is None or s.end > prev_end:
+                prev_end = s.end
+        if core_hit:
+            cores.append(core)
+    if not overlaps:
+        return None
+    ratio = overlaps / max(1, total)
+    severity = "error" if ratio > _OVERLAP_ERROR_RATIO else "warning"
+    rng = None
+    if rng_lo is not None and rng_hi is not None:
+        rng = {"start": int(rng_lo), "end": int(rng_hi)}
+    return _check(
+        CHECK_CORE_INTERVAL_OVERLAP, severity,
+        f"{overlaps:,} task slice(s) overlap in time on the same core "
+        f"({ratio * 100:.1f}% of slices on {len(cores)} core(s)). Two tasks "
+        "cannot run at once on one core, so the reconstructed schedule is "
+        "inconsistent here.",
+        affected_range=rng,
+        affected_entities=sorted(cores),
+        evidence_refs=ev,
+        metric_limitations=[
+            "Core Utilisation", "Core Time Breakdown",
+            "Preemption Chain Analysis", "Response Time",
+        ],
+    )
+
+
+def _check_unknown_cores(trace: Any) -> Optional[dict]:
+    bad: List[str] = []
+    for name in getattr(trace, "core_names", None) or []:
+        m = _VALID_CORE_RE.match(str(name).strip())
+        if not m or not (0 <= int(m.group(1)) <= 31):
+            bad.append(str(name))
+    if not bad:
+        return None
+    return _check(
+        CHECK_UNKNOWN_CORE, "warning",
+        "Core identifier(s) outside the valid 0-31 range or in an unexpected "
+        f"format: {', '.join(bad[:8])}.",
+        affected_entities=bad,
+        metric_limitations=["Core Migrations", "Core Affinity", "Task × Core"],
+    )
+
+
+def _check_task_identity(trace: Any) -> Optional[dict]:
+    meta = getattr(trace, "meta", None) or {}
+    overflow = False
+    for key in ("taskTableOverflow", "task_table_overflow"):
+        v = meta.get(key)
+        if v is True or v == 1 or str(v).strip().lower() in ("1", "true", "yes"):
+            overflow = True
+    placeholders = 0
+    repr_map = getattr(trace, "task_repr", None) or {}
+    names = list(repr_map.values()) if repr_map else list(getattr(trace, "tasks", None) or [])
+    for name in names:
+        text = str(name or "").strip()
+        if not text or _PLACEHOLDER_TASK_RE.match(text):
+            placeholders += 1
+    if not overflow and not placeholders:
+        return None
+    bits = []
+    if overflow:
+        bits.append("task-table overflow was flagged during capture")
+    if placeholders:
+        bits.append(f"{placeholders} task(s) have no readable name")
+    summary = "; ".join(bits)
+    summary = summary[:1].upper() + summary[1:]
+    return _check(
+        CHECK_MISSING_TASK_IDENTITY, "warning",
+        summary + ". Per-task attribution for those slices is unreliable.",
+        metric_limitations=["Top Tasks by CPU", "Task × Core", "Task Health"],
+    )
+
+
+def _check_unmatched_intervals(trace: Any) -> Optional[dict]:
+    try:
+        n = int(getattr(trace, "interval_unmatched_starts", 0) or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return None
+    return _check(
+        CHECK_UNMATCHED_INTERVALS, "warning",
+        f"{n:,} interval_start event(s) never received a matching "
+        "interval_stop. Those spans are dropped from interval statistics.",
+        metric_limitations=["Interval Analysis", "Period / Jitter"],
+    )
+
+
+def _check_sync_pairing(
+    trace: Any, format_ns: Optional[Callable[[int], Any]]
+) -> Optional[dict]:
+    issues = list(getattr(trace, "sync_issues", None) or [])
+    if not issues:
+        return None
+    ev: List[str] = []
+    for i in issues[:_EVIDENCE_CAP]:
+        kind = str(i.get("kind") or i.get("detail") or "issue")
+        t = i.get("time_ns")
+        ev.append(
+            f"{kind} @ {_fmt(format_ns, t)}" if t is not None else kind
+        )
+    return _check(
+        CHECK_SYNC_PAIRING, "warning",
+        f"{len(issues):,} mutex/semaphore pairing issue(s) (orphan give, "
+        "unmatched take, or lock held across a migration).",
+        evidence_refs=ev,
+        metric_limitations=[
+            "Mutex / Semaphore", "Mutex Blocking",
+            "Waiter × Owner", "Priority Inheritance",
+        ],
+    )
+
+
+def _check_truncation(trace: Any) -> Optional[dict]:
+    warnings = collect_trace_quality_warnings(trace)
+    if not warnings:
+        return None
+    return _check(
+        CHECK_CAPTURE_TRUNCATION, "warning",
+        " ".join(warnings),
+        metric_limitations=[
+            "Timeline Anomalies", "Worst Events",
+            "Response Time", "Execution Time Per Slice",
+        ],
+    )
+
+
+def _check_long_gap(
+    segs: list,
+    lo: Optional[int],
+    hi: Optional[int],
+    trace: Any,
+    format_ns: Optional[Callable[[int], Any]],
+) -> Optional[dict]:
+    if len(segs) < 2:
+        return None
+    span_lo = lo if lo is not None else getattr(trace, "time_min", None)
+    span_hi = hi if hi is not None else getattr(trace, "time_max", None)
+    if span_lo is None or span_hi is None or span_hi <= span_lo:
+        return None
+    span = span_hi - span_lo
+    ordered = sorted(segs, key=lambda s: s.start)
+    gap = 0
+    gap_lo = gap_hi = 0
+    covered = ordered[0].end
+    for s in ordered[1:]:
+        if s.start > covered:
+            g = s.start - covered
+            if g > gap:
+                gap, gap_lo, gap_hi = g, covered, s.start
+        if s.end > covered:
+            covered = s.end
+    if gap <= span * _LONG_GAP_SPAN_FRACTION:
+        return None
+    return _check(
+        CHECK_LONG_GAP, "info",
+        f"No task was scheduled for {_fmt(format_ns, gap)} "
+        f"({gap / span * 100:.0f}% of the analysed span). This may be genuine "
+        "idle time or a gap in the capture; rates and utilisation include it "
+        "in the denominator.",
+        affected_range={"start": int(gap_lo), "end": int(gap_hi)},
+        metric_limitations=["Scheduling Load Over Time", "Core Utilisation"],
+    )
+
+
+def _check_prerequisites(
+    trace: Any, segs: list, lo: Optional[int], hi: Optional[int]
+) -> Optional[dict]:
+    channels = {str(c).lower() for c in (getattr(trace, "sti_channels", None) or [])}
+    tick_times = _scoped_times(getattr(trace, "tick_sti_times", None), lo, hi)
+    cores = {s.core for s in segs} or set(getattr(trace, "core_names", None) or [])
+    missing: List[str] = []
+    limits: List[str] = []
+    if not tick_times:
+        missing.append("no TICK events")
+        limits += ["Trace Health (TICK)"]
+    if not getattr(trace, "has_sync_object_instrumentation", False) and not (
+        channels & {"mutex", "sem", "queue"}
+    ):
+        missing.append("no mutex/semaphore/queue STI events")
+        limits += ["Mutex / Semaphore", "Mutex Blocking", "Waiter × Owner"]
+    if not (getattr(trace, "interval_ids", None) or "interval_start" in channels):
+        missing.append("no interval_start/stop events")
+        limits += ["Interval Analysis"]
+    if not getattr(trace, "has_priority_instrumentation", False):
+        missing.append("no priority (create pri:/set_priority) events")
+        limits += ["Priority Inheritance"]
+    if len(cores) < 2:
+        missing.append("single core in scope")
+        limits += ["Core Migrations", "Core Affinity", "Load Balance Score"]
+    if not missing:
+        return None
+    return _check(
+        CHECK_METRIC_PREREQUISITES, "info",
+        "Some metrics need event types this trace does not contain: "
+        + "; ".join(missing) + ".",
+        metric_limitations=limits,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+def build_trace_health_result(
+    trace: Optional["BtfTrace"],
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+    *,
+    format_ns: Optional[Callable[[int], Any]] = None,
+) -> Dict[str, Any]:
+    """Return a ``TraceHealthResult`` dict for *trace* over ``[lo, hi]``.
+
+    Shape::
+
+        {
+          "status": "pass" | "caution" | "insufficient",
+          "checks": [ {id, severity, summary, affected_range,
+                       affected_entities, evidence_refs, metric_limitations} ],
+          "issue_count": int,            # warning + error checks
+          "metric_limitations": [str],   # de-duplicated union
+          "scoped": bool,
+        }
+    """
+    if trace is None:
+        return {
+            "status": STATUS_INSUFFICIENT,
+            "checks": [_check(
+                CHECK_EMPTY_TRACE, "error", "No trace is loaded.",
+                metric_limitations=["All statistics"],
+            )],
+            "issue_count": 1,
+            "metric_limitations": ["All statistics"],
+            "scoped": False,
+        }
+
+    segs = _scoped_segments(trace, lo, hi)
+    sti_events = _scoped_times(
+        [e.time for e in (getattr(trace, "sti_events", None) or [])], lo, hi
+    )
+
+    checks: List[Dict[str, Any]] = []
+    empty = _check_empty(segs, sti_events)
+    if empty:
+        checks.append(empty)
+    else:
+        for candidate in (
+            _check_units(trace),
+            _check_skips(trace),
+            _check_core_overlap(trace, segs, format_ns),
+            _check_unknown_cores(trace),
+            _check_task_identity(trace),
+            _check_unmatched_intervals(trace),
+            _check_sync_pairing(trace, format_ns),
+            _check_truncation(trace),
+            _check_long_gap(segs, lo, hi, trace, format_ns),
+            _check_prerequisites(trace, segs, lo, hi),
+        ):
+            if candidate:
+                checks.append(candidate)
+
+    checks.sort(key=lambda c: (-_SEVERITY_RANK.get(c["severity"], 0), c["id"]))
+
+    severities = {c["severity"] for c in checks}
+    if "error" in severities:
+        status = STATUS_INSUFFICIENT
+    elif "warning" in severities:
+        status = STATUS_CAUTION
+    else:
+        status = STATUS_PASS
+
+    limitations: List[str] = []
+    seen = set()
+    for c in checks:
+        for m in c.get("metric_limitations") or []:
+            if m not in seen:
+                seen.add(m)
+                limitations.append(m)
+
+    return {
+        "status": status,
+        "checks": checks,
+        "issue_count": sum(
+            1 for c in checks if c["severity"] in ("warning", "error")
+        ),
+        "metric_limitations": limitations,
+        "scoped": bool(lo is not None or hi is not None),
+    }
+
+
+def trace_health_summary(result: Optional[Dict[str, Any]]) -> str:
+    """One-line summary for KPI tiles / plain-text exports."""
+    if not result:
+        return "Trace health: unknown"
+    status = trace_health_status_label(result.get("status", ""))
+    n = int(result.get("issue_count") or 0)
+    if not n:
+        return f"Trace health: {status}"
+    return f"Trace health: {status} · {n} issue(s)"
+# ===========================================================================
+# verify_rules
+# ===========================================================================
+
+VERIFY_SCHEMA_VERSION = 1
+
+EXIT_PASS = 0
+EXIT_FAIL = 1
+EXIT_INPUT = 2
+EXIT_INTERNAL = 3
+
+_SEVERITIES = ("info", "warning", "error")
+
+# metric -> (snapshot key, kind).  kind: "number" | "time_ns" | "status"
+_TRACE_METRICS: Dict[str, Tuple[str, str]] = {
+    "span_ns": ("span_ns", "time_ns"),
+    "tasks": ("tasks", "number"),
+    "segments": ("segments", "number"),
+    "sti_events": ("sti_events", "number"),
+    "context_switches": ("context_switches", "number"),
+    "gap_avg_ns": ("gap_avg_ns", "time_ns"),
+    "gap_max_ns": ("gap_max_ns", "time_ns"),
+    "migrations": ("migrations", "number"),
+    "migrated_tasks": ("migrated_tasks", "number"),
+    "load_balance_score": ("load_balance_score", "number"),
+    "load_balance_sigma": ("load_balance_sigma", "number"),
+    "tick_health": ("tick_health", "status"),
+    "tick_count": ("tick_count", "number"),
+    "missed_ticks": ("missed_ticks", "number"),
+}
+
+# Derived metrics resolved from build_trace_health_result / the snapshot.
+_DERIVED_METRICS = {"trace_health", "migration_rate_per_s"}
+
+_TIME_UNIT_DIVISOR = {"ns": 1.0, "us": 1_000.0, "ms": 1_000_000.0, "s": 1_000_000_000.0}
+_HEALTH_RANK = {"pass": 0, "caution": 1, "insufficient": 2}
+
+
+def supported_metrics() -> List[str]:
+    """Sorted list of every metric name a rule may target."""
+    return sorted(set(_TRACE_METRICS) | _DERIVED_METRICS)
+
+
+# --------------------------------------------------------------------------
+def load_rule_file(path: str) -> Dict[str, Any]:
+    """Parse + validate a JSON rule file. Raises ``ValueError`` on any problem."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = fh.read()
+    except OSError as exc:  # pragma: no cover - surfaced by the caller
+        raise ValueError(f"cannot read rule file: {exc}") from exc
+    return parse_rules(raw)
+
+
+def parse_rules(text: str) -> Dict[str, Any]:
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"rule file is not valid JSON: {exc}") from exc
+    if not isinstance(obj, dict):
+        raise ValueError("rule file must be a JSON object")
+    ver = obj.get("schema_version", VERIFY_SCHEMA_VERSION)
+    if ver != VERIFY_SCHEMA_VERSION:
+        raise ValueError(
+            f"unsupported rule schema_version {ver!r} (expected {VERIFY_SCHEMA_VERSION})")
+    rules = obj.get("rules")
+    if not isinstance(rules, list) or not rules:
+        raise ValueError("rule file has no 'rules' array")
+    norm = [normalize_rule(r, i) for i, r in enumerate(rules)]
+    return {"schema_version": VERIFY_SCHEMA_VERSION, "rules": norm}
+
+
+def normalize_rule(rule: Any, index: int = 0) -> Dict[str, Any]:
+    if not isinstance(rule, dict):
+        raise ValueError(f"rule #{index + 1} is not an object")
+    metric = str(rule.get("metric") or "").strip()
+    if not metric:
+        raise ValueError(f"rule #{index + 1} has no 'metric'")
+    out: Dict[str, Any] = {
+        "metric": metric,
+        "entity": str(rule.get("entity") or "").strip(),
+        "severity": _clean_severity(rule.get("severity")),
+        "label": str(rule.get("label") or "").strip(),
+    }
+    # Threshold: min/max (native) or minimum_<unit>/maximum_<unit>, or expect*.
+    lo = _first_present(rule, ("min", "minimum"))
+    hi = _first_present(rule, ("max", "maximum"))
+    unit = "ns"
+    for u in ("ns", "us", "ms", "s"):
+        if f"minimum_{u}" in rule:
+            lo, unit = rule[f"minimum_{u}"], u
+        if f"maximum_{u}" in rule:
+            hi, unit = rule[f"maximum_{u}"], u
+    expect = rule.get("expect")
+    expect_one_of = rule.get("expect_one_of")
+
+    if expect is not None:
+        out["expect"] = [str(expect)]
+    elif isinstance(expect_one_of, list) and expect_one_of:
+        out["expect"] = [str(x) for x in expect_one_of]
+    elif lo is None and hi is None:
+        raise ValueError(
+            f"rule #{index + 1} ({metric}) has no threshold "
+            "(min / max / minimum_us / maximum_us / expect / expect_one_of)")
+    if lo is not None:
+        out["min"] = float(lo)
+    if hi is not None:
+        out["max"] = float(hi)
+    if lo is not None or hi is not None:
+        out["threshold_unit"] = unit
+    return out
+
+
+def _first_present(d: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[Any]:
+    for k in keys:
+        if k in d:
+            return d[k]
+    return None
+
+
+def _clean_severity(value: Any) -> str:
+    s = str(value or "error").strip().lower()
+    return s if s in _SEVERITIES else "error"
+
+
+# --------------------------------------------------------------------------
+def _split_unit_suffix(metric: str) -> Tuple[str, str]:
+    """('gap_max_us', ...) -> ('gap_max', 'us'); 'gap_max_ns' stays ('gap_max_ns','ns')."""
+    for u in ("us", "ms"):
+        if metric.endswith("_" + u):
+            return metric[: -(len(u) + 1)], u
+    return metric, "ns"
+
+
+def _canonical_metric(name: str) -> Optional[Tuple[str, Tuple[str, str], str]]:
+    """Resolve a rule metric name to (canonical, (snapshot_key, kind), display_unit)."""
+    if name in _TRACE_METRICS:
+        return name, _TRACE_METRICS[name], "ns"
+    base, unit = _split_unit_suffix(name)
+    if base in _TRACE_METRICS:
+        return base, _TRACE_METRICS[base], unit
+    if base + "_ns" in _TRACE_METRICS:
+        return base + "_ns", _TRACE_METRICS[base + "_ns"], unit
+    return None
+
+
+def resolve_metric(
+    metric: str, snapshot: Dict[str, Any], health: Optional[Dict[str, Any]],
+) -> Tuple[Optional[float], str, str]:
+    """(value, kind, reason). ``value`` is None when the metric cannot be
+    resolved; ``reason`` explains why. ``kind`` is 'number' | 'status'."""
+    name = str(metric or "").strip()
+
+    if name == "trace_health":
+        status = str((health or {}).get("status") or "").strip().lower()
+        if status not in _HEALTH_RANK:
+            return None, "status", "trace health was not computed"
+        return float(_HEALTH_RANK[status]), "status", ""
+
+    if name == "migration_rate_per_s":
+        span = float(snapshot.get("span_ns") or 0)
+        migs = float(snapshot.get("migrations") or 0)
+        if span <= 0:
+            return None, "number", "trace span is zero"
+        return migs / (span / 1e9), "number", ""
+
+    canon = _canonical_metric(name)
+    if canon is None:
+        return None, "number", f"unknown metric '{name}'"
+    _canonical, (key, kind), disp_unit = canon
+    val = snapshot.get(key)
+    if val is None:
+        return None, kind, "insufficient data for this metric"
+    if kind == "status":
+        return None, "status", ""  # compared via expect only; see evaluate_rule
+    fval = float(val)
+    if kind == "time_ns" and disp_unit != "ns":
+        fval = fval / _TIME_UNIT_DIVISOR.get(disp_unit, 1.0)
+    return fval, "number", ""
+
+
+def evaluate_rule(
+    rule: Dict[str, Any], snapshot: Dict[str, Any], health: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    metric = rule["metric"]
+    out: Dict[str, Any] = {
+        "metric": metric,
+        "entity": rule.get("entity", ""),
+        "severity": rule.get("severity", "error"),
+        "label": rule.get("label") or metric,
+        "status": "pass",
+        "value": None,
+        "message": "",
+    }
+
+    # Per-entity rules on trace-wide metrics are not supported yet.
+    if rule.get("entity") and metric not in _DERIVED_METRICS \
+            and _canonical_metric(metric) is None:
+        out["status"] = "error"
+        out["message"] = (
+            f"per-entity metric '{metric}' for '{rule['entity']}' is not "
+            "supported by verify yet")
+        return out
+
+    # Status metrics: string equality against expect list.
+    is_status_metric = (
+        metric == "tick_health"
+        or (_TRACE_METRICS.get(metric, ("", ""))[1] == "status"))
+    if is_status_metric:
+        actual = str(snapshot.get(_TRACE_METRICS[metric][0]) or "").strip()
+        out["value"] = actual
+        want = [str(x) for x in rule.get("expect", [])]
+        if not want:
+            out["status"] = "error"
+            out["message"] = f"metric '{metric}' needs expect / expect_one_of"
+        elif not actual:
+            out["status"] = "error"
+            out["message"] = "insufficient data for this metric"
+        elif actual not in want:
+            out["status"] = "fail"
+            out["message"] = f"{actual!r} not in {want}"
+        return out
+
+    if metric == "trace_health":
+        status = str((health or {}).get("status") or "").strip().lower()
+        out["value"] = status or None
+        if "expect" in rule:
+            want = [str(x).lower() for x in rule["expect"]]
+            if status not in _HEALTH_RANK:
+                out["status"] = "error"
+                out["message"] = "trace health was not computed"
+            elif status not in want:
+                out["status"] = "fail"
+                out["message"] = f"structural health {status!r} not in {want}"
+            return out
+        # numeric worst-allowed via max (0=pass,1=caution,2=insufficient)
+        rank = _HEALTH_RANK.get(status)
+        if rank is None:
+            out["status"] = "error"
+            out["message"] = "trace health was not computed"
+            return out
+        limit = int(rule.get("max", 1))
+        if rank > limit:
+            out["status"] = "fail"
+            out["message"] = (
+                f"structural health {status!r} worse than the allowed rank {limit}")
+        return out
+
+    value, _kind, reason = resolve_metric(metric, snapshot, health)
+    out["value"] = value
+    if value is None:
+        out["status"] = "error"
+        out["message"] = reason or "metric could not be resolved"
+        return out
+    lo = rule.get("min")
+    hi = rule.get("max")
+    if lo is not None and value < lo:
+        out["status"] = "fail"
+        out["message"] = f"{_vr_num(value)} < min {_vr_num(lo)}"
+    elif hi is not None and value > hi:
+        out["status"] = "fail"
+        out["message"] = f"{_vr_num(value)} > max {_vr_num(hi)}"
+    return out
+
+
+def _vr_num(v: float) -> str:
+    if v == int(v):
+        return str(int(v))
+    return f"{v:.3f}".rstrip("0").rstrip(".")
+
+
+# --------------------------------------------------------------------------
+def run_verification(
+    snapshot: Dict[str, Any],
+    health: Optional[Dict[str, Any]],
+    rules: Dict[str, Any],
+    *,
+    strict: bool = False,
+) -> Dict[str, Any]:
+    results = [evaluate_rule(r, snapshot, health) for r in rules.get("rules", [])]
+    failed = [r for r in results if r["status"] == "fail"]
+    errored = [r for r in results if r["status"] == "error"]
+    passed = [r for r in results if r["status"] == "pass"]
+
+    exit_code = EXIT_PASS
+    if errored:
+        exit_code = EXIT_INPUT
+    blocking = [
+        r for r in failed
+        if r["severity"] == "error" or (strict and r["severity"] == "warning")
+    ]
+    if blocking and exit_code == EXIT_PASS:
+        exit_code = EXIT_FAIL
+    elif blocking:  # keep the more severe of FAIL / INPUT? failing limits win.
+        exit_code = EXIT_FAIL if not errored else EXIT_INPUT
+
+    return {
+        "results": results,
+        "passed": len(passed),
+        "failed": len(failed),
+        "errored": len(errored),
+        "blocking": len(blocking),
+        "exit_code": exit_code,
+        "strict": bool(strict),
+    }
+
+
+def format_verification_report(result: Dict[str, Any], *, title: str = "") -> str:
+    lines: List[str] = []
+    if title:
+        lines.append(f"Verify: {title}")
+    tag = {"pass": "PASS", "fail": "FAIL", "error": "DATA"}
+    for r in result.get("results", []):
+        val = r.get("value")
+        val_s = "—" if val is None else (val if isinstance(val, str) else _vr_num(float(val)))
+        ent = f" [{r['entity']}]" if r.get("entity") else ""
+        msg = f"  {r['message']}" if r.get("message") else ""
+        lines.append(
+            f"  {tag.get(r['status'], '?'):4}  {r['label']}{ent} = {val_s}"
+            f"  ({r['severity']}){msg}")
+    lines.append(
+        f"  {result['passed']} passed, {result['failed']} failed, "
+        f"{result['errored']} data error(s) → exit {result['exit_code']}")
+    return "\n".join(lines) + "\n"
+# ===========================================================================
 # Perfetto export
 # ===========================================================================
 
@@ -82609,35 +86305,57 @@ def is_demo_xml_path(path: str) -> bool:
 
 
 def _first_btf_in(folder: Path) -> Optional[Path]:
-    try:
-        found = sorted(
-            child for child in folder.iterdir()
-            if child.is_file() and is_btf_open_path(str(child))
-        )
-    except OSError:
-        return None
-    return found[0] if found else None
+    """First BTF directly in *folder*, else the first under ``folder/trace/``
+    (the package-mirror layout keeps the trace at ``trace/source.btf.gz``)."""
+    for base in (folder, folder / "trace"):
+        try:
+            found = sorted(
+                child for child in base.iterdir()
+                if child.is_file() and is_btf_open_path(str(child))
+            )
+        except OSError:
+            continue
+        if found:
+            return found[0]
+    return None
+
+
+def _find_demo_script(folder: Path) -> Optional[Path]:
+    """The overlay-tour script in a demo folder — ``demo/script.xml`` (package
+    layout) or the first parseable ``*.xml`` at the top level (loose layout)."""
+    packaged = folder / "demo" / "script.xml"
+    if packaged.is_file():
+        try:
+            load_demo_xml(packaged)
+            return packaged
+        except (OSError, ET.ParseError, ValueError):
+            pass
+    xmls = sorted(p for p in folder.glob("*.xml") if p.is_file())
+    for cand in [p for p in xmls if "demo" in p.name.lower()] or xmls:
+        try:
+            load_demo_xml(cand)
+            return cand
+        except (OSError, ET.ParseError, ValueError):
+            continue
+    return None
 
 
 def discover_demo_pack(path: str) -> Optional[Tuple[str, str]]:
-    """Return ``(xml_path, btf_path)`` if *path* is a demo XML or pack folder."""
+    """Return ``(xml_path, btf_path)`` if *path* is a demo XML or pack folder.
+
+    Handles both the package-mirror folder (``demo/script.xml`` + ``trace/``)
+    and a loose folder (``<name>.xml`` + a sibling ``.btf``).
+    """
     raw = Path(os.path.abspath(os.path.expanduser(path)))
     xml: Optional[Path] = None
     folder: Optional[Path] = None
     if raw.is_file() and raw.suffix.lower() == ".xml":
         xml = raw
-        folder = raw.parent
+        # loose: xml's own dir; package: the parent of demo/
+        folder = raw.parent.parent if raw.parent.name == "demo" else raw.parent
     elif raw.is_dir():
         folder = raw
-        xmls = sorted(p for p in raw.glob("*.xml") if p.is_file())
-        demoish = [p for p in xmls if "demo" in p.name.lower()]
-        for cand in demoish or xmls:
-            try:
-                load_demo_xml(cand)
-                xml = cand
-                break
-            except (OSError, ET.ParseError, ValueError):
-                continue
+        xml = _find_demo_script(raw)
     if xml is None or folder is None:
         return None
     try:
@@ -82648,6 +86366,44 @@ def discover_demo_pack(path: str) -> Optional[Tuple[str, str]]:
     if btf is None:
         return None
     return str(xml), str(btf)
+
+
+def discover_demo_ai_case(xml_path: str) -> Optional[Dict[str, Any]]:
+    """Parsed AI investigation case that ships with a loose demo, or None.
+
+    Looked up by convention under ``investigation/ai_case.json`` beside the
+    script (loose layout) or one level up (package layout: script is in
+    ``demo/``), or from a ``<meta><ai_case>`` path in the script. Mirrors the
+    ``investigation/ai_case.json`` member of a packed ``.btfw`` demo.
+    """
+    import json
+
+    xml = Path(os.path.abspath(os.path.expanduser(str(xml_path or ""))))
+    if not xml.is_file():
+        return None
+    candidates: List[Path] = []
+    try:
+        root = load_demo_xml(xml)
+        meta = root.find("meta")
+        node = meta.find("ai_case") if meta is not None else None
+        if node is not None:
+            ref = (text_content(node) or node.attrib.get("value", "")).strip()
+            if ref:
+                variables = build_variables(root, xml)
+                ref = expand_vars(ref, variables)
+                candidates.append(Path(ref) if os.path.isabs(ref)
+                                  else xml.parent / ref)
+    except (OSError, ET.ParseError, ValueError):
+        pass
+    candidates.append(xml.parent / "investigation" / "ai_case.json")
+    candidates.append(xml.parent.parent / "investigation" / "ai_case.json")
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                return json.loads(cand.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def build_variables(
@@ -85876,7 +89632,7 @@ class _TraceTab:
 
     __slots__ = (
         "vm", "view", "cpu_load_graph", "cpu_load_scroll", "cpu_splitter",
-        "_timeline_pane", "_stats_built",
+        "_timeline_pane", "_stats_built", "_investigation", "_notebook_history",
     )
 
     def __init__(self, path: str, trace: "BtfTrace", win: "MainWindow") -> None:
@@ -85904,6 +89660,8 @@ class _TraceTab:
         if not win._show_cpu_load:
             self.cpu_splitter.set_cpu_visible(False)
         self._stats_built = False
+        self._investigation = None
+        self._notebook_history = None
 
     @property
     def path(self) -> str:
@@ -86016,6 +89774,944 @@ class _TraceTab:
     @plot_interval_id.setter
     def plot_interval_id(self, value: Optional[str]) -> None:
         self.vm.plot_interval_id = value
+
+class _NotebookBookmarkRow(QWidget):
+    """Inline-editable bookmark row — mirror of the web ``.nb-item``:
+    title field + type combo + remove, a note field, and reference chips."""
+
+    def __init__(self, bm: dict, *, fmt, broken_ref_idx, on_change, on_remove,
+                 on_ref_click, parent=None) -> None:
+        super().__init__(parent)
+        self._bid = str(bm.get("id") or "")
+        self._on_change = on_change
+        self._building = True
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(9, 9, 9, 9)
+        outer.setSpacing(7)
+        self.setObjectName("nb_item")
+        self.setProperty("broken", bool(broken_ref_idx))
+
+        top = QHBoxLayout()
+        top.setSpacing(7)
+        self._title = QLineEdit(str(bm.get("title") or ""))
+        self._title.editingFinished.connect(self._emit_title)
+        self._type = QComboBox()
+        for t in BOOKMARK_TYPES:
+            self._type.addItem(BOOKMARK_TYPE_LABELS[t], t)
+        idx = self._type.findData(bm.get("type"))
+        if idx >= 0:
+            self._type.setCurrentIndex(idx)
+        self._type.activated.connect(self._emit_type)
+        self._type.setFixedWidth(150)
+        rm = QToolButton()
+        rm.setText("🗑")
+        rm.setToolTip("Remove bookmark")
+        rm.setAutoRaise(True)
+        rm.setCursor(Qt.CursorShape.PointingHandCursor)
+        rm.clicked.connect(lambda: on_remove(self._bid))
+        top.addWidget(self._title, 1)
+        top.addWidget(self._type)
+        top.addWidget(rm)
+        outer.addLayout(top)
+
+        self._note = QPlainTextEdit(str(bm.get("note") or ""))
+        self._note.setPlaceholderText("Note")
+        self._note.setFixedHeight(46)
+        self._note.focusOutEvent = _wrap_focus_out(
+            self._note.focusOutEvent, self._emit_note)
+        outer.addWidget(self._note)
+
+        refs = bm.get("refs") or []
+        if refs:
+            chips = QHBoxLayout()
+            chips.setSpacing(6)
+            for i, r in enumerate(refs):
+                c = QToolButton()
+                c.setText(_ref_chip_label(r, fmt))
+                c.setToolTip(str(r.get("label") or _ref_chip_label(r, fmt)))
+                c.setProperty("brokenChip", i in (broken_ref_idx or set()))
+                c.setCursor(Qt.CursorShape.PointingHandCursor)
+                c.setObjectName("nb_ref_chip")
+                c.clicked.connect(lambda _=False, ref=r: on_ref_click(ref))
+                chips.addWidget(c)
+            chips.addStretch(1)
+            outer.addLayout(chips)
+
+        self._building = False
+
+    def _emit_title(self) -> None:
+        if not self._building:
+            self._on_change(self._bid, {"title": self._title.text()})
+
+    def _emit_type(self, *_a) -> None:
+        if not self._building:
+            self._on_change(self._bid, {"type": self._type.currentData()})
+
+    def _emit_note(self) -> None:
+        if not self._building:
+            self._on_change(self._bid, {"note": self._note.toPlainText()})
+
+
+def _ref_chip_label(r: dict, fmt) -> str:
+    kind = str(r.get("kind") or "")
+    if kind == "finding":
+        return f"finding: {r.get('rule_id') or r.get('label') or '?'}"
+    if kind == "metric":
+        return f"metric: {r.get('metric') or r.get('label') or '?'}"
+    if kind == "entity":
+        return f"entity: {r.get('entity') or r.get('label') or '?'}"
+    if kind == "range" and isinstance(r.get("range"), dict):
+        return f"range {fmt(r['range']['start'])}–{fmt(r['range']['end'])}"
+    if kind == "evidence":
+        return f"evidence @ {fmt(r['time'])}" if r.get("time") is not None else "evidence"
+    return kind or "ref"
+
+
+def _wrap_focus_out(orig, cb):
+    def _handler(event):
+        orig(event)
+        cb()
+    return _handler
+
+
+class _InvestigationNotebookDialog(QDialog):
+    """Editor for the Investigation Bookmarks & Evidence Chain (TODO Phase 3).
+
+    Structure, button set and order mirror the web
+    ``InvestigationNotebookDialog.vue`` exactly:
+
+      header : title + stale-ref flag ... [Scaffold][Undo][Redo][Import][Export]
+               [Evidence pack][x]
+      body   : Title -> Add bookmark -> grouped bookmark rows -> Conclusion +
+               grounded chains -> Links -> Unresolved questions
+      footer : "N bookmark(s)" ... [Close]
+
+    Holds a working investigation dict + an undo/redo history; every edit calls
+    ``on_change(new_inv)`` (the web ``@update`` flow).
+    """
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        investigation=None,
+        history=None,
+        findings=None,
+        cursor_range=None,
+        format_ns=None,
+        trace=None,
+        trace_name="",
+        on_change=None,
+        on_status=None,
+        on_ref_jump=None,
+        on_evidence_package=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Investigation Notebook")
+        self.setModal(False)
+        self.resize(620, 720)
+        self._inv = load_investigation(investigation or new_investigation())
+        self._history = history or push_notebook_state(
+            empty_notebook_history(), self._inv)
+        self._findings = list(findings or [])
+        self._cursor_range = cursor_range
+        self._trace = trace
+        self._fmt = format_ns or (lambda ns: str(int(ns)))
+        self._trace_name = str(trace_name or "")
+        self._on_change = on_change
+        self._on_status = on_status
+        self._on_ref_jump = on_ref_jump
+        self._on_evidence_package = on_evidence_package
+        self._building = False
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(9)
+
+        # ---- Header : title + stale flag ... action bar ----
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        header.addWidget(QLabel("<b>Investigation Notebook</b>"))
+        self._broken_lbl = QLabel("")
+        self._broken_lbl.setObjectName("nb_broken_flag")
+        self._broken_lbl.setVisible(False)
+        header.addWidget(self._broken_lbl)
+        header.addStretch(1)
+
+        self._scaffold_btn = QPushButton("✦ Scaffold")
+        self._scaffold_btn.clicked.connect(self._scaffold_from_findings)
+        self._undo_btn = QPushButton("↶ Undo")
+        self._undo_btn.setToolTip("Undo (notebook)")
+        self._undo_btn.clicked.connect(self._undo)
+        self._redo_btn = QPushButton("↷ Redo")
+        self._redo_btn.setToolTip("Redo (notebook)")
+        self._redo_btn.clicked.connect(self._redo)
+        imp = QPushButton("Import…")
+        imp.setToolTip("Import a saved investigation (.json)")
+        imp.clicked.connect(self._import_json)
+        exp = QPushButton("Export…")
+        exp.setToolTip("Save this investigation as .json")
+        exp.clicked.connect(self._export_json)
+        self._evpack_btn = QPushButton("Evidence pack…")
+        self._evpack_btn.setToolTip(
+            "Build a compact AI evidence package from this investigation")
+        self._evpack_btn.clicked.connect(self._emit_evidence_package)
+        self._evpack_btn.setEnabled(callable(self._on_evidence_package))
+        close_x = QToolButton()
+        close_x.setText("✕")
+        close_x.setAutoRaise(True)
+        close_x.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_x.clicked.connect(self.close)
+        for b in (self._scaffold_btn, self._undo_btn, self._redo_btn,
+                  imp, exp, self._evpack_btn):
+            header.addWidget(b)
+        header.addWidget(close_x)
+        root.addLayout(header)
+        self._sync_scaffold_tooltip()
+
+        # ---- Body (scrolls) ----
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 6, 0)
+        bl.setSpacing(13)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(body)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        root.addWidget(scroll, 1)
+
+        # Title
+        _tf = QVBoxLayout()
+        _tf.setSpacing(4)
+        _tf.addWidget(QLabel("Title"))
+        self._title_edit = QLineEdit(self._inv.get("title") or "")
+        self._title_edit.setPlaceholderText("What is this investigation about?")
+        self._title_edit.editingFinished.connect(self._on_title_changed)
+        _tf.addWidget(self._title_edit)
+        bl.addLayout(_tf)
+
+        # Add-bookmark box
+        add_box = QFrame()
+        add_box.setObjectName("nb_add_box")
+        ab = QVBoxLayout(add_box)
+        ab.setSpacing(8)
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        self._type_cb = QComboBox()
+        for t in BOOKMARK_TYPES:
+            self._type_cb.addItem(BOOKMARK_TYPE_LABELS[t], t)
+        self._type_cb.setFixedWidth(150)
+        self._new_title = QLineEdit()
+        self._new_title.setPlaceholderText("Bookmark title")
+        self._new_title.returnPressed.connect(self._add_bookmark)
+        self._add_btn = QPushButton("Add")
+        self._add_btn.clicked.connect(self._add_bookmark)
+        row1.addWidget(self._type_cb)
+        row1.addWidget(self._new_title, 1)
+        row1.addWidget(self._add_btn)
+        ab.addLayout(row1)
+        self._new_note = QPlainTextEdit()
+        self._new_note.setPlaceholderText("Note (optional)")
+        self._new_note.setFixedHeight(46)
+        ab.addWidget(self._new_note)
+        row2 = QHBoxLayout()
+        row2.setSpacing(12)
+        self._attach_range_cb = QCheckBox("Attach current cursor range")
+        self._finding_cb = QComboBox()
+        self._finding_cb.addItem("— none —", "")
+        row2.addWidget(self._attach_range_cb)
+        row2.addWidget(QLabel("Link finding"))
+        row2.addWidget(self._finding_cb, 1)
+        ab.addLayout(row2)
+        bl.addWidget(add_box)
+
+        # Bookmark groups host
+        self._groups_host = QWidget()
+        self._groups_lay = QVBoxLayout(self._groups_host)
+        self._groups_lay.setContentsMargins(0, 0, 0, 0)
+        self._groups_lay.setSpacing(8)
+        bl.addWidget(self._groups_host)
+
+        # Conclusion
+        _cf = QVBoxLayout()
+        _cf.setSpacing(4)
+        _cf.addWidget(QLabel("Conclusion"))
+        self._concl = QPlainTextEdit(self._inv.get("conclusion") or "")
+        self._concl.setPlaceholderText(
+            "What does the evidence support? Leave blank until it does.")
+        self._concl.setFixedHeight(66)
+        self._concl.focusOutEvent = _wrap_focus_out(
+            self._concl.focusOutEvent, self._on_conclusion_changed)
+        _cf.addWidget(self._concl)
+        bl.addLayout(_cf)
+        self._chains_host = QWidget()
+        self._chains_lay = QVBoxLayout(self._chains_host)
+        self._chains_lay.setContentsMargins(0, 0, 0, 0)
+        self._chains_lay.setSpacing(3)
+        bl.addWidget(self._chains_host)
+
+        # Links
+        self._links_host = QWidget()
+        _lf = QVBoxLayout(self._links_host)
+        _lf.setContentsMargins(0, 0, 0, 0)
+        _lf.setSpacing(6)
+        _lf.addWidget(QLabel("Links"))
+        lrow = QHBoxLayout()
+        lrow.setSpacing(8)
+        self._link_from = QComboBox()
+        self._link_rel = QComboBox()
+        for r in LINK_RELATIONS:
+            self._link_rel.addItem(r, r)
+        self._link_rel.setFixedWidth(150)
+        self._link_to = QComboBox()
+        self._link_btn = QPushButton("Link")
+        self._link_btn.clicked.connect(self._add_link)
+        lrow.addWidget(self._link_from, 1)
+        lrow.addWidget(self._link_rel)
+        lrow.addWidget(self._link_to, 1)
+        lrow.addWidget(self._link_btn)
+        _lf.addLayout(lrow)
+        self._link_list = QListWidget()
+        self._link_list.setFixedHeight(84)
+        self._link_list.itemDoubleClicked.connect(self._remove_link_item)
+        _lf.addWidget(self._link_list)
+        bl.addWidget(self._links_host)
+
+        # Unresolved questions
+        _qf = QVBoxLayout()
+        _qf.setSpacing(6)
+        _qf.addWidget(QLabel("Unresolved questions"))
+        qrow = QHBoxLayout()
+        qrow.setSpacing(8)
+        self._q_edit = QLineEdit()
+        self._q_edit.setPlaceholderText("Add a question")
+        self._q_edit.returnPressed.connect(self._add_question)
+        self._q_add = QPushButton("Add")
+        self._q_add.clicked.connect(self._add_question)
+        qrow.addWidget(self._q_edit, 1)
+        qrow.addWidget(self._q_add)
+        _qf.addLayout(qrow)
+        self._q_list = QListWidget()
+        self._q_list.setFixedHeight(84)
+        self._q_list.itemDoubleClicked.connect(self._remove_question)
+        _qf.addWidget(self._q_list)
+        bl.addLayout(_qf)
+        bl.addStretch(1)
+
+        # ---- Footer : count ... Close ----
+        foot = QHBoxLayout()
+        self._count_lbl = QLabel("0 bookmark(s)")
+        self._count_lbl.setObjectName("nb_count")
+        foot.addWidget(self._count_lbl)
+        foot.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        foot.addWidget(close_btn)
+        root.addLayout(foot)
+
+        self.setStyleSheet(
+            "QFrame#nb_add_box{border:1px solid palette(mid);border-radius:8px;}"
+            "QLabel#nb_broken_flag{color:#E0A030;font-weight:600;}"
+            "QLabel#nb_count{color:palette(mid);}"
+            "QWidget#nb_item{border:1px solid palette(mid);border-radius:8px;}"
+            "QWidget#nb_item[broken=\"true\"]{border-color:#E0A030;}"
+            "QToolButton#nb_ref_chip{border:1px solid palette(mid);border-radius:9px;"
+            "padding:1px 7px;color:palette(mid);}"
+            "QToolButton#nb_ref_chip[brokenChip=\"true\"]{border-color:#E0A030;color:#E0A030;}"
+        )
+        self._render()
+
+    # ---- public API (parity with the web props/emits) ----
+    def investigation(self) -> dict:
+        return self._inv
+
+    def history(self) -> dict:
+        return self._history
+
+    def set_context(self, *, findings=None, cursor_range=None):
+        if findings is not None:
+            self._findings = list(findings)
+        self._cursor_range = cursor_range
+        self._render()
+
+    # ---- helpers ----
+    def _finding_options(self):
+        seen, out = set(), []
+        for f in self._findings:
+            rid = str(f.get("rule_id") or f.get("id") or "").strip()
+            if not rid or rid in seen:
+                continue
+            seen.add(rid)
+            out.append((rid, f"{f.get('severity', 'info')} · {f.get('title', rid)}"))
+        return out
+
+    _SCAFFOLD_TIP = "Seed observations from the current Analysis findings, plus a hypothesis + verification stub"  # noqa: E501
+    _SCAFFOLD_TIP_OFF = "No Analysis findings to seed from"
+
+    def _sync_scaffold_tooltip(self) -> None:
+        has = bool(self._finding_options())
+        self._scaffold_btn.setEnabled(has)
+        self._scaffold_btn.setToolTip(
+            self._SCAFFOLD_TIP if has else self._SCAFFOLD_TIP_OFF)
+
+    def _status(self, msg: str) -> None:
+        if callable(self._on_status):
+            self._on_status(msg)
+
+    def _broken(self) -> dict:
+        return detect_broken_references(
+            self._inv, trace=self._trace,
+            known_rule_ids=[rid for rid, _ in self._finding_options()])
+
+    def _commit(self, new_inv: dict) -> None:
+        self._inv = load_investigation(new_inv)
+        self._history = push_notebook_state(self._history, self._inv)
+        if callable(self._on_change):
+            self._on_change(self._inv)
+        self._render()
+
+    def _restore_snapshot(self, history) -> None:
+        self._history = history
+        snap = notebook_history_state(self._history).get("current")
+        if snap:
+            self._inv = load_investigation(snap)
+            if callable(self._on_change):
+                self._on_change(self._inv)
+        self._render()
+
+    def _bm_label(self, bid: str) -> str:
+        for b in self._inv.get("bookmarks", []):
+            if str(b.get("id")) == bid:
+                return f"{BOOKMARK_TYPE_LABELS.get(b.get('type'), b.get('type'))}: {b.get('title')}"
+        return bid
+
+    # ---- render ----
+    def _clear_layout(self, lay) -> None:
+        while lay.count():
+            it = lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+            elif it.layout() is not None:
+                self._clear_layout(it.layout())
+
+    def _render(self) -> None:
+        self._building = True
+        bms = self._inv.get("bookmarks", [])
+        broken = self._broken()
+        broken_by_bm: dict = {}
+        for iss in broken.get("issues", []):
+            broken_by_bm.setdefault(str(iss["bookmark_id"]), set()).add(iss["ref_index"])
+        n_flag = len(broken.get("issues", [])) + (1 if broken.get("stale_trace") else 0)
+        self._broken_lbl.setText(f"⚠ {n_flag} stale ref")
+        self._broken_lbl.setToolTip(
+            f"{n_flag} bookmark reference(s) no longer resolve")
+        self._broken_lbl.setVisible(n_flag > 0)
+
+        if self._title_edit.text() != (self._inv.get("title") or ""):
+            self._title_edit.setText(self._inv.get("title") or "")
+        if self._concl.toPlainText() != (self._inv.get("conclusion") or ""):
+            self._concl.setPlainText(self._inv.get("conclusion") or "")
+
+        # add-box context widgets
+        opts = self._finding_options()
+        cur_fid = self._finding_cb.currentData()
+        self._finding_cb.blockSignals(True)
+        self._finding_cb.clear()
+        self._finding_cb.addItem("— none —", "")
+        for rid, lbl in opts:
+            self._finding_cb.addItem(lbl, rid)
+        j = self._finding_cb.findData(cur_fid)
+        self._finding_cb.setCurrentIndex(j if j >= 0 else 0)
+        self._finding_cb.blockSignals(False)
+        self._finding_cb.parentWidget().setVisible(bool(opts))
+        if self._cursor_range:
+            lo, hi = self._cursor_range
+            self._attach_range_cb.setText(
+                f"Attach current cursor range ({self._fmt(lo)} – {self._fmt(hi)})")
+            self._attach_range_cb.setVisible(True)
+        else:
+            self._attach_range_cb.setVisible(False)
+            self._attach_range_cb.setChecked(False)
+        self._sync_scaffold_tooltip()
+
+        # bookmark groups
+        self._clear_layout(self._groups_lay)
+        if not bms:
+            hint = QLabel(
+                "No bookmarks yet. Add an observation, hypothesis, supporting or "
+                "contradicting evidence, a verification step, or a conclusion above.")
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color:palette(mid);")
+            self._groups_lay.addWidget(hint)
+        else:
+            for t in BOOKMARK_TYPES:
+                items = [b for b in bms if b.get("type") == t]
+                if not items:
+                    continue
+                head = QLabel(f"{BOOKMARK_TYPE_LABELS[t]} ({len(items)})")
+                head.setStyleSheet("color:palette(mid);font-weight:600;")
+                self._groups_lay.addWidget(head)
+                for b in items:
+                    row = _NotebookBookmarkRow(
+                        b, fmt=self._fmt,
+                        broken_ref_idx=broken_by_bm.get(str(b.get("id"))),
+                        on_change=self._row_change,
+                        on_remove=self._row_remove,
+                        on_ref_click=self._row_ref_click)
+                    self._groups_lay.addWidget(row)
+
+        # grounded chains
+        self._clear_layout(self._chains_lay)
+        for ch in conclusion_evidence_chains(self._inv):
+            if not ch.get("grounded"):
+                continue
+            parts = " · ".join(
+                f"{BOOKMARK_TYPE_LABELS.get(e['type'], e['type'])}: {e['title']}"
+                for e in ch.get("evidence", []))
+            lab = QLabel(f"<b>{ch['title']}</b> ← {parts}")
+            lab.setWordWrap(True)
+            lab.setStyleSheet("color:palette(mid);font-size:11px;")
+            self._chains_lay.addWidget(lab)
+
+        # links
+        self._links_host.setVisible(len(bms) >= 2)
+        for cb in (self._link_from, self._link_to):
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItem("from…" if cb is self._link_from else "to…", "")
+            for b in bms:
+                cb.addItem(
+                    f"{BOOKMARK_TYPE_LABELS.get(b.get('type'), b.get('type'))}: {b.get('title')}",
+                    b.get("id"))
+            cb.blockSignals(False)
+        self._link_list.clear()
+        for link in self._inv.get("links", []):
+            it = QListWidgetItem(
+                f"{self._bm_label(str(link['from']))}  —{link['relation']}→  "
+                f"{self._bm_label(str(link['to']))}")
+            it.setData(Qt.ItemDataRole.UserRole, (link["from"], link["to"]))
+            it.setToolTip("Double-click to remove link")
+            self._link_list.addItem(it)
+
+        # questions
+        self._q_list.clear()
+        for q in self._inv.get("unresolved_questions", []):
+            it = QListWidgetItem(q)
+            it.setToolTip("Double-click to remove question")
+            self._q_list.addItem(it)
+
+        hs = notebook_history_state(self._history)
+        self._undo_btn.setEnabled(bool(hs.get("can_undo")))
+        self._redo_btn.setEnabled(bool(hs.get("can_redo")))
+        self._count_lbl.setText(f"{len(bms)} bookmark(s)")
+        self._building = False
+
+    # ---- edit actions ----
+    def _on_title_changed(self) -> None:
+        if self._building:
+            return
+        txt = self._title_edit.text().strip()
+        if txt != (self._inv.get("title") or ""):
+            self._commit(load_investigation({**self._inv, "title": txt}))
+
+    def _on_conclusion_changed(self) -> None:
+        if self._building:
+            return
+        txt = self._concl.toPlainText().strip()
+        if txt != (self._inv.get("conclusion") or ""):
+            self._commit(set_conclusion(self._inv, txt))
+
+    def _add_bookmark(self) -> None:
+        title = self._new_title.text().strip()
+        if not title:
+            return
+        refs = []
+        if self._attach_range_cb.isChecked() and self._cursor_range:
+            lo, hi = self._cursor_range
+            refs.append({"kind": "range", "range": {"start": int(lo), "end": int(hi)}})
+        rid = self._finding_cb.currentData()
+        if rid:
+            refs.append({"kind": "finding", "rule_id": str(rid)})
+        self._commit(add_bookmark(
+            self._inv, type=self._type_cb.currentData(), title=title,
+            note=self._new_note.toPlainText(), refs=refs))
+        self._new_title.clear()
+        self._new_note.setPlainText("")
+        self._attach_range_cb.setChecked(False)
+        self._finding_cb.setCurrentIndex(0)
+
+    def _row_change(self, bid: str, changes: dict) -> None:
+        if self._building:
+            return
+        b = next((x for x in self._inv.get("bookmarks", []) if str(x["id"]) == bid), None)
+        if b is None:
+            return
+        if all(str(b.get(k) or "") == str(v or "") for k, v in changes.items()):
+            return
+        self._commit(update_bookmark(self._inv, bid, **changes))
+
+    def _row_remove(self, bid: str) -> None:
+        self._commit(remove_bookmark(self._inv, bid))
+
+    def _row_ref_click(self, ref: dict) -> None:
+        rng = ref.get("range")
+        if isinstance(rng, dict) and callable(self._on_ref_jump):
+            self._on_ref_jump(int(rng["start"]), int(rng["end"]))
+
+    def _add_link(self) -> None:
+        a = self._link_from.currentData()
+        b = self._link_to.currentData()
+        if not a or not b or a == b:
+            return
+        self._commit(link_bookmarks(self._inv, a, b, self._link_rel.currentData()))
+
+    def _remove_link_item(self, item: QListWidgetItem) -> None:
+        pair = item.data(Qt.ItemDataRole.UserRole)
+        if pair:
+            self._commit(unlink_bookmarks(self._inv, pair[0], pair[1]))
+
+    def _add_question(self) -> None:
+        q = self._q_edit.text().strip()
+        if q:
+            self._commit(add_unresolved_question(self._inv, q))
+            self._q_edit.clear()
+
+    def _remove_question(self, item: QListWidgetItem) -> None:
+        if item is not None:
+            self._commit(remove_unresolved_question(self._inv, item.text()))
+
+    def _undo(self) -> None:
+        self._restore_snapshot(notebook_undo(self._history))
+
+    def _redo(self) -> None:
+        self._restore_snapshot(notebook_redo(self._history))
+
+    def _scaffold_from_findings(self) -> None:
+        rng = None
+        if self._cursor_range:
+            lo, hi = self._cursor_range
+            rng = {"start": int(lo), "end": int(hi)}
+        before = len(self._inv.get("bookmarks") or [])
+        nxt = scaffold_investigation_from_findings(
+            self._inv, findings=self._findings, cursor_range=rng)
+        added = len(nxt.get("bookmarks") or []) - before
+        if added <= 0:
+            self._status(
+                "Nothing new to scaffold — every finding is already in the notebook.")
+            return
+        self._commit(nxt)
+        self._status(
+            f"Scaffolded {added} bookmark{'' if added == 1 else 's'} from findings")
+
+    def _emit_evidence_package(self) -> None:
+        if not callable(self._on_evidence_package):
+            return
+        q, ok = QInputDialog.getText(
+            self, "Evidence pack",
+            "Question the AI evidence package should answer:",
+            text=self._inv.get("title") or "")
+        if ok:
+            self._on_evidence_package(str(q).strip())
+
+    def _import_json(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import investigation", "", "JSON (*.json);;All files (*)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                self._commit(load_investigation(fh.read()))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Import investigation", f"Could not import:\n{exc}")
+
+    def _export_json(self) -> None:
+        base = (self._trace_name or "investigation").rsplit(".btf", 1)[0] or "investigation"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export investigation", f"{base}-investigation.json",
+            "JSON (*.json);;All files (*)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(dump_investigation(self._inv))
+        except OSError as exc:
+            QMessageBox.warning(self, "Export investigation", f"Could not export:\n{exc}")
+
+
+# Target labels + hints — byte-for-byte parity with the web dialog
+# (web/src/utils/exportActions.js EXPORT_TARGET_LABELS / EXPORT_TARGET_HINTS).
+_EXPORT_TARGET_LABELS = {
+    "workspace": "Portable workspace (.btfw)",
+    "perfetto": "Perfetto / Chrome Trace JSON",
+    "btf-slice": "Cursor-range BTF file",
+}
+_EXPORT_TARGET_HINTS = {
+    "workspace": "Trace + view state + analysis findings + trace health + investigation notebook + a rendered HTML report, in one ZIP-compatible file.",  # noqa: E501
+    "perfetto": "Open in https://ui.perfetto.dev — full loaded trace or the current viewport.",  # noqa: E501
+    "btf-slice": "A .btf containing only the events between the earliest and latest cursors.",  # noqa: E501
+}
+_EXPORT_SLICE_DISABLED_REASON = "Place at least two cursors (C1–Cn) to mark the range."
+# Same five lines as the web dialog's workspace summary (ExportDialog.vue).
+_EXPORT_WORKSPACE_SUMMARY = (
+    "View state & cursors",
+    "Analysis findings",
+    "Trace health status",
+    "Investigation notebook",
+    "Rendered statistics HTML report",
+)
+
+
+# Web ExportDialog.vue theme tokens (App.vue :root / [data-theme="light"]) so
+# the desktop dialog paints the *same* colours in light and dark.
+_EXPORT_THEME = {
+    True: {   # dark
+        "panel": "#252526", "border": "#3C3C3C", "dim": "#858585",
+        "accent": "#4F8BFF", "hover": "rgba(255,255,255,0.08)",
+    },
+    False: {  # light
+        "panel": "#F5F5F5", "border": "#DDDDDD", "dim": "#666666",
+        "accent": "#0066CC", "hover": "rgba(0,0,0,0.06)",
+    },
+}
+_EXPORT_DIALOG_WIDTH = 460  # web: width: min(460px, calc(100vw - 32px))
+
+# Trailing trace / archive suffix stripped from a source path to form an export
+# default name — lockstep with web exportActions.js EXPORT_BASENAME_RE.
+_EXPORT_BASENAME_RE = re.compile(
+    r"\.(btf\.gz|btf\.bz2|btf\.zip|btf|btfw|json|gz|bz2|zip)$", re.IGNORECASE)
+
+
+def _export_base_name(path: str, fallback: str) -> str:
+    """``…/example-8cores.btf.gz`` → ``…/example-8cores`` (any BTF/archive ext)."""
+    s = str(path or "").strip()
+    if not s:
+        return fallback
+    return _EXPORT_BASENAME_RE.sub("", s) or fallback
+
+
+def _staged_trace_ext(data: bytes) -> str:
+    """Extension whose codec matches *data*'s magic bytes — used when staging a
+    ``.btfw``'s embedded trace, whose manifest name may claim a compression the
+    bytes don't actually have (anonymized / web-authored workspace)."""
+    m = bytes(data or b"")[:4]
+    if m.startswith(b"\x1f\x8b"):
+        return ".btf.gz"
+    if m.startswith(b"BZh"):
+        return ".btf.bz2"
+    if m.startswith(b"PK"):
+        return ".btf.zip"
+    return ".btf"
+_EXPORT_ANONYMIZE_LABEL = "Anonymize task names (Task-1, Task-2, …)"
+_EXPORT_ANONYMIZE_HINT = (
+    "Every task name in the exported trace, Perfetto file, findings, health and "
+    "notebook is replaced with a stable Task-N alias."
+)
+
+
+class _ExportDialog(QDialog):
+    """Unified Export chooser — portable workspace (.btfw) · Perfetto JSON ·
+    cursor-range BTF.  Replaces the separate Perfetto / Save-BTF toolbar buttons.
+
+    Pixel-for-pixel the web ``ExportDialog.vue``: fixed ``460px`` width, radio
+    "cards" (label + dim hint sub-line) that highlight on hover, the same
+    outline colour in light and dark, and a **fixed-size** per-target options
+    area (a ``QStackedWidget``, the desktop analogue of the web grid-overlap
+    stack) so changing the selection never resizes the window.
+    ``result_choice()`` returns
+    ``{"target", "embed_trace", "perfetto_scope", "anonymize"}`` or ``None``.
+    """
+
+    def __init__(self, parent=None, *, has_range=False, format_ns=None,
+                 cursor_range=None):
+        super().__init__(parent)
+        self.setWindowTitle("Export")
+        self.setModal(True)
+        self._fmt = format_ns or (lambda ns: str(int(ns)))
+        self._choice = None
+
+        dark = bool(getattr(parent, "_is_dark", True))
+        c = _EXPORT_THEME[dark]
+        self.setStyleSheet(f"""
+            QDialog {{ background: {c['panel']}; }}
+            QFrame#exp_target_card {{
+                border: 1px solid {c['border']};
+                border-radius: 9px;
+            }}
+            QFrame#exp_target_card:hover {{ background: {c['hover']}; }}
+            QStackedWidget#exp_opts_stack > QWidget {{
+                border: 1px solid {c['border']};
+                border-radius: 9px;
+            }}
+            QLabel#exp_hint {{ color: {c['dim']}; font-size: 11px; }}
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 12)
+        lay.setSpacing(12)
+        # Snug + non-resizable; with a QStackedWidget the snug size is constant
+        # across selections. The content minimum width below fixes the dialog
+        # at the web's 460px (SetFixedSize would clobber a plain setFixedWidth).
+        lay.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+
+        title = QLabel("Export")
+        title.setStyleSheet("font-weight: 650; font-size: 14px;")
+        lay.addWidget(title)
+
+        # --- Target radio "cards" (label + dim wrapped hint) -----------------
+        self._grp = QButtonGroup(self)
+        self._rb_workspace = QRadioButton(_EXPORT_TARGET_LABELS["workspace"])
+        self._rb_perfetto = QRadioButton(_EXPORT_TARGET_LABELS["perfetto"])
+        self._rb_slice = QRadioButton(_EXPORT_TARGET_LABELS["btf-slice"])
+        cards = QVBoxLayout()
+        cards.setSpacing(6)
+        for i, (rb, key) in enumerate((
+                (self._rb_workspace, "workspace"),
+                (self._rb_perfetto, "perfetto"),
+                (self._rb_slice, "btf-slice"))):
+            self._grp.addButton(rb, i)
+            disabled = key == "btf-slice" and not has_range
+            hint_text = (_EXPORT_SLICE_DISABLED_REASON if disabled
+                         else _EXPORT_TARGET_HINTS[key])
+            cards.addWidget(self._exp_target_card(rb, hint_text, disabled))
+        lay.addLayout(cards)
+        self._rb_workspace.setChecked(True)
+        self._rb_slice.setEnabled(bool(has_range))
+
+        # --- Fixed-size per-target options (QStackedWidget) -----------------
+        self._opts = QStackedWidget()
+        self._opts.setObjectName("exp_opts_stack")
+        # Reserve room for the tallest page on every page (matches the web
+        # grid-overlap stack), so switching pages does not change the size.
+        self._opts.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                 QSizePolicy.Policy.Fixed)
+        # Pins the whole dialog to the web's 460px (see comment above).
+        self._opts.setMinimumWidth(_EXPORT_DIALOG_WIDTH - 32)
+
+        # page 0 — workspace
+        ws_page = QWidget()
+        ws_lay = QVBoxLayout(ws_page)
+        ws_lay.setContentsMargins(10, 10, 10, 10)
+        ws_lay.setSpacing(6)
+        self._embed_cb = QCheckBox(
+            "Embed the trace file (portable — opens anywhere)")
+        self._embed_cb.setChecked(True)
+        ws_lay.addWidget(self._embed_cb)
+        summary = QLabel(
+            "\n".join(f"•  {line}" for line in _EXPORT_WORKSPACE_SUMMARY))
+        summary.setObjectName("exp_hint")
+        ws_lay.addWidget(summary)
+        ws_lay.addStretch(1)
+        self._opts.addWidget(ws_page)
+
+        # page 1 — perfetto scope
+        pf_page = QWidget()
+        pf_lay = QVBoxLayout(pf_page)
+        pf_lay.setContentsMargins(10, 10, 10, 10)
+        pf_lay.setSpacing(6)
+        self._pf_full = QRadioButton("Full loaded trace")
+        self._pf_vp = QRadioButton("Current timeline viewport only")
+        self._pf_full.setChecked(True)
+        self._pf_grp = QButtonGroup(self)
+        self._pf_grp.addButton(self._pf_full)
+        self._pf_grp.addButton(self._pf_vp)
+        pf_lay.addWidget(self._pf_full)
+        pf_lay.addWidget(self._pf_vp)
+        pf_lay.addStretch(1)
+        self._opts.addWidget(pf_page)
+
+        # page 2 — cursor-range BTF
+        sl_page = QWidget()
+        sl_lay = QVBoxLayout(sl_page)
+        sl_lay.setContentsMargins(10, 10, 10, 10)
+        sl_lay.setSpacing(6)
+        if has_range and cursor_range:
+            lo, hi = cursor_range
+            sl_text = (f"Writes events in [{self._fmt(lo)}, {self._fmt(hi)})"
+                       "  (earliest → latest cursor).")
+        else:
+            sl_text = "Place at least two cursors to mark the range."
+        sl_lbl = QLabel(sl_text)
+        sl_lbl.setWordWrap(True)
+        sl_lbl.setStyleSheet("font-size: 12px;")
+        sl_lay.addWidget(sl_lbl)
+        sl_lay.addStretch(1)
+        self._opts.addWidget(sl_page)
+
+        lay.addWidget(self._opts)
+
+        # --- Anonymize (applies to every target) --------------------------
+        self._anon_cb = QCheckBox(_EXPORT_ANONYMIZE_LABEL)
+        self._anon_cb.setChecked(False)
+        self._anon_cb.setToolTip(_EXPORT_ANONYMIZE_HINT)
+        lay.addWidget(self._anon_cb)
+        anon_hint = QLabel(_EXPORT_ANONYMIZE_HINT)
+        anon_hint.setObjectName("exp_hint")
+        anon_hint.setWordWrap(True)
+        lay.addWidget(anon_hint)
+
+        self._grp.buttonToggled.connect(lambda *_: self._sync())
+        self._sync()
+
+        bb = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        ok_btn = bb.button(QDialogButtonBox.StandardButton.Ok)
+        ok_btn.setText("Export")
+        ok_btn.setStyleSheet(
+            f"background: {c['accent']}; color: #fff; font-weight: 650;"
+            " padding: 6px 14px; border-radius: 8px;")
+        bb.button(QDialogButtonBox.StandardButton.Cancel).setStyleSheet(
+            "padding: 6px 14px; border-radius: 8px;")
+        bb.accepted.connect(self._accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    @staticmethod
+    def _exp_target_card(radio: QRadioButton, hint_text: str,
+                         disabled: bool) -> QWidget:
+        """A bordered row: the radio button + a dim, word-wrapped hint below.
+        Border + hover colours come from the dialog-level stylesheet."""
+        card = QFrame()
+        card.setObjectName("exp_target_card")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(10, 8, 10, 9)
+        cl.setSpacing(2)
+        cl.addWidget(radio)
+        hint = QLabel(hint_text)
+        hint.setObjectName("exp_hint")
+        hint.setWordWrap(True)
+        cl.addWidget(hint)
+        if disabled:
+            card.setEnabled(False)
+        return card
+
+    def _sync(self) -> None:
+        if self._rb_perfetto.isChecked():
+            self._opts.setCurrentIndex(1)
+        elif self._rb_slice.isChecked():
+            self._opts.setCurrentIndex(2)
+        else:
+            self._opts.setCurrentIndex(0)
+
+    def _accept(self) -> None:
+        if self._rb_perfetto.isChecked():
+            target = "perfetto"
+        elif self._rb_slice.isChecked():
+            target = "btf-slice"
+        else:
+            target = "workspace"
+        self._choice = {
+            "target": target,
+            "embed_trace": self._embed_cb.isChecked(),
+            "perfetto_scope": "viewport" if self._pf_vp.isChecked() else "full",
+            "anonymize": self._anon_cb.isChecked(),
+        }
+        self.accept()
+
+    def result_choice(self):
+        return self._choice
+
 
 class _CommandPaletteDialog(QDialog):
     """Ctrl+K jump list for existing surfaces (no extra toolbar buttons)."""
@@ -86271,6 +90967,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._focus_mode: bool = False
         self._progress_dialog: Optional[QProgressDialog] = None
         self._pending_demo: Optional[dict] = None
+        self._pending_workspace: Optional[dict] = None
         self._demo_runner: Optional[InAppDemoRunner] = None
         self._demo_overlay: Optional[DemoPointerOverlay] = None
         self._demo_message_overlay: Optional[DemoMessageOverlay] = None
@@ -86674,6 +91371,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view.bookmark_requested.connect(self._add_bookmark_at_ns)
         view.annotation_requested.connect(self._add_annotation_at_ns)
         view.explain_region_requested.connect(self._on_explain_region_with_ai)
+        view.add_region_to_investigation_requested.connect(
+            self._on_add_region_to_investigation)
         view.ask_ai_event_requested.connect(self._on_ask_ai_event)
         view.clear_bookmarks_requested.connect(self._clear_all_bookmarks)
         view.clear_annotations_requested.connect(self._clear_all_annotations)
@@ -87345,6 +92044,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         {
             "heatmap": self._open_migration_heatmap,
             "analysis": self._open_analysis_findings,
+            "notebook": self._open_investigation_notebook,
             "compare": self._open_trace_compare,
             "snapshot": self._on_save_image,
             "help": self._on_keyboard_shortcuts,
@@ -87360,6 +92060,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         rail.set_item_visible(
             "heatmap", trace is not None and _trace_is_multi_core(trace))
         rail.set_item_visible("analysis", trace is not None)
+        rail.set_item_visible("notebook", trace is not None)
         rail.set_item_visible("compare", len(getattr(self, "_tabs", ())) >= 2)
         rail.set_item_visible("snapshot", trace is not None)
 
@@ -87595,6 +92296,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._status_file.setText("  No file loaded")
             self._status_file.setToolTip("")
             self.setWindowTitle("RTOS BTF Viewer")
+            self._refresh_trace_health()
             return
         fname = _trace_display_name(self._current_file)
         ts = _format_time(trace.time_max - trace.time_min, trace.time_scale,
@@ -87616,6 +92318,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._status_file.setText(f"  {fname}  |  {summary}")
         tip = self._current_file or fname
         self._status_file.setToolTip(f"{tip}\n{summary}")
+        self._refresh_trace_health()
 
     def _has_cursor_range(self) -> bool:
         if self._trace is None:
@@ -87629,8 +92332,88 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         except (AttributeError, TypeError):
             return False
 
+    def _current_health_scope(self) -> tuple:
+        """(lo, hi) for structural health — the cursor range when scope-to-cursors
+        is on and at least two cursors are placed, else (None, None)."""
+        panel = getattr(self, "_stats_panel", None)
+        if (self._trace is not None
+                and getattr(panel, "_scope_to_cursors", False)
+                and self._has_cursor_range()):
+            try:
+                times = sorted(int(t) for t in self._view._scene.cursor_times())
+                return times[0], times[-1]
+            except (AttributeError, TypeError, ValueError):
+                return None, None
+        return None, None
+
+    def _refresh_trace_health(self) -> None:
+        """Recompute the structural Trace Health result and update the status pill."""
+        btn = getattr(self, "_status_health_btn", None)
+        if btn is None:
+            return
+        if self._trace is None:
+            self._trace_health_result = None
+            btn.setVisible(False)
+            return
+        lo, hi = self._current_health_scope()
+
+        def _fmt(ns: int):
+            return _format_time(int(ns), self._trace.time_scale,
+                                decimals=self._time_decimals_val)
+
+        try:
+            result = build_trace_health_result(self._trace, lo, hi, format_ns=_fmt)
+        except Exception:
+            self._trace_health_result = None
+            btn.setVisible(False)
+            return
+        self._trace_health_result = result
+        status = str(result.get("status") or "pass")
+        n = int(result.get("issue_count", 0) or 0)
+        glyph = {"pass": "●", "caution": "⚠", "insufficient": "✕"}.get(status, "●")
+        label = trace_health_status_label(status)
+        btn.setText(f"  {glyph} {label}" + (f" · {n}" if n else "") + "  ")
+        btn.setProperty("healthStatus", status)
+        btn.setToolTip(trace_health_summary(result) + " — click for detail")
+        btn.setVisible(True)
+
+    def _show_trace_health_detail(self) -> None:
+        result = getattr(self, "_trace_health_result", None)
+        if not result:
+            return
+        status = str(result.get("status") or "pass")
+        n = int(result.get("issue_count", 0) or 0)
+        lines = [
+            f"Status: {trace_health_status_label(status)} · {n} structural issue(s)",
+            "",
+            "Structural checks on the parsed event model, independent of AI and of "
+            "Trace Health (TICK). Passing means the statistics rest on a consistent "
+            "event stream — not that the system is healthy.",
+            "",
+        ]
+        checks = result.get("checks") or []
+        if not checks:
+            lines.append("No structural issues detected in the analysed range.")
+        for c in checks:
+            lines.append(f"[{c.get('severity', 'info')}] {c.get('summary', '')}")
+            rng = c.get("affected_range") or {}
+            lo, hi = rng.get("lo"), rng.get("hi")
+            if lo is not None and hi is not None:
+                lines.append(f"    Range: {lo} – {hi}")
+            lim = c.get("metric_limitations") or []
+            if lim:
+                lines.append(f"    Limited: {', '.join(lim)}")
+            lines.append("")
+        box = QMessageBox(self)
+        box.setWindowTitle("Trace Health")
+        box.setIcon(
+            QMessageBox.Icon.Warning if status != "pass" else QMessageBox.Icon.Information)
+        box.setText("\n".join(lines).rstrip())
+        box.exec()
+
     def _sync_file_export_actions(self, has_range: Optional[bool] = None) -> None:
-        """Enable snapshot / SVG / Perfetto with a trace; BTF slice needs C1–Cn."""
+        """Enable snapshot / SVG / Export with a trace loaded (the Export dialog
+        gates the cursor-range BTF option on C1–Cn itself)."""
         has_trace = self._trace is not None
         if has_range is None:
             has_range = self._has_cursor_range()
@@ -87638,19 +92421,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             getattr(self, "_act_save_img", None),
             getattr(self, "_act_save_svg", None),
             getattr(self, "_act_copy_img", None),
-            getattr(self, "_act_export_perfetto", None),
+            getattr(self, "_act_export", None),
             getattr(self, "_tb_snap_btn", None),
             getattr(self, "_tb_save_svg_btn", None),
-            getattr(self, "_tb_export_perfetto_btn", None),
+            getattr(self, "_tb_export_btn", None),
         ):
             if act is not None:
                 act.setEnabled(has_trace)
         for act in (
-            getattr(self, "_act_export_slice", None),
-            getattr(self, "_tb_export_slice_btn", None),
+            getattr(self, "_act_notebook", None),
+            getattr(self, "_tb_notebook_btn", None),
         ):
             if act is not None:
-                act.setEnabled(has_trace and bool(has_range))
+                act.setEnabled(has_trace)
 
     def _update_tab_actions(self) -> None:
         self._sync_file_export_actions()
@@ -88513,7 +93296,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if not path:
                     continue
                 if (is_btf_open_path(path)
-                        or is_xtf_open_path(path)
+                        or str(path).lower().endswith(WORKSPACE_EXT)
                         or path.lower().endswith(".xml")
                         or Path(path).is_dir()):
                     event.acceptProposedAction()
@@ -88525,7 +93308,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not raw:
             return []
         p = Path(raw)
-        if p.is_file() and is_xtf_open_path(raw):
+        if p.is_file() and str(raw).lower().endswith(WORKSPACE_EXT):
             return [raw]
         if p.is_file() and is_btf_open_path(raw):
             return [raw]
@@ -88562,8 +93345,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not opened:
             QMessageBox.information(
                 self, "Open",
-                "Drop a .btf / .btf.gz file, a demo .xtf pack, a demo .xml next to its "
-                "trace, or a folder that contains a BTF trace.",
+                "Drop a .btf / .btf.gz file, a .btfw package (workspace or demo), "
+                "a demo .xml next to its trace, or a folder that contains a BTF trace.",
             )
 
     # ------------------------------------------------------------------
@@ -89567,6 +94350,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         for _k, _p, _lbl in (
             ("heatmap", _RG_HEATMAP, "Migration heatmap"),
             ("analysis", _RG_ANALYSIS, "Analysis findings"),
+            ("notebook", _RG_NOTEBOOK, "Investigation notebook"),
             ("compare", _RG_COMPARE, "Compare traces"),
             ("snapshot", _RG_SNAPSHOT, "Snapshot editor"),
         ):
@@ -90132,7 +94916,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.query_ai_requested.connect(self._on_stats_query_ai)
         self._stats_panel.set_ai_enabled(self._ai_feature_enabled())
         self._stats_panel._scope_cb.toggled.connect(
-            lambda _checked=False: self._update_cursor_scope_banner())
+            lambda _checked=False: (self._update_cursor_scope_banner(),
+                                    self._refresh_trace_health()))
         self.setAcceptDrops(True)
 
     def _on_stats_query_ai(self, template_id: str, extra: str = "") -> None:
@@ -90201,14 +94986,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_save_svg.setEnabled(False)
         self._act_copy_img = fm.addAction("&Copy Image to Clipboard", self._on_copy_image, "Ctrl+Shift+C")
         self._act_copy_img.setEnabled(False)
-        self._act_export_perfetto = fm.addAction(
-            "Export &Perfetto…", self._on_export_perfetto, "Ctrl+Shift+E")
-        self._act_export_perfetto.setEnabled(False)
-        self._act_export_slice = fm.addAction(
-            "Save se&lection as BTF…", self._on_export_btf_slice)
-        self._act_export_slice.setToolTip(
-            "Save cursor range as BTF (C1–Cn).")
-        self._act_export_slice.setEnabled(False)
+        self._act_export = fm.addAction(
+            "&Export…", self._on_export, "Ctrl+Shift+E")
+        self._act_export.setToolTip(
+            "Export a portable workspace (.btfw), Perfetto JSON, or the "
+            "cursor-range BTF slice.")
+        self._act_export.setEnabled(False)
         self._act_close_tab = fm.addAction("Close &Tab", self._on_close_tab_action, QKeySequence.Close)
         self._act_close_tab.setEnabled(False)
         self._act_close_all_tabs = fm.addAction("Close &All Tabs", self._on_close_all_tabs_action)
@@ -90268,6 +95051,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_focus_mode.setShortcut(QKeySequence("Shift+F"))
         self._act_focus_mode.setToolTip(
             "Hide the side panel, activity rail and trace tabs — timeline only")
+        vm.addSeparator()
+        self._act_notebook = vm.addAction(
+            "&Investigation Notebook…", self._open_investigation_notebook)
+        self._act_notebook.setToolTip(
+            "Typed bookmarks, evidence chain and conclusion for this trace")
+        self._act_notebook.setEnabled(False)
         vm.addSeparator()
         vm.addAction("⚙ &Settings…", self._open_settings, "Ctrl+,")
         vm.addSeparator()
@@ -90330,6 +95119,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # a fitting mnemonic for "detailed reference," one level past F1.
         _ref_act.setShortcuts([QKeySequence("Shift+F1")])
         hm.addSeparator()
+        hm.addAction("Open &Guided Demo…", self._on_open_guided_demo)
+        hm.addSeparator()
         hm.addAction("&About", self._on_about)
 
     def _build_toolbar(self) -> None:
@@ -90350,22 +95141,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._tb_icon_actions.append((act, ic_path))
             return act
 
-        # --- File actions (same cluster as web: Open · SVG · Perfetto · Slice).
+        # --- File actions (same cluster as web: Open · SVG · Export).
         #     Snapshot / Heatmap / Analysis / Compare live on the left activity
-        #     rail now (shell redesign) — not the toolbar. ---
+        #     rail now (shell redesign) — not the toolbar.  Perfetto + Save-BTF
+        #     folded into one Export chooser. ---
         self._tb_open_btn = _ia("Open", self._on_open, _IC_OPEN, "Open BTF trace file  (Ctrl+O)")
         self._tb_save_svg_btn = _ia(
             "Save SVG", self._on_save_svg, _IC_SAVE_SVG,
             "Save viewport as SVG  (Ctrl+Shift+S)")
-        self._tb_export_perfetto_btn = _ia(
-            "Perfetto", self._on_export_perfetto, _IC_PERFETTO,
-            "Export Perfetto (Chrome Trace JSON for ui.perfetto.dev)  (Ctrl+Shift+E)")
-        self._tb_export_slice_btn = _ia(
-            "Save BTF", self._on_export_btf_slice, _IC_EXPORT_SLICE,
-            "Save cursor range as BTF (C1–Cn)")
+        self._tb_export_btn = _ia(
+            "Export", self._on_export, _IC_EXPORT_OUT,
+            "Export… — workspace (.btfw), Perfetto JSON, or cursor-range BTF  "
+            "(Ctrl+Shift+E)")
         self._tb_save_svg_btn.setEnabled(False)
-        self._tb_export_perfetto_btn.setEnabled(False)
-        self._tb_export_slice_btn.setEnabled(False)
+        self._tb_export_btn.setEnabled(False)
         tb.addSeparator()
 
         # --- Layout and zoom ---
@@ -90880,6 +95669,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._status_inspect.setContentsMargins(4, 0, 8, 0)
         self._status_inspect.setToolTip("Selected task inspector")
 
+        # Structural Trace Health pill (web .status-health). Recomputed on trace
+        # load and analysis-scope change; click opens the per-check detail.
+        self._trace_health_result = None
+        self._status_health_btn = QToolButton()
+        self._status_health_btn.setObjectName("statusHealthBtn")
+        self._status_health_btn.setText("")
+        self._status_health_btn.setToolTip("Structural trace health — click for detail")
+        self._status_health_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._status_health_btn.setAutoRaise(True)
+        self._status_health_btn.setVisible(False)
+        self._status_health_btn.clicked.connect(self._show_trace_health_detail)
+
         # Inline load progress (replaces the modal card — web .status-loading).
         self._status_load_lbl = QLabel("")
         self._status_load_lbl.setObjectName("statusLoad")
@@ -90969,6 +95770,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sb.addWidget(self._status_load_lbl)
         sb.addWidget(self._status_load_cancel)
         sb.addWidget(self._status_inspect)
+        sb.addWidget(self._status_health_btn)
         sb.addPermanentWidget(self._cursor_bar)
         sb.addPermanentWidget(self._status_migrated_filter_btn)
         sb.addPermanentWidget(self._status_core_filter_btn)
@@ -91276,6 +96078,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._load_in_progress = False
         self._continue_session_restore()
         self._drain_pending_open_paths()
+        self._start_pending_workspace()
         self._start_pending_demo()
 
     def _preferred_demo_voice_lang(self) -> str:
@@ -91390,6 +96193,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not xml_path or not os.path.isfile(xml_path):
             return
         self._stop_inapp_demo()
+
+        # Pre-seed the AI panel with the demo's investigation case, if it
+        # ships one (packed under investigation/ai_case.json, or next to a
+        # loose demo XML). Same restore path as a .btfw workspace.
+        ai_case = pending.get("ai_case")
+        if ai_case:
+            panel = getattr(self, "_ai_panel", None)
+            if panel is not None and hasattr(panel, "restore_workspace_ai_case"):
+                try:
+                    panel.restore_workspace_ai_case(ai_case)
+                except Exception:
+                    pass
         old = self._demo_overlay
         self._demo_overlay = None
         if old is not None:
@@ -91890,6 +96705,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _ai_open_stats_section(self, section_id: str) -> None:
         """AI Evidence link ``btfstats:section/…`` → Statistics section (no Scope change)."""
         sid = str(section_id or "").strip()
+        # Accept a header title / loose spelling ("Ready-Gap (Starvation)") too.
+        sid = resolve_stats_section_id(sid) or sid
         if not sid:
             return
         tabs = getattr(self, "_panel_tabs", None)
@@ -92977,8 +97794,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return "Opened corridor inspector"
         if name == AI_TOOL_OPEN_STATS_SECTION:
             section = str(args.get("section") or args.get("section_id") or "").strip()
-            self._ai_open_stats_section(section)
-            return f"Opened Statistics section {section}" if section else "Opened Statistics"
+            sid = resolve_stats_section_id(section)
+            self._ai_open_stats_section(sid or section)
+            if sid:
+                return f"Opened Statistics section “{stats_section_title(sid)}”"
+            return (f"Opened Statistics (could not match section “{section}”)"
+                    if section else "Opened Statistics")
         if name == AI_TOOL_ADD_ANNOTATION:
             ns = int(float(args["time"]))
             note = str(args.get("note") or "")
@@ -93869,7 +98690,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             data={"csv": str(ctx.get("findings_text") or "")},
         )
 
-    def _on_export_btf_slice(self) -> None:
+    def _on_export_btf_slice(self, *, anonymize: bool = False) -> None:
         if self._trace is None:
             return
         times = sorted(int(t) for t in self._view._scene.cursor_times())
@@ -93905,6 +98726,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     text, kept = "", 0
             if not str(text).strip():
                 text, kept = reconstruct_btf_slice(self._trace, lo, hi)
+            if anonymize:
+                amap = self._export_task_alias_map()
+                if amap:
+                    text = anonymize_btf_text(text, amap)
             write_btf_text(text, path)
         except Exception as exc:
             QMessageBox.critical(
@@ -94200,6 +99025,180 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         scene.set_finding_overlays(merge_incident_overlay_times(
             ux, finding_times, include_anomalies=True, limit=120))
 
+    # -- Investigation notebook (TODO Phase 3) --------------------------
+    def _notebook_cursor_range(self):
+        if self._trace is None or not self._has_cursor_range():
+            return None
+        try:
+            times = sorted(int(t) for t in self._view._scene.cursor_times())
+            return times[0], times[-1]
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _current_investigation(self):
+        tab = self._active_tab
+        return getattr(tab, "_investigation", None) if tab is not None else None
+
+    def _ensure_investigation(self):
+        tab = self._active_tab
+        if tab is None or self._trace is None:
+            return None
+        if tab._investigation is None:
+            ident = trace_identity(self._trace, os.path.basename(tab.path or ""))
+            rng = self._notebook_cursor_range()
+            inv = new_investigation(
+                title=os.path.basename(tab.path or "") or "Investigation",
+                trace_identity=ident,
+                analysis_range={"start": rng[0], "end": rng[1]} if rng else None,
+            )
+            tab._investigation = inv
+            tab._notebook_history = push_notebook_state(empty_notebook_history(), inv)
+            self._stats_panel._export_investigation = inv
+        return tab._investigation
+
+    def _on_investigation_changed(self, inv: dict) -> None:
+        tab = self._active_tab
+        if tab is not None:
+            tab._investigation = inv
+        if self._stats_panel is not None:
+            self._stats_panel._export_investigation = inv
+
+    def _open_investigation_notebook(self) -> None:
+        if self._trace is None:
+            self.statusBar().showMessage(
+                "Open a trace before starting an investigation.", 3000)
+            return
+        self._ensure_investigation()
+        tab = self._active_tab
+        dlg = getattr(self, "_notebook_dlg", None)
+        if dlg is not None:
+            try:
+                if dlg.isVisible():
+                    dlg.set_context(
+                        findings=self._stats_panel.build_analysis_findings()[0],
+                        cursor_range=self._notebook_cursor_range())
+                    dlg.raise_()
+                    dlg.activateWindow()
+                    return
+            except RuntimeError:
+                self._notebook_dlg = None
+        findings = self._stats_panel.build_analysis_findings()[0]
+        dlg = _InvestigationNotebookDialog(
+            self,
+            investigation=tab._investigation,
+            history=tab._notebook_history,
+            findings=findings,
+            cursor_range=self._notebook_cursor_range(),
+            format_ns=lambda ns: _format_time(
+                int(ns), self._trace.time_scale, decimals=self._time_decimals_val),
+            trace=self._trace,
+            trace_name=os.path.basename(tab.path or ""),
+            on_change=self._on_investigation_changed,
+            on_status=lambda msg: self.statusBar().showMessage(msg, 3000),
+            on_ref_jump=self._notebook_jump_to_range,
+            on_evidence_package=self._notebook_evidence_package,
+        )
+        self._notebook_dlg = dlg
+
+        def _on_closed(*_a) -> None:
+            if getattr(self, "_notebook_dlg", None) is dlg:
+                try:
+                    tab._notebook_history = dlg.history()
+                except RuntimeError:
+                    pass
+                self._notebook_dlg = None
+
+        dlg.finished.connect(_on_closed)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _notebook_jump_to_range(self, lo: int, hi: int) -> None:
+        """Notebook range/evidence chip → move the timeline there."""
+        view = getattr(self, "_view", None)
+        if view is not None and hasattr(view, "scroll_to_ns"):
+            view.scroll_to_ns(int(lo))
+
+    def _notebook_evidence_package(self, question: str) -> None:
+        """Notebook 'Evidence pack…' → build + save a compact AI evidence
+        package (mirror of the web onExportAiEvidencePackage)."""
+        if self._trace is None:
+            return
+        tab = self._active_tab
+        base = os.path.splitext(self._current_file or "trace")[0]
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save AI evidence package", base + "-evidence.json",
+            "JSON (*.json);;All files (*)")
+        if not path:
+            return
+        lo = hi = None
+        rng = self._notebook_cursor_range()
+        if rng:
+            lo, hi = rng
+        try:
+            raw_findings = self._stats_panel.build_analysis_findings()[0]
+            pkg_findings = [investigation_finding_export(x)
+                            for x in build_investigation_findings(raw_findings)]
+        except Exception:
+            pkg_findings = []
+        try:
+            health = build_trace_health_result(self._trace, lo, hi)
+        except Exception:
+            health = None
+        package = build_evidence_package(
+            question=str(question or ""),
+            scope=f"C1–C{len(self._view._scene.cursor_times())}" if rng else "Full trace",
+            analysis_range={"start": lo, "end": hi} if rng else None,
+            trace_name=os.path.basename(self._current_file or "trace.btf"),
+            trace_summary=_trace_summary_snapshot(self._trace, lo, hi),
+            health=health,
+            findings=pkg_findings,
+            investigation=getattr(tab, "_investigation", None),
+            entities=[str(t) for t in list(getattr(self._trace, "tasks", []))[:40]],
+            cores=[str(c) for c in getattr(self._trace, "core_names", [])],
+        )
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(package, fh, ensure_ascii=False, indent=2, sort_keys=True)
+        except OSError as exc:
+            QMessageBox.warning(self, "Evidence pack", f"Could not write file:\n{exc}")
+            return
+        self.statusBar().showMessage(
+            f"AI evidence package saved — ~{estimate_tokens(package)} tokens", 4000)
+
+    def _add_finding_to_investigation(self, finding: dict) -> None:
+        if not finding or self._trace is None:
+            return
+        self._ensure_investigation()
+        tab = self._active_tab
+        refs = [{"kind": "finding",
+                 "rule_id": str(finding.get("rule_id") or finding.get("id") or "")}]
+        rng = self._notebook_cursor_range()
+        if rng:
+            refs.append({"kind": "range",
+                         "range": {"start": rng[0], "end": rng[1]}})
+        inv = add_bookmark(
+            tab._investigation, type="observation",
+            title=finding.get("title") or finding.get("rule_id") or "Finding",
+            note=finding.get("text") or finding.get("impact") or "",
+            refs=refs)
+        tab._investigation = inv
+        tab._notebook_history = push_notebook_state(
+            tab._notebook_history or empty_notebook_history(), inv)
+        self._on_investigation_changed(inv)
+        self.statusBar().showMessage("Added to investigation notebook", 3000)
+        dlg = getattr(self, "_notebook_dlg", None)
+        if dlg is not None:
+            try:
+                if dlg.isVisible():
+                    dlg._inv = load_investigation(inv)
+                    dlg._history = tab._notebook_history
+                    dlg._render()
+                    return
+            except RuntimeError:
+                self._notebook_dlg = None
+        self._open_investigation_notebook()
+
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
         if self._trace is None or self._stats_panel is None:
@@ -94376,6 +99375,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             triage_state=triage,
             on_triage_change=_on_triage_change,
             on_add_to_case=_on_add_to_case,
+            on_add_to_investigation=self._add_finding_to_investigation,
             on_undo_investigate=_on_undo_investigate,
             current_limit=cur_limit,
             current_cursor_lo=cur_lo,
@@ -94412,6 +99412,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel = getattr(self, "_ai_panel", None)
         if panel is not None and hasattr(panel, "query_template"):
             QTimer.singleShot(0, lambda: panel.query_template("explain_region"))
+
+    def _on_add_region_to_investigation(self) -> None:
+        """Timeline context menu → Add region to investigation (C1–Cn range)."""
+        rng = self._notebook_cursor_range()
+        if rng is None or self._trace is None:
+            return
+        self._ensure_investigation()
+        tab = self._active_tab
+        lo, hi = rng
+        label = (f"{_format_time(lo, self._trace.time_scale, decimals=self._time_decimals_val)}"
+                 f" – {_format_time(hi, self._trace.time_scale, decimals=self._time_decimals_val)}")
+        inv = add_bookmark(
+            tab._investigation, type="observation", title=f"Region {label}",
+            refs=[{"kind": "range", "range": {"start": int(lo), "end": int(hi)}}])
+        tab._investigation = inv
+        tab._notebook_history = push_notebook_state(
+            tab._notebook_history or empty_notebook_history(), inv)
+        self._on_investigation_changed(inv)
+        self.statusBar().showMessage("Region added to investigation notebook", 3000)
+        self._open_investigation_notebook()
 
     def _on_ask_ai_event(self, event: dict) -> None:
         """Timeline context menu → Ask AI about this event."""
@@ -94965,24 +99985,173 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if path:
             self._open_file(path)
 
-    def _open_xtf_pack(self, path: str) -> None:
-        """Extract a shareable ``.xtf`` demo pack and open its BTF trace."""
+    def _stage_demo_tree(self, demo: dict, dest_dir: str) -> Optional[str]:
+        """Write a ``.btfw`` demo subtree (``demo/*``) under *dest_dir*.
+
+        Returns the path to the staged demo script, or None when there is none.
+        """
+        script_path = None
+        script_name = str((demo or {}).get("script_name") or "script.xml")
+        for rel, blob in ((demo or {}).get("files") or {}).items():
+            rel = str(rel or "").replace("\\", "/").lstrip("/")
+            if not rel or ".." in rel.split("/"):
+                continue
+            target = os.path.join(dest_dir, *rel.split("/"))
+            os.makedirs(os.path.dirname(target) or dest_dir, exist_ok=True)
+            with open(target, "wb") as fh:
+                fh.write(blob if isinstance(blob, (bytes, bytearray))
+                         else str(blob).encode("utf-8"))
+            if rel == script_name:
+                script_path = target
+        return script_path
+
+    def _open_workspace_file(self, path: str) -> None:
+        """Open a ``.btfw`` package. A ``kind == "workspace"`` package restores
+        the investigation onto its tab; a ``kind == "demo"`` package stages the
+        guided tour and (optionally) pre-loads its AI investigation case."""
         try:
-            xml, btf = extract_xtf_pack(path)
+            ws = open_workspace(path)
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
-            QMessageBox.warning(self, "Open Error", str(exc))
+            QMessageBox.warning(self, "Open Error", f"Not a readable .btfw package:\n{exc}")
             return
-        # Keep the extract dir alive for the session (BTF path is inside it).
-        if not hasattr(self, "_xtf_extract_dirs"):
-            self._xtf_extract_dirs = []
-        self._xtf_extract_dirs.append(os.path.dirname(btf))
-        self.statusBar().showMessage(
-            f"Opened demo pack {os.path.basename(path)} — loaded trace "
-            f"{os.path.basename(btf)}",
-            5000,
-        )
-        self._pending_demo = {"xml": xml}
-        self._open_file(btf)
+        trace_bytes = ws.get("trace_bytes")
+        if not trace_bytes:
+            if ws.get("trace_embedded"):
+                QMessageBox.warning(
+                    self, "Open Error", "Package trace is missing or corrupt.")
+            else:
+                QMessageBox.warning(
+                    self, "Open Error",
+                    "Package references an external trace "
+                    f"({ws.get('trace_ref') or 'unknown'}). Open that .btf directly.")
+            return
+        if not hasattr(self, "_workspace_extract_dirs"):
+            self._workspace_extract_dirs = []
+        tmp = tempfile.mkdtemp(prefix="btfw_")
+        self._workspace_extract_dirs.append(tmp)
+        raw_name = os.path.basename(
+            (ws.get("manifest") or {}).get("trace", {}).get("name")
+            or os.path.basename(path).replace(WORKSPACE_EXT, ".btf"))
+        stem = os.path.basename(_export_base_name(raw_name, "trace"))
+        # Name the staged file after the *actual* bytes, not the manifest's
+        # possibly-stale compression suffix (fixes "Not a gzipped file (b'#v')").
+        btf_path = os.path.join(tmp, stem + _staged_trace_ext(trace_bytes))
+        try:
+            with open(btf_path, "wb") as fh:
+                fh.write(trace_bytes)
+        except OSError as exc:
+            QMessageBox.warning(self, "Open Error", f"Cannot stage package trace:\n{exc}")
+            return
+        for w in ws.get("warnings") or []:
+            self.statusBar().showMessage(f"Package: {w}", 6000)
+
+        demo = ws.get("demo")
+        if ws.get("kind") == "demo" or demo:
+            script_path = self._stage_demo_tree(demo or {}, tmp) if demo else None
+            if not script_path or not os.path.isfile(script_path):
+                QMessageBox.warning(
+                    self, "Open Error",
+                    "Demo package has no demo/script.xml.")
+                return
+            self.statusBar().showMessage(
+                f"Opened demo pack {os.path.basename(path)} — loaded trace "
+                f"{os.path.basename(btf_path)}", 5000)
+            self._pending_demo = {"xml": script_path, "ai_case": ws.get("ai_case")}
+            self._open_file(btf_path)
+            return
+
+        self._pending_workspace = ws
+        self._open_file(btf_path)
+
+    def _start_pending_workspace(self) -> None:
+        ws = self._pending_workspace
+        self._pending_workspace = None
+        if not ws:
+            return
+        tab = self._active_tab
+        if tab is None:
+            return
+        notes = []
+        inv = ws.get("investigation")
+        if isinstance(inv, dict):
+            tab._investigation = load_investigation(inv)
+            tab._notebook_history = push_notebook_state(
+                empty_notebook_history(), tab._investigation)
+            if self._stats_panel is not None:
+                self._stats_panel._export_investigation = tab._investigation
+            n = len(tab._investigation.get("bookmarks") or [])
+            notes.append(f"investigation notebook ({n} bookmark{'' if n == 1 else 's'})")
+        view = ws.get("view_state")
+        if isinstance(view, dict):
+            cursors = view.get("cursors") or view.get("cursor_times") or []
+            times = [int(t) for t in cursors if isinstance(t, (int, float))]
+            if len(times) >= 1 and hasattr(self._view, "_scene"):
+                self._view.begin_programmatic_viewport()
+                try:
+                    self._view._scene.clear_cursors()
+                    for t in times:
+                        self._view._scene.add_cursor(int(t))
+                    self._view.cursors_changed.emit(self._view._scene.cursor_times())
+                finally:
+                    self._view.end_programmatic_viewport()
+                notes.append(f"{len(times)} cursor{'' if len(times) == 1 else 's'}")
+
+            bms, anns, max_id = [], [], 1
+            for m in view.get("marks") or []:
+                if not isinstance(m, dict):
+                    continue
+                try:
+                    mid, ns = int(m.get("id")), int(m.get("ns"))
+                except (TypeError, ValueError):
+                    continue
+                max_id = max(max_id, mid + 1)
+                if str(m.get("type")) == "annotation":
+                    anns.append(TraceAnnotation(id=mid, ns=ns, note=str(m.get("label") or "")))
+                else:
+                    bms.append(TraceBookmark(id=mid, ns=ns, label=str(m.get("label") or "")))
+            if bms or anns:
+                bms.sort(key=lambda b: b.ns)
+                anns.sort(key=lambda a: a.ns)
+                self._bookmarks = bms
+                self._annotations = anns
+                self._mark_next_id = max(int(view.get("markNextId") or 1), max_id)
+                try:
+                    self._rebuild_marks_list()
+                except Exception:
+                    pass
+                notes.append(
+                    f"{len(bms)} bookmark(s), {len(anns)} annotation(s)")
+
+            vp_raw = view.get("viewport_desktop")
+            if isinstance(vp_raw, str) and vp_raw:
+                vp = viewport_from_json(vp_raw)
+                if vp is not None and hasattr(tab, "vm"):
+                    tab.vm.viewport = vp
+                    apply_viewport(tab.view, vp)
+
+        if ws.get("ai_case"):
+            panel = getattr(self, "_ai_panel", None)
+            if panel is not None and hasattr(panel, "restore_workspace_ai_case"):
+                try:
+                    if panel.restore_workspace_ai_case(ws["ai_case"]):
+                        notes.append("AI investigation")
+                except Exception:
+                    pass
+
+        if ws.get("read_only"):
+            self.statusBar().showMessage(
+                "Workspace written by a newer BTFViewer — opened read-only.", 6000)
+        extras = []
+        if ws.get("health"):
+            extras.append("trace health")
+        if ws.get("findings"):
+            extras.append(f"{len(ws['findings'])} finding(s)")
+        if ws.get("report_html"):
+            extras.append("HTML report")
+        msg = f"Workspace opened — restored {', '.join(notes) or 'trace only'}"
+        if extras:
+            msg += f"; also carries {', '.join(extras)}"
+        self.statusBar().showMessage(msg, 6000)
 
     def _save_recent_files(self, path: str) -> None:
         norm = _normalize_open_path(path)
@@ -95803,9 +100972,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
 
     def _open_file(self, path: str) -> None:
-        if is_xtf_open_path(path):
+        if str(path or "").lower().endswith(WORKSPACE_EXT):
             self._stop_inapp_demo()
-            self._open_xtf_pack(path)
+            self._open_workspace_file(path)
             return
         pack = None
         lowered = (path or "").lower()
@@ -95814,7 +100983,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if pack:
                 xml, btf = pack
                 self._stop_inapp_demo()
-                self._pending_demo = {"xml": xml}
+                self._pending_demo = {
+                    "xml": xml, "ai_case": discover_demo_ai_case(xml)}
                 if os.path.abspath(btf) != os.path.abspath(path):
                     self._open_file(btf)
                     return
@@ -96051,7 +101221,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _on_save_svg(self) -> None:
         if self._trace is None:
             return
-        base = os.path.splitext(self._current_file)[0] if self._current_file else "trace"
+        base = _export_base_name(self._current_file, "trace")
         path, _ = QFileDialog.getSaveFileName(
             self, "Save SVG", base + ".svg",
             "SVG files (*.svg);;All files (*)"
@@ -96103,28 +101273,181 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self.statusBar().showMessage("Copied to clipboard!", 4000)
 
     @_dialog_guard
-    def _on_export_perfetto(self) -> None:
+    def _on_export(self) -> None:
+        """Unified Export chooser (toolbar + File ▸ Export…, Ctrl+Shift+E)."""
+        if self._trace is None:
+            return
+        has_range = self._has_cursor_range()
+        rng = self._notebook_cursor_range()
+        dlg = _ExportDialog(
+            self, has_range=has_range,
+            format_ns=lambda ns: _format_time(
+                int(ns), self._trace.time_scale, decimals=self._time_decimals_val),
+            cursor_range=rng)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        choice = dlg.result_choice() or {}
+        target = choice.get("target")
+        anon = bool(choice.get("anonymize", False))
+        if target == "perfetto":
+            self._run_perfetto_export(choice.get("perfetto_scope", "full"),
+                                      anonymize=anon)
+        elif target == "btf-slice":
+            self._on_export_btf_slice(anonymize=anon)
+        elif target == "workspace":
+            self._run_workspace_export(bool(choice.get("embed_trace", True)),
+                                       anonymize=anon)
+
+    def _export_task_alias_map(self) -> dict:
+        """``{bare_task_name: "Task-N"}`` for the Export dialog's Anonymize option.
+
+        Keyed on the **bare** task name (``Runner``, not ``Runner[1]``) — that is
+        the token that actually appears in the raw BTF text (``[0/0001]Runner``,
+        ``Runner[1]``, ``Runner(1)`` all contain it as a whole token), so the
+        embedded / sliced trace really gets rewritten.  Same scheme as the web
+        ``buildExportAnonymizer`` / ``exportTaskAliasMap``.
+        """
+        names = set()
+        for raw in getattr(self._trace, "task_repr", {}).values():
+            nm = str(_parse_task_name(str(raw))[2] or "").strip()
+            if nm and not _is_idle_task_name(nm) and nm != "TICK":
+                names.add(nm)
+        return build_task_alias_map(names)
+
+    def _workspace_view_state(self, tab) -> dict:
+        """Web-compatible ``state/view.json`` — cursors + marks + viewport."""
+        try:
+            cursors = [int(t) for t in self._view._scene.cursor_times()]
+        except (AttributeError, TypeError, ValueError):
+            cursors = []
+        marks = []
+        for b in list(getattr(self, "_bookmarks", []) or []):
+            marks.append({"id": int(b.id), "ns": int(b.ns),
+                          "label": str(b.label or ""), "type": "bookmark"})
+        for a in list(getattr(self, "_annotations", []) or []):
+            marks.append({"id": int(a.id), "ns": int(a.ns),
+                          "label": str(a.note or ""), "type": "annotation"})
+        vp_json = ""
+        try:
+            tab.vm.capture_viewport_from_view(tab.view)
+            vp_json = viewport_to_json(tab.vm.viewport)
+        except Exception:
+            vp_json = ""
+        return {
+            "version": 2,
+            "trace_name": os.path.basename(getattr(tab, "path", "") or ""),
+            "cursors": cursors,
+            "marks": marks,
+            "markNextId": int(getattr(self, "_mark_next_id", 1) or 1),
+            "scopeToCursors": bool(
+                getattr(self._stats_panel, "_scope_to_cursors", True)),
+            "viewport_desktop": vp_json,
+        }
+
+    def _run_workspace_export(self, embed: bool, *, anonymize: bool = False) -> None:
+        """Write a portable .btfw for the active trace + investigation state.
+
+        When *anonymize* is set every task name in the embedded trace, findings,
+        health, notebook, AI case and report is replaced with a stable
+        ``Task-N`` alias (see :mod:`btf_viewer_pkg.anonymize_export`).
+        """
+        if self._trace is None:
+            return
+        base = _export_base_name(self._current_file, "workspace")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save workspace", base + ".btfw",
+            "BTF Viewer workspace (*.btfw);;All files (*)")
+        if not path:
+            return
+        amap = self._export_task_alias_map() if anonymize else {}
+
+        def _anon(obj):
+            return anonymize_json_strings(obj, amap) if amap else obj
+
+        try:
+            trace_raw = b""
+            if self._current_file and os.path.isfile(self._current_file):
+                if amap:
+                    try:
+                        with _open_btf_text(self._current_file) as fh:
+                            trace_raw = anonymize_btf_text(
+                                fh.read(), amap).encode("utf-8")
+                    except Exception:
+                        trace_raw = b""
+                else:
+                    with open(self._current_file, "rb") as fh:
+                        trace_raw = fh.read()
+            embed = embed and bool(trace_raw)
+
+            def _hf(ns):
+                return _format_time(int(ns), self._trace.time_scale,
+                                    decimals=self._time_decimals_val)
+
+            health = findings = None
+            try:
+                health = _anon(build_trace_health_result(self._trace, format_ns=_hf))
+            except Exception:
+                health = None
+            try:
+                raw_findings = self._stats_panel.build_analysis_findings()[0]
+                findings = [_anon(investigation_finding_export(x))
+                            for x in build_investigation_findings(raw_findings)]
+            except Exception:
+                findings = None
+            report_html = None
+            try:
+                report_html = self._stats_panel.build_statistics_html()
+                if amap and report_html:
+                    # Post-process with the *same* bare-name map used for the
+                    # trace / findings / health, so every Task-N in the .btfw
+                    # lines up (the stats panel's own anonymiser keys on the
+                    # decorated "Name[id]" form and would number differently).
+                    report_html = anonymize_with_map(report_html, amap)
+            except Exception:
+                report_html = None
+            tab = self._active_tab
+            investigation = getattr(tab, "_investigation", None)
+            if amap and investigation is not None:
+                investigation = _anon(load_investigation(investigation))
+            ai_case = None
+            try:
+                panel = getattr(self, "_ai_panel", None)
+                if panel is not None and hasattr(panel, "workspace_ai_case"):
+                    ai_case = _anon(panel.workspace_ai_case())
+            except Exception:
+                ai_case = None
+            save_workspace(
+                path,
+                trace_bytes=trace_raw if embed else None,
+                trace_ref="" if embed else (self._current_file or ""),
+                trace_name=os.path.basename(self._current_file or "trace.btf"),
+                trace_size=len(trace_raw),
+                embed_trace=embed,
+                view_state=self._workspace_view_state(tab),
+                health=health,
+                findings=findings,
+                investigation=investigation,
+                ai_case=ai_case,
+                report_html=report_html,
+                analysis_settings={"anonymized": True} if amap else None,
+                locale="",
+                btfviewer_version=str(globals().get("_APP_VERSION", "") or ""),
+            )
+            self.statusBar().showMessage(
+                f"Workspace saved ({'embedded' if embed else 'referenced'} trace"
+                f"{', anonymized' if amap else ''}) → {os.path.basename(path)}", 4000)
+        except (OSError, ValueError, TypeError) as exc:
+            _critical_with_detail(
+                self, "Export Error",
+                "Could not write the workspace file.", str(exc))
+
+    def _run_perfetto_export(self, scope: str = "full", *,
+                             anonymize: bool = False) -> None:
         """Export the loaded trace as Chrome Trace JSON for ui.perfetto.dev."""
         if self._trace is None:
             return
-        box = QMessageBox(self)
-        box.setWindowTitle("Export Perfetto")
-        box.setIcon(QMessageBox.Question)
-        box.setText("Choose the time range to export.")
-        box.setInformativeText(
-            "Full trace exports every event. Current viewport clips to the "
-            "visible timeline window (same units as the BTF timeScale)."
-        )
-        full_btn = box.addButton("Full trace", QMessageBox.AcceptRole)
-        vp_btn = box.addButton("Current viewport", QMessageBox.ActionRole)
-        box.addButton(QMessageBox.Cancel)
-        box.setDefaultButton(full_btn)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is None or clicked not in (full_btn, vp_btn):
-            return
         lo = hi = None
-        if clicked is vp_btn:
+        if scope == "viewport":
             scene = getattr(self._view, "_scene", None)
             if scene is None:
                 QMessageBox.warning(
@@ -96137,7 +101460,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     self, "Export Perfetto",
                     "Current viewport is empty; choose Full trace instead.")
                 return
-        base = os.path.splitext(self._current_file)[0] if self._current_file else "trace"
+        base = _export_base_name(self._current_file, "trace")
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Perfetto",
             base + ".json",
@@ -96147,12 +101470,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         try:
             export_perfetto(self._trace, path, lo=lo, hi=hi)
+            if anonymize:
+                amap = self._export_task_alias_map()
+                if amap:
+                    with open(path, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                    with open(path, "w", encoding="utf-8") as fh:
+                        json.dump(anonymize_json_strings(data, amap), fh)
             scope = (
                 f"viewport [{lo}, {hi})" if lo is not None
                 else "full trace"
             )
             self.statusBar().showMessage(
-                f"Perfetto exported ({scope}) → {os.path.basename(path)}", 4000)
+                f"Perfetto exported ({scope}{', anonymized' if anonymize else ''})"
+                f" → {os.path.basename(path)}", 4000)
         except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
             _critical_with_detail(
                 self, "Export Error",
@@ -96721,6 +102052,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_zoom_range.setEnabled(has_range)
         self._tb_zoom_range_btn.setEnabled(has_range)
         self._sync_file_export_actions(has_range=has_range)
+        if refresh_stats:
+            self._refresh_trace_health()
         if hasattr(self, "_marks_card_range"):
             self._marks_card_range.set_count("A–B" if has_range else None)
         if self._trace is None or not has_range:
@@ -97557,6 +102890,28 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     # -- Help -----------------------------------------------------------
 
     @_dialog_guard
+    def _on_open_guided_demo(self) -> None:
+        """Help ▸ Open Guided Demo — launch the bundled investigation-workflow
+        tour (demos/demo_8cores). Uses the same demo runner as a dropped .btfw
+        demo package; every step is skippable and the tour can be restarted
+        from here."""
+        root = Path(__file__).resolve().parents[1]
+        demo_dir = root / "demos" / "demo_8cores"
+        for cand in (
+            demo_dir / "demo" / "script.xml",   # package-mirror folder
+            demo_dir / "demo_8cores.xml",       # legacy flat folder
+            root / "builds" / "demo_8cores.btfw",
+        ):
+            if cand.is_file():
+                self._stop_inapp_demo()
+                self._open_file(str(cand))
+                return
+        QMessageBox.information(
+            self, "Guided Demo",
+            "The guided demo pack was not found next to this build.\n\n"
+            "Get it by dropping demos/demo_8cores/ (or a packed demo_8cores.btfw) "
+            "onto the window, or run:  make -C BTFViewer demo")
+
     def _on_keyboard_shortcuts(self) -> None:
         """Show a reference dialog listing all keyboard shortcuts."""
         if self._is_dark:
@@ -97578,7 +102933,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+S",       "Open snapshot editor"),
                 ("Ctrl+Shift+S", "Save viewport as SVG"),
                 ("Ctrl+Shift+C", "Copy viewport to clipboard"),
-                ("Ctrl+Shift+E", "Export Perfetto (Chrome Trace JSON)"),
+                ("Ctrl+Shift+E", "Export… (workspace · Perfetto · BTF slice)"),
                 ("Ctrl+Q",       "Quit  (Alt+F4 also works on Windows)"),
             ]),
             ("Edit", [
@@ -97678,6 +103033,25 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         dlg.setMinimumWidth(780)
         layout = QVBoxLayout(dlg)
         layout.setContentsMargins(16, 12, 16, 12)
+
+        # Full-width Statistics Reference banner — lockstep with the web Help
+        # dialog's ``.help-reference-link`` (App.vue).
+        _ref_btn = QPushButton(
+            "Statistics Reference — full documentation for every stat →")
+        _ref_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        _ref_btn.setStyleSheet(
+            f"QPushButton {{ text-align:left; padding:9px 14px; font-weight:600;"
+            f" border:1px solid {c_key}; border-radius:8px; color:{c_key};"
+            f" background:{c_bg}; }}"
+            f"QPushButton:hover {{ background:palette(midlight); }}")
+
+        def _open_stats_reference_from_help():
+            dlg.accept()
+            self._open_stats_reference("")
+
+        _ref_btn.clicked.connect(_open_stats_reference_from_help)
+        layout.addWidget(_ref_btn)
+
         cols = QHBoxLayout()
         cols.setSpacing(20)
         for col_html in (left_html, right_html):
@@ -97866,7 +103240,7 @@ _HEADLESS_QPA_PLATFORMS = ("offscreen", "minimal", "vnc")
 # cli._CLI_COMMANDS by tests.
 _HEADLESS_CLI_COMMANDS = frozenset({
     "report", "compare", "analyze", "ai-test", "info", "migrations", "snapshot",
-    "perfetto", "slice",
+    "perfetto", "slice", "workspace", "verify",
 })
 
 def _headless_cli_invocation(argv: list[str] | None = None) -> bool:
@@ -98100,9 +103474,12 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   snapshot     Export a PNG/SVG image (timeline, migration inspector, or a
                statistics metric plot) without opening the GUI.
   perfetto     Export Chrome Trace JSON for https://ui.perfetto.dev
-               (same as File → Export Perfetto…).
+               (same as Export… → Perfetto).
   slice        Export a timestamp range as a smaller .btf
-               (same as File → Save selection as BTF…).
+               (same as Export… → cursor-range BTF).
+  workspace    Inspect / extract a portable .btfw workspace.
+  verify       Check a trace against a JSON rule file — CI gate with stable
+               exit codes (0 pass · 1 limit failed · 2 bad input · 3 internal).
 
 Time range (--lo / --hi):
   Values are raw trace timestamps in the file's time units (see # timeScale
@@ -98129,6 +103506,7 @@ CLI examples:
   %(prog)s compare run1.btf run2.btf -o /tmp/compare.html --name-a baseline --name-b tuned
   %(prog)s analyze candidate.btf --baseline baseline.btf --fail-on-regression
   %(prog)s analyze candidate.btf --save-baseline /tmp/base.json
+  %(prog)s verify candidate.btf --rules project-rules.json --strict
   %(prog)s compare tracedata/tickless-8cores.zip -o /tmp/tick-policy.html
   %(prog)s migrations tracedata/example-4cores.btf -o /tmp/migrations.csv
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/timeline.png --view timeline
@@ -98371,6 +103749,40 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     )
     report.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
     report.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+    report.add_argument(
+        "--investigation", default=None, metavar="PATH",
+        help=(
+            "path to a saved Investigation (.json: bookmarks + evidence chain); "
+            "adds an Investigation section to the HTML/JSON report"
+        ),
+    )
+    report.add_argument(
+        "--save-workspace", default=None, metavar="PATH",
+        help=(
+            "also write a portable .btfw workspace (embedded trace + view state "
+            "+ health + findings + investigation + HTML report)"
+        ),
+    )
+    report.add_argument(
+        "--no-embed-trace", dest="embed_trace", action="store_false",
+        help="with --save-workspace: reference the trace by path instead of embedding it",
+    )
+    report.set_defaults(embed_trace=True)
+    report.add_argument(
+        "--ai-package", default=None, metavar="OUT.json",
+        help=(
+            "also write a compact AI evidence package (question + scope + health "
+            "+ findings + investigation + trace summary) and print a token estimate"
+        ),
+    )
+    report.add_argument(
+        "--question", default="", metavar="TEXT",
+        help="the question the --ai-package should answer",
+    )
+    report.add_argument(
+        "--redact-names", action="store_true",
+        help="with --ai-package: replace task names with task_N aliases",
+    )
 
     compare = sub.add_parser(
         "compare",
@@ -98702,6 +104114,70 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="range end (trace time units, inclusive; must be greater than --lo)",
     )
 
+    workspace_p = sub.add_parser(
+        "workspace",
+        help="inspect or extract a portable .btfw workspace",
+        description=(
+            "Read a .btfw workspace (a ZIP container: trace + view state + "
+            "health + findings + investigation + optional report).\n\n"
+            "With no option, prints the manifest and a content inventory. "
+            "The container is inspectable with any ZIP tool."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    workspace_p.add_argument(
+        "workspace", metavar="file.btfw",
+        help="path to the .btfw workspace",
+    )
+    workspace_p.add_argument(
+        "--extract", metavar="DIR", default=None,
+        help="safely extract every member under DIR (rejects path traversal)",
+    )
+    workspace_p.add_argument(
+        "--report", metavar="OUT.html", default=None,
+        help="write the embedded HTML report to OUT.html",
+    )
+    workspace_p.add_argument(
+        "--json", action="store_true",
+        help="print the manifest as JSON instead of a summary",
+    )
+
+    verify_p = sub.add_parser(
+        "verify",
+        help="check a trace against a JSON rule file (CI gate; stable exit codes)",
+        description=(
+            "Resolve each rule's metric for the trace (optionally a cursor "
+            "scope), compare to its threshold, and exit:\n"
+            "  0  every rule passed\n"
+            "  1  one or more error-severity limits failed\n"
+            "  2  invalid rule file, unknown metric, or insufficient data\n"
+            "  3  internal processing error\n\n"
+            "Rule file: {\"schema_version\": 1, \"rules\": [ {\"metric\": ...,"
+            " \"min\"|\"max\"|\"maximum_us\"|\"expect_one_of\": ...,"
+            " \"severity\": \"error\"} ]}"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    verify_p.add_argument("trace", metavar="trace.btf", help="path to the .btf trace")
+    verify_p.add_argument(
+        "--rules", required=True, metavar="rules.json",
+        help="path to the JSON rule file",
+    )
+    verify_p.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
+    verify_p.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+    verify_p.add_argument(
+        "--strict", action="store_true",
+        help="treat warning-severity failures as blocking (exit 1) too",
+    )
+    verify_p.add_argument(
+        "--json", action="store_true",
+        help="print the result as JSON instead of a text report",
+    )
+    verify_p.add_argument(
+        "--list-metrics", action="store_true",
+        help="print every metric name a rule may target and exit",
+    )
+
     ai_test = sub.add_parser(
         "ai-test",
         help="AI evidence/validator benchmark (offline fixtures or live --config)",
@@ -98794,6 +104270,8 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "snapshot": snapshot,
         "perfetto": perfetto,
         "slice": slice_p,
+        "workspace": workspace_p,
+        "verify": verify_p,
         "ai-test": ai_test,
     }
 
@@ -98860,6 +104338,15 @@ def _cli_report_run(args: argparse.Namespace) -> int:
     panel._task_deadlines_ns = {}
     panel._ux_events_key = None
     panel._ux_events_cached = None
+    panel._export_investigation = None
+    if getattr(args, "investigation", None):
+        load_investigation = globals().get("load_investigation")
+        try:
+            panel._export_investigation = load_investigation(
+                Path(args.investigation).read_text(encoding="utf-8"))
+        except OSError as exc:
+            print(f"error: cannot read investigation: {exc}", file=sys.stderr)
+            return 1
     if args.lo is not None and args.hi is not None:
         panel._export_scope_override = (args.lo, args.hi)
 
@@ -98882,6 +104369,102 @@ def _cli_report_run(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    if getattr(args, "save_workspace", None):
+        save_workspace = globals().get("save_workspace")
+        _cfg = globals().get("config")
+        embed = bool(getattr(args, "embed_trace", True))
+        html_for_ws = None
+        if fmt in ("html", "both", "all"):
+            try:
+                with open(html_path, "r", encoding="utf-8") as fh:
+                    html_for_ws = fh.read()
+            except OSError:
+                html_for_ws = None
+        try:
+            with open(trace_path, "rb") as fh:
+                trace_raw = fh.read()
+        except OSError as exc:
+            print(f"error: cannot read trace for workspace: {exc}", file=sys.stderr)
+            return 1
+        health = findings = None
+        try:
+            _f, _ = panel.build_analysis_findings()
+            build_investigation_findings = globals().get("build_investigation_findings")
+            investigation_finding_export = globals().get("investigation_finding_export")
+            findings = [investigation_finding_export(x) for x in build_investigation_findings(_f)]
+        except Exception:
+            findings = None
+        try:
+            build_trace_health_result = globals().get("build_trace_health_result")
+            health = build_trace_health_result(trace)
+        except Exception:
+            health = None
+        try:
+            save_workspace(
+                args.save_workspace,
+                trace_bytes=trace_raw if embed else None,
+                trace_ref="" if embed else trace_path,
+                trace_name=os.path.basename(trace_path),
+                trace_size=len(trace_raw),
+                embed_trace=embed,
+                health=health,
+                findings=findings,
+                investigation=panel._export_investigation,
+                report_html=html_for_ws,
+                locale=str(getattr(_cfg, "APP_LOCALE", "") or ""),
+                btfviewer_version=str(getattr(_cfg, "_APP_VERSION", "") or ""),
+            )
+            written.append(args.save_workspace)
+        except (OSError, ValueError) as exc:
+            print(f"error: cannot write workspace: {exc}", file=sys.stderr)
+            return 1
+
+    if getattr(args, "ai_package", None):
+        build_evidence_package = globals().get("build_evidence_package")
+        estimate_tokens = globals().get("estimate_tokens")
+        format_evidence_package_preview = globals().get("format_evidence_package_preview")
+        try:
+            _f, scope_title = panel.build_analysis_findings()
+            build_investigation_findings = globals().get("build_investigation_findings")
+            investigation_finding_export = globals().get("investigation_finding_export")
+            pkg_findings = [
+                investigation_finding_export(x)
+                for x in build_investigation_findings(_f)
+            ]
+        except Exception:
+            pkg_findings, scope_title = [], ""
+        pkg_health = None
+        try:
+            build_trace_health_result = globals().get("build_trace_health_result")
+            pkg_health = build_trace_health_result(trace, args.lo, args.hi)
+        except Exception:
+            pkg_health = None
+        rng = None
+        if args.lo is not None and args.hi is not None:
+            rng = {"start": args.lo, "end": args.hi}
+        package = build_evidence_package(
+            question=str(getattr(args, "question", "") or ""),
+            scope=str(scope_title or "").strip(),
+            analysis_range=rng,
+            trace_name=os.path.basename(trace_path),
+            trace_summary=_trace_summary_snapshot(trace, args.lo, args.hi),
+            health=pkg_health,
+            findings=pkg_findings,
+            investigation=getattr(panel, "_export_investigation", None),
+            entities=[str(t) for t in list(getattr(trace, "tasks", []))[:40]],
+            cores=[str(c) for c in getattr(trace, "core_names", [])],
+            redact_names=bool(getattr(args, "redact_names", False)),
+        )
+        try:
+            with open(args.ai_package, "w", encoding="utf-8") as fh:
+                json.dump(package, fh, ensure_ascii=False, indent=2, sort_keys=True)
+        except OSError as exc:
+            print(f"error: cannot write AI package: {exc}", file=sys.stderr)
+            return 1
+        written.append(args.ai_package)
+        print(f"AI evidence package: ~{estimate_tokens(package)} tokens", file=sys.stderr)
+        print(format_evidence_package_preview(package), end="", file=sys.stderr)
+
     for path in written:
         print(path)
     return 0
@@ -98890,6 +104473,141 @@ def _cli_report_main(argv: List[str]) -> int:
     _parsers = _make_arg_parser()[1]
     args = _parsers["report"].parse_args(argv)
     return _cli_report_run(args)
+
+
+def _cli_workspace_run(args: argparse.Namespace) -> int:
+    extract_workspace = globals().get("extract_workspace")
+    open_workspace = globals().get("open_workspace")
+    read_manifest = globals().get("read_manifest")
+    workspace_trace_status = globals().get("workspace_trace_status")
+
+    path = os.path.abspath(args.workspace)
+    if not os.path.isfile(path):
+        print(f"error: workspace not found: {path}", file=sys.stderr)
+        return 1
+
+    try:
+        if args.json and not (args.extract or args.report):
+            import json as _json
+            print(_json.dumps(read_manifest(path), indent=2, sort_keys=True))
+            return 0
+        ws = open_workspace(path)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    written: List[str] = []
+    if args.extract:
+        try:
+            written = extract_workspace(path, args.extract)
+        except (OSError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    if args.report:
+        if not ws.get("report_html"):
+            print("error: workspace has no embedded report", file=sys.stderr)
+            return 2
+        try:
+            with open(args.report, "w", encoding="utf-8") as fh:
+                fh.write(ws["report_html"])
+            written.append(args.report)
+        except OSError as exc:
+            print(f"error: cannot write {args.report}: {exc}", file=sys.stderr)
+            return 1
+
+    if written:
+        for p in written:
+            print(p)
+        return 0
+
+    man = ws["manifest"]
+    tr = man.get("trace") or {}
+    status = workspace_trace_status(
+        man, current_sha256=tr.get("sha256") if tr.get("embedded") else "")
+    print(f"Workspace: {path}")
+    print(f"  schema        {ws['schema']}"
+          + ("  (read-only: newer format)" if ws["read_only"] else "")
+          + ("  (migrated)" if ws["migrated"] else ""))
+    print(f"  BTFViewer     {man.get('btfviewer_version') or '—'}")
+    print(f"  created       {man.get('created')}")
+    print(f"  modified      {man.get('modified')}")
+    print(f"  locale        {man.get('locale') or '—'}")
+    print(f"  trace         {tr.get('name') or '—'}  ({tr.get('size', 0):,} bytes, "
+          f"{'embedded' if tr.get('embedded') else 'referenced: ' + (tr.get('ref') or '?')})")
+    print(f"  trace hash    {tr.get('sha256') or '—'}  [{status['reason']}]")
+    print(f"  contents      {', '.join(man.get('contents') or []) or '—'}")
+    if man.get("attachments"):
+        print(f"  attachments   {', '.join(a.get('name', '?') for a in man['attachments'])}")
+    if ws["investigation"]:
+        bm = ws["investigation"].get("bookmarks") or []
+        print(f"  investigation {len(bm)} bookmark(s), "
+              f"{'conclusion set' if ws['investigation'].get('conclusion') else 'no conclusion'}")
+    for w in ws["warnings"]:
+        print(f"  ! {w}", file=sys.stderr)
+    return 0
+
+
+def _cli_workspace_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["workspace"].parse_args(argv)
+    return _cli_workspace_run(args)
+
+
+def _cli_verify_run(args: argparse.Namespace) -> int:
+    EXIT_INPUT = globals().get("EXIT_INPUT")
+    EXIT_INTERNAL = globals().get("EXIT_INTERNAL")
+    format_verification_report = globals().get("format_verification_report")
+    load_rule_file = globals().get("load_rule_file")
+    run_verification = globals().get("run_verification")
+    supported_metrics = globals().get("supported_metrics")
+
+    if getattr(args, "list_metrics", False):
+        for m in supported_metrics():
+            print(m)
+        return 0
+
+    err = _cli_validate_range_pair(args.lo, args.hi, "range")
+    if err:
+        print(err, file=sys.stderr)
+        return EXIT_INPUT
+
+    try:
+        rules = load_rule_file(os.path.abspath(args.rules))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_INPUT
+
+    trace, err_load = _cli_load_trace(os.path.abspath(args.trace))
+    if err_load:
+        print(err_load, file=sys.stderr)
+        return EXIT_INPUT
+    assert trace is not None
+
+    try:
+        snapshot = _trace_summary_snapshot(trace, args.lo, args.hi)
+        health = None
+        try:
+            build_trace_health_result = globals().get("build_trace_health_result")
+            health = build_trace_health_result(trace, args.lo, args.hi)
+        except Exception:
+            health = None
+        result = run_verification(snapshot, health, rules, strict=bool(args.strict))
+    except Exception as exc:  # noqa: BLE001 - contract: internal error → exit 3
+        print(f"error: internal verification failure: {exc}", file=sys.stderr)
+        return EXIT_INTERNAL
+
+    if args.json:
+        import json as _json
+        print(_json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(format_verification_report(
+            result, title=_trace_display_name(os.path.abspath(args.trace))), end="")
+    return int(result["exit_code"])
+
+
+def _cli_verify_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["verify"].parse_args(argv)
+    return _cli_verify_run(args)
 
 def _cli_compare_run(args: argparse.Namespace) -> int:
     lo_a, hi_a, lo_b, hi_b, err = _cli_dual_ranges(args)
@@ -100033,6 +105751,8 @@ _CLI_COMMANDS = {
     "snapshot": _cli_snapshot_main,
     "perfetto": _cli_perfetto_main,
     "slice": _cli_slice_main,
+    "workspace": _cli_workspace_main,
+    "verify": _cli_verify_main,
     "ai-test": _cli_ai_test_main,
 }
 

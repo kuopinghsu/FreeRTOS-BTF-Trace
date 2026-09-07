@@ -174,6 +174,14 @@
           Explain this region with AI
         </div>
         <div
+          v-if="hasTwoCursors"
+          class="ctx-item"
+          title="Bookmark the C1–Cn range as an observation in the Investigation notebook"
+          @click="onCtxAddRegionToInvestigation"
+        >
+          Add region to investigation
+        </div>
+        <div
           class="ctx-sep"
           role="separator"
         />
@@ -368,7 +376,7 @@ const emit = defineEmits([
   'viewportChange', 'cursorsChange', 'hoverTimeChange', 'highlightChange', 'highlightClick',
   'segmentClick', 'clearSelection', 'addBookmark', 'addAnnotation', 'markMove', 'copyScreenshot',
   'beforeCursorChange', 'beforeMarkChange', 'labelWidthChange', 'explainRegion', 'askAiEvent',
-  'clearBookmarks', 'clearAnnotations', 'clearAllMarks',
+  'clearBookmarks', 'clearAnnotations', 'clearAllMarks', 'addRegionToInvestigation',
 ])
 
 const aiFeatureEnabled = computed(() => props.aiEnabled !== false)
@@ -1087,6 +1095,13 @@ function onCtxExplainRegion() {
   if (!aiFeatureEnabled.value) return
   contextMenu.visible = false
   emit('explainRegion')
+}
+
+function onCtxAddRegionToInvestigation() {
+  contextMenu.visible = false
+  const placed = props.cursors.filter(c => c != null).map(Number).filter(Number.isFinite)
+  if (placed.length < 2) return
+  emit('addRegionToInvestigation', { start: Math.min(...placed), end: Math.max(...placed) })
 }
 
 function onAddBookmark() {

@@ -4,14 +4,16 @@
 
   Run (from BTFViewer/):
     make demo
-    # or: python3 builds/btf_viewer.py demos/demo_8cores/demo_8cores.xml
+    # or: python3 builds/btf_viewer.py demos/demo_8cores
     Note: XML comments must not contain double-hyphen sequences.
-    Open or drop this XML, the folder, or a packed .xtf in Desktop or Web.
+    Open or drop the demo_8cores/ folder, this demo/script.xml, or a packed
+    .btfw in Desktop or Web. The folder is a valid unpacked .btfw package.
     Toolbar icons, tabs, Analysis, and Find are demo API events, not overlay clicks.
 
-  Trace snapshot: demo_8cores.btf.gz (frozen copy in this demo folder;
+  Trace snapshot: trace/source.btf.gz (frozen copy in this demo package;
   do not point at tracedata/example-8cores.btf.gz — that file may change).
-  Narration: text/{lang}/*.txt → voice/{lang}/*.mp3 (see scripts/demo_voice.py)
+  Narration: attachments/text/{lang}/*.txt → demo/voice/{lang}/*.mp3
+  (see scripts/demo_voice.py)
   TTS tip: write Free-RTOS (with hyphen) so speech engines say it correctly.
   Variables: REPO, BTF, PYTHON, MOD, XML_DIR, trace, cwd (as ${name})
 
@@ -34,10 +36,10 @@
       (health, analysis, scope, balance, WCET, latency, migrations,
       core-migration view, compliance) → Find/Export/Compare →
       AI for newcomers (Settings, Start Investigation, verify jumps,
-      Explain region). Trace: demo_8cores.btf.gz (frozen demo snapshot).
+      Explain region). Trace: trace/source.btf.gz (frozen demo snapshot).
     </description>
     <cwd>${BTF}</cwd>
-    <trace>${XML_DIR}/demo_8cores.btf.gz</trace>
+    <trace>${XML_DIR}/../trace/source.btf.gz</trace>
     <languages default="en">
       <language id="en" label="English"/>
       <language id="zh-tw" label="中文"/>
@@ -449,7 +451,7 @@
       <macro ref="fit"/>
       <audio file="${XML_DIR}/voice/23_close.mp3"/>
       <wait_audio/>
-      <show_message text="Try it yourself: open demo_8cores.xml (or the demo folder / .xtf) in BTFViewer" seconds="6"/>
+      <show_message text="Try it yourself: open demo_8cores.xml (or the demo folder / .btfw package) in BTFViewer" seconds="6"/>
       <wait seconds="3" why="end hold"/>
     </step>
 

@@ -1,6 +1,6 @@
 """Desktop ↔ web demo Settings parity (AI page open/close).
 
-Shared contract: demos/demo_8cores/demo_8cores.xml step 18
+Shared contract: demos/demo_8cores/demo/script.xml step 18
 ``<settings page="AI"/>`` then ``<settings close="true"/>``.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ if str(BTF_ROOT) not in sys.path:
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml"
+DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo" / "script.xml"
 WEB_RUNNER = BTF_ROOT / "web" / "src" / "utils" / "demoRunner.js"
 WEB_APP = BTF_ROOT / "web" / "src" / "App.vue"
 WEB_SETTINGS = BTF_ROOT / "web" / "src" / "components" / "SettingsDialog.vue"

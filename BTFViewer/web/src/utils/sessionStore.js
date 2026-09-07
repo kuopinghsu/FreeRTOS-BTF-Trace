@@ -1,5 +1,7 @@
 /** Persist web viewer layout, tabs, and per-trace state in localStorage. */
 
+import { dumpInvestigation, loadInvestigation } from './investigationNotebook.js'
+
 const SESSION_KEY = 'btf-viewer-session-v2'
 
 export function loadSession() {
@@ -139,7 +141,21 @@ export function snapshotTabState(tab) {
     cpuLoadExpanded: tab.cpuLoadExpanded !== false,
     scopeToCursors: tab.scopeToCursors !== false,
     openPlot: sanitizeOpenPlot(tab.openPlot),
+    investigation: sanitizeInvestigation(tab.investigation),
     ...filters,
+  }
+}
+
+/** Keep only a non-empty investigation notebook (bookmarks or a conclusion). */
+function sanitizeInvestigation(inv) {
+  if (!inv || typeof inv !== 'object') return null
+  const has = (inv.bookmarks?.length || String(inv.conclusion || '').trim()
+    || inv.unresolved_questions?.length)
+  if (!has) return null
+  try {
+    return JSON.parse(dumpInvestigation(inv))
+  } catch {
+    return null
   }
 }
 
@@ -171,6 +187,9 @@ export function applyTabState(tab, state) {
   if (state.cpuLoadExpanded != null) tab.cpuLoadExpanded = !!state.cpuLoadExpanded
   if (state.scopeToCursors != null) tab.scopeToCursors = !!state.scopeToCursors
   if (state.openPlot !== undefined) tab.openPlot = sanitizeOpenPlot(state.openPlot)
+  if (state.investigation && typeof state.investigation === 'object') {
+    tab.investigation = loadInvestigation(state.investigation)
+  }
   applyTabFilters(tab, sanitizeTabFilters(state))
 }
 

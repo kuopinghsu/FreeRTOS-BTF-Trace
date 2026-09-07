@@ -32,8 +32,8 @@ from btf_viewer_pkg.stats import _RcSettings  # noqa: E402
 
 from tests import destroy_main_window  # noqa: E402
 
-DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml"
-DEMO_BTF = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.btf.gz"
+DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo" / "script.xml"
+DEMO_BTF = BTF_ROOT / "demos" / "demo_8cores" / "trace" / "source.btf.gz"
 
 
 def _clear_override_cursors() -> None:

@@ -139,11 +139,15 @@ A navigation action does not make the selected event a root cause. It only conne
 
 - Analysis Scope, trace metadata, filters, and timestamp origin;
 - diagnostic KPIs and Analysis Findings;
+- the **Trace Health Check** status and any limited metrics;
+- an **Investigation** section when a saved investigation is attached (GUI) or passed with `--investigation` (headless CLI);
 - the same Statistics tables, grouped table of contents, and section notes;
 - search, sorting, Problems only, and Show all for each statistics table; and
 - an SVG load-balance gauge under Core Utilisation.
 
 The HTML report can identify where to investigate, but it cannot preserve every interactive timeline action. Keep the source trace when another reviewer may need to verify an event.
+
+The machine-readable snapshot (`--format json`) uses schema `btf-viewer-stats/2`: each entry in `findings` gains a `rule_id`, and a new `investigation_findings` array carries the full structured finding (id, rule_id, severity, status, observation, category, comparison_basis, affected_range, entities, measured_values, evidence_refs, limitations, rank_score). When an investigation is attached it is echoed back under `investigation` with resolved `chains` and `broken_references`.
 
 ### Analysis flow
 
@@ -176,6 +180,10 @@ Toolbar **Analysis** provides a heuristic inbox for the current Scope. It stays 
 - **Show on timeline** centers the timeline on the supporting timestamp and can highlight the related task. It never changes Scope or Filters.
 - Severity ranks attention; it does not assign failure probability.
 - Each finding shows an **evidence-strength** label (Direct / Derived / Estimated / Configured) with tooltips where applicable.
+- Every finding carries a stable **rule id**, and its **measured values** (name, value, unit, sample count) and **comparison basis** are kept separate from the display text, so exported reports and the JSON snapshot stay reproducible and localizable.
+- Findings for the same rule, entity, and overlapping time range are **merged** into one.
+- The list is **ranked** by severity, then magnitude, evidence duration, and evidence quality.
+- When no rule fires the list shows **No findings under the current rules** — this is not a clean bill of health.
 
 <a id="analysis-context-strip" name="analysis-context-strip"></a>
 ### Analysis Context strip
@@ -490,6 +498,23 @@ A large gap can come from tickless idle, a long critical section, CPU pressure, 
 **How to use it.** Establish whether the trace is periodic or tickless before treating a large gap as an error. Correlate the gap with **Core Time Breakdown**, CPU load, and the timeline. If all event types disappear in the same range, suspect capture loss; if tasks continue but TICK events disappear, investigate tick suppression, interrupt masking, or instrumentation.
 
 ![Tick interval distribution chart — scatter and histogram of consecutive TICK gaps in example-8cores.btf.gz](../images/stats/stats-tick.svg)
+
+<a id="statistics-health-check" name="statistics-health-check"></a>
+### Trace Health Check ![](../images/readme/h4.svg)
+
+**What it tells you**
+
+Deterministic structural checks on the parsed event model, run after parsing and whenever the Scope changes. It answers one question: *is the reconstructed schedule internally consistent enough to trust the statistics below it?* It is independent of AI and separate from **Trace Health (TICK)**, which only measures tick regularity.
+
+| Status | Meaning |
+|---|---|
+| **Pass** | No structural inconsistencies under the current checks |
+| **Caution** | One or more warnings; valid metrics are still calculated, affected ones are marked limited |
+| **Insufficient data** | A blocking error (empty range, unknown timestamp unit, or a schedule with many overlapping slices); dependent values are withheld rather than shown wrong |
+
+**Checks.** Non-monotonic or dropped timestamps; unrecognised timestamp units; task slices that overlap in time on the same core; core identifiers outside the valid 0–31 range; missing task identity (task-table overflow or unnamed tasks); `interval_start` events with no matching `interval_stop`; mutex/semaphore pairing issues; capture truncation and ring-buffer overflow; a long interval with no scheduled task; and metric prerequisites (event types a section needs but the trace does not contain).
+
+**How to use it.** Read the status first. On **Caution** or **Insufficient data**, expand each check for its time range, affected cores or tasks, and the list of metrics it limits — those sections show *Insufficient data* or a limitation notice instead of a number. A warning never suppresses a metric that can still be computed.
 
 <a id="statistics-task_health" name="statistics-task_health"></a>
 ### Task Health ![](../images/readme/h4.svg)

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { zipSync } from 'fflate'
 import {
   buildVariables,
   demoTimeToTraceUnits,
@@ -15,7 +14,8 @@ import {
   truthy,
 } from '../src/utils/demoXml.js'
 import { createDemoRunner, shouldSkipStep } from '../src/utils/demoRunner.js'
-import { classifyOpenFiles, classifyPickedOpen, collectDroppedFiles, demoPackHintFromParsed, directoryPickerOptions, filePickerOptions, FILE_OPEN_PICKER_ID, filesFromXtf, isXtfOpenName, normalizePackPath, packFromFileMap } from '../src/utils/demoPack.js'
+import { classifyOpenFiles, classifyPickedOpen, collectDroppedFiles, demoPackHintFromParsed, directoryPickerOptions, filePickerOptions, FILE_OPEN_PICKER_ID, filesFromWorkspaceDemo, isBtfwOpenName, normalizePackPath, packFromFileMap, packFromWorkspaceFile } from '../src/utils/demoPack.js'
+import { buildWorkspaceBlob } from '../src/utils/workspace.js'
 
 const SAMPLE = `<?xml version="1.0" encoding="UTF-8"?>
 <!-- comment: no double-hyphen inside -->
@@ -129,40 +129,57 @@ describe('demoPack', () => {
     assert.equal(classifyOpenFiles(new Map([['a.btf.gz', {}]])), 'btf')
     assert.equal(classifyOpenFiles(new Map([['demo.xml', {}], ['a.btf.gz', {}]])), 'demo')
     assert.equal(classifyOpenFiles(new Map([['notes.txt', {}]])), 'unknown')
-    assert.equal(classifyOpenFiles(new Map([['demo.xtf', {}]])), 'xtf')
-    assert.equal(isXtfOpenName('demo_8cores.xtf'), true)
+    assert.equal(classifyOpenFiles(new Map([['demo.btfw', {}]])), 'workspace')
+    assert.equal(isBtfwOpenName('demo_8cores.btfw'), true)
+    assert.equal(isBtfwOpenName('demo_8cores.xtf'), false)
   })
 
-  it('keeps .xtf in the FSA picker accept map', async () => {
+  it('keeps .btfw in the FSA picker accept map and drops .xtf', async () => {
     const {
       OPEN_FILE_PICKER_ACCEPT,
       OPEN_FILE_PICKER_TYPES,
       OPEN_FILE_ACCEPT,
     } = await import('../src/utils/fileOpen.js')
-    assert.ok(OPEN_FILE_ACCEPT.includes('.xtf'))
-    assert.ok(OPEN_FILE_PICKER_ACCEPT['application/octet-stream'].includes('.xtf'))
+    assert.ok(OPEN_FILE_ACCEPT.includes('.btfw'))
+    assert.ok(!OPEN_FILE_ACCEPT.includes('.xtf'))
+    assert.ok(OPEN_FILE_PICKER_ACCEPT['application/octet-stream'].includes('.btfw'))
     assert.equal(OPEN_FILE_PICKER_TYPES.length, 1)
     assert.ok(
-      OPEN_FILE_PICKER_TYPES[0].accept['application/octet-stream'].includes('.xtf'),
+      OPEN_FILE_PICKER_TYPES[0].accept['application/octet-stream'].includes('.btfw'),
     )
-    // Do not list .xtf under application/zip — Chromium strips it there.
     assert.equal(OPEN_FILE_PICKER_ACCEPT['application/zip'], undefined)
   })
 
-  it('expands a .xtf zip into a demo pack', async () => {
-    const zipped = zipSync({
-      'demo.xml': new TextEncoder().encode(SAMPLE),
-      'demo.btf.gz': new Uint8Array([1, 2, 3]),
-      'voice/en/01_title.mp3': new Uint8Array([4]),
+  it('opens a .btfw demo package into a demo pack with its AI case', async () => {
+    const { blob } = buildWorkspaceBlob({
+      kind: 'demo',
+      traceBytes: new Uint8Array([1, 2, 3]),
+      embedTrace: true,
+      traceName: 'demo.btf.gz',
+      demoXml: new TextEncoder().encode(SAMPLE),
+      demoVoices: { en: { '01_title.aac': new Uint8Array([4]), 'voice.json': new TextEncoder().encode('{}') } },
+      demoDefaultLanguage: 'en',
+      aiCase: { v: 1, messages: [{ role: 'user', content: 'why?' }] },
     })
-    const xtf = new File([zipped], 'demo.xtf')
-    assert.equal(classifyOpenFiles(new Map([['demo.xtf', xtf]])), 'xtf')
-    const files = await filesFromXtf(xtf)
-    assert.ok(files.has('demo.xml'))
-    assert.ok(files.has('demo.btf.gz'))
-    const picked = await classifyPickedOpen(new Map([['demo.xtf', xtf]]))
+    const btfw = new File([blob], 'demo_8cores.btfw')
+    assert.equal(classifyOpenFiles(new Map([['demo_8cores.btfw', btfw]])), 'workspace')
+
+    const files = filesFromWorkspaceDemo(
+      (await import('../src/utils/workspace.js')).openWorkspaceBlob(
+        new Uint8Array(await btfw.arrayBuffer())),
+    )
+    assert.ok(files.has('script.xml'))
+    assert.ok(files.has('voice/en/01_title.aac'))
+    assert.ok([...files.keys()].some(k => /\.btf/i.test(k)))
+
+    const pack = await packFromWorkspaceFile(btfw)
+    assert.ok(pack.traceFile)
+    assert.equal(pack.aiCase.messages[0].content, 'why?')
+
+    const picked = await classifyPickedOpen(new Map([['demo_8cores.btfw', btfw]]))
     assert.equal(picked.kind, 'demo')
-    assert.equal(picked.pack.traceFile.name, 'demo.btf.gz')
+    assert.ok(picked.pack.traceFile)
+    assert.equal(picked.pack.aiCase.v, 1)
   })
 
   it('asks for the pack folder when only the xml is opened', async () => {
@@ -1011,12 +1028,12 @@ describe('demoRunner', () => {
 
 describe('demo_8cores.xml', () => {
   it('parses the shipped 8-core pack', () => {
-    const path = fileURLToPath(new URL('../../demos/demo_8cores/demo_8cores.xml', import.meta.url))
+    const path = fileURLToPath(new URL('../../demos/demo_8cores/demo/script.xml', import.meta.url))
     const xml = readFileSync(path, 'utf8')
     const root = parseXmlRoot(xml)
     assert.equal(root.tag, 'demo')
-    const demo = parseDemoXml(xml, { xmlDir: '/demos/demo_8cores' })
-    assert.match(demo.trace, /demo_8cores\.btf\.gz$/)
+    const demo = parseDemoXml(xml, { xmlDir: '/demos/demo_8cores/demo' })
+    assert.match(demo.trace, /\/trace\/source\.btf\.gz$/)
     assert.deepEqual(demo.targets.timeline, { x: 0.44, y: 0.46 })
     assert.ok(demo.steps.length >= 20)
     const title = demo.steps.find(s => s.id === '1')

@@ -8,6 +8,29 @@ import os
 import sys
 import threading
 
+# --- Headless / GPU-less software-GL fallback -----------------------------
+# Runs before the first PySide6 import. On Linux with no DRM render node
+# (WSL2, containers, CI, plain SSH) Qt's OpenGL and QtWebEngine's Chromium GPU
+# process fail noisily and fall back to software anyway; select software
+# rendering up front so the fallback is clean and silent. A real GPU or any
+# explicit override is left untouched. This block is duplicated verbatim in
+# btf_viewer_pkg/_imports.py and scripts/bundle_viewer.py (SHARED_IMPORTS),
+# checked by tests/test_gpu_fallback.py.
+if sys.platform.startswith("linux") and not os.environ.get("BTFVIEWER_NO_GL_FALLBACK"):
+    try:
+        _dri_nodes = os.listdir("/dev/dri")
+    except OSError:
+        _dri_nodes = []
+    if not any(_n.startswith("renderD") for _n in _dri_nodes):
+        os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+        _have = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").split()
+        for _flag in ("--disable-gpu", "--disable-gpu-compositing"):
+            if _flag not in _have:
+                _have.append(_flag)
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(_have)
+        del _have, _flag
+    del _dri_nodes
+
 import argparse
 import base64
 import configparser
@@ -69,7 +92,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog, QCompleter,
     QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget,
+    QPushButton, QRadioButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
     QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
     QPlainTextEdit, QTextBrowser, QTextEdit,

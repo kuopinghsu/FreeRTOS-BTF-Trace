@@ -260,6 +260,13 @@
                 :disabled="!selectedFinding?.id"
                 @click="addToCase"
               >{{ isInCase ? 'Remove from case' : 'Add to case' }}</button>
+              <button
+                type="button"
+                class="analysis-btn"
+                :disabled="!selectedFinding?.id"
+                title="Add this finding as an observation in the Investigation notebook"
+                @click="addToInvestigation"
+              >Add to investigation</button>
             </div>
           </template>
         </div>
@@ -396,7 +403,7 @@ const props = defineProps({
 const emit = defineEmits([
   'close', 'query-ai', 'apply-scope', 'investigate', 'show-evidence',
   'save-recipe', 'save-story', 'recalculate-context', 'add-to-case',
-  'update:triageState', 'undo-investigate',
+  'add-to-investigation', 'update:triageState', 'undo-investigate',
 ])
 
 const showOnTimelineLabel = SHOW_ON_TIMELINE_LABEL
@@ -671,6 +678,12 @@ function addToCase() {
   }
   commitTriage(applyTriageAction(triageState.value, f.id, 'case'))
   emit('add-to-case', f)
+}
+
+function addToInvestigation() {
+  const f = selectedFinding.value
+  if (!f?.id) return
+  emit('add-to-investigation', f)
 }
 
 const scopeHint = computed(() => {

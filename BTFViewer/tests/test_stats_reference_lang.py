@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
 if str(BTF_ROOT) not in sys.path:
@@ -29,6 +30,7 @@ install()
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from btf_viewer_pkg import stats_reference  # noqa: E402
 from btf_viewer_pkg.mainwindow import MainWindow  # noqa: E402
 from btf_viewer_pkg.stats import _RcSettings  # noqa: E402
 from btf_viewer_pkg.stats_reference import StatsReferenceViewer  # noqa: E402
@@ -48,6 +50,21 @@ class StatsReferenceLangToggleTests(unittest.TestCase):
         self._tmpdir = tempfile.mkdtemp(prefix="btf_stats_lang_")
         self._orig_rc = _RcSettings.RC_PATH
         _RcSettings.RC_PATH = os.path.join(self._tmpdir, "btf_viewer.rc")
+
+        # Force StatsReferenceViewer's no-QtWebEngine fallback for the whole
+        # module. The lang toggle / rc-persistence logic under test lives in
+        # __init__, _load_pages() and _toggle_lang() and is fully independent
+        # of the embedded browser (_navigate() now loads _pages before the
+        # `self._view is None` guard). Instantiating a real QWebEngineView
+        # here is not just unnecessary, it is unsafe: on this offscreen/GPU-
+        # less box QtWebEngine's Chromium threads survive one nested
+        # `app.exec()` teardown (destroy_main_window) but segfault the *next*
+        # one — and test_toggle_persists_* builds a second MainWindow, so the
+        # second teardown always crashed the process (exit 139) before this.
+        self._webengine_patch = mock.patch.object(
+            stats_reference, "_HAVE_WEBENGINE", False)
+        self._webengine_patch.start()
+        self.addCleanup(self._webengine_patch.stop)
 
     def tearDown(self) -> None:
         _RcSettings.RC_PATH = self._orig_rc

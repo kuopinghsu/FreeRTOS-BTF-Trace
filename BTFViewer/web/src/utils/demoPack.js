@@ -1,19 +1,21 @@
 /**
  * Load a demo pack folder: *.xml + voice clips + the BTF named in <meta><trace>.
- * Shareable ``.xtf`` archives are zip packs of the same layout.
+ * A shareable ``.btfw`` demo package (manifest "kind": "demo") is the same
+ * layout inside one ZIP container — see workspace.js.
  */
 
-import { unzipSync } from 'fflate'
 import { parseDemoXml } from './demoXml.js'
 import { isBtfOpenName } from './btfLoad.js'
+import { openWorkspaceBlob } from './workspace.js'
 
 export function isXmlOpenName(name) {
   return String(name || '').toLowerCase().endsWith('.xml')
 }
 
-/** Shareable demo tour pack (zip of xml + btf + voice/). */
-export function isXtfOpenName(name) {
-  return String(name || '').toLowerCase().endsWith('.xtf')
+/** A ``.btfw`` package — either a portable workspace or a shareable demo tour
+ *  (told apart by its manifest ``kind``). */
+export function isBtfwOpenName(name) {
+  return String(name || '').toLowerCase().endsWith('.btfw')
 }
 
 export function normalizePackPath(p) {
@@ -88,12 +90,25 @@ export async function packFromFileMap(files) {
     const btfs = [...files.entries()].filter(([k]) => /\.btf(\.gz|\.bz2|\.zip)?$/i.test(k))
     if (btfs.length === 1) traceFile = btfs[0][1]
   }
+  // A pre-seeded AI investigation case: packed under investigation/ai_case.json
+  // (a .btfw demo package) or sitting next to a loose demo folder's script.
+  let aiCase = null
+  const aiCaseFile = lookupFile(files, 'investigation/ai_case.json')
+    || lookupFile(files, `${xmlDir === '.' ? '' : `${xmlDir}/`}investigation/ai_case.json`)
+  if (aiCaseFile) {
+    try {
+      aiCase = JSON.parse(await aiCaseFile.text())
+    } catch {
+      aiCase = null
+    }
+  }
   return {
     files,
     xmlRel,
     xmlDir,
     parsed,
     traceFile,
+    aiCase,
     resolve(rel) {
       return lookupFile(files, rel)
     },
@@ -171,38 +186,65 @@ export function classifyOpenFiles(files) {
     ...(files?.keys?.() || []),
     ...[...(files?.values?.() || [])].map(f => f?.name || ''),
   ]
-  if (names.some(n => isXtfOpenName(n))) return 'xtf'
+  if (names.some(n => isBtfwOpenName(n))) return 'workspace'
   if (names.some(n => isXmlOpenName(n))) return 'demo'
   if (names.some(n => isBtfOpenName(n))) return 'btf'
   return 'unknown'
 }
 
+function fileFromBytes(data, name) {
+  const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+  return new File([ab], name)
+}
+
 /**
- * Expand a ``.xtf`` (zip) File into a relative-path File map for packFromFileMap.
- * @param {File} file
- * @returns {Promise<Map<string, File>>}
+ * Expand an already-opened ``.btfw`` demo package (from openWorkspaceBlob) into
+ * the relative-path File map packFromFileMap expects: the demo/ subtree flattened
+ * (``script.xml``, ``voice/<lang>/…``), the embedded trace under ``trace/``, and
+ * ``investigation/ai_case.json`` when the package ships one.
+ * @param {object} ws  openWorkspaceBlob() result
+ * @returns {Map<string, File>}
  */
-export async function filesFromXtf(file) {
-  if (!file) throw new Error('No .xtf file')
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  let entries
-  try {
-    entries = unzipSync(bytes)
-  } catch (err) {
-    throw new Error(`Invalid .xtf archive: ${err?.message || err}`)
+export function filesFromWorkspaceDemo(ws) {
+  const demo = ws?.demo
+  if (!demo || !demo.script) {
+    throw new Error('Not a demo .btfw package (no demo/script.xml)')
   }
   const files = new Map()
-  for (const [rawName, data] of Object.entries(entries || {})) {
-    const rel = normalizePackPath(rawName)
-    if (!rel || rel.endsWith('/')) continue
-    const base = basename(rel)
-    const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
-    files.set(rel, new File([ab], base))
+  for (const [rel, data] of Object.entries(demo.files || {})) {
+    const norm = normalizePackPath(rel)
+    if (!norm || norm.endsWith('/')) continue
+    files.set(norm, fileFromBytes(data, basename(norm)))
   }
-  if (![...files.keys()].some(k => isXmlOpenName(k))) {
-    throw new Error('No .xml demo script inside the .xtf archive')
+  if (ws.trace_bytes) {
+    const traceName = basename(ws.manifest?.trace?.name || '') || 'source.btf'
+    files.set(`trace/${traceName}`, fileFromBytes(ws.trace_bytes, traceName))
+  }
+  if (ws.ai_case != null) {
+    files.set(
+      'investigation/ai_case.json',
+      new File([JSON.stringify(ws.ai_case)], 'ai_case.json'),
+    )
   }
   return files
+}
+
+/**
+ * Read a ``.btfw`` demo package File into a demo pack (for startDemoPack).
+ * @param {File} file
+ * @returns {Promise<object>}  pack with `.aiCase` set when present
+ */
+export async function packFromWorkspaceFile(file) {
+  if (!file) throw new Error('No .btfw file')
+  let ws
+  try {
+    ws = openWorkspaceBlob(new Uint8Array(await file.arrayBuffer()))
+  } catch (err) {
+    throw new Error(`Invalid .btfw package: ${err?.message || err}`, { cause: err })
+  }
+  const pack = await packFromFileMap(filesFromWorkspaceDemo(ws))
+  pack.aiCase = ws.ai_case ?? pack.aiCase ?? null
+  return pack
 }
 
 function supportsDirectoryPicker() {
@@ -311,14 +353,28 @@ async function tryParentDirectoryPack(handle) {
  * >}
  */
 export async function classifyPickedOpen(files, xmlHandle = null) {
-  let map = files
-  const xtf = [...(files?.values?.() || [])].find(f => isXtfOpenName(f.name))
-    || [...(files?.entries?.() || [])].find(([k]) => isXtfOpenName(k))?.[1]
-  if (xtf) {
-    map = await filesFromXtf(xtf)
+  const map = files
+  const btfw = [...(files?.values?.() || [])].find(f => isBtfwOpenName(f.name))
+    || [...(files?.entries?.() || [])].find(([k]) => isBtfwOpenName(k))?.[1]
+  if (btfw) {
+    let ws = null
+    try {
+      ws = openWorkspaceBlob(new Uint8Array(await btfw.arrayBuffer()))
+    } catch {
+      ws = null // let onOpenWorkspaceFile surface the real error
+    }
+    if (ws && (ws.kind === 'demo' || ws.demo)) {
+      const pack = await packFromFileMap(filesFromWorkspaceDemo(ws))
+      pack.aiCase = ws.ai_case ?? null
+      if (!pack.traceFile) {
+        throw new Error('Demo .btfw package has no embedded .btf trace')
+      }
+      return { kind: 'demo', pack }
+    }
+    return { kind: 'workspace', file: btfw }
   }
   const kind = classifyOpenFiles(map)
-  if (kind === 'demo' || kind === 'xtf') {
+  if (kind === 'demo') {
     let pack = await packFromFileMap(map)
     const folderHandle = (await resolveDirectoryStartIn(xmlHandle)) || xmlHandle || null
     if (!pack.traceFile) {
@@ -326,9 +382,6 @@ export async function classifyPickedOpen(files, xmlHandle = null) {
       if (parent?.traceFile) pack = parent
     }
     if (pack.traceFile) return { kind: 'demo', pack }
-    if (xtf) {
-      throw new Error('Demo .xtf has no .btf / .btf.gz trace')
-    }
     const hint = demoPackHintFromParsed(pack.parsed, pack.xmlRel)
     return {
       kind: 'demo-folder',

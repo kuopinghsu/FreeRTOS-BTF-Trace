@@ -20,7 +20,7 @@ install()
 
 from btf_viewer_pkg import demo_inapp as dr  # noqa: E402
 
-DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml"
+DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo" / "script.xml"
 
 
 class DemoVoiceLangTests(unittest.TestCase):

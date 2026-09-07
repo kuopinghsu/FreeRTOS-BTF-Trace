@@ -26,7 +26,7 @@ install()
 
 from btf_viewer_pkg import parser as P  # noqa: E402
 
-_TRACE = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.btf.gz"
+_TRACE = BTF_ROOT / "demos" / "demo_8cores" / "trace" / "source.btf.gz"
 
 
 class TestSampleVariability(unittest.TestCase):

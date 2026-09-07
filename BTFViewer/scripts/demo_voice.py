@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
-"""Uniform demo voice packs: ``text/<lang>/`` + ``voice/<lang>/`` + ``voice.json``.
+"""Uniform demo voice packs, laid out to mirror the ``.btfw`` package.
 
-Every language is packed the same way. XML keeps
+Every language is packed the same way. The script keeps
 ``<audio file="${XML_DIR}/voice/01_title.mp3"/>``; the runner resolves
 ``voice/<lang>/<file>`` then flat ``voice/<file>`` then ``voice/<default>/``.
 
-On-disk layout inside a demo folder::
+On-disk layout inside a demo folder (= unpacked ``.btfw``)::
 
-    text/<lang>/01_title.txt
-    voice/<lang>/01_title.mp3          <- the app plays only from here
-    voice/<lang>/voice.json
-    voice-male/<lang>/01_title.mp3     <- `render --gender male` output
-    voice-female/<lang>/01_title.mp3   <- `render --gender female` output
+    demo/script.xml
+    attachments/text/<lang>/01_title.txt
+    demo/voice/<lang>/01_title.mp3          <- the app plays only from here
+    demo/voice/<lang>/voice.json
+    demo/voice-male/<lang>/01_title.mp3     <- `render --gender male` output
+    demo/voice-female/<lang>/01_title.mp3   <- `render --gender female` output
 
-``render --gender`` writes into its own ``voice-male/`` or ``voice-female/``
-tree rather than the live ``voice/`` tree, so rendering one gender never
-overwrites the other and both takes stay on disk. Nothing reads
-``voice-male/``/``voice-female/`` at demo-playback time — run ``use-voice``
-to copy one of them over ``voice/`` once you've picked a take.
+``render --gender`` writes into its own ``demo/voice-male/`` or
+``demo/voice-female/`` tree rather than the live ``demo/voice/`` tree, so
+rendering one gender never overwrites the other and both takes stay on disk.
+Nothing reads ``demo/voice-male/``/``demo/voice-female/`` at demo-playback
+time — run ``use-voice`` to copy one over ``demo/voice/`` once you've picked
+a take, and ``demo_pack.py`` ships only ``demo/voice/``.
 
 Shareable zip (install/export)::
 
@@ -25,8 +27,8 @@ Shareable zip (install/export)::
     text/01_title.txt
     voice/01_title.mp3
 
-Legacy flat ``text/*.txt`` / ``voice/*.mp3`` is treated as the default
-language (``en``) until ``normalize`` moves it.
+Legacy flat clips directly under ``attachments/text/`` / ``demo/voice/`` are
+treated as the default language (``en``) until ``normalize`` moves them.
 
 Examples::
 
@@ -57,6 +59,23 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 SCHEMA = "btf-demo-voice"
 SCHEMA_VERSION = 1
 MANIFEST_NAME = "voice.json"
+
+# The demo folder mirrors the .btfw package layout: narration scripts live
+# under attachments/text/<lang>/ and rendered clips under demo/voice/<lang>/
+# (alternate takes: demo/voice-<gender>/<lang>/).
+TEXT_ROOT = "attachments/text"
+VOICE_ROOT = "demo/voice"
+
+
+def gender_root(gender: str) -> str:
+    """``demo/voice`` (no gender) or ``demo/voice-<gender>``."""
+    g = str(gender or "").strip().lower()
+    return f"{VOICE_ROOT}-{g}" if g else VOICE_ROOT
+
+
+def kind_root(kind: str) -> str:
+    """Folder for a pack ``kind`` (``"text"`` → attachments/text, else demo/voice)."""
+    return TEXT_ROOT if kind == "text" else VOICE_ROOT
 AUDIO_EXTS = {".mp3", ".aac", ".wav", ".m4a", ".aiff", ".aif", ".ogg", ".flac"}
 TEXT_EXTS = {".txt"}
 LANG_RE = re.compile(r"^[a-z]{2}(?:-[a-z0-9]+)?$", re.I)
@@ -187,6 +206,10 @@ def resolve_demo_dir(path: Path) -> Path:
 
 
 def find_demo_xml(demo_dir: Path) -> Optional[Path]:
+    # Package-mirror layout: the script lives at demo/script.xml.
+    packaged = demo_dir / "demo" / "script.xml"
+    if packaged.is_file():
+        return packaged
     xmls = sorted(demo_dir.glob("*.xml"))
     if not xmls:
         return None
@@ -247,11 +270,11 @@ def manifest_lang(data: Dict[str, Any]) -> str:
     )
 
 
-def load_lang_manifest(demo_dir: Path, lang: str, voice_root: str = "voice") -> Dict[str, Any]:
+def load_lang_manifest(demo_dir: Path, lang: str, voice_root: str = VOICE_ROOT) -> Dict[str, Any]:
     n = normalize_voice_lang(lang)
     for cand in (
         demo_dir / voice_root / n / MANIFEST_NAME,
-        demo_dir / "text" / n / MANIFEST_NAME,
+        demo_dir / TEXT_ROOT / n / MANIFEST_NAME,
     ):
         if cand.is_file():
             try:
@@ -262,13 +285,13 @@ def load_lang_manifest(demo_dir: Path, lang: str, voice_root: str = "voice") -> 
 
 
 def iter_lang_records(
-    demo_dir: Path, default_lang: str = "en", voice_root: str = "voice",
+    demo_dir: Path, default_lang: str = "en", voice_root: str = VOICE_ROOT,
 ) -> List[Dict[str, Any]]:
-    """One record per language found under text/ and <voice_root>/.
+    """One record per language found under ``attachments/text/`` and <voice_root>/.
 
-    ``voice_root`` defaults to the live ``voice/`` tree; pass ``voice-male``
-    / ``voice-female`` to inspect a rendered-but-not-yet-live take instead
-    (see demo_voice.py render --gender / use-voice).
+    ``voice_root`` defaults to the live ``demo/voice/`` tree; pass
+    ``demo/voice-male`` / ``demo/voice-female`` to inspect a
+    rendered-but-not-yet-live take instead (see render --gender / use-voice).
     """
     demo_dir = Path(demo_dir)
     found: Dict[str, Dict[str, Any]] = {}
@@ -289,7 +312,7 @@ def iter_lang_records(
             rec[key].append(rel)
 
     for kind, root_name, exts in (
-        ("text", "text", TEXT_EXTS), ("voice", voice_root, AUDIO_EXTS),
+        ("text", TEXT_ROOT, TEXT_EXTS), ("voice", voice_root, AUDIO_EXTS),
     ):
         root = demo_dir / root_name
         if not root.is_dir():
@@ -377,13 +400,16 @@ def normalize_demo(
     remove_flat: bool = True,
     overwrite: bool = False,
 ) -> Dict[str, Any]:
-    """Move legacy flat text/*.txt and voice/* clips into ``<kind>/<lang>/``."""
+    """Move legacy flat narration/clips into ``<root>/<lang>/``
+    (``attachments/text/<lang>/`` and ``demo/voice/<lang>/``)."""
     demo_dir = resolve_demo_dir(demo_dir)
     lang = normalize_voice_lang(default_lang) or "en"
     moved = 0
     skipped = 0
-    for kind, exts in (("text", TEXT_EXTS), ("voice", AUDIO_EXTS)):
-        root = demo_dir / kind
+    for _kind, root_name, exts in (
+        ("text", TEXT_ROOT, TEXT_EXTS), ("voice", VOICE_ROOT, AUDIO_EXTS),
+    ):
+        root = demo_dir / root_name
         if not root.is_dir():
             continue
         dest_dir = root / lang
@@ -400,7 +426,7 @@ def normalize_demo(
             if remove_flat:
                 entry.unlink()
     write_manifest(
-        demo_dir / "voice" / lang / MANIFEST_NAME,
+        demo_dir / VOICE_ROOT / lang / MANIFEST_NAME,
         lang,
         extra={"demo": demo_dir.name},
     )
@@ -528,11 +554,11 @@ def install_pack(
                 except (OSError, json.JSONDecodeError):
                     manifest_data = {}
                 continue
-            dest = demo_dir / kind / lang_n / filename
+            dest = demo_dir / kind_root(kind) / lang_n / filename
             if _copy_file(path, dest, overwrite):
                 copied[kind] += 1
         write_manifest(
-            demo_dir / "voice" / lang_n / MANIFEST_NAME,
+            demo_dir / VOICE_ROOT / lang_n / MANIFEST_NAME,
             lang_n,
             label=label or str(manifest_data.get("label") or ""),
             extra={"demo": demo_dir.name},
@@ -561,7 +587,8 @@ def export_pack(
     recs = {r["id"]: r for r in iter_lang_records(demo_dir)}
     rec = recs.get(lang_n)
     if rec is None and not include_empty:
-        raise FileNotFoundError(f"no text/ or voice/ files for language {lang_n}")
+        raise FileNotFoundError(
+            f"no {TEXT_ROOT}/ or {VOICE_ROOT}/ files for language {lang_n}")
     data = load_lang_manifest(demo_dir, lang_n)
     label = voice_label(lang_n, str(data.get("label") or (rec or {}).get("label") or ""))
     with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -573,7 +600,7 @@ def export_pack(
             "demo": demo_dir.name,
         }
         zf.writestr(MANIFEST_NAME, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
-        for kind, folder in (("text", demo_dir / "text" / lang_n), ("voice", demo_dir / "voice" / lang_n)):
+        for kind, folder in (("text", demo_dir / TEXT_ROOT / lang_n), ("voice", demo_dir / VOICE_ROOT / lang_n)):
             if not folder.is_dir():
                 continue
             for path in sorted(folder.iterdir()):
@@ -648,7 +675,7 @@ def render_lang(
 ) -> Dict[str, Any]:
     demo_dir = resolve_demo_dir(demo_dir)
     lang_n = normalize_voice_lang(lang) or "en"
-    text_dir = demo_dir / "text" / lang_n
+    text_dir = demo_dir / TEXT_ROOT / lang_n
     if not text_dir.is_dir():
         raise FileNotFoundError(f"missing scripts: {text_dir}")
     scripts = sorted(
@@ -657,11 +684,11 @@ def render_lang(
     if not scripts:
         raise FileNotFoundError(f"no .txt scripts in {text_dir}")
     gender_n = gender.strip().lower()
-    # A gendered render lands in its own voice-male/ or voice-female/ tree,
-    # never the live voice/ tree the app actually plays from — so rendering
-    # one gender never clobbers the other, and both can be kept side by
-    # side. "use-voice" below copies one of them into voice/ to make it live.
-    voice_root = f"voice-{gender_n}" if gender_n else "voice"
+    # A gendered render lands in its own demo/voice-male/ or demo/voice-female/
+    # tree, never the live demo/voice/ tree the app actually plays from — so
+    # rendering one gender never clobbers the other, and both can be kept side
+    # by side. "use-voice" below copies one into demo/voice/ to make it live.
+    voice_root = gender_root(gender_n)
     voice_dir = demo_dir / voice_root / lang_n
     voice_dir.mkdir(parents=True, exist_ok=True)
     if voice:
@@ -763,14 +790,14 @@ def use_voice(
     *,
     overwrite: bool = True,
 ) -> Dict[str, Any]:
-    """Copy a previously rendered voice-<gender>/ take into voice/ — the
-    tree the app actually plays from — without re-running TTS. ``lang``
-    empty means every language voice-<gender>/ has."""
+    """Copy a previously rendered demo/voice-<gender>/ take into demo/voice/ —
+    the tree the app actually plays from — without re-running TTS. ``lang``
+    empty means every language demo/voice-<gender>/ has."""
     demo_dir = resolve_demo_dir(demo_dir)
     gender_n = gender.strip().lower()
     if gender_n not in ("male", "female"):
         raise ValueError(f"gender must be 'male' or 'female', got {gender!r}")
-    src_root = demo_dir / f"voice-{gender_n}"
+    src_root = demo_dir / gender_root(gender_n)
     if not src_root.is_dir():
         raise FileNotFoundError(
             f"no {src_root.name}/ — render it first: "
@@ -786,7 +813,7 @@ def use_voice(
         if not lang_dir.is_dir():
             raise FileNotFoundError(f"no {lang_dir}")
         lang_n = normalize_voice_lang(lang_dir.name) or lang_dir.name
-        dest_dir = demo_dir / "voice" / lang_n
+        dest_dir = demo_dir / VOICE_ROOT / lang_n
         for src in lang_dir.iterdir():
             if not src.is_file():
                 continue
@@ -841,7 +868,7 @@ def format_status(demo_dir: Path) -> str:
     xml = find_demo_xml(demo_dir)
     header = f"demo={demo_dir.name}  xml={xml.name if xml else '-'}"
     if not recs:
-        return header + "\n  (no text/ or voice/ files)"
+        return header + f"\n  (no {TEXT_ROOT}/ or {VOICE_ROOT}/ files)"
     rows = [header, f"  {'lang':<8} {'label':<10} {'scripts':>7} {'clips':>7}"]
     for rec in recs:
         rows.append(
@@ -849,7 +876,7 @@ def format_status(demo_dir: Path) -> str:
         )
     genders = []
     for g in ("male", "female"):
-        root = demo_dir / f"voice-{g}"
+        root = demo_dir / gender_root(g)
         if root.is_dir():
             langs = sorted(p.name for p in root.iterdir() if p.is_dir())
             genders.append(f"{g}=[{', '.join(langs) or '-'}]")

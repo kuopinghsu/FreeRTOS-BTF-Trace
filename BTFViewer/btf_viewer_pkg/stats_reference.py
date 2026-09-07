@@ -285,12 +285,12 @@ class StatsReferenceViewer(QDialog):
         self._back_btn.setEnabled(self._history_index > 0)
         self._fwd_btn.setEnabled(self._history_index < len(self._history) - 1)
 
-        if self._view is None:
-            return
         if not self._pages and not self._load_pages():
             self._breadcrumb.setText(f"{crumb}  (reference not built)")
             return
         self._sync_toc_subsections(section_id)
+        if self._view is None:
+            return
         if self._doc_loaded:
             self._scroll_to(section_id)
         else:

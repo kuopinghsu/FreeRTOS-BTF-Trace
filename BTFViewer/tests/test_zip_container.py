@@ -1,4 +1,4 @@
-"""Shared hardened ZIP-container reader (``.btfw`` + ``.xtf``).
+"""Shared hardened ZIP-container reader (backs the ``.btfw`` package).
 
 Parity with ``web/tests/zipContainer.test.js``.
 """
@@ -67,7 +67,7 @@ class ReadZipContainerTests(unittest.TestCase):
         p = self.tmp / "x.zip"
         p.write_bytes(b"not a zip at all")
         with self.assertRaises(ValueError):
-            read_zip_container(str(p), container_desc="zip / .xtf")
+            read_zip_container(str(p), container_desc=".btfw / ZIP")
 
     def test_reads_from_raw_bytes_too(self):
         p = _zip(self.tmp / "b.zip", [("m.txt", b"hi")])

@@ -17,7 +17,7 @@ import { parseTaskName, isIdleTaskName, taskDisplayName } from '../src/utils/col
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const FIXTURE = join(__dirname, '../../tests/fixtures/demo_8cores-cursor-stats-golden.json')
-const TRACE = join(__dirname, '../../demos/demo_8cores/demo_8cores.btf.gz')
+const TRACE = join(__dirname, '../../demos/demo_8cores/trace/source.btf.gz')
 
 function sampleSummary(samples) {
   let min = samples[0]

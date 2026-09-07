@@ -67,10 +67,14 @@ class RoundTripTests(unittest.TestCase):
             btfviewer_version="1.4.0", locale="en", rule_set_version="wf/1",
         )
         self.assertEqual(man["schema"], WORKSPACE_SCHEMA)
+        self.assertEqual(man["kind"], "workspace")
+        self.assertIsNone(man["demo"])
         self.assertEqual(man["trace"]["sha256"], hashlib.sha256(_TRACE).hexdigest())
         self.assertTrue(man["trace"]["embedded"])
 
         ws = open_workspace(self.path)
+        self.assertEqual(ws["kind"], "workspace")
+        self.assertIsNone(ws["demo"])
         self.assertEqual(ws["trace_bytes"], _TRACE)
         self.assertEqual(ws["view_state"]["cursors"], [1, 2])
         self.assertEqual(ws["view_state"]["marks"][0]["label"], "b")

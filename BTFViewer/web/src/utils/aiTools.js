@@ -3,6 +3,7 @@
  * Keep in sync with btf_viewer_pkg/ai_tools.py.
  */
 import { taskDisplayName, taskMergeKey, taskReprGet } from './colors.js'
+import { resolveStatsSectionId, statsSectionTitle } from './statsPins.js'
 import { migrationsInRange } from './migrationAnalysis.js'
 import { preemptionChainRows } from './statsAnalysis.js'
 import { activationLatencyRows, readyGapRows } from './timingLatency.js'
@@ -259,6 +260,78 @@ export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_ANALYZE_PERIODICITY,
   AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
 ]
+
+// Namespace / prose junk models sometimes glue onto a tool name. `nextstep:` is
+// the big one: the model confuses the `nextstep:{action}` prose follow-up
+// convention with an actual tool call (e.g. `nextstep:open_statistics`).
+// Keep in sync with btf_viewer_pkg/ai_tools.py.
+const TOOL_NAME_PREFIX_JUNK = [
+  'nextstep:', 'next_step:', 'next-step:', 'nextstep_', 'nextstep.',
+  'functions.', 'default_api.', 'default_api:', 'tool:', 'tool.', 'btftool:',
+  'btf:', 'viewer:', 'function:', 'api.',
+]
+const NEXTSTEP_PREFIXES = ['nextstep:', 'next_step:', 'next-step:', 'nextstep_']
+// Common near-miss names, incl. ones safe to accept even from a `nextstep:` line.
+const TOOL_NAME_ALIASES = {
+  open_statistics: AI_TOOL_OPEN_STATS_SECTION,
+  open_stats: AI_TOOL_OPEN_STATS_SECTION,
+  open_stats_section: AI_TOOL_OPEN_STATS_SECTION,
+  open_statistics_section: AI_TOOL_OPEN_STATS_SECTION,
+  statistics_section: AI_TOOL_OPEN_STATS_SECTION,
+  stats_section: AI_TOOL_OPEN_STATS_SECTION,
+  goto_statistics: AI_TOOL_OPEN_STATS_SECTION,
+  show_statistics: AI_TOOL_OPEN_STATS_SECTION,
+  open_statistics_page: AI_TOOL_OPEN_STATS_SECTION,
+  set_cursor: AI_TOOL_SET_CURSORS,
+  place_cursors: AI_TOOL_SET_CURSORS,
+  place_cursor: AI_TOOL_SET_CURSORS,
+  add_cursors: AI_TOOL_SET_CURSORS,
+  zoom_range: AI_TOOL_ZOOM_TO_RANGE,
+  zoom_to: AI_TOOL_ZOOM_TO_RANGE,
+  view_mode: AI_TOOL_SET_VIEW_MODE,
+  annotate: AI_TOOL_ADD_ANNOTATION,
+  search: AI_TOOL_SEARCH_TIMELINE,
+}
+
+/** True if `name` is a `nextstep:{action}` suggestion mis-sent as a tool. */
+export function looksLikeNextstepPseudoTool(name) {
+  const n = String(name ?? '').trim().toLowerCase().replace(/ /g, '')
+  return NEXTSTEP_PREFIXES.some((p) => n.startsWith(p))
+}
+
+/**
+ * Best-effort map a model-emitted tool name onto a real one: strip namespace /
+ * `nextstep:` junk and normalise separators, then match exactly or via a small
+ * alias table. An ordinary namespaced name also accepts a unique prefix
+ * (`open_statistics` -> `open_statistics_section`); a `nextstep:{action}`
+ * pseudo-call is resolved only by exact / alias match (prose by convention), so
+ * an unrelated one stays unresolved and is dropped rather than mis-routed.
+ * Keep in sync with btf_viewer_pkg/ai_tools.py `canonical_tool_name`.
+ */
+export function canonicalToolName(name) {
+  let n = String(name ?? '').trim()
+  if (!n) return ''
+  let low = n.toLowerCase()
+  let fromNextstep = false
+  for (const pre of TOOL_NAME_PREFIX_JUNK) {
+    if (low.startsWith(pre)) {
+      fromNextstep = NEXTSTEP_PREFIXES.includes(pre)
+      n = n.slice(pre.length).trim().replace(/^[-:._/\s]+/, '').trim()
+      break
+    }
+  }
+  n = n.replace(/[\s-]+/g, '_').replace(/^_+|_+$/g, '')  // tool names are snake_case
+  low = n.toLowerCase()
+  if (AI_VIEWER_TOOL_NAMES.includes(n)) return n
+  if (AI_VIEWER_TOOL_NAMES.includes(low)) return low
+  if (Object.prototype.hasOwnProperty.call(TOOL_NAME_ALIASES, low)) return TOOL_NAME_ALIASES[low]
+  if (low && !fromNextstep) {
+    const matches = [...new Set(AI_VIEWER_TOOL_NAMES.filter(
+      (t) => t === low || t.startsWith(low) || low.startsWith(t)))]
+    if (matches.length === 1) return matches[0]
+  }
+  return n
+}
 
 export const AI_BOOKMARK_KINDS = [
   'root_cause', 'evidence', 'correlated', 'reference',
@@ -1839,7 +1912,7 @@ function extractedToolCall({ id, name, arguments: args, signature = '' }) {
   return item
 }
 
-function toolCallName(obj) {
+function rawToolCallName(obj) {
   if (!obj || typeof obj !== 'object') return ''
   const fn = obj.function && typeof obj.function === 'object' ? obj.function : {}
   let name = String(fn.name || obj.name || obj.tool || '').trim()
@@ -1869,6 +1942,11 @@ function toolCallName(obj) {
   return ''
 }
 
+/** Canonical tool name (namespace / `nextstep:` junk stripped, near-misses mapped). */
+function toolCallName(obj) {
+  return canonicalToolName(rawToolCallName(obj))
+}
+
 function toolCallId(obj, index) {
   if (!obj || typeof obj !== 'object') return `call_${index}`
   return String(obj.id || '').trim() || `call_${index}`
@@ -1885,8 +1963,10 @@ export function extractToolCalls(message) {
     calls.forEach((call, i) => {
       if (!call || typeof call !== 'object') return
       const fn = call.function && typeof call.function === 'object' ? call.function : {}
-      const name = toolCallName(call)
+      const rawName = rawToolCallName(call)
+      const name = canonicalToolName(rawName)
       if (!name) return
+      if (!AI_VIEWER_TOOL_NAMES.includes(name) && looksLikeNextstepPseudoTool(rawName)) return
       out.push(extractedToolCall({
         id: toolCallId(call, i),
         name,
@@ -1897,12 +1977,17 @@ export function extractToolCalls(message) {
   }
   const legacy = message.function_call
   if (legacy && typeof legacy === 'object' && legacy.name) {
-    out.push(extractedToolCall({
-      id: String(legacy.id || 'call_0'),
-      name: String(legacy.name).trim(),
-      arguments: parseToolArguments(legacy.arguments),
-      signature: thoughtSignatureFromObj(legacy),
-    }))
+    const legacyRaw = String(legacy.name).trim()
+    const legacyName = canonicalToolName(legacyRaw)
+    if (legacyName && !(!AI_VIEWER_TOOL_NAMES.includes(legacyName)
+        && looksLikeNextstepPseudoTool(legacyRaw))) {
+      out.push(extractedToolCall({
+        id: String(legacy.id || 'call_0'),
+        name: legacyName,
+        arguments: parseToolArguments(legacy.arguments),
+        signature: thoughtSignatureFromObj(legacy),
+      }))
+    }
   }
   if (Array.isArray(message.content)) {
     message.content.forEach((part, i) => {
@@ -1915,8 +2000,10 @@ export function extractToolCalls(message) {
           : null)
       if (!['tool_use', 'function_call', 'tool_call', 'functionCall'].includes(ptype)
           && !(nested && nested.name)) return
-      const name = toolCallName(part)
+      const partRaw = rawToolCallName(part)
+      const name = canonicalToolName(partRaw)
       if (!name) return
+      if (!AI_VIEWER_TOOL_NAMES.includes(name) && looksLikeNextstepPseudoTool(partRaw)) return
       out.push(extractedToolCall({
         id: String(part.id || '').trim() || `part_${i}`,
         name,
@@ -2028,6 +2115,7 @@ function toolCallFromObj(obj, idx) {
       )
     }
   }
+  name = canonicalToolName(name)
   if (!AI_VIEWER_TOOL_NAMES.includes(name)) return null
   const checked = validateToolCall(name, args)
   if (checked.error) return null
@@ -2314,7 +2402,9 @@ export function validateToolCall(name, args) {
     if (!section) {
       return { args: null, error: 'section must be a non-empty Statistics section id or title' }
     }
-    return { args: { section }, error: '' }
+    // AI often passes the header title ("Ready-Gap (Starvation)") or a loose
+    // spelling; resolve to the canonical id so it actually expands.
+    return { args: { section: resolveStatsSectionId(section) || section }, error: '' }
   }
   if (name === AI_TOOL_ADD_ANNOTATION) {
     const t = asScalarNumber(a.time)
@@ -2904,7 +2994,8 @@ export function summariseToolCall(name, args) {
   }
   if (name === AI_TOOL_OPEN_STATS_SECTION) {
     const sec = String(a.section || a.section_id || '').trim() || 'section'
-    return `Open Statistics: ${sec}`
+    const sid = resolveStatsSectionId(sec)
+    return `Open Statistics: ${sid ? statsSectionTitle(sid) : sec}`
   }
   if (name === AI_TOOL_ADD_ANNOTATION) {
     const note = String(a.note || '').trim() || 'annotation'

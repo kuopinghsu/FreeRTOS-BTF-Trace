@@ -1,6 +1,8 @@
 """BTF Viewer — mainwindow module (source). Do not edit btf_viewer.py; run make bundle."""
 from __future__ import annotations
 
+import re
+
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .parser import *  # noqa: F403,F401
@@ -41,7 +43,7 @@ from .ai_assistant import (
 from .demo_api import demo_api_enabled, demo_api_port, start_demo_api
 from .demo_inapp import (
     DemoMessageOverlay, DemoPointerOverlay, DemoStatusBanner, InAppDemoRunner,
-    discover_demo_pack, preferred_voice_lang,
+    discover_demo_ai_case, discover_demo_pack, preferred_voice_lang,
 )
 from .ai_tools import (
     AI_TOOL_ADD_ANNOTATION,
@@ -183,6 +185,52 @@ from .mvvm import (
 )
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 from .trace_quality import trace_quality_summary
+from .trace_health import (
+    build_trace_health_result,
+    trace_health_status_label,
+    trace_health_summary,
+)
+from .workspace import (
+    WORKSPACE_EXT,
+    open_workspace,
+    save_workspace,
+)
+from .investigation_findings import (
+    build_investigation_findings,
+    investigation_finding_export,
+)
+from .ai_evidence_package import build_evidence_package, estimate_tokens
+from .anonymize_export import (
+    anonymize_btf_text,
+    anonymize_json_strings,
+    anonymize_with_map,
+    build_task_alias_map,
+)
+from .investigation_notebook import (
+    BOOKMARK_TYPES,
+    BOOKMARK_TYPE_LABELS,
+    LINK_RELATIONS,
+    add_bookmark,
+    add_unresolved_question,
+    conclusion_evidence_chains,
+    detect_broken_references,
+    dump_investigation,
+    empty_notebook_history,
+    link_bookmarks,
+    load_investigation,
+    new_investigation,
+    notebook_history_state,
+    notebook_redo,
+    notebook_undo,
+    push_notebook_state,
+    remove_bookmark,
+    remove_unresolved_question,
+    scaffold_investigation_from_findings,
+    set_conclusion,
+    trace_identity,
+    unlink_bookmarks,
+    update_bookmark,
+)
 from .perfetto_export import export_perfetto
 from .ux_explore import (
     best_finding_scope, harvest_ux_events, finding_overlay_times,
@@ -2008,7 +2056,7 @@ class _TraceTab:
 
     __slots__ = (
         "vm", "view", "cpu_load_graph", "cpu_load_scroll", "cpu_splitter",
-        "_timeline_pane", "_stats_built",
+        "_timeline_pane", "_stats_built", "_investigation", "_notebook_history",
     )
 
     def __init__(self, path: str, trace: "BtfTrace", win: "MainWindow") -> None:
@@ -2036,6 +2084,8 @@ class _TraceTab:
         if not win._show_cpu_load:
             self.cpu_splitter.set_cpu_visible(False)
         self._stats_built = False
+        self._investigation = None
+        self._notebook_history = None
 
     @property
     def path(self) -> str:
@@ -2148,6 +2198,944 @@ class _TraceTab:
     @plot_interval_id.setter
     def plot_interval_id(self, value: Optional[str]) -> None:
         self.vm.plot_interval_id = value
+
+class _NotebookBookmarkRow(QWidget):
+    """Inline-editable bookmark row — mirror of the web ``.nb-item``:
+    title field + type combo + remove, a note field, and reference chips."""
+
+    def __init__(self, bm: dict, *, fmt, broken_ref_idx, on_change, on_remove,
+                 on_ref_click, parent=None) -> None:
+        super().__init__(parent)
+        self._bid = str(bm.get("id") or "")
+        self._on_change = on_change
+        self._building = True
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(9, 9, 9, 9)
+        outer.setSpacing(7)
+        self.setObjectName("nb_item")
+        self.setProperty("broken", bool(broken_ref_idx))
+
+        top = QHBoxLayout()
+        top.setSpacing(7)
+        self._title = QLineEdit(str(bm.get("title") or ""))
+        self._title.editingFinished.connect(self._emit_title)
+        self._type = QComboBox()
+        for t in BOOKMARK_TYPES:
+            self._type.addItem(BOOKMARK_TYPE_LABELS[t], t)
+        idx = self._type.findData(bm.get("type"))
+        if idx >= 0:
+            self._type.setCurrentIndex(idx)
+        self._type.activated.connect(self._emit_type)
+        self._type.setFixedWidth(150)
+        rm = QToolButton()
+        rm.setText("🗑")
+        rm.setToolTip("Remove bookmark")
+        rm.setAutoRaise(True)
+        rm.setCursor(Qt.CursorShape.PointingHandCursor)
+        rm.clicked.connect(lambda: on_remove(self._bid))
+        top.addWidget(self._title, 1)
+        top.addWidget(self._type)
+        top.addWidget(rm)
+        outer.addLayout(top)
+
+        self._note = QPlainTextEdit(str(bm.get("note") or ""))
+        self._note.setPlaceholderText("Note")
+        self._note.setFixedHeight(46)
+        self._note.focusOutEvent = _wrap_focus_out(
+            self._note.focusOutEvent, self._emit_note)
+        outer.addWidget(self._note)
+
+        refs = bm.get("refs") or []
+        if refs:
+            chips = QHBoxLayout()
+            chips.setSpacing(6)
+            for i, r in enumerate(refs):
+                c = QToolButton()
+                c.setText(_ref_chip_label(r, fmt))
+                c.setToolTip(str(r.get("label") or _ref_chip_label(r, fmt)))
+                c.setProperty("brokenChip", i in (broken_ref_idx or set()))
+                c.setCursor(Qt.CursorShape.PointingHandCursor)
+                c.setObjectName("nb_ref_chip")
+                c.clicked.connect(lambda _=False, ref=r: on_ref_click(ref))
+                chips.addWidget(c)
+            chips.addStretch(1)
+            outer.addLayout(chips)
+
+        self._building = False
+
+    def _emit_title(self) -> None:
+        if not self._building:
+            self._on_change(self._bid, {"title": self._title.text()})
+
+    def _emit_type(self, *_a) -> None:
+        if not self._building:
+            self._on_change(self._bid, {"type": self._type.currentData()})
+
+    def _emit_note(self) -> None:
+        if not self._building:
+            self._on_change(self._bid, {"note": self._note.toPlainText()})
+
+
+def _ref_chip_label(r: dict, fmt) -> str:
+    kind = str(r.get("kind") or "")
+    if kind == "finding":
+        return f"finding: {r.get('rule_id') or r.get('label') or '?'}"
+    if kind == "metric":
+        return f"metric: {r.get('metric') or r.get('label') or '?'}"
+    if kind == "entity":
+        return f"entity: {r.get('entity') or r.get('label') or '?'}"
+    if kind == "range" and isinstance(r.get("range"), dict):
+        return f"range {fmt(r['range']['start'])}–{fmt(r['range']['end'])}"
+    if kind == "evidence":
+        return f"evidence @ {fmt(r['time'])}" if r.get("time") is not None else "evidence"
+    return kind or "ref"
+
+
+def _wrap_focus_out(orig, cb):
+    def _handler(event):
+        orig(event)
+        cb()
+    return _handler
+
+
+class _InvestigationNotebookDialog(QDialog):
+    """Editor for the Investigation Bookmarks & Evidence Chain (TODO Phase 3).
+
+    Structure, button set and order mirror the web
+    ``InvestigationNotebookDialog.vue`` exactly:
+
+      header : title + stale-ref flag ... [Scaffold][Undo][Redo][Import][Export]
+               [Evidence pack][x]
+      body   : Title -> Add bookmark -> grouped bookmark rows -> Conclusion +
+               grounded chains -> Links -> Unresolved questions
+      footer : "N bookmark(s)" ... [Close]
+
+    Holds a working investigation dict + an undo/redo history; every edit calls
+    ``on_change(new_inv)`` (the web ``@update`` flow).
+    """
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        investigation=None,
+        history=None,
+        findings=None,
+        cursor_range=None,
+        format_ns=None,
+        trace=None,
+        trace_name="",
+        on_change=None,
+        on_status=None,
+        on_ref_jump=None,
+        on_evidence_package=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Investigation Notebook")
+        self.setModal(False)
+        self.resize(620, 720)
+        self._inv = load_investigation(investigation or new_investigation())
+        self._history = history or push_notebook_state(
+            empty_notebook_history(), self._inv)
+        self._findings = list(findings or [])
+        self._cursor_range = cursor_range
+        self._trace = trace
+        self._fmt = format_ns or (lambda ns: str(int(ns)))
+        self._trace_name = str(trace_name or "")
+        self._on_change = on_change
+        self._on_status = on_status
+        self._on_ref_jump = on_ref_jump
+        self._on_evidence_package = on_evidence_package
+        self._building = False
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(9)
+
+        # ---- Header : title + stale flag ... action bar ----
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        header.addWidget(QLabel("<b>Investigation Notebook</b>"))
+        self._broken_lbl = QLabel("")
+        self._broken_lbl.setObjectName("nb_broken_flag")
+        self._broken_lbl.setVisible(False)
+        header.addWidget(self._broken_lbl)
+        header.addStretch(1)
+
+        self._scaffold_btn = QPushButton("✦ Scaffold")
+        self._scaffold_btn.clicked.connect(self._scaffold_from_findings)
+        self._undo_btn = QPushButton("↶ Undo")
+        self._undo_btn.setToolTip("Undo (notebook)")
+        self._undo_btn.clicked.connect(self._undo)
+        self._redo_btn = QPushButton("↷ Redo")
+        self._redo_btn.setToolTip("Redo (notebook)")
+        self._redo_btn.clicked.connect(self._redo)
+        imp = QPushButton("Import…")
+        imp.setToolTip("Import a saved investigation (.json)")
+        imp.clicked.connect(self._import_json)
+        exp = QPushButton("Export…")
+        exp.setToolTip("Save this investigation as .json")
+        exp.clicked.connect(self._export_json)
+        self._evpack_btn = QPushButton("Evidence pack…")
+        self._evpack_btn.setToolTip(
+            "Build a compact AI evidence package from this investigation")
+        self._evpack_btn.clicked.connect(self._emit_evidence_package)
+        self._evpack_btn.setEnabled(callable(self._on_evidence_package))
+        close_x = QToolButton()
+        close_x.setText("✕")
+        close_x.setAutoRaise(True)
+        close_x.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_x.clicked.connect(self.close)
+        for b in (self._scaffold_btn, self._undo_btn, self._redo_btn,
+                  imp, exp, self._evpack_btn):
+            header.addWidget(b)
+        header.addWidget(close_x)
+        root.addLayout(header)
+        self._sync_scaffold_tooltip()
+
+        # ---- Body (scrolls) ----
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 6, 0)
+        bl.setSpacing(13)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(body)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        root.addWidget(scroll, 1)
+
+        # Title
+        _tf = QVBoxLayout()
+        _tf.setSpacing(4)
+        _tf.addWidget(QLabel("Title"))
+        self._title_edit = QLineEdit(self._inv.get("title") or "")
+        self._title_edit.setPlaceholderText("What is this investigation about?")
+        self._title_edit.editingFinished.connect(self._on_title_changed)
+        _tf.addWidget(self._title_edit)
+        bl.addLayout(_tf)
+
+        # Add-bookmark box
+        add_box = QFrame()
+        add_box.setObjectName("nb_add_box")
+        ab = QVBoxLayout(add_box)
+        ab.setSpacing(8)
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        self._type_cb = QComboBox()
+        for t in BOOKMARK_TYPES:
+            self._type_cb.addItem(BOOKMARK_TYPE_LABELS[t], t)
+        self._type_cb.setFixedWidth(150)
+        self._new_title = QLineEdit()
+        self._new_title.setPlaceholderText("Bookmark title")
+        self._new_title.returnPressed.connect(self._add_bookmark)
+        self._add_btn = QPushButton("Add")
+        self._add_btn.clicked.connect(self._add_bookmark)
+        row1.addWidget(self._type_cb)
+        row1.addWidget(self._new_title, 1)
+        row1.addWidget(self._add_btn)
+        ab.addLayout(row1)
+        self._new_note = QPlainTextEdit()
+        self._new_note.setPlaceholderText("Note (optional)")
+        self._new_note.setFixedHeight(46)
+        ab.addWidget(self._new_note)
+        row2 = QHBoxLayout()
+        row2.setSpacing(12)
+        self._attach_range_cb = QCheckBox("Attach current cursor range")
+        self._finding_cb = QComboBox()
+        self._finding_cb.addItem("— none —", "")
+        row2.addWidget(self._attach_range_cb)
+        row2.addWidget(QLabel("Link finding"))
+        row2.addWidget(self._finding_cb, 1)
+        ab.addLayout(row2)
+        bl.addWidget(add_box)
+
+        # Bookmark groups host
+        self._groups_host = QWidget()
+        self._groups_lay = QVBoxLayout(self._groups_host)
+        self._groups_lay.setContentsMargins(0, 0, 0, 0)
+        self._groups_lay.setSpacing(8)
+        bl.addWidget(self._groups_host)
+
+        # Conclusion
+        _cf = QVBoxLayout()
+        _cf.setSpacing(4)
+        _cf.addWidget(QLabel("Conclusion"))
+        self._concl = QPlainTextEdit(self._inv.get("conclusion") or "")
+        self._concl.setPlaceholderText(
+            "What does the evidence support? Leave blank until it does.")
+        self._concl.setFixedHeight(66)
+        self._concl.focusOutEvent = _wrap_focus_out(
+            self._concl.focusOutEvent, self._on_conclusion_changed)
+        _cf.addWidget(self._concl)
+        bl.addLayout(_cf)
+        self._chains_host = QWidget()
+        self._chains_lay = QVBoxLayout(self._chains_host)
+        self._chains_lay.setContentsMargins(0, 0, 0, 0)
+        self._chains_lay.setSpacing(3)
+        bl.addWidget(self._chains_host)
+
+        # Links
+        self._links_host = QWidget()
+        _lf = QVBoxLayout(self._links_host)
+        _lf.setContentsMargins(0, 0, 0, 0)
+        _lf.setSpacing(6)
+        _lf.addWidget(QLabel("Links"))
+        lrow = QHBoxLayout()
+        lrow.setSpacing(8)
+        self._link_from = QComboBox()
+        self._link_rel = QComboBox()
+        for r in LINK_RELATIONS:
+            self._link_rel.addItem(r, r)
+        self._link_rel.setFixedWidth(150)
+        self._link_to = QComboBox()
+        self._link_btn = QPushButton("Link")
+        self._link_btn.clicked.connect(self._add_link)
+        lrow.addWidget(self._link_from, 1)
+        lrow.addWidget(self._link_rel)
+        lrow.addWidget(self._link_to, 1)
+        lrow.addWidget(self._link_btn)
+        _lf.addLayout(lrow)
+        self._link_list = QListWidget()
+        self._link_list.setFixedHeight(84)
+        self._link_list.itemDoubleClicked.connect(self._remove_link_item)
+        _lf.addWidget(self._link_list)
+        bl.addWidget(self._links_host)
+
+        # Unresolved questions
+        _qf = QVBoxLayout()
+        _qf.setSpacing(6)
+        _qf.addWidget(QLabel("Unresolved questions"))
+        qrow = QHBoxLayout()
+        qrow.setSpacing(8)
+        self._q_edit = QLineEdit()
+        self._q_edit.setPlaceholderText("Add a question")
+        self._q_edit.returnPressed.connect(self._add_question)
+        self._q_add = QPushButton("Add")
+        self._q_add.clicked.connect(self._add_question)
+        qrow.addWidget(self._q_edit, 1)
+        qrow.addWidget(self._q_add)
+        _qf.addLayout(qrow)
+        self._q_list = QListWidget()
+        self._q_list.setFixedHeight(84)
+        self._q_list.itemDoubleClicked.connect(self._remove_question)
+        _qf.addWidget(self._q_list)
+        bl.addLayout(_qf)
+        bl.addStretch(1)
+
+        # ---- Footer : count ... Close ----
+        foot = QHBoxLayout()
+        self._count_lbl = QLabel("0 bookmark(s)")
+        self._count_lbl.setObjectName("nb_count")
+        foot.addWidget(self._count_lbl)
+        foot.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        foot.addWidget(close_btn)
+        root.addLayout(foot)
+
+        self.setStyleSheet(
+            "QFrame#nb_add_box{border:1px solid palette(mid);border-radius:8px;}"
+            "QLabel#nb_broken_flag{color:#E0A030;font-weight:600;}"
+            "QLabel#nb_count{color:palette(mid);}"
+            "QWidget#nb_item{border:1px solid palette(mid);border-radius:8px;}"
+            "QWidget#nb_item[broken=\"true\"]{border-color:#E0A030;}"
+            "QToolButton#nb_ref_chip{border:1px solid palette(mid);border-radius:9px;"
+            "padding:1px 7px;color:palette(mid);}"
+            "QToolButton#nb_ref_chip[brokenChip=\"true\"]{border-color:#E0A030;color:#E0A030;}"
+        )
+        self._render()
+
+    # ---- public API (parity with the web props/emits) ----
+    def investigation(self) -> dict:
+        return self._inv
+
+    def history(self) -> dict:
+        return self._history
+
+    def set_context(self, *, findings=None, cursor_range=None):
+        if findings is not None:
+            self._findings = list(findings)
+        self._cursor_range = cursor_range
+        self._render()
+
+    # ---- helpers ----
+    def _finding_options(self):
+        seen, out = set(), []
+        for f in self._findings:
+            rid = str(f.get("rule_id") or f.get("id") or "").strip()
+            if not rid or rid in seen:
+                continue
+            seen.add(rid)
+            out.append((rid, f"{f.get('severity', 'info')} · {f.get('title', rid)}"))
+        return out
+
+    _SCAFFOLD_TIP = "Seed observations from the current Analysis findings, plus a hypothesis + verification stub"  # noqa: E501
+    _SCAFFOLD_TIP_OFF = "No Analysis findings to seed from"
+
+    def _sync_scaffold_tooltip(self) -> None:
+        has = bool(self._finding_options())
+        self._scaffold_btn.setEnabled(has)
+        self._scaffold_btn.setToolTip(
+            self._SCAFFOLD_TIP if has else self._SCAFFOLD_TIP_OFF)
+
+    def _status(self, msg: str) -> None:
+        if callable(self._on_status):
+            self._on_status(msg)
+
+    def _broken(self) -> dict:
+        return detect_broken_references(
+            self._inv, trace=self._trace,
+            known_rule_ids=[rid for rid, _ in self._finding_options()])
+
+    def _commit(self, new_inv: dict) -> None:
+        self._inv = load_investigation(new_inv)
+        self._history = push_notebook_state(self._history, self._inv)
+        if callable(self._on_change):
+            self._on_change(self._inv)
+        self._render()
+
+    def _restore_snapshot(self, history) -> None:
+        self._history = history
+        snap = notebook_history_state(self._history).get("current")
+        if snap:
+            self._inv = load_investigation(snap)
+            if callable(self._on_change):
+                self._on_change(self._inv)
+        self._render()
+
+    def _bm_label(self, bid: str) -> str:
+        for b in self._inv.get("bookmarks", []):
+            if str(b.get("id")) == bid:
+                return f"{BOOKMARK_TYPE_LABELS.get(b.get('type'), b.get('type'))}: {b.get('title')}"
+        return bid
+
+    # ---- render ----
+    def _clear_layout(self, lay) -> None:
+        while lay.count():
+            it = lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+            elif it.layout() is not None:
+                self._clear_layout(it.layout())
+
+    def _render(self) -> None:
+        self._building = True
+        bms = self._inv.get("bookmarks", [])
+        broken = self._broken()
+        broken_by_bm: dict = {}
+        for iss in broken.get("issues", []):
+            broken_by_bm.setdefault(str(iss["bookmark_id"]), set()).add(iss["ref_index"])
+        n_flag = len(broken.get("issues", [])) + (1 if broken.get("stale_trace") else 0)
+        self._broken_lbl.setText(f"⚠ {n_flag} stale ref")
+        self._broken_lbl.setToolTip(
+            f"{n_flag} bookmark reference(s) no longer resolve")
+        self._broken_lbl.setVisible(n_flag > 0)
+
+        if self._title_edit.text() != (self._inv.get("title") or ""):
+            self._title_edit.setText(self._inv.get("title") or "")
+        if self._concl.toPlainText() != (self._inv.get("conclusion") or ""):
+            self._concl.setPlainText(self._inv.get("conclusion") or "")
+
+        # add-box context widgets
+        opts = self._finding_options()
+        cur_fid = self._finding_cb.currentData()
+        self._finding_cb.blockSignals(True)
+        self._finding_cb.clear()
+        self._finding_cb.addItem("— none —", "")
+        for rid, lbl in opts:
+            self._finding_cb.addItem(lbl, rid)
+        j = self._finding_cb.findData(cur_fid)
+        self._finding_cb.setCurrentIndex(j if j >= 0 else 0)
+        self._finding_cb.blockSignals(False)
+        self._finding_cb.parentWidget().setVisible(bool(opts))
+        if self._cursor_range:
+            lo, hi = self._cursor_range
+            self._attach_range_cb.setText(
+                f"Attach current cursor range ({self._fmt(lo)} – {self._fmt(hi)})")
+            self._attach_range_cb.setVisible(True)
+        else:
+            self._attach_range_cb.setVisible(False)
+            self._attach_range_cb.setChecked(False)
+        self._sync_scaffold_tooltip()
+
+        # bookmark groups
+        self._clear_layout(self._groups_lay)
+        if not bms:
+            hint = QLabel(
+                "No bookmarks yet. Add an observation, hypothesis, supporting or "
+                "contradicting evidence, a verification step, or a conclusion above.")
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color:palette(mid);")
+            self._groups_lay.addWidget(hint)
+        else:
+            for t in BOOKMARK_TYPES:
+                items = [b for b in bms if b.get("type") == t]
+                if not items:
+                    continue
+                head = QLabel(f"{BOOKMARK_TYPE_LABELS[t]} ({len(items)})")
+                head.setStyleSheet("color:palette(mid);font-weight:600;")
+                self._groups_lay.addWidget(head)
+                for b in items:
+                    row = _NotebookBookmarkRow(
+                        b, fmt=self._fmt,
+                        broken_ref_idx=broken_by_bm.get(str(b.get("id"))),
+                        on_change=self._row_change,
+                        on_remove=self._row_remove,
+                        on_ref_click=self._row_ref_click)
+                    self._groups_lay.addWidget(row)
+
+        # grounded chains
+        self._clear_layout(self._chains_lay)
+        for ch in conclusion_evidence_chains(self._inv):
+            if not ch.get("grounded"):
+                continue
+            parts = " · ".join(
+                f"{BOOKMARK_TYPE_LABELS.get(e['type'], e['type'])}: {e['title']}"
+                for e in ch.get("evidence", []))
+            lab = QLabel(f"<b>{ch['title']}</b> ← {parts}")
+            lab.setWordWrap(True)
+            lab.setStyleSheet("color:palette(mid);font-size:11px;")
+            self._chains_lay.addWidget(lab)
+
+        # links
+        self._links_host.setVisible(len(bms) >= 2)
+        for cb in (self._link_from, self._link_to):
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItem("from…" if cb is self._link_from else "to…", "")
+            for b in bms:
+                cb.addItem(
+                    f"{BOOKMARK_TYPE_LABELS.get(b.get('type'), b.get('type'))}: {b.get('title')}",
+                    b.get("id"))
+            cb.blockSignals(False)
+        self._link_list.clear()
+        for link in self._inv.get("links", []):
+            it = QListWidgetItem(
+                f"{self._bm_label(str(link['from']))}  —{link['relation']}→  "
+                f"{self._bm_label(str(link['to']))}")
+            it.setData(Qt.ItemDataRole.UserRole, (link["from"], link["to"]))
+            it.setToolTip("Double-click to remove link")
+            self._link_list.addItem(it)
+
+        # questions
+        self._q_list.clear()
+        for q in self._inv.get("unresolved_questions", []):
+            it = QListWidgetItem(q)
+            it.setToolTip("Double-click to remove question")
+            self._q_list.addItem(it)
+
+        hs = notebook_history_state(self._history)
+        self._undo_btn.setEnabled(bool(hs.get("can_undo")))
+        self._redo_btn.setEnabled(bool(hs.get("can_redo")))
+        self._count_lbl.setText(f"{len(bms)} bookmark(s)")
+        self._building = False
+
+    # ---- edit actions ----
+    def _on_title_changed(self) -> None:
+        if self._building:
+            return
+        txt = self._title_edit.text().strip()
+        if txt != (self._inv.get("title") or ""):
+            self._commit(load_investigation({**self._inv, "title": txt}))
+
+    def _on_conclusion_changed(self) -> None:
+        if self._building:
+            return
+        txt = self._concl.toPlainText().strip()
+        if txt != (self._inv.get("conclusion") or ""):
+            self._commit(set_conclusion(self._inv, txt))
+
+    def _add_bookmark(self) -> None:
+        title = self._new_title.text().strip()
+        if not title:
+            return
+        refs = []
+        if self._attach_range_cb.isChecked() and self._cursor_range:
+            lo, hi = self._cursor_range
+            refs.append({"kind": "range", "range": {"start": int(lo), "end": int(hi)}})
+        rid = self._finding_cb.currentData()
+        if rid:
+            refs.append({"kind": "finding", "rule_id": str(rid)})
+        self._commit(add_bookmark(
+            self._inv, type=self._type_cb.currentData(), title=title,
+            note=self._new_note.toPlainText(), refs=refs))
+        self._new_title.clear()
+        self._new_note.setPlainText("")
+        self._attach_range_cb.setChecked(False)
+        self._finding_cb.setCurrentIndex(0)
+
+    def _row_change(self, bid: str, changes: dict) -> None:
+        if self._building:
+            return
+        b = next((x for x in self._inv.get("bookmarks", []) if str(x["id"]) == bid), None)
+        if b is None:
+            return
+        if all(str(b.get(k) or "") == str(v or "") for k, v in changes.items()):
+            return
+        self._commit(update_bookmark(self._inv, bid, **changes))
+
+    def _row_remove(self, bid: str) -> None:
+        self._commit(remove_bookmark(self._inv, bid))
+
+    def _row_ref_click(self, ref: dict) -> None:
+        rng = ref.get("range")
+        if isinstance(rng, dict) and callable(self._on_ref_jump):
+            self._on_ref_jump(int(rng["start"]), int(rng["end"]))
+
+    def _add_link(self) -> None:
+        a = self._link_from.currentData()
+        b = self._link_to.currentData()
+        if not a or not b or a == b:
+            return
+        self._commit(link_bookmarks(self._inv, a, b, self._link_rel.currentData()))
+
+    def _remove_link_item(self, item: QListWidgetItem) -> None:
+        pair = item.data(Qt.ItemDataRole.UserRole)
+        if pair:
+            self._commit(unlink_bookmarks(self._inv, pair[0], pair[1]))
+
+    def _add_question(self) -> None:
+        q = self._q_edit.text().strip()
+        if q:
+            self._commit(add_unresolved_question(self._inv, q))
+            self._q_edit.clear()
+
+    def _remove_question(self, item: QListWidgetItem) -> None:
+        if item is not None:
+            self._commit(remove_unresolved_question(self._inv, item.text()))
+
+    def _undo(self) -> None:
+        self._restore_snapshot(notebook_undo(self._history))
+
+    def _redo(self) -> None:
+        self._restore_snapshot(notebook_redo(self._history))
+
+    def _scaffold_from_findings(self) -> None:
+        rng = None
+        if self._cursor_range:
+            lo, hi = self._cursor_range
+            rng = {"start": int(lo), "end": int(hi)}
+        before = len(self._inv.get("bookmarks") or [])
+        nxt = scaffold_investigation_from_findings(
+            self._inv, findings=self._findings, cursor_range=rng)
+        added = len(nxt.get("bookmarks") or []) - before
+        if added <= 0:
+            self._status(
+                "Nothing new to scaffold — every finding is already in the notebook.")
+            return
+        self._commit(nxt)
+        self._status(
+            f"Scaffolded {added} bookmark{'' if added == 1 else 's'} from findings")
+
+    def _emit_evidence_package(self) -> None:
+        if not callable(self._on_evidence_package):
+            return
+        q, ok = QInputDialog.getText(
+            self, "Evidence pack",
+            "Question the AI evidence package should answer:",
+            text=self._inv.get("title") or "")
+        if ok:
+            self._on_evidence_package(str(q).strip())
+
+    def _import_json(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import investigation", "", "JSON (*.json);;All files (*)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                self._commit(load_investigation(fh.read()))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Import investigation", f"Could not import:\n{exc}")
+
+    def _export_json(self) -> None:
+        base = (self._trace_name or "investigation").rsplit(".btf", 1)[0] or "investigation"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export investigation", f"{base}-investigation.json",
+            "JSON (*.json);;All files (*)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(dump_investigation(self._inv))
+        except OSError as exc:
+            QMessageBox.warning(self, "Export investigation", f"Could not export:\n{exc}")
+
+
+# Target labels + hints — byte-for-byte parity with the web dialog
+# (web/src/utils/exportActions.js EXPORT_TARGET_LABELS / EXPORT_TARGET_HINTS).
+_EXPORT_TARGET_LABELS = {
+    "workspace": "Portable workspace (.btfw)",
+    "perfetto": "Perfetto / Chrome Trace JSON",
+    "btf-slice": "Cursor-range BTF file",
+}
+_EXPORT_TARGET_HINTS = {
+    "workspace": "Trace + view state + analysis findings + trace health + investigation notebook + a rendered HTML report, in one ZIP-compatible file.",  # noqa: E501
+    "perfetto": "Open in https://ui.perfetto.dev — full loaded trace or the current viewport.",  # noqa: E501
+    "btf-slice": "A .btf containing only the events between the earliest and latest cursors.",  # noqa: E501
+}
+_EXPORT_SLICE_DISABLED_REASON = "Place at least two cursors (C1–Cn) to mark the range."
+# Same five lines as the web dialog's workspace summary (ExportDialog.vue).
+_EXPORT_WORKSPACE_SUMMARY = (
+    "View state & cursors",
+    "Analysis findings",
+    "Trace health status",
+    "Investigation notebook",
+    "Rendered statistics HTML report",
+)
+
+
+# Web ExportDialog.vue theme tokens (App.vue :root / [data-theme="light"]) so
+# the desktop dialog paints the *same* colours in light and dark.
+_EXPORT_THEME = {
+    True: {   # dark
+        "panel": "#252526", "border": "#3C3C3C", "dim": "#858585",
+        "accent": "#4F8BFF", "hover": "rgba(255,255,255,0.08)",
+    },
+    False: {  # light
+        "panel": "#F5F5F5", "border": "#DDDDDD", "dim": "#666666",
+        "accent": "#0066CC", "hover": "rgba(0,0,0,0.06)",
+    },
+}
+_EXPORT_DIALOG_WIDTH = 460  # web: width: min(460px, calc(100vw - 32px))
+
+# Trailing trace / archive suffix stripped from a source path to form an export
+# default name — lockstep with web exportActions.js EXPORT_BASENAME_RE.
+_EXPORT_BASENAME_RE = re.compile(
+    r"\.(btf\.gz|btf\.bz2|btf\.zip|btf|btfw|json|gz|bz2|zip)$", re.IGNORECASE)
+
+
+def _export_base_name(path: str, fallback: str) -> str:
+    """``…/example-8cores.btf.gz`` → ``…/example-8cores`` (any BTF/archive ext)."""
+    s = str(path or "").strip()
+    if not s:
+        return fallback
+    return _EXPORT_BASENAME_RE.sub("", s) or fallback
+
+
+def _staged_trace_ext(data: bytes) -> str:
+    """Extension whose codec matches *data*'s magic bytes — used when staging a
+    ``.btfw``'s embedded trace, whose manifest name may claim a compression the
+    bytes don't actually have (anonymized / web-authored workspace)."""
+    m = bytes(data or b"")[:4]
+    if m.startswith(b"\x1f\x8b"):
+        return ".btf.gz"
+    if m.startswith(b"BZh"):
+        return ".btf.bz2"
+    if m.startswith(b"PK"):
+        return ".btf.zip"
+    return ".btf"
+_EXPORT_ANONYMIZE_LABEL = "Anonymize task names (Task-1, Task-2, …)"
+_EXPORT_ANONYMIZE_HINT = (
+    "Every task name in the exported trace, Perfetto file, findings, health and "
+    "notebook is replaced with a stable Task-N alias."
+)
+
+
+class _ExportDialog(QDialog):
+    """Unified Export chooser — portable workspace (.btfw) · Perfetto JSON ·
+    cursor-range BTF.  Replaces the separate Perfetto / Save-BTF toolbar buttons.
+
+    Pixel-for-pixel the web ``ExportDialog.vue``: fixed ``460px`` width, radio
+    "cards" (label + dim hint sub-line) that highlight on hover, the same
+    outline colour in light and dark, and a **fixed-size** per-target options
+    area (a ``QStackedWidget``, the desktop analogue of the web grid-overlap
+    stack) so changing the selection never resizes the window.
+    ``result_choice()`` returns
+    ``{"target", "embed_trace", "perfetto_scope", "anonymize"}`` or ``None``.
+    """
+
+    def __init__(self, parent=None, *, has_range=False, format_ns=None,
+                 cursor_range=None):
+        super().__init__(parent)
+        self.setWindowTitle("Export")
+        self.setModal(True)
+        self._fmt = format_ns or (lambda ns: str(int(ns)))
+        self._choice = None
+
+        dark = bool(getattr(parent, "_is_dark", True))
+        c = _EXPORT_THEME[dark]
+        self.setStyleSheet(f"""
+            QDialog {{ background: {c['panel']}; }}
+            QFrame#exp_target_card {{
+                border: 1px solid {c['border']};
+                border-radius: 9px;
+            }}
+            QFrame#exp_target_card:hover {{ background: {c['hover']}; }}
+            QStackedWidget#exp_opts_stack > QWidget {{
+                border: 1px solid {c['border']};
+                border-radius: 9px;
+            }}
+            QLabel#exp_hint {{ color: {c['dim']}; font-size: 11px; }}
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 12)
+        lay.setSpacing(12)
+        # Snug + non-resizable; with a QStackedWidget the snug size is constant
+        # across selections. The content minimum width below fixes the dialog
+        # at the web's 460px (SetFixedSize would clobber a plain setFixedWidth).
+        lay.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+
+        title = QLabel("Export")
+        title.setStyleSheet("font-weight: 650; font-size: 14px;")
+        lay.addWidget(title)
+
+        # --- Target radio "cards" (label + dim wrapped hint) -----------------
+        self._grp = QButtonGroup(self)
+        self._rb_workspace = QRadioButton(_EXPORT_TARGET_LABELS["workspace"])
+        self._rb_perfetto = QRadioButton(_EXPORT_TARGET_LABELS["perfetto"])
+        self._rb_slice = QRadioButton(_EXPORT_TARGET_LABELS["btf-slice"])
+        cards = QVBoxLayout()
+        cards.setSpacing(6)
+        for i, (rb, key) in enumerate((
+                (self._rb_workspace, "workspace"),
+                (self._rb_perfetto, "perfetto"),
+                (self._rb_slice, "btf-slice"))):
+            self._grp.addButton(rb, i)
+            disabled = key == "btf-slice" and not has_range
+            hint_text = (_EXPORT_SLICE_DISABLED_REASON if disabled
+                         else _EXPORT_TARGET_HINTS[key])
+            cards.addWidget(self._exp_target_card(rb, hint_text, disabled))
+        lay.addLayout(cards)
+        self._rb_workspace.setChecked(True)
+        self._rb_slice.setEnabled(bool(has_range))
+
+        # --- Fixed-size per-target options (QStackedWidget) -----------------
+        self._opts = QStackedWidget()
+        self._opts.setObjectName("exp_opts_stack")
+        # Reserve room for the tallest page on every page (matches the web
+        # grid-overlap stack), so switching pages does not change the size.
+        self._opts.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                 QSizePolicy.Policy.Fixed)
+        # Pins the whole dialog to the web's 460px (see comment above).
+        self._opts.setMinimumWidth(_EXPORT_DIALOG_WIDTH - 32)
+
+        # page 0 — workspace
+        ws_page = QWidget()
+        ws_lay = QVBoxLayout(ws_page)
+        ws_lay.setContentsMargins(10, 10, 10, 10)
+        ws_lay.setSpacing(6)
+        self._embed_cb = QCheckBox(
+            "Embed the trace file (portable — opens anywhere)")
+        self._embed_cb.setChecked(True)
+        ws_lay.addWidget(self._embed_cb)
+        summary = QLabel(
+            "\n".join(f"•  {line}" for line in _EXPORT_WORKSPACE_SUMMARY))
+        summary.setObjectName("exp_hint")
+        ws_lay.addWidget(summary)
+        ws_lay.addStretch(1)
+        self._opts.addWidget(ws_page)
+
+        # page 1 — perfetto scope
+        pf_page = QWidget()
+        pf_lay = QVBoxLayout(pf_page)
+        pf_lay.setContentsMargins(10, 10, 10, 10)
+        pf_lay.setSpacing(6)
+        self._pf_full = QRadioButton("Full loaded trace")
+        self._pf_vp = QRadioButton("Current timeline viewport only")
+        self._pf_full.setChecked(True)
+        self._pf_grp = QButtonGroup(self)
+        self._pf_grp.addButton(self._pf_full)
+        self._pf_grp.addButton(self._pf_vp)
+        pf_lay.addWidget(self._pf_full)
+        pf_lay.addWidget(self._pf_vp)
+        pf_lay.addStretch(1)
+        self._opts.addWidget(pf_page)
+
+        # page 2 — cursor-range BTF
+        sl_page = QWidget()
+        sl_lay = QVBoxLayout(sl_page)
+        sl_lay.setContentsMargins(10, 10, 10, 10)
+        sl_lay.setSpacing(6)
+        if has_range and cursor_range:
+            lo, hi = cursor_range
+            sl_text = (f"Writes events in [{self._fmt(lo)}, {self._fmt(hi)})"
+                       "  (earliest → latest cursor).")
+        else:
+            sl_text = "Place at least two cursors to mark the range."
+        sl_lbl = QLabel(sl_text)
+        sl_lbl.setWordWrap(True)
+        sl_lbl.setStyleSheet("font-size: 12px;")
+        sl_lay.addWidget(sl_lbl)
+        sl_lay.addStretch(1)
+        self._opts.addWidget(sl_page)
+
+        lay.addWidget(self._opts)
+
+        # --- Anonymize (applies to every target) --------------------------
+        self._anon_cb = QCheckBox(_EXPORT_ANONYMIZE_LABEL)
+        self._anon_cb.setChecked(False)
+        self._anon_cb.setToolTip(_EXPORT_ANONYMIZE_HINT)
+        lay.addWidget(self._anon_cb)
+        anon_hint = QLabel(_EXPORT_ANONYMIZE_HINT)
+        anon_hint.setObjectName("exp_hint")
+        anon_hint.setWordWrap(True)
+        lay.addWidget(anon_hint)
+
+        self._grp.buttonToggled.connect(lambda *_: self._sync())
+        self._sync()
+
+        bb = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        ok_btn = bb.button(QDialogButtonBox.StandardButton.Ok)
+        ok_btn.setText("Export")
+        ok_btn.setStyleSheet(
+            f"background: {c['accent']}; color: #fff; font-weight: 650;"
+            " padding: 6px 14px; border-radius: 8px;")
+        bb.button(QDialogButtonBox.StandardButton.Cancel).setStyleSheet(
+            "padding: 6px 14px; border-radius: 8px;")
+        bb.accepted.connect(self._accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    @staticmethod
+    def _exp_target_card(radio: QRadioButton, hint_text: str,
+                         disabled: bool) -> QWidget:
+        """A bordered row: the radio button + a dim, word-wrapped hint below.
+        Border + hover colours come from the dialog-level stylesheet."""
+        card = QFrame()
+        card.setObjectName("exp_target_card")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(10, 8, 10, 9)
+        cl.setSpacing(2)
+        cl.addWidget(radio)
+        hint = QLabel(hint_text)
+        hint.setObjectName("exp_hint")
+        hint.setWordWrap(True)
+        cl.addWidget(hint)
+        if disabled:
+            card.setEnabled(False)
+        return card
+
+    def _sync(self) -> None:
+        if self._rb_perfetto.isChecked():
+            self._opts.setCurrentIndex(1)
+        elif self._rb_slice.isChecked():
+            self._opts.setCurrentIndex(2)
+        else:
+            self._opts.setCurrentIndex(0)
+
+    def _accept(self) -> None:
+        if self._rb_perfetto.isChecked():
+            target = "perfetto"
+        elif self._rb_slice.isChecked():
+            target = "btf-slice"
+        else:
+            target = "workspace"
+        self._choice = {
+            "target": target,
+            "embed_trace": self._embed_cb.isChecked(),
+            "perfetto_scope": "viewport" if self._pf_vp.isChecked() else "full",
+            "anonymize": self._anon_cb.isChecked(),
+        }
+        self.accept()
+
+    def result_choice(self):
+        return self._choice
+
 
 class _CommandPaletteDialog(QDialog):
     """Ctrl+K jump list for existing surfaces (no extra toolbar buttons)."""
@@ -2403,6 +3391,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._focus_mode: bool = False
         self._progress_dialog: Optional[QProgressDialog] = None
         self._pending_demo: Optional[dict] = None
+        self._pending_workspace: Optional[dict] = None
         self._demo_runner: Optional[InAppDemoRunner] = None
         self._demo_overlay: Optional[DemoPointerOverlay] = None
         self._demo_message_overlay: Optional[DemoMessageOverlay] = None
@@ -2806,6 +3795,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view.bookmark_requested.connect(self._add_bookmark_at_ns)
         view.annotation_requested.connect(self._add_annotation_at_ns)
         view.explain_region_requested.connect(self._on_explain_region_with_ai)
+        view.add_region_to_investigation_requested.connect(
+            self._on_add_region_to_investigation)
         view.ask_ai_event_requested.connect(self._on_ask_ai_event)
         view.clear_bookmarks_requested.connect(self._clear_all_bookmarks)
         view.clear_annotations_requested.connect(self._clear_all_annotations)
@@ -3477,6 +4468,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         {
             "heatmap": self._open_migration_heatmap,
             "analysis": self._open_analysis_findings,
+            "notebook": self._open_investigation_notebook,
             "compare": self._open_trace_compare,
             "snapshot": self._on_save_image,
             "help": self._on_keyboard_shortcuts,
@@ -3492,6 +4484,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         rail.set_item_visible(
             "heatmap", trace is not None and _trace_is_multi_core(trace))
         rail.set_item_visible("analysis", trace is not None)
+        rail.set_item_visible("notebook", trace is not None)
         rail.set_item_visible("compare", len(getattr(self, "_tabs", ())) >= 2)
         rail.set_item_visible("snapshot", trace is not None)
 
@@ -3727,6 +4720,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._status_file.setText("  No file loaded")
             self._status_file.setToolTip("")
             self.setWindowTitle("RTOS BTF Viewer")
+            self._refresh_trace_health()
             return
         fname = _trace_display_name(self._current_file)
         ts = _format_time(trace.time_max - trace.time_min, trace.time_scale,
@@ -3748,6 +4742,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._status_file.setText(f"  {fname}  |  {summary}")
         tip = self._current_file or fname
         self._status_file.setToolTip(f"{tip}\n{summary}")
+        self._refresh_trace_health()
 
     def _has_cursor_range(self) -> bool:
         if self._trace is None:
@@ -3761,8 +4756,88 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         except (AttributeError, TypeError):
             return False
 
+    def _current_health_scope(self) -> tuple:
+        """(lo, hi) for structural health — the cursor range when scope-to-cursors
+        is on and at least two cursors are placed, else (None, None)."""
+        panel = getattr(self, "_stats_panel", None)
+        if (self._trace is not None
+                and getattr(panel, "_scope_to_cursors", False)
+                and self._has_cursor_range()):
+            try:
+                times = sorted(int(t) for t in self._view._scene.cursor_times())
+                return times[0], times[-1]
+            except (AttributeError, TypeError, ValueError):
+                return None, None
+        return None, None
+
+    def _refresh_trace_health(self) -> None:
+        """Recompute the structural Trace Health result and update the status pill."""
+        btn = getattr(self, "_status_health_btn", None)
+        if btn is None:
+            return
+        if self._trace is None:
+            self._trace_health_result = None
+            btn.setVisible(False)
+            return
+        lo, hi = self._current_health_scope()
+
+        def _fmt(ns: int):
+            return _format_time(int(ns), self._trace.time_scale,
+                                decimals=self._time_decimals_val)
+
+        try:
+            result = build_trace_health_result(self._trace, lo, hi, format_ns=_fmt)
+        except Exception:
+            self._trace_health_result = None
+            btn.setVisible(False)
+            return
+        self._trace_health_result = result
+        status = str(result.get("status") or "pass")
+        n = int(result.get("issue_count", 0) or 0)
+        glyph = {"pass": "●", "caution": "⚠", "insufficient": "✕"}.get(status, "●")
+        label = trace_health_status_label(status)
+        btn.setText(f"  {glyph} {label}" + (f" · {n}" if n else "") + "  ")
+        btn.setProperty("healthStatus", status)
+        btn.setToolTip(trace_health_summary(result) + " — click for detail")
+        btn.setVisible(True)
+
+    def _show_trace_health_detail(self) -> None:
+        result = getattr(self, "_trace_health_result", None)
+        if not result:
+            return
+        status = str(result.get("status") or "pass")
+        n = int(result.get("issue_count", 0) or 0)
+        lines = [
+            f"Status: {trace_health_status_label(status)} · {n} structural issue(s)",
+            "",
+            "Structural checks on the parsed event model, independent of AI and of "
+            "Trace Health (TICK). Passing means the statistics rest on a consistent "
+            "event stream — not that the system is healthy.",
+            "",
+        ]
+        checks = result.get("checks") or []
+        if not checks:
+            lines.append("No structural issues detected in the analysed range.")
+        for c in checks:
+            lines.append(f"[{c.get('severity', 'info')}] {c.get('summary', '')}")
+            rng = c.get("affected_range") or {}
+            lo, hi = rng.get("lo"), rng.get("hi")
+            if lo is not None and hi is not None:
+                lines.append(f"    Range: {lo} – {hi}")
+            lim = c.get("metric_limitations") or []
+            if lim:
+                lines.append(f"    Limited: {', '.join(lim)}")
+            lines.append("")
+        box = QMessageBox(self)
+        box.setWindowTitle("Trace Health")
+        box.setIcon(
+            QMessageBox.Icon.Warning if status != "pass" else QMessageBox.Icon.Information)
+        box.setText("\n".join(lines).rstrip())
+        box.exec()
+
     def _sync_file_export_actions(self, has_range: Optional[bool] = None) -> None:
-        """Enable snapshot / SVG / Perfetto with a trace; BTF slice needs C1–Cn."""
+        """Enable snapshot / SVG / Export with a trace loaded (the Export dialog
+        gates the cursor-range BTF option on C1–Cn itself)."""
         has_trace = self._trace is not None
         if has_range is None:
             has_range = self._has_cursor_range()
@@ -3770,19 +4845,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             getattr(self, "_act_save_img", None),
             getattr(self, "_act_save_svg", None),
             getattr(self, "_act_copy_img", None),
-            getattr(self, "_act_export_perfetto", None),
+            getattr(self, "_act_export", None),
             getattr(self, "_tb_snap_btn", None),
             getattr(self, "_tb_save_svg_btn", None),
-            getattr(self, "_tb_export_perfetto_btn", None),
+            getattr(self, "_tb_export_btn", None),
         ):
             if act is not None:
                 act.setEnabled(has_trace)
         for act in (
-            getattr(self, "_act_export_slice", None),
-            getattr(self, "_tb_export_slice_btn", None),
+            getattr(self, "_act_notebook", None),
+            getattr(self, "_tb_notebook_btn", None),
         ):
             if act is not None:
-                act.setEnabled(has_trace and bool(has_range))
+                act.setEnabled(has_trace)
 
     def _update_tab_actions(self) -> None:
         self._sync_file_export_actions()
@@ -4645,7 +5720,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if not path:
                     continue
                 if (is_btf_open_path(path)
-                        or is_xtf_open_path(path)
+                        or str(path).lower().endswith(WORKSPACE_EXT)
                         or path.lower().endswith(".xml")
                         or Path(path).is_dir()):
                     event.acceptProposedAction()
@@ -4657,7 +5732,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not raw:
             return []
         p = Path(raw)
-        if p.is_file() and is_xtf_open_path(raw):
+        if p.is_file() and str(raw).lower().endswith(WORKSPACE_EXT):
             return [raw]
         if p.is_file() and is_btf_open_path(raw):
             return [raw]
@@ -4694,8 +5769,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not opened:
             QMessageBox.information(
                 self, "Open",
-                "Drop a .btf / .btf.gz file, a demo .xtf pack, a demo .xml next to its "
-                "trace, or a folder that contains a BTF trace.",
+                "Drop a .btf / .btf.gz file, a .btfw package (workspace or demo), "
+                "a demo .xml next to its trace, or a folder that contains a BTF trace.",
             )
 
     # ------------------------------------------------------------------
@@ -5699,6 +6774,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         for _k, _p, _lbl in (
             ("heatmap", _RG_HEATMAP, "Migration heatmap"),
             ("analysis", _RG_ANALYSIS, "Analysis findings"),
+            ("notebook", _RG_NOTEBOOK, "Investigation notebook"),
             ("compare", _RG_COMPARE, "Compare traces"),
             ("snapshot", _RG_SNAPSHOT, "Snapshot editor"),
         ):
@@ -6264,7 +7340,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.query_ai_requested.connect(self._on_stats_query_ai)
         self._stats_panel.set_ai_enabled(self._ai_feature_enabled())
         self._stats_panel._scope_cb.toggled.connect(
-            lambda _checked=False: self._update_cursor_scope_banner())
+            lambda _checked=False: (self._update_cursor_scope_banner(),
+                                    self._refresh_trace_health()))
         self.setAcceptDrops(True)
 
     def _on_stats_query_ai(self, template_id: str, extra: str = "") -> None:
@@ -6333,14 +7410,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_save_svg.setEnabled(False)
         self._act_copy_img = fm.addAction("&Copy Image to Clipboard", self._on_copy_image, "Ctrl+Shift+C")
         self._act_copy_img.setEnabled(False)
-        self._act_export_perfetto = fm.addAction(
-            "Export &Perfetto…", self._on_export_perfetto, "Ctrl+Shift+E")
-        self._act_export_perfetto.setEnabled(False)
-        self._act_export_slice = fm.addAction(
-            "Save se&lection as BTF…", self._on_export_btf_slice)
-        self._act_export_slice.setToolTip(
-            "Save cursor range as BTF (C1–Cn).")
-        self._act_export_slice.setEnabled(False)
+        self._act_export = fm.addAction(
+            "&Export…", self._on_export, "Ctrl+Shift+E")
+        self._act_export.setToolTip(
+            "Export a portable workspace (.btfw), Perfetto JSON, or the "
+            "cursor-range BTF slice.")
+        self._act_export.setEnabled(False)
         self._act_close_tab = fm.addAction("Close &Tab", self._on_close_tab_action, QKeySequence.Close)
         self._act_close_tab.setEnabled(False)
         self._act_close_all_tabs = fm.addAction("Close &All Tabs", self._on_close_all_tabs_action)
@@ -6400,6 +7475,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_focus_mode.setShortcut(QKeySequence("Shift+F"))
         self._act_focus_mode.setToolTip(
             "Hide the side panel, activity rail and trace tabs — timeline only")
+        vm.addSeparator()
+        self._act_notebook = vm.addAction(
+            "&Investigation Notebook…", self._open_investigation_notebook)
+        self._act_notebook.setToolTip(
+            "Typed bookmarks, evidence chain and conclusion for this trace")
+        self._act_notebook.setEnabled(False)
         vm.addSeparator()
         vm.addAction("⚙ &Settings…", self._open_settings, "Ctrl+,")
         vm.addSeparator()
@@ -6462,6 +7543,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # a fitting mnemonic for "detailed reference," one level past F1.
         _ref_act.setShortcuts([QKeySequence("Shift+F1")])
         hm.addSeparator()
+        hm.addAction("Open &Guided Demo…", self._on_open_guided_demo)
+        hm.addSeparator()
         hm.addAction("&About", self._on_about)
 
     def _build_toolbar(self) -> None:
@@ -6482,22 +7565,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._tb_icon_actions.append((act, ic_path))
             return act
 
-        # --- File actions (same cluster as web: Open · SVG · Perfetto · Slice).
+        # --- File actions (same cluster as web: Open · SVG · Export).
         #     Snapshot / Heatmap / Analysis / Compare live on the left activity
-        #     rail now (shell redesign) — not the toolbar. ---
+        #     rail now (shell redesign) — not the toolbar.  Perfetto + Save-BTF
+        #     folded into one Export chooser. ---
         self._tb_open_btn = _ia("Open", self._on_open, _IC_OPEN, "Open BTF trace file  (Ctrl+O)")
         self._tb_save_svg_btn = _ia(
             "Save SVG", self._on_save_svg, _IC_SAVE_SVG,
             "Save viewport as SVG  (Ctrl+Shift+S)")
-        self._tb_export_perfetto_btn = _ia(
-            "Perfetto", self._on_export_perfetto, _IC_PERFETTO,
-            "Export Perfetto (Chrome Trace JSON for ui.perfetto.dev)  (Ctrl+Shift+E)")
-        self._tb_export_slice_btn = _ia(
-            "Save BTF", self._on_export_btf_slice, _IC_EXPORT_SLICE,
-            "Save cursor range as BTF (C1–Cn)")
+        self._tb_export_btn = _ia(
+            "Export", self._on_export, _IC_EXPORT_OUT,
+            "Export… — workspace (.btfw), Perfetto JSON, or cursor-range BTF  "
+            "(Ctrl+Shift+E)")
         self._tb_save_svg_btn.setEnabled(False)
-        self._tb_export_perfetto_btn.setEnabled(False)
-        self._tb_export_slice_btn.setEnabled(False)
+        self._tb_export_btn.setEnabled(False)
         tb.addSeparator()
 
         # --- Layout and zoom ---
@@ -7014,6 +8095,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._status_inspect.setContentsMargins(4, 0, 8, 0)
         self._status_inspect.setToolTip("Selected task inspector")
 
+        # Structural Trace Health pill (web .status-health). Recomputed on trace
+        # load and analysis-scope change; click opens the per-check detail.
+        self._trace_health_result = None
+        self._status_health_btn = QToolButton()
+        self._status_health_btn.setObjectName("statusHealthBtn")
+        self._status_health_btn.setText("")
+        self._status_health_btn.setToolTip("Structural trace health — click for detail")
+        self._status_health_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._status_health_btn.setAutoRaise(True)
+        self._status_health_btn.setVisible(False)
+        self._status_health_btn.clicked.connect(self._show_trace_health_detail)
+
         # Inline load progress (replaces the modal card — web .status-loading).
         self._status_load_lbl = QLabel("")
         self._status_load_lbl.setObjectName("statusLoad")
@@ -7103,6 +8196,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sb.addWidget(self._status_load_lbl)
         sb.addWidget(self._status_load_cancel)
         sb.addWidget(self._status_inspect)
+        sb.addWidget(self._status_health_btn)
         sb.addPermanentWidget(self._cursor_bar)
         sb.addPermanentWidget(self._status_migrated_filter_btn)
         sb.addPermanentWidget(self._status_core_filter_btn)
@@ -7410,6 +8504,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._load_in_progress = False
         self._continue_session_restore()
         self._drain_pending_open_paths()
+        self._start_pending_workspace()
         self._start_pending_demo()
 
     def _preferred_demo_voice_lang(self) -> str:
@@ -7524,6 +8619,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not xml_path or not os.path.isfile(xml_path):
             return
         self._stop_inapp_demo()
+
+        # Pre-seed the AI panel with the demo's investigation case, if it
+        # ships one (packed under investigation/ai_case.json, or next to a
+        # loose demo XML). Same restore path as a .btfw workspace.
+        ai_case = pending.get("ai_case")
+        if ai_case:
+            panel = getattr(self, "_ai_panel", None)
+            if panel is not None and hasattr(panel, "restore_workspace_ai_case"):
+                try:
+                    panel.restore_workspace_ai_case(ai_case)
+                except Exception:
+                    pass
         old = self._demo_overlay
         self._demo_overlay = None
         if old is not None:
@@ -8024,6 +9131,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _ai_open_stats_section(self, section_id: str) -> None:
         """AI Evidence link ``btfstats:section/…`` → Statistics section (no Scope change)."""
         sid = str(section_id or "").strip()
+        # Accept a header title / loose spelling ("Ready-Gap (Starvation)") too.
+        sid = resolve_stats_section_id(sid) or sid
         if not sid:
             return
         tabs = getattr(self, "_panel_tabs", None)
@@ -9111,8 +10220,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return "Opened corridor inspector"
         if name == AI_TOOL_OPEN_STATS_SECTION:
             section = str(args.get("section") or args.get("section_id") or "").strip()
-            self._ai_open_stats_section(section)
-            return f"Opened Statistics section {section}" if section else "Opened Statistics"
+            sid = resolve_stats_section_id(section)
+            self._ai_open_stats_section(sid or section)
+            if sid:
+                return f"Opened Statistics section “{stats_section_title(sid)}”"
+            return (f"Opened Statistics (could not match section “{section}”)"
+                    if section else "Opened Statistics")
         if name == AI_TOOL_ADD_ANNOTATION:
             ns = int(float(args["time"]))
             note = str(args.get("note") or "")
@@ -10000,7 +11113,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             data={"csv": str(ctx.get("findings_text") or "")},
         )
 
-    def _on_export_btf_slice(self) -> None:
+    def _on_export_btf_slice(self, *, anonymize: bool = False) -> None:
         if self._trace is None:
             return
         times = sorted(int(t) for t in self._view._scene.cursor_times())
@@ -10036,6 +11149,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     text, kept = "", 0
             if not str(text).strip():
                 text, kept = reconstruct_btf_slice(self._trace, lo, hi)
+            if anonymize:
+                amap = self._export_task_alias_map()
+                if amap:
+                    text = anonymize_btf_text(text, amap)
             write_btf_text(text, path)
         except Exception as exc:
             QMessageBox.critical(
@@ -10331,6 +11448,180 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         scene.set_finding_overlays(merge_incident_overlay_times(
             ux, finding_times, include_anomalies=True, limit=120))
 
+    # -- Investigation notebook (TODO Phase 3) --------------------------
+    def _notebook_cursor_range(self):
+        if self._trace is None or not self._has_cursor_range():
+            return None
+        try:
+            times = sorted(int(t) for t in self._view._scene.cursor_times())
+            return times[0], times[-1]
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _current_investigation(self):
+        tab = self._active_tab
+        return getattr(tab, "_investigation", None) if tab is not None else None
+
+    def _ensure_investigation(self):
+        tab = self._active_tab
+        if tab is None or self._trace is None:
+            return None
+        if tab._investigation is None:
+            ident = trace_identity(self._trace, os.path.basename(tab.path or ""))
+            rng = self._notebook_cursor_range()
+            inv = new_investigation(
+                title=os.path.basename(tab.path or "") or "Investigation",
+                trace_identity=ident,
+                analysis_range={"start": rng[0], "end": rng[1]} if rng else None,
+            )
+            tab._investigation = inv
+            tab._notebook_history = push_notebook_state(empty_notebook_history(), inv)
+            self._stats_panel._export_investigation = inv
+        return tab._investigation
+
+    def _on_investigation_changed(self, inv: dict) -> None:
+        tab = self._active_tab
+        if tab is not None:
+            tab._investigation = inv
+        if self._stats_panel is not None:
+            self._stats_panel._export_investigation = inv
+
+    def _open_investigation_notebook(self) -> None:
+        if self._trace is None:
+            self.statusBar().showMessage(
+                "Open a trace before starting an investigation.", 3000)
+            return
+        self._ensure_investigation()
+        tab = self._active_tab
+        dlg = getattr(self, "_notebook_dlg", None)
+        if dlg is not None:
+            try:
+                if dlg.isVisible():
+                    dlg.set_context(
+                        findings=self._stats_panel.build_analysis_findings()[0],
+                        cursor_range=self._notebook_cursor_range())
+                    dlg.raise_()
+                    dlg.activateWindow()
+                    return
+            except RuntimeError:
+                self._notebook_dlg = None
+        findings = self._stats_panel.build_analysis_findings()[0]
+        dlg = _InvestigationNotebookDialog(
+            self,
+            investigation=tab._investigation,
+            history=tab._notebook_history,
+            findings=findings,
+            cursor_range=self._notebook_cursor_range(),
+            format_ns=lambda ns: _format_time(
+                int(ns), self._trace.time_scale, decimals=self._time_decimals_val),
+            trace=self._trace,
+            trace_name=os.path.basename(tab.path or ""),
+            on_change=self._on_investigation_changed,
+            on_status=lambda msg: self.statusBar().showMessage(msg, 3000),
+            on_ref_jump=self._notebook_jump_to_range,
+            on_evidence_package=self._notebook_evidence_package,
+        )
+        self._notebook_dlg = dlg
+
+        def _on_closed(*_a) -> None:
+            if getattr(self, "_notebook_dlg", None) is dlg:
+                try:
+                    tab._notebook_history = dlg.history()
+                except RuntimeError:
+                    pass
+                self._notebook_dlg = None
+
+        dlg.finished.connect(_on_closed)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _notebook_jump_to_range(self, lo: int, hi: int) -> None:
+        """Notebook range/evidence chip → move the timeline there."""
+        view = getattr(self, "_view", None)
+        if view is not None and hasattr(view, "scroll_to_ns"):
+            view.scroll_to_ns(int(lo))
+
+    def _notebook_evidence_package(self, question: str) -> None:
+        """Notebook 'Evidence pack…' → build + save a compact AI evidence
+        package (mirror of the web onExportAiEvidencePackage)."""
+        if self._trace is None:
+            return
+        tab = self._active_tab
+        base = os.path.splitext(self._current_file or "trace")[0]
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save AI evidence package", base + "-evidence.json",
+            "JSON (*.json);;All files (*)")
+        if not path:
+            return
+        lo = hi = None
+        rng = self._notebook_cursor_range()
+        if rng:
+            lo, hi = rng
+        try:
+            raw_findings = self._stats_panel.build_analysis_findings()[0]
+            pkg_findings = [investigation_finding_export(x)
+                            for x in build_investigation_findings(raw_findings)]
+        except Exception:
+            pkg_findings = []
+        try:
+            health = build_trace_health_result(self._trace, lo, hi)
+        except Exception:
+            health = None
+        package = build_evidence_package(
+            question=str(question or ""),
+            scope=f"C1–C{len(self._view._scene.cursor_times())}" if rng else "Full trace",
+            analysis_range={"start": lo, "end": hi} if rng else None,
+            trace_name=os.path.basename(self._current_file or "trace.btf"),
+            trace_summary=_trace_summary_snapshot(self._trace, lo, hi),
+            health=health,
+            findings=pkg_findings,
+            investigation=getattr(tab, "_investigation", None),
+            entities=[str(t) for t in list(getattr(self._trace, "tasks", []))[:40]],
+            cores=[str(c) for c in getattr(self._trace, "core_names", [])],
+        )
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(package, fh, ensure_ascii=False, indent=2, sort_keys=True)
+        except OSError as exc:
+            QMessageBox.warning(self, "Evidence pack", f"Could not write file:\n{exc}")
+            return
+        self.statusBar().showMessage(
+            f"AI evidence package saved — ~{estimate_tokens(package)} tokens", 4000)
+
+    def _add_finding_to_investigation(self, finding: dict) -> None:
+        if not finding or self._trace is None:
+            return
+        self._ensure_investigation()
+        tab = self._active_tab
+        refs = [{"kind": "finding",
+                 "rule_id": str(finding.get("rule_id") or finding.get("id") or "")}]
+        rng = self._notebook_cursor_range()
+        if rng:
+            refs.append({"kind": "range",
+                         "range": {"start": rng[0], "end": rng[1]}})
+        inv = add_bookmark(
+            tab._investigation, type="observation",
+            title=finding.get("title") or finding.get("rule_id") or "Finding",
+            note=finding.get("text") or finding.get("impact") or "",
+            refs=refs)
+        tab._investigation = inv
+        tab._notebook_history = push_notebook_state(
+            tab._notebook_history or empty_notebook_history(), inv)
+        self._on_investigation_changed(inv)
+        self.statusBar().showMessage("Added to investigation notebook", 3000)
+        dlg = getattr(self, "_notebook_dlg", None)
+        if dlg is not None:
+            try:
+                if dlg.isVisible():
+                    dlg._inv = load_investigation(inv)
+                    dlg._history = tab._notebook_history
+                    dlg._render()
+                    return
+            except RuntimeError:
+                self._notebook_dlg = None
+        self._open_investigation_notebook()
+
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
         if self._trace is None or self._stats_panel is None:
@@ -10507,6 +11798,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             triage_state=triage,
             on_triage_change=_on_triage_change,
             on_add_to_case=_on_add_to_case,
+            on_add_to_investigation=self._add_finding_to_investigation,
             on_undo_investigate=_on_undo_investigate,
             current_limit=cur_limit,
             current_cursor_lo=cur_lo,
@@ -10543,6 +11835,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel = getattr(self, "_ai_panel", None)
         if panel is not None and hasattr(panel, "query_template"):
             QTimer.singleShot(0, lambda: panel.query_template("explain_region"))
+
+    def _on_add_region_to_investigation(self) -> None:
+        """Timeline context menu → Add region to investigation (C1–Cn range)."""
+        rng = self._notebook_cursor_range()
+        if rng is None or self._trace is None:
+            return
+        self._ensure_investigation()
+        tab = self._active_tab
+        lo, hi = rng
+        label = (f"{_format_time(lo, self._trace.time_scale, decimals=self._time_decimals_val)}"
+                 f" – {_format_time(hi, self._trace.time_scale, decimals=self._time_decimals_val)}")
+        inv = add_bookmark(
+            tab._investigation, type="observation", title=f"Region {label}",
+            refs=[{"kind": "range", "range": {"start": int(lo), "end": int(hi)}}])
+        tab._investigation = inv
+        tab._notebook_history = push_notebook_state(
+            tab._notebook_history or empty_notebook_history(), inv)
+        self._on_investigation_changed(inv)
+        self.statusBar().showMessage("Region added to investigation notebook", 3000)
+        self._open_investigation_notebook()
 
     def _on_ask_ai_event(self, event: dict) -> None:
         """Timeline context menu → Ask AI about this event."""
@@ -11096,24 +12408,173 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if path:
             self._open_file(path)
 
-    def _open_xtf_pack(self, path: str) -> None:
-        """Extract a shareable ``.xtf`` demo pack and open its BTF trace."""
+    def _stage_demo_tree(self, demo: dict, dest_dir: str) -> Optional[str]:
+        """Write a ``.btfw`` demo subtree (``demo/*``) under *dest_dir*.
+
+        Returns the path to the staged demo script, or None when there is none.
+        """
+        script_path = None
+        script_name = str((demo or {}).get("script_name") or "script.xml")
+        for rel, blob in ((demo or {}).get("files") or {}).items():
+            rel = str(rel or "").replace("\\", "/").lstrip("/")
+            if not rel or ".." in rel.split("/"):
+                continue
+            target = os.path.join(dest_dir, *rel.split("/"))
+            os.makedirs(os.path.dirname(target) or dest_dir, exist_ok=True)
+            with open(target, "wb") as fh:
+                fh.write(blob if isinstance(blob, (bytes, bytearray))
+                         else str(blob).encode("utf-8"))
+            if rel == script_name:
+                script_path = target
+        return script_path
+
+    def _open_workspace_file(self, path: str) -> None:
+        """Open a ``.btfw`` package. A ``kind == "workspace"`` package restores
+        the investigation onto its tab; a ``kind == "demo"`` package stages the
+        guided tour and (optionally) pre-loads its AI investigation case."""
         try:
-            xml, btf = extract_xtf_pack(path)
+            ws = open_workspace(path)
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
-            QMessageBox.warning(self, "Open Error", str(exc))
+            QMessageBox.warning(self, "Open Error", f"Not a readable .btfw package:\n{exc}")
             return
-        # Keep the extract dir alive for the session (BTF path is inside it).
-        if not hasattr(self, "_xtf_extract_dirs"):
-            self._xtf_extract_dirs = []
-        self._xtf_extract_dirs.append(os.path.dirname(btf))
-        self.statusBar().showMessage(
-            f"Opened demo pack {os.path.basename(path)} — loaded trace "
-            f"{os.path.basename(btf)}",
-            5000,
-        )
-        self._pending_demo = {"xml": xml}
-        self._open_file(btf)
+        trace_bytes = ws.get("trace_bytes")
+        if not trace_bytes:
+            if ws.get("trace_embedded"):
+                QMessageBox.warning(
+                    self, "Open Error", "Package trace is missing or corrupt.")
+            else:
+                QMessageBox.warning(
+                    self, "Open Error",
+                    "Package references an external trace "
+                    f"({ws.get('trace_ref') or 'unknown'}). Open that .btf directly.")
+            return
+        if not hasattr(self, "_workspace_extract_dirs"):
+            self._workspace_extract_dirs = []
+        tmp = tempfile.mkdtemp(prefix="btfw_")
+        self._workspace_extract_dirs.append(tmp)
+        raw_name = os.path.basename(
+            (ws.get("manifest") or {}).get("trace", {}).get("name")
+            or os.path.basename(path).replace(WORKSPACE_EXT, ".btf"))
+        stem = os.path.basename(_export_base_name(raw_name, "trace"))
+        # Name the staged file after the *actual* bytes, not the manifest's
+        # possibly-stale compression suffix (fixes "Not a gzipped file (b'#v')").
+        btf_path = os.path.join(tmp, stem + _staged_trace_ext(trace_bytes))
+        try:
+            with open(btf_path, "wb") as fh:
+                fh.write(trace_bytes)
+        except OSError as exc:
+            QMessageBox.warning(self, "Open Error", f"Cannot stage package trace:\n{exc}")
+            return
+        for w in ws.get("warnings") or []:
+            self.statusBar().showMessage(f"Package: {w}", 6000)
+
+        demo = ws.get("demo")
+        if ws.get("kind") == "demo" or demo:
+            script_path = self._stage_demo_tree(demo or {}, tmp) if demo else None
+            if not script_path or not os.path.isfile(script_path):
+                QMessageBox.warning(
+                    self, "Open Error",
+                    "Demo package has no demo/script.xml.")
+                return
+            self.statusBar().showMessage(
+                f"Opened demo pack {os.path.basename(path)} — loaded trace "
+                f"{os.path.basename(btf_path)}", 5000)
+            self._pending_demo = {"xml": script_path, "ai_case": ws.get("ai_case")}
+            self._open_file(btf_path)
+            return
+
+        self._pending_workspace = ws
+        self._open_file(btf_path)
+
+    def _start_pending_workspace(self) -> None:
+        ws = self._pending_workspace
+        self._pending_workspace = None
+        if not ws:
+            return
+        tab = self._active_tab
+        if tab is None:
+            return
+        notes = []
+        inv = ws.get("investigation")
+        if isinstance(inv, dict):
+            tab._investigation = load_investigation(inv)
+            tab._notebook_history = push_notebook_state(
+                empty_notebook_history(), tab._investigation)
+            if self._stats_panel is not None:
+                self._stats_panel._export_investigation = tab._investigation
+            n = len(tab._investigation.get("bookmarks") or [])
+            notes.append(f"investigation notebook ({n} bookmark{'' if n == 1 else 's'})")
+        view = ws.get("view_state")
+        if isinstance(view, dict):
+            cursors = view.get("cursors") or view.get("cursor_times") or []
+            times = [int(t) for t in cursors if isinstance(t, (int, float))]
+            if len(times) >= 1 and hasattr(self._view, "_scene"):
+                self._view.begin_programmatic_viewport()
+                try:
+                    self._view._scene.clear_cursors()
+                    for t in times:
+                        self._view._scene.add_cursor(int(t))
+                    self._view.cursors_changed.emit(self._view._scene.cursor_times())
+                finally:
+                    self._view.end_programmatic_viewport()
+                notes.append(f"{len(times)} cursor{'' if len(times) == 1 else 's'}")
+
+            bms, anns, max_id = [], [], 1
+            for m in view.get("marks") or []:
+                if not isinstance(m, dict):
+                    continue
+                try:
+                    mid, ns = int(m.get("id")), int(m.get("ns"))
+                except (TypeError, ValueError):
+                    continue
+                max_id = max(max_id, mid + 1)
+                if str(m.get("type")) == "annotation":
+                    anns.append(TraceAnnotation(id=mid, ns=ns, note=str(m.get("label") or "")))
+                else:
+                    bms.append(TraceBookmark(id=mid, ns=ns, label=str(m.get("label") or "")))
+            if bms or anns:
+                bms.sort(key=lambda b: b.ns)
+                anns.sort(key=lambda a: a.ns)
+                self._bookmarks = bms
+                self._annotations = anns
+                self._mark_next_id = max(int(view.get("markNextId") or 1), max_id)
+                try:
+                    self._rebuild_marks_list()
+                except Exception:
+                    pass
+                notes.append(
+                    f"{len(bms)} bookmark(s), {len(anns)} annotation(s)")
+
+            vp_raw = view.get("viewport_desktop")
+            if isinstance(vp_raw, str) and vp_raw:
+                vp = viewport_from_json(vp_raw)
+                if vp is not None and hasattr(tab, "vm"):
+                    tab.vm.viewport = vp
+                    apply_viewport(tab.view, vp)
+
+        if ws.get("ai_case"):
+            panel = getattr(self, "_ai_panel", None)
+            if panel is not None and hasattr(panel, "restore_workspace_ai_case"):
+                try:
+                    if panel.restore_workspace_ai_case(ws["ai_case"]):
+                        notes.append("AI investigation")
+                except Exception:
+                    pass
+
+        if ws.get("read_only"):
+            self.statusBar().showMessage(
+                "Workspace written by a newer BTFViewer — opened read-only.", 6000)
+        extras = []
+        if ws.get("health"):
+            extras.append("trace health")
+        if ws.get("findings"):
+            extras.append(f"{len(ws['findings'])} finding(s)")
+        if ws.get("report_html"):
+            extras.append("HTML report")
+        msg = f"Workspace opened — restored {', '.join(notes) or 'trace only'}"
+        if extras:
+            msg += f"; also carries {', '.join(extras)}"
+        self.statusBar().showMessage(msg, 6000)
 
     def _save_recent_files(self, path: str) -> None:
         norm = _normalize_open_path(path)
@@ -11934,9 +13395,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
 
     def _open_file(self, path: str) -> None:
-        if is_xtf_open_path(path):
+        if str(path or "").lower().endswith(WORKSPACE_EXT):
             self._stop_inapp_demo()
-            self._open_xtf_pack(path)
+            self._open_workspace_file(path)
             return
         pack = None
         lowered = (path or "").lower()
@@ -11945,7 +13406,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if pack:
                 xml, btf = pack
                 self._stop_inapp_demo()
-                self._pending_demo = {"xml": xml}
+                self._pending_demo = {
+                    "xml": xml, "ai_case": discover_demo_ai_case(xml)}
                 if os.path.abspath(btf) != os.path.abspath(path):
                     self._open_file(btf)
                     return
@@ -12182,7 +13644,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _on_save_svg(self) -> None:
         if self._trace is None:
             return
-        base = os.path.splitext(self._current_file)[0] if self._current_file else "trace"
+        base = _export_base_name(self._current_file, "trace")
         path, _ = QFileDialog.getSaveFileName(
             self, "Save SVG", base + ".svg",
             "SVG files (*.svg);;All files (*)"
@@ -12234,28 +13696,181 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self.statusBar().showMessage("Copied to clipboard!", 4000)
 
     @_dialog_guard
-    def _on_export_perfetto(self) -> None:
+    def _on_export(self) -> None:
+        """Unified Export chooser (toolbar + File ▸ Export…, Ctrl+Shift+E)."""
+        if self._trace is None:
+            return
+        has_range = self._has_cursor_range()
+        rng = self._notebook_cursor_range()
+        dlg = _ExportDialog(
+            self, has_range=has_range,
+            format_ns=lambda ns: _format_time(
+                int(ns), self._trace.time_scale, decimals=self._time_decimals_val),
+            cursor_range=rng)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        choice = dlg.result_choice() or {}
+        target = choice.get("target")
+        anon = bool(choice.get("anonymize", False))
+        if target == "perfetto":
+            self._run_perfetto_export(choice.get("perfetto_scope", "full"),
+                                      anonymize=anon)
+        elif target == "btf-slice":
+            self._on_export_btf_slice(anonymize=anon)
+        elif target == "workspace":
+            self._run_workspace_export(bool(choice.get("embed_trace", True)),
+                                       anonymize=anon)
+
+    def _export_task_alias_map(self) -> dict:
+        """``{bare_task_name: "Task-N"}`` for the Export dialog's Anonymize option.
+
+        Keyed on the **bare** task name (``Runner``, not ``Runner[1]``) — that is
+        the token that actually appears in the raw BTF text (``[0/0001]Runner``,
+        ``Runner[1]``, ``Runner(1)`` all contain it as a whole token), so the
+        embedded / sliced trace really gets rewritten.  Same scheme as the web
+        ``buildExportAnonymizer`` / ``exportTaskAliasMap``.
+        """
+        names = set()
+        for raw in getattr(self._trace, "task_repr", {}).values():
+            nm = str(_parse_task_name(str(raw))[2] or "").strip()
+            if nm and not _is_idle_task_name(nm) and nm != "TICK":
+                names.add(nm)
+        return build_task_alias_map(names)
+
+    def _workspace_view_state(self, tab) -> dict:
+        """Web-compatible ``state/view.json`` — cursors + marks + viewport."""
+        try:
+            cursors = [int(t) for t in self._view._scene.cursor_times()]
+        except (AttributeError, TypeError, ValueError):
+            cursors = []
+        marks = []
+        for b in list(getattr(self, "_bookmarks", []) or []):
+            marks.append({"id": int(b.id), "ns": int(b.ns),
+                          "label": str(b.label or ""), "type": "bookmark"})
+        for a in list(getattr(self, "_annotations", []) or []):
+            marks.append({"id": int(a.id), "ns": int(a.ns),
+                          "label": str(a.note or ""), "type": "annotation"})
+        vp_json = ""
+        try:
+            tab.vm.capture_viewport_from_view(tab.view)
+            vp_json = viewport_to_json(tab.vm.viewport)
+        except Exception:
+            vp_json = ""
+        return {
+            "version": 2,
+            "trace_name": os.path.basename(getattr(tab, "path", "") or ""),
+            "cursors": cursors,
+            "marks": marks,
+            "markNextId": int(getattr(self, "_mark_next_id", 1) or 1),
+            "scopeToCursors": bool(
+                getattr(self._stats_panel, "_scope_to_cursors", True)),
+            "viewport_desktop": vp_json,
+        }
+
+    def _run_workspace_export(self, embed: bool, *, anonymize: bool = False) -> None:
+        """Write a portable .btfw for the active trace + investigation state.
+
+        When *anonymize* is set every task name in the embedded trace, findings,
+        health, notebook, AI case and report is replaced with a stable
+        ``Task-N`` alias (see :mod:`btf_viewer_pkg.anonymize_export`).
+        """
+        if self._trace is None:
+            return
+        base = _export_base_name(self._current_file, "workspace")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save workspace", base + ".btfw",
+            "BTF Viewer workspace (*.btfw);;All files (*)")
+        if not path:
+            return
+        amap = self._export_task_alias_map() if anonymize else {}
+
+        def _anon(obj):
+            return anonymize_json_strings(obj, amap) if amap else obj
+
+        try:
+            trace_raw = b""
+            if self._current_file and os.path.isfile(self._current_file):
+                if amap:
+                    try:
+                        with _open_btf_text(self._current_file) as fh:
+                            trace_raw = anonymize_btf_text(
+                                fh.read(), amap).encode("utf-8")
+                    except Exception:
+                        trace_raw = b""
+                else:
+                    with open(self._current_file, "rb") as fh:
+                        trace_raw = fh.read()
+            embed = embed and bool(trace_raw)
+
+            def _hf(ns):
+                return _format_time(int(ns), self._trace.time_scale,
+                                    decimals=self._time_decimals_val)
+
+            health = findings = None
+            try:
+                health = _anon(build_trace_health_result(self._trace, format_ns=_hf))
+            except Exception:
+                health = None
+            try:
+                raw_findings = self._stats_panel.build_analysis_findings()[0]
+                findings = [_anon(investigation_finding_export(x))
+                            for x in build_investigation_findings(raw_findings)]
+            except Exception:
+                findings = None
+            report_html = None
+            try:
+                report_html = self._stats_panel.build_statistics_html()
+                if amap and report_html:
+                    # Post-process with the *same* bare-name map used for the
+                    # trace / findings / health, so every Task-N in the .btfw
+                    # lines up (the stats panel's own anonymiser keys on the
+                    # decorated "Name[id]" form and would number differently).
+                    report_html = anonymize_with_map(report_html, amap)
+            except Exception:
+                report_html = None
+            tab = self._active_tab
+            investigation = getattr(tab, "_investigation", None)
+            if amap and investigation is not None:
+                investigation = _anon(load_investigation(investigation))
+            ai_case = None
+            try:
+                panel = getattr(self, "_ai_panel", None)
+                if panel is not None and hasattr(panel, "workspace_ai_case"):
+                    ai_case = _anon(panel.workspace_ai_case())
+            except Exception:
+                ai_case = None
+            save_workspace(
+                path,
+                trace_bytes=trace_raw if embed else None,
+                trace_ref="" if embed else (self._current_file or ""),
+                trace_name=os.path.basename(self._current_file or "trace.btf"),
+                trace_size=len(trace_raw),
+                embed_trace=embed,
+                view_state=self._workspace_view_state(tab),
+                health=health,
+                findings=findings,
+                investigation=investigation,
+                ai_case=ai_case,
+                report_html=report_html,
+                analysis_settings={"anonymized": True} if amap else None,
+                locale="",
+                btfviewer_version=str(globals().get("_APP_VERSION", "") or ""),
+            )
+            self.statusBar().showMessage(
+                f"Workspace saved ({'embedded' if embed else 'referenced'} trace"
+                f"{', anonymized' if amap else ''}) → {os.path.basename(path)}", 4000)
+        except (OSError, ValueError, TypeError) as exc:
+            _critical_with_detail(
+                self, "Export Error",
+                "Could not write the workspace file.", str(exc))
+
+    def _run_perfetto_export(self, scope: str = "full", *,
+                             anonymize: bool = False) -> None:
         """Export the loaded trace as Chrome Trace JSON for ui.perfetto.dev."""
         if self._trace is None:
             return
-        box = QMessageBox(self)
-        box.setWindowTitle("Export Perfetto")
-        box.setIcon(QMessageBox.Question)
-        box.setText("Choose the time range to export.")
-        box.setInformativeText(
-            "Full trace exports every event. Current viewport clips to the "
-            "visible timeline window (same units as the BTF timeScale)."
-        )
-        full_btn = box.addButton("Full trace", QMessageBox.AcceptRole)
-        vp_btn = box.addButton("Current viewport", QMessageBox.ActionRole)
-        box.addButton(QMessageBox.Cancel)
-        box.setDefaultButton(full_btn)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is None or clicked not in (full_btn, vp_btn):
-            return
         lo = hi = None
-        if clicked is vp_btn:
+        if scope == "viewport":
             scene = getattr(self._view, "_scene", None)
             if scene is None:
                 QMessageBox.warning(
@@ -12268,7 +13883,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     self, "Export Perfetto",
                     "Current viewport is empty; choose Full trace instead.")
                 return
-        base = os.path.splitext(self._current_file)[0] if self._current_file else "trace"
+        base = _export_base_name(self._current_file, "trace")
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Perfetto",
             base + ".json",
@@ -12278,12 +13893,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         try:
             export_perfetto(self._trace, path, lo=lo, hi=hi)
+            if anonymize:
+                amap = self._export_task_alias_map()
+                if amap:
+                    with open(path, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                    with open(path, "w", encoding="utf-8") as fh:
+                        json.dump(anonymize_json_strings(data, amap), fh)
             scope = (
                 f"viewport [{lo}, {hi})" if lo is not None
                 else "full trace"
             )
             self.statusBar().showMessage(
-                f"Perfetto exported ({scope}) → {os.path.basename(path)}", 4000)
+                f"Perfetto exported ({scope}{', anonymized' if anonymize else ''})"
+                f" → {os.path.basename(path)}", 4000)
         except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
             _critical_with_detail(
                 self, "Export Error",
@@ -12852,6 +14475,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_zoom_range.setEnabled(has_range)
         self._tb_zoom_range_btn.setEnabled(has_range)
         self._sync_file_export_actions(has_range=has_range)
+        if refresh_stats:
+            self._refresh_trace_health()
         if hasattr(self, "_marks_card_range"):
             self._marks_card_range.set_count("A–B" if has_range else None)
         if self._trace is None or not has_range:
@@ -13688,6 +15313,28 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     # -- Help -----------------------------------------------------------
 
     @_dialog_guard
+    def _on_open_guided_demo(self) -> None:
+        """Help ▸ Open Guided Demo — launch the bundled investigation-workflow
+        tour (demos/demo_8cores). Uses the same demo runner as a dropped .btfw
+        demo package; every step is skippable and the tour can be restarted
+        from here."""
+        root = Path(__file__).resolve().parents[1]
+        demo_dir = root / "demos" / "demo_8cores"
+        for cand in (
+            demo_dir / "demo" / "script.xml",   # package-mirror folder
+            demo_dir / "demo_8cores.xml",       # legacy flat folder
+            root / "builds" / "demo_8cores.btfw",
+        ):
+            if cand.is_file():
+                self._stop_inapp_demo()
+                self._open_file(str(cand))
+                return
+        QMessageBox.information(
+            self, "Guided Demo",
+            "The guided demo pack was not found next to this build.\n\n"
+            "Get it by dropping demos/demo_8cores/ (or a packed demo_8cores.btfw) "
+            "onto the window, or run:  make -C BTFViewer demo")
+
     def _on_keyboard_shortcuts(self) -> None:
         """Show a reference dialog listing all keyboard shortcuts."""
         if self._is_dark:
@@ -13709,7 +15356,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+S",       "Open snapshot editor"),
                 ("Ctrl+Shift+S", "Save viewport as SVG"),
                 ("Ctrl+Shift+C", "Copy viewport to clipboard"),
-                ("Ctrl+Shift+E", "Export Perfetto (Chrome Trace JSON)"),
+                ("Ctrl+Shift+E", "Export… (workspace · Perfetto · BTF slice)"),
                 ("Ctrl+Q",       "Quit  (Alt+F4 also works on Windows)"),
             ]),
             ("Edit", [
@@ -13809,6 +15456,25 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         dlg.setMinimumWidth(780)
         layout = QVBoxLayout(dlg)
         layout.setContentsMargins(16, 12, 16, 12)
+
+        # Full-width Statistics Reference banner — lockstep with the web Help
+        # dialog's ``.help-reference-link`` (App.vue).
+        _ref_btn = QPushButton(
+            "Statistics Reference — full documentation for every stat →")
+        _ref_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        _ref_btn.setStyleSheet(
+            f"QPushButton {{ text-align:left; padding:9px 14px; font-weight:600;"
+            f" border:1px solid {c_key}; border-radius:8px; color:{c_key};"
+            f" background:{c_bg}; }}"
+            f"QPushButton:hover {{ background:palette(midlight); }}")
+
+        def _open_stats_reference_from_help():
+            dlg.accept()
+            self._open_stats_reference("")
+
+        _ref_btn.clicked.connect(_open_stats_reference_from_help)
+        layout.addWidget(_ref_btn)
+
         cols = QHBoxLayout()
         cols.setSpacing(20)
         for col_html in (left_html, right_html):

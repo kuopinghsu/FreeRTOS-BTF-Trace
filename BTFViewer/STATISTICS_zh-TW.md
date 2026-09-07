@@ -139,11 +139,15 @@ Statistics 位於右側面板。標題會顯示 **Full Trace**或目前的**C1�
 
 - 分析範圍、追蹤資料資訊、篩選條件與時間戳記起點；
 - 診斷重點指標與 Analysis Findings；
+- **Trace Health Check** 狀態與任何受限指標；
+- 附加已儲存的調查時（GUI）或以 `--investigation` 傳入時（headless CLI）的 **Investigation** 區段；
 - 與 Statistics 相同的表格、分組目錄及區段說明；
 - 各統計表格的搜尋、排序、Problems only 與 Show all；
 - Core Utilisation 下方的 SVG 負載平衡量表。
 
 HTML 報告可指出應調查的位置，但無法保留所有 **Timeline**互動。若其他人需要驗證事件，仍應保留原始追蹤資料。
+
+機器可讀快照（`--format json`）使用 `btf-viewer-stats/2` schema：`findings` 每一項新增 `rule_id`，另有新的 `investigation_findings` 陣列，內含完整結構化發現（id、rule_id、severity、status、observation、category、comparison_basis、affected_range、entities、measured_values、evidence_refs、limitations、rank_score）。附加調查時，會以 `investigation` 回填並附上解析後的 `chains` 與 `broken_references`。
 
 ### 分析流程圖
 
@@ -175,6 +179,10 @@ flowchart TD
 - **Investigate** 會開啟相關 Statistics 區段，不改變分析範圍或篩選條件。
 - **Show Evidence** 會將 **Timeline**置中於證據時間，並可標示相關工作。
 - 嚴重程度只用來安排檢查順序，不代表故障機率。
+- 每項發現都帶有穩定的 **rule id**，其**量測值**（名稱、數值、單位、樣本數）與**比較基準**與顯示文字分開儲存，讓匯出報告與 JSON 快照可重現且可在地化。
+- 同一 rule、同一實體且時間範圍重疊的發現會**合併**為一項。
+- 清單依嚴重程度排序，再依幅度、證據持續時間與證據品質排序。
+- 沒有任何 rule 觸發時，清單會顯示 **No findings under the current rules**——這不代表完全沒有問題。
 
 發現項目涵蓋負載平衡、主要 CPU 使用工作、已觀察執行時間最大值、離開 CPU 間隔、頻繁核心遷移、截止時間、TICK 健康狀態與同步問題。負載平衡良好或中等時仍可能顯示資訊，讓使用者可查看負載平衡分數、母體標準差與 Gini 係數。
 
@@ -489,6 +497,23 @@ STATISTICS_zh-TW.md#statistics-<section-id>
 **如何使用：** 先判斷系統採固定週期 Tick 或 Tickless，再決定大型間隔是否異常。搭配**核心時間分布**、CPU 負載與 **Timeline**判讀。若同一範圍內所有事件都消失，應優先懷疑擷取缺口；若工作繼續執行而 TICK 消失，則可檢查 Tick 抑制、中斷遮蔽或追蹤事件。
 
 ![TICK 間隔散佈圖與直方圖](../images/stats/stats-tick.svg)
+
+<a id="statistics-health-check" name="statistics-health-check"></a>
+### 追蹤健康檢查（Trace Health Check） ![](../images/readme/h4.svg)
+
+**這項統計代表什麼**
+
+對解析後的事件模型執行的確定性結構檢查，於解析後以及每次變更範圍時重新執行。它只回答一個問題：*重建出的排程是否足夠一致，可以信任下方的統計？* 此檢查不依賴 AI，也與只衡量 Tick 規律性的 **追蹤健康狀態（TICK）** 不同。
+
+| 狀態 | 說明 |
+|---|---|
+| **Pass（通過）** | 目前的檢查未發現結構性不一致 |
+| **Caution（注意）** | 出現一項以上警告；仍會計算有效的統計，受影響的項目會標示為受限 |
+| **Insufficient data（資料不足）** | 發生阻斷性錯誤（範圍為空、時間單位無法辨識，或同一核心有大量重疊的時間片）；此時寧可保留數值也不呈現錯誤結果 |
+
+**檢查項目：** 非單調或遭捨棄的時間戳記；無法辨識的時間單位；同一核心上時間重疊的工作時間片；超出 0–31 有效範圍的核心識別碼；缺少工作識別（工作表溢位或工作無名稱）；有 `interval_start` 卻沒有對應 `interval_stop`；互斥鎖／號誌配對問題；擷取遭截斷與環形緩衝區溢位；長時間沒有任何工作被排程的區間；以及指標前置條件（某區段所需但追蹤中不存在的事件類型）。
+
+**如何使用：** 先看狀態。若為 **Caution** 或 **Insufficient data**，展開各項檢查以檢視其時間範圍、受影響的核心或工作，以及它所限制的指標清單——這些區段會顯示 *Insufficient data* 或受限說明，而非數值。警告不會使仍可計算的指標被隱藏。
 
 <a id="statistics-task_health" name="statistics-task_health"></a>
 ### 工作健康狀態（Task Health） ![](../images/readme/h4.svg)

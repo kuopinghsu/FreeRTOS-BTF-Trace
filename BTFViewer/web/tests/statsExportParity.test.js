@@ -26,7 +26,7 @@ describe('mutex/queue export parity with desktop', () => {
     assert.match(stats, /aiRedactTaskNames/)
     assert.match(stats, /function buildExportAnonymizer\(/)
     assert.match(stats, /Task-\$\{i \+ 1\}/)
-    assert.match(stats, /_exportAnonFn = buildExportAnonymizer\(tr, exportAnon\.value\)/)
+    assert.match(stats, /_exportAnonFn = buildExportAnonymizer\(tr, anonymize \|\| exportAnon\.value\)/)
     assert.match(stats, /class="stats-export-anon"/)
   })
 

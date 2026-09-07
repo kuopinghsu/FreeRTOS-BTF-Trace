@@ -820,6 +820,46 @@ def find_stats_sections(query: str) -> List[Tuple[str, str]]:
     return out
 
 
+# Href / palette prefixes an AI or a link may wrap a section reference in.
+_STATS_SECTION_REF_PREFIXES: Tuple[str, ...] = (
+    "btfstats:section/", "btfstats:", "stats-section:", "stats:section/",
+    "section/", "stats/", "cat:",
+)
+
+
+def resolve_stats_section_id(raw: str) -> str:
+    """Map an AI / link string to a canonical Statistics section id, or ``""``.
+
+    Accepts an exact id, a header title (``Ready-Gap (Starvation)``), a
+    ``btfstats:section/<id>`` / ``stats-section:<id>`` href, or a loose spelling
+    (``ready-gap``, ``ready gap``). Keep lockstep with
+    ``web/src/utils/statsPins.js`` ``resolveStatsSectionId``.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    low = s.lower()
+    for pre in _STATS_SECTION_REF_PREFIXES:
+        if low.startswith(pre):
+            s = s[len(pre):].strip().strip("/")
+            low = s.lower()
+            break
+    if s in STATS_PINNABLE_SECTIONS:
+        return s
+    if low in STATS_PINNABLE_SECTIONS:
+        return low
+    snake = re.sub(r"[^a-z0-9]+", "_", low).strip("_")
+    if snake in STATS_PINNABLE_SECTIONS:
+        return snake
+    for sid, title in STATS_SECTION_TITLES.items():
+        if title.lower() == low:
+            return sid
+    for sid, _title in find_stats_sections(s):
+        if not sid.startswith("cat:"):
+            return sid
+    return ""
+
+
 def command_palette_stats_section_actions() -> List[Tuple[str, str]]:
     """Synthetic palette rows: ``stats-section:<id>`` → ``Stats: <title>``."""
     return [
@@ -1710,6 +1750,8 @@ _RG_HEATMAP  = ('<rect x="3.5" y="3.5" width="7" height="7" rx="1"/>'
                 '<rect x="13.5" y="13.5" width="7" height="7" rx="1"/>')
 _RG_ANALYSIS = ('<path d="M9 3h6M10 3v5l-5 9.2A2 2 0 0 0 6.8 20h10.4a2 2 0 0 0 '
                 '1.8-2.8L14 8V3"/>')
+_RG_NOTEBOOK = ('<path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V5'
+                'a2 2 0 0 1 2-2z"/><path d="M4 8h3M4 12h3M4 16h3M10 8h5M10 12h5"/>')
 _RG_COMPARE  = ('<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/>'
                 '<path d="M6 15.5V9a3 3 0 0 1 3-3h4M18 8.5V15a3 3 0 0 1-3 3h-4"/>'
                 '<path d="m11 4 2 2-2 2M13 20l-2-2 2-2"/>')
@@ -1765,6 +1807,14 @@ _IC_PERFETTO = (
     "v-9A1.5 1.5 0 0 0 13.5 2h-11zm0 1h11a.5.5 0 0 1 .5.5V5H2V3.5a.5.5 0 0 1 .5-.5z"
     "M2 6h12v6.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V6zm2 1.5v1h2v-1H4zm3 0v1h2v-1H7z"
     "m3 0v1h2v-1h-2zM4 10v1h5v-1H4z"
+)
+# Unified Export (tray + up arrow). Keep in sync with web/src/utils/toolbarIcons.js
+# ``exportOut``.
+_IC_EXPORT_OUT = (
+    "M8 1a.5.5 0 0 1 .354.146l3 3a.5.5 0 0 1-.708.708L8.5 2.707V10.5a.5.5 0 0 1-1 0"
+    "V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3A.5.5 0 0 1 8 1zM3 9.5a.5.5 0 0 1 .5.5"
+    "v3a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 1 1 0v3A1.5 1.5 0 0 1 12 15H4"
+    "a1.5 1.5 0 0 1-1.5-1.5v-3a.5.5 0 0 1 .5-.5z"
 )
 # Cursor-range BTF slice (crop). Keep in sync with web/src/utils/toolbarIcons.js.
 _IC_EXPORT_SLICE = (

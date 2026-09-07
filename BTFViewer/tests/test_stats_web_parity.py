@@ -40,8 +40,8 @@ from btf_viewer_pkg.parser import (  # noqa: E402
 from btf_viewer_pkg.timeline_util import _from_ns  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "demo_8cores-cursor-stats-golden.json"
-TRACE = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.btf.gz"
-DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml"
+TRACE = BTF_ROOT / "demos" / "demo_8cores" / "trace" / "source.btf.gz"
+DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo" / "script.xml"
 
 CURSOR_LO_S = 3.085
 CURSOR_HI_S = 3.310

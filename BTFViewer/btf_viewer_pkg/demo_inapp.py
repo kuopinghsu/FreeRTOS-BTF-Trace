@@ -309,35 +309,57 @@ def is_demo_xml_path(path: str) -> bool:
 
 
 def _first_btf_in(folder: Path) -> Optional[Path]:
-    try:
-        found = sorted(
-            child for child in folder.iterdir()
-            if child.is_file() and is_btf_open_path(str(child))
-        )
-    except OSError:
-        return None
-    return found[0] if found else None
+    """First BTF directly in *folder*, else the first under ``folder/trace/``
+    (the package-mirror layout keeps the trace at ``trace/source.btf.gz``)."""
+    for base in (folder, folder / "trace"):
+        try:
+            found = sorted(
+                child for child in base.iterdir()
+                if child.is_file() and is_btf_open_path(str(child))
+            )
+        except OSError:
+            continue
+        if found:
+            return found[0]
+    return None
+
+
+def _find_demo_script(folder: Path) -> Optional[Path]:
+    """The overlay-tour script in a demo folder — ``demo/script.xml`` (package
+    layout) or the first parseable ``*.xml`` at the top level (loose layout)."""
+    packaged = folder / "demo" / "script.xml"
+    if packaged.is_file():
+        try:
+            load_demo_xml(packaged)
+            return packaged
+        except (OSError, ET.ParseError, ValueError):
+            pass
+    xmls = sorted(p for p in folder.glob("*.xml") if p.is_file())
+    for cand in [p for p in xmls if "demo" in p.name.lower()] or xmls:
+        try:
+            load_demo_xml(cand)
+            return cand
+        except (OSError, ET.ParseError, ValueError):
+            continue
+    return None
 
 
 def discover_demo_pack(path: str) -> Optional[Tuple[str, str]]:
-    """Return ``(xml_path, btf_path)`` if *path* is a demo XML or pack folder."""
+    """Return ``(xml_path, btf_path)`` if *path* is a demo XML or pack folder.
+
+    Handles both the package-mirror folder (``demo/script.xml`` + ``trace/``)
+    and a loose folder (``<name>.xml`` + a sibling ``.btf``).
+    """
     raw = Path(os.path.abspath(os.path.expanduser(path)))
     xml: Optional[Path] = None
     folder: Optional[Path] = None
     if raw.is_file() and raw.suffix.lower() == ".xml":
         xml = raw
-        folder = raw.parent
+        # loose: xml's own dir; package: the parent of demo/
+        folder = raw.parent.parent if raw.parent.name == "demo" else raw.parent
     elif raw.is_dir():
         folder = raw
-        xmls = sorted(p for p in raw.glob("*.xml") if p.is_file())
-        demoish = [p for p in xmls if "demo" in p.name.lower()]
-        for cand in demoish or xmls:
-            try:
-                load_demo_xml(cand)
-                xml = cand
-                break
-            except (OSError, ET.ParseError, ValueError):
-                continue
+        xml = _find_demo_script(raw)
     if xml is None or folder is None:
         return None
     try:
@@ -348,6 +370,44 @@ def discover_demo_pack(path: str) -> Optional[Tuple[str, str]]:
     if btf is None:
         return None
     return str(xml), str(btf)
+
+
+def discover_demo_ai_case(xml_path: str) -> Optional[Dict[str, Any]]:
+    """Parsed AI investigation case that ships with a loose demo, or None.
+
+    Looked up by convention under ``investigation/ai_case.json`` beside the
+    script (loose layout) or one level up (package layout: script is in
+    ``demo/``), or from a ``<meta><ai_case>`` path in the script. Mirrors the
+    ``investigation/ai_case.json`` member of a packed ``.btfw`` demo.
+    """
+    import json
+
+    xml = Path(os.path.abspath(os.path.expanduser(str(xml_path or ""))))
+    if not xml.is_file():
+        return None
+    candidates: List[Path] = []
+    try:
+        root = load_demo_xml(xml)
+        meta = root.find("meta")
+        node = meta.find("ai_case") if meta is not None else None
+        if node is not None:
+            ref = (text_content(node) or node.attrib.get("value", "")).strip()
+            if ref:
+                variables = build_variables(root, xml)
+                ref = expand_vars(ref, variables)
+                candidates.append(Path(ref) if os.path.isabs(ref)
+                                  else xml.parent / ref)
+    except (OSError, ET.ParseError, ValueError):
+        pass
+    candidates.append(xml.parent / "investigation" / "ai_case.json")
+    candidates.append(xml.parent.parent / "investigation" / "ai_case.json")
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                return json.loads(cand.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def build_variables(

@@ -34,6 +34,9 @@ from .ai_tools import (
     AI_MALFORMED_FUNCTION_CALL_NUDGE,
     AI_TOOL_EXPORT_INVESTIGATION,
     AI_TOOL_EXPORT_REPORT,
+    AI_VIEWER_TOOL_NAMES,
+    canonical_tool_name,
+    looks_like_nextstep_pseudo_tool,
     AI_TOOL_PROMPT,
     AI_TOOL_SYSTEM_ADDENDUM,
     ai_viewer_tools,
@@ -7783,18 +7786,14 @@ def create_ai_assistant_panel(
             except Exception:
                 pass
 
-        def _restore_investigation_session(self) -> None:
-            if not get_settings:
-                return
-            try:
-                cfg = get_settings() or {}
-            except Exception:
-                return
-            parsed = parse_investigation_session(cfg.get("investigation_session"))
-            msgs = parsed.get("messages") or []
+        def _apply_investigation_session(self, parsed: Dict[str, Any]) -> bool:
+            """Apply a parsed investigation session (payload + plan + chat).
+            Returns True if it carried a real chat. Shared by localStorage
+            restore and .btfw workspace restore."""
+            msgs = (parsed or {}).get("messages") or []
             if not investigation_session_has_chat(msgs):
                 self._refresh_guide_ui()
-                return
+                return False
             if parsed.get("payload"):
                 self._evidence_payload = parsed["payload"]
             if parsed.get("plan"):
@@ -7810,6 +7809,38 @@ def create_ai_assistant_panel(
                     self._refresh_log()
             self._refresh_guide_ui()
             self._refresh_intent_landing()
+            return True
+
+        def _restore_investigation_session(self) -> None:
+            if not get_settings:
+                return
+            try:
+                cfg = get_settings() or {}
+            except Exception:
+                return
+            self._apply_investigation_session(
+                parse_investigation_session(cfg.get("investigation_session")))
+
+        def workspace_ai_case(self) -> Optional[Dict[str, Any]]:
+            """The AI investigation session as a JSON-serialisable dict for a
+            ``.btfw`` workspace, or None when there is no chat yet."""
+            try:
+                blob = self._investigation_session_blob()
+                parsed = parse_investigation_session(blob)
+                if not investigation_session_has_chat(parsed.get("messages") or []):
+                    return None
+                return json.loads(blob)
+            except Exception:
+                return None
+
+        def restore_workspace_ai_case(self, data: Any) -> bool:
+            """Restore the AI investigation session from a ``.btfw`` workspace."""
+            try:
+                blob = data if isinstance(data, str) else json.dumps(data)
+                return self._apply_investigation_session(
+                    parse_investigation_session(blob))
+            except Exception:
+                return False
 
         def _refresh_guide_ui(self) -> None:
             # Keep the header mode/scope chips fresh (runs after every turn,
@@ -8287,7 +8318,11 @@ def create_ai_assistant_panel(
             for c in calls:
                 if not isinstance(c, dict):
                     continue
-                name = str(c.get("name") or "")
+                raw_name = str(c.get("name") or "")
+                name = canonical_tool_name(raw_name)
+                if (name not in AI_VIEWER_TOOL_NAMES
+                        and looks_like_nextstep_pseudo_tool(raw_name)):
+                    continue  # "nextstep:{action}" prose mis-sent as a tool call
                 args = c.get("arguments") if isinstance(c.get("arguments"), dict) else {}
                 ok_args, err = validate_tool_call(name, args)
                 tools_norm.append({

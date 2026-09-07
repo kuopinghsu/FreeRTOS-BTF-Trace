@@ -4,23 +4,23 @@
  */
 
 import { BTF_FILE_ACCEPT, isBtfOpenName } from './btfLoad.js'
-import { classifyPickedOpen, isXmlOpenName, isXtfOpenName, packFromDirectoryHandle, filePickerOptions, rememberFileOpenHandle, lastRememberedFileOpenHandle } from './demoPack.js'
+import { classifyPickedOpen, isXmlOpenName, isBtfwOpenName, packFromDirectoryHandle, filePickerOptions, rememberFileOpenHandle, lastRememberedFileOpenHandle } from './demoPack.js'
 
-export const OPEN_FILE_ACCEPT = `${BTF_FILE_ACCEPT},.xml,.xtf`
+export const OPEN_FILE_ACCEPT = `${BTF_FILE_ACCEPT},.xml,.btfw`
 
 /**
  * Chromium's showOpenFilePicker strips unknown extensions from typed MIME
- * lists (e.g. ``.xtf`` under ``application/zip``). Put every Open extension
+ * lists (e.g. ``.btfw`` under ``application/zip``). Put every Open extension
  * under ``application/octet-stream`` in one type entry so the *default*
- * filter accepts ``.xtf`` on the first dialog open.
+ * filter accepts ``.btfw`` on the first dialog open.
  */
 export const OPEN_FILE_PICKER_TYPES = [
   {
-    description: 'BTF trace, demo XML, or .xtf pack',
+    description: 'BTF trace, demo XML, or .btfw package',
     accept: {
       'application/octet-stream': [
         '.btf', '.btf.gz', '.gz', '.btf.bz2', '.bz2', '.btf.zip', '.zip',
-        '.xml', '.xtf',
+        '.xml', '.btfw',
       ],
     },
   },
@@ -78,4 +78,4 @@ export async function pickAndReadOpen() {
   }
 }
 
-export { isBtfOpenName, isXmlOpenName, isXtfOpenName, packFromDirectoryHandle }
+export { isBtfOpenName, isXmlOpenName, isBtfwOpenName, packFromDirectoryHandle }

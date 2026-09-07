@@ -230,9 +230,12 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   snapshot     Export a PNG/SVG image (timeline, migration inspector, or a
                statistics metric plot) without opening the GUI.
   perfetto     Export Chrome Trace JSON for https://ui.perfetto.dev
-               (same as File → Export Perfetto…).
+               (same as Export… → Perfetto).
   slice        Export a timestamp range as a smaller .btf
-               (same as File → Save selection as BTF…).
+               (same as Export… → cursor-range BTF).
+  workspace    Inspect / extract a portable .btfw workspace.
+  verify       Check a trace against a JSON rule file — CI gate with stable
+               exit codes (0 pass · 1 limit failed · 2 bad input · 3 internal).
 
 Time range (--lo / --hi):
   Values are raw trace timestamps in the file's time units (see # timeScale
@@ -259,6 +262,7 @@ CLI examples:
   %(prog)s compare run1.btf run2.btf -o /tmp/compare.html --name-a baseline --name-b tuned
   %(prog)s analyze candidate.btf --baseline baseline.btf --fail-on-regression
   %(prog)s analyze candidate.btf --save-baseline /tmp/base.json
+  %(prog)s verify candidate.btf --rules project-rules.json --strict
   %(prog)s compare tracedata/tickless-8cores.zip -o /tmp/tick-policy.html
   %(prog)s migrations tracedata/example-4cores.btf -o /tmp/migrations.csv
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/timeline.png --view timeline
@@ -501,6 +505,40 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     )
     report.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
     report.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+    report.add_argument(
+        "--investigation", default=None, metavar="PATH",
+        help=(
+            "path to a saved Investigation (.json: bookmarks + evidence chain); "
+            "adds an Investigation section to the HTML/JSON report"
+        ),
+    )
+    report.add_argument(
+        "--save-workspace", default=None, metavar="PATH",
+        help=(
+            "also write a portable .btfw workspace (embedded trace + view state "
+            "+ health + findings + investigation + HTML report)"
+        ),
+    )
+    report.add_argument(
+        "--no-embed-trace", dest="embed_trace", action="store_false",
+        help="with --save-workspace: reference the trace by path instead of embedding it",
+    )
+    report.set_defaults(embed_trace=True)
+    report.add_argument(
+        "--ai-package", default=None, metavar="OUT.json",
+        help=(
+            "also write a compact AI evidence package (question + scope + health "
+            "+ findings + investigation + trace summary) and print a token estimate"
+        ),
+    )
+    report.add_argument(
+        "--question", default="", metavar="TEXT",
+        help="the question the --ai-package should answer",
+    )
+    report.add_argument(
+        "--redact-names", action="store_true",
+        help="with --ai-package: replace task names with task_N aliases",
+    )
 
     compare = sub.add_parser(
         "compare",
@@ -832,6 +870,70 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="range end (trace time units, inclusive; must be greater than --lo)",
     )
 
+    workspace_p = sub.add_parser(
+        "workspace",
+        help="inspect or extract a portable .btfw workspace",
+        description=(
+            "Read a .btfw workspace (a ZIP container: trace + view state + "
+            "health + findings + investigation + optional report).\n\n"
+            "With no option, prints the manifest and a content inventory. "
+            "The container is inspectable with any ZIP tool."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    workspace_p.add_argument(
+        "workspace", metavar="file.btfw",
+        help="path to the .btfw workspace",
+    )
+    workspace_p.add_argument(
+        "--extract", metavar="DIR", default=None,
+        help="safely extract every member under DIR (rejects path traversal)",
+    )
+    workspace_p.add_argument(
+        "--report", metavar="OUT.html", default=None,
+        help="write the embedded HTML report to OUT.html",
+    )
+    workspace_p.add_argument(
+        "--json", action="store_true",
+        help="print the manifest as JSON instead of a summary",
+    )
+
+    verify_p = sub.add_parser(
+        "verify",
+        help="check a trace against a JSON rule file (CI gate; stable exit codes)",
+        description=(
+            "Resolve each rule's metric for the trace (optionally a cursor "
+            "scope), compare to its threshold, and exit:\n"
+            "  0  every rule passed\n"
+            "  1  one or more error-severity limits failed\n"
+            "  2  invalid rule file, unknown metric, or insufficient data\n"
+            "  3  internal processing error\n\n"
+            "Rule file: {\"schema_version\": 1, \"rules\": [ {\"metric\": ...,"
+            " \"min\"|\"max\"|\"maximum_us\"|\"expect_one_of\": ...,"
+            " \"severity\": \"error\"} ]}"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    verify_p.add_argument("trace", metavar="trace.btf", help="path to the .btf trace")
+    verify_p.add_argument(
+        "--rules", required=True, metavar="rules.json",
+        help="path to the JSON rule file",
+    )
+    verify_p.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
+    verify_p.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+    verify_p.add_argument(
+        "--strict", action="store_true",
+        help="treat warning-severity failures as blocking (exit 1) too",
+    )
+    verify_p.add_argument(
+        "--json", action="store_true",
+        help="print the result as JSON instead of a text report",
+    )
+    verify_p.add_argument(
+        "--list-metrics", action="store_true",
+        help="print every metric name a rule may target and exit",
+    )
+
     ai_test = sub.add_parser(
         "ai-test",
         help="AI evidence/validator benchmark (offline fixtures or live --config)",
@@ -924,6 +1026,8 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "snapshot": snapshot,
         "perfetto": perfetto,
         "slice": slice_p,
+        "workspace": workspace_p,
+        "verify": verify_p,
         "ai-test": ai_test,
     }
 
@@ -990,6 +1094,15 @@ def _cli_report_run(args: argparse.Namespace) -> int:
     panel._task_deadlines_ns = {}
     panel._ux_events_key = None
     panel._ux_events_cached = None
+    panel._export_investigation = None
+    if getattr(args, "investigation", None):
+        from .investigation_notebook import load_investigation
+        try:
+            panel._export_investigation = load_investigation(
+                Path(args.investigation).read_text(encoding="utf-8"))
+        except OSError as exc:
+            print(f"error: cannot read investigation: {exc}", file=sys.stderr)
+            return 1
     if args.lo is not None and args.hi is not None:
         panel._export_scope_override = (args.lo, args.hi)
 
@@ -1012,6 +1125,102 @@ def _cli_report_run(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    if getattr(args, "save_workspace", None):
+        from .workspace import save_workspace
+        from . import config as _cfg
+        embed = bool(getattr(args, "embed_trace", True))
+        html_for_ws = None
+        if fmt in ("html", "both", "all"):
+            try:
+                with open(html_path, "r", encoding="utf-8") as fh:
+                    html_for_ws = fh.read()
+            except OSError:
+                html_for_ws = None
+        try:
+            with open(trace_path, "rb") as fh:
+                trace_raw = fh.read()
+        except OSError as exc:
+            print(f"error: cannot read trace for workspace: {exc}", file=sys.stderr)
+            return 1
+        health = findings = None
+        try:
+            _f, _ = panel.build_analysis_findings()
+            from .investigation_findings import build_investigation_findings, investigation_finding_export
+            findings = [investigation_finding_export(x) for x in build_investigation_findings(_f)]
+        except Exception:
+            findings = None
+        try:
+            from .trace_health import build_trace_health_result
+            health = build_trace_health_result(trace)
+        except Exception:
+            health = None
+        try:
+            save_workspace(
+                args.save_workspace,
+                trace_bytes=trace_raw if embed else None,
+                trace_ref="" if embed else trace_path,
+                trace_name=os.path.basename(trace_path),
+                trace_size=len(trace_raw),
+                embed_trace=embed,
+                health=health,
+                findings=findings,
+                investigation=panel._export_investigation,
+                report_html=html_for_ws,
+                locale=str(getattr(_cfg, "APP_LOCALE", "") or ""),
+                btfviewer_version=str(getattr(_cfg, "_APP_VERSION", "") or ""),
+            )
+            written.append(args.save_workspace)
+        except (OSError, ValueError) as exc:
+            print(f"error: cannot write workspace: {exc}", file=sys.stderr)
+            return 1
+
+    if getattr(args, "ai_package", None):
+        from .ai_evidence_package import (
+            build_evidence_package, estimate_tokens, format_evidence_package_preview,
+        )
+        try:
+            _f, scope_title = panel.build_analysis_findings()
+            from .investigation_findings import (
+                build_investigation_findings, investigation_finding_export,
+            )
+            pkg_findings = [
+                investigation_finding_export(x)
+                for x in build_investigation_findings(_f)
+            ]
+        except Exception:
+            pkg_findings, scope_title = [], ""
+        pkg_health = None
+        try:
+            from .trace_health import build_trace_health_result
+            pkg_health = build_trace_health_result(trace, args.lo, args.hi)
+        except Exception:
+            pkg_health = None
+        rng = None
+        if args.lo is not None and args.hi is not None:
+            rng = {"start": args.lo, "end": args.hi}
+        package = build_evidence_package(
+            question=str(getattr(args, "question", "") or ""),
+            scope=str(scope_title or "").strip(),
+            analysis_range=rng,
+            trace_name=os.path.basename(trace_path),
+            trace_summary=_trace_summary_snapshot(trace, args.lo, args.hi),
+            health=pkg_health,
+            findings=pkg_findings,
+            investigation=getattr(panel, "_export_investigation", None),
+            entities=[str(t) for t in list(getattr(trace, "tasks", []))[:40]],
+            cores=[str(c) for c in getattr(trace, "core_names", [])],
+            redact_names=bool(getattr(args, "redact_names", False)),
+        )
+        try:
+            with open(args.ai_package, "w", encoding="utf-8") as fh:
+                json.dump(package, fh, ensure_ascii=False, indent=2, sort_keys=True)
+        except OSError as exc:
+            print(f"error: cannot write AI package: {exc}", file=sys.stderr)
+            return 1
+        written.append(args.ai_package)
+        print(f"AI evidence package: ~{estimate_tokens(package)} tokens", file=sys.stderr)
+        print(format_evidence_package_preview(package), end="", file=sys.stderr)
+
     for path in written:
         print(path)
     return 0
@@ -1020,6 +1229,138 @@ def _cli_report_main(argv: List[str]) -> int:
     _parsers = _make_arg_parser()[1]
     args = _parsers["report"].parse_args(argv)
     return _cli_report_run(args)
+
+
+def _cli_workspace_run(args: argparse.Namespace) -> int:
+    from .workspace import (
+        extract_workspace, open_workspace, read_manifest, workspace_trace_status,
+    )
+
+    path = os.path.abspath(args.workspace)
+    if not os.path.isfile(path):
+        print(f"error: workspace not found: {path}", file=sys.stderr)
+        return 1
+
+    try:
+        if args.json and not (args.extract or args.report):
+            import json as _json
+            print(_json.dumps(read_manifest(path), indent=2, sort_keys=True))
+            return 0
+        ws = open_workspace(path)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    written: List[str] = []
+    if args.extract:
+        try:
+            written = extract_workspace(path, args.extract)
+        except (OSError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    if args.report:
+        if not ws.get("report_html"):
+            print("error: workspace has no embedded report", file=sys.stderr)
+            return 2
+        try:
+            with open(args.report, "w", encoding="utf-8") as fh:
+                fh.write(ws["report_html"])
+            written.append(args.report)
+        except OSError as exc:
+            print(f"error: cannot write {args.report}: {exc}", file=sys.stderr)
+            return 1
+
+    if written:
+        for p in written:
+            print(p)
+        return 0
+
+    man = ws["manifest"]
+    tr = man.get("trace") or {}
+    status = workspace_trace_status(
+        man, current_sha256=tr.get("sha256") if tr.get("embedded") else "")
+    print(f"Workspace: {path}")
+    print(f"  schema        {ws['schema']}"
+          + ("  (read-only: newer format)" if ws["read_only"] else "")
+          + ("  (migrated)" if ws["migrated"] else ""))
+    print(f"  BTFViewer     {man.get('btfviewer_version') or '—'}")
+    print(f"  created       {man.get('created')}")
+    print(f"  modified      {man.get('modified')}")
+    print(f"  locale        {man.get('locale') or '—'}")
+    print(f"  trace         {tr.get('name') or '—'}  ({tr.get('size', 0):,} bytes, "
+          f"{'embedded' if tr.get('embedded') else 'referenced: ' + (tr.get('ref') or '?')})")
+    print(f"  trace hash    {tr.get('sha256') or '—'}  [{status['reason']}]")
+    print(f"  contents      {', '.join(man.get('contents') or []) or '—'}")
+    if man.get("attachments"):
+        print(f"  attachments   {', '.join(a.get('name', '?') for a in man['attachments'])}")
+    if ws["investigation"]:
+        bm = ws["investigation"].get("bookmarks") or []
+        print(f"  investigation {len(bm)} bookmark(s), "
+              f"{'conclusion set' if ws['investigation'].get('conclusion') else 'no conclusion'}")
+    for w in ws["warnings"]:
+        print(f"  ! {w}", file=sys.stderr)
+    return 0
+
+
+def _cli_workspace_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["workspace"].parse_args(argv)
+    return _cli_workspace_run(args)
+
+
+def _cli_verify_run(args: argparse.Namespace) -> int:
+    from .verify_rules import (
+        EXIT_INPUT, EXIT_INTERNAL, format_verification_report, load_rule_file,
+        run_verification, supported_metrics,
+    )
+
+    if getattr(args, "list_metrics", False):
+        for m in supported_metrics():
+            print(m)
+        return 0
+
+    err = _cli_validate_range_pair(args.lo, args.hi, "range")
+    if err:
+        print(err, file=sys.stderr)
+        return EXIT_INPUT
+
+    try:
+        rules = load_rule_file(os.path.abspath(args.rules))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_INPUT
+
+    trace, err_load = _cli_load_trace(os.path.abspath(args.trace))
+    if err_load:
+        print(err_load, file=sys.stderr)
+        return EXIT_INPUT
+    assert trace is not None
+
+    try:
+        snapshot = _trace_summary_snapshot(trace, args.lo, args.hi)
+        health = None
+        try:
+            from .trace_health import build_trace_health_result
+            health = build_trace_health_result(trace, args.lo, args.hi)
+        except Exception:
+            health = None
+        result = run_verification(snapshot, health, rules, strict=bool(args.strict))
+    except Exception as exc:  # noqa: BLE001 - contract: internal error → exit 3
+        print(f"error: internal verification failure: {exc}", file=sys.stderr)
+        return EXIT_INTERNAL
+
+    if args.json:
+        import json as _json
+        print(_json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(format_verification_report(
+            result, title=_trace_display_name(os.path.abspath(args.trace))), end="")
+    return int(result["exit_code"])
+
+
+def _cli_verify_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["verify"].parse_args(argv)
+    return _cli_verify_run(args)
 
 def _cli_compare_run(args: argparse.Namespace) -> int:
     lo_a, hi_a, lo_b, hi_b, err = _cli_dual_ranges(args)
@@ -2167,6 +2508,8 @@ _CLI_COMMANDS = {
     "snapshot": _cli_snapshot_main,
     "perfetto": _cli_perfetto_main,
     "slice": _cli_slice_main,
+    "workspace": _cli_workspace_main,
+    "verify": _cli_verify_main,
     "ai-test": _cli_ai_test_main,
 }
 

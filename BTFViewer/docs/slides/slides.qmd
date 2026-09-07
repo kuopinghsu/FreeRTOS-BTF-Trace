@@ -153,7 +153,7 @@ flowchart LR
 ### Do this
 
 1. Select **Open**.
-2. Choose a `.btf`, compressed trace, ZIP archive, or `.xtf` demo.
+2. Choose a `.btf`, compressed trace, ZIP archive, or `.btfw` package.
 3. Select **Fit** or press `Ctrl+0`.
 4. Confirm that the full capture is visible.
 

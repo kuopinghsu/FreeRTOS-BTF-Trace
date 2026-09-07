@@ -5151,13 +5151,18 @@ import {
   htmlGlossary,
   htmlHealthBars,
   htmlInvestigateAnomalies,
+  htmlInvestigationSection,
   htmlMatrixHeatmap,
   htmlPercentileBars,
   htmlScopeIdentityCard,
   htmlTagOverview,
+  htmlTraceHealthCard,
   htmlTraceMetadataCard,
   evidenceRefsFromFindings,
 } from '../utils/statsHtmlReport.js'
+import { buildTraceHealthResult, traceHealthStatusLabel } from '../utils/traceHealth.js'
+import { buildInvestigationFindings } from '../utils/investigationFindings.js'
+import { conclusionEvidenceChains, detectBrokenReferences, traceIdentity } from '../utils/investigationNotebook.js'
 import {
   HEALTH_BAND_SECTION,
   analyzeResponseTimes,
@@ -5209,6 +5214,7 @@ const props = defineProps({
   activeFilterLabel: { type: String, default: null },
   traceFileName: { type: String, default: '' },
   topFinding: { type: Object, default: null },
+  investigation: { type: Object, default: null },
   onClearFilters: { type: Function, default: null },
 })
 
@@ -8805,9 +8811,9 @@ function _renderDeadlineReportHtml(suffix) {
     <tbody>${cvBody}</tbody></table></section>`
 }
 
-function exportHtml() {
+function exportHtml({ returnHtml = false, anonymize = false } = {}) {
   const tr = props.trace
-  _exportAnonFn = buildExportAnonymizer(tr, exportAnon.value)
+  _exportAnonFn = buildExportAnonymizer(tr, anonymize || exportAnon.value)
   const r = statsRange.value
   const suffix = scopeSuffixStr.value
   const execReportRows = _execSliceRowsForReport(tr, r)
@@ -8864,6 +8870,30 @@ function exportHtml() {
       : f
   ))
   const analysisHtml = renderWorkflowAnalysisHtml(findings, suffix)
+  const _healthFmt = ns => formatTime(ns, tr.timeScale)
+  const traceHealthResult = buildTraceHealthResult(tr, lo, hi, _healthFmt)
+  const traceHealthHtml = htmlTraceHealthCard(traceHealthResult, { formatNs: _healthFmt, scopeTitle: suffix })
+  const traceHealthKpiKind = { insufficient: 'error', caution: 'warn' }[traceHealthResult.status] || 'ok'
+
+  // Investigation Bookmarks and Evidence Chain — rendered only when supplied.
+  let investigationHtml = ''
+  const _inv = props.investigation
+  if (_inv && (_inv.bookmarks?.length || String(_inv.conclusion || '').trim())) {
+    const invSpanNs = (hi ?? tr.timeMax) - (lo ?? tr.timeMin)
+    const invFindings = buildInvestigationFindings(findings, { totalSpanNs: invSpanNs })
+    const curIdent = traceIdentity(tr, props.traceFileName || '')
+    const broken = detectBrokenReferences(_inv, {
+      trace: tr,
+      knownRuleIds: invFindings.map(f => f.rule_id),
+      currentIdentity: curIdent,
+    })
+    investigationHtml = htmlInvestigationSection(_inv, {
+      formatNs: _healthFmt,
+      brokenRefs: broken,
+      chains: conclusionEvidenceChains(_inv),
+      scopeTitle: suffix,
+    })
+  }
   const warnN = findings.filter(f => f.severity === 'warning').length
   const errN = findings.filter(f => f.severity === 'error').length
   const statusKind = errN ? 'error' : (warnN ? 'warn' : 'ok')
@@ -8888,6 +8918,12 @@ function exportHtml() {
   const syncN = (syncIssueList.value || []).length
   const kpis = [
     { label: 'Overall status', value: statusValue, kind: statusKind },
+    {
+      label: 'Trace health',
+      value: traceHealthStatusLabel(traceHealthResult.status),
+      hint: `${traceHealthResult.issueCount} structural issue(s)`,
+      kind: traceHealthKpiKind,
+    },
     {
       label: 'Load balance',
       value: lbKpi ? `${lbKpi.score.toFixed(0)}%` : '—',
@@ -8984,6 +9020,8 @@ function exportHtml() {
     ${scopeHtml}
     ${evidenceRefsHtml}
     ${analysisHtml}
+    ${traceHealthHtml}
+    ${investigationHtml}
     ${metaHtml}
     ${coreHtml}
     ${tickHealthHtml}
@@ -9523,7 +9561,9 @@ function exportHtml() {
 
   const finalHtml = htmlApplyCollapsibleToc(html, STATS_DEFAULT_EXPANDED, STATS_TOC_GROUPS)
   _exportAnonFn = v => v
+  if (returnHtml) return finalHtml
   _downloadText(`statistics-${_stamp()}.html`, finalHtml, 'text/html;charset=utf-8')
+  return finalHtml
 }
 
 // ---- Range statistics (from 2+ cursor positions) -----------------------
@@ -9633,6 +9673,7 @@ defineExpose({
   setFindQuery,
   focusFind,
   pressFindEnter,
+  exportHtml,
 })
 </script>
 

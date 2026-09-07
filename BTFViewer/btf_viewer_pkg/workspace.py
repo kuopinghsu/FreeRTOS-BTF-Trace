@@ -2,21 +2,31 @@
 
 Lockstep with ``web/src/utils/workspace.js``.
 
-A ``.btfw`` saves the complete investigation state — the trace, the view
-state, the deterministic analysis (health + findings), the investigation
-notebook, and optionally a rendered report — in one file that stays
-inspectable with any ZIP tool and does not depend on an installed BTFViewer
-or any online service.
+A ``.btfw`` is the one shareable BTFViewer package. It comes in two *kinds*,
+told apart by ``manifest.json`` → ``"kind"``:
+
+* ``"workspace"`` (default) — a saved investigation: the trace, the view
+  state, the deterministic analysis (health + findings), the investigation
+  notebook, an optional AI case, and optionally a rendered report.
+* ``"demo"`` — a shareable guided tour: the trace, the demo script + voice
+  packs, and (optionally) a pre-seeded AI investigation case that the viewer
+  loads alongside the tour.
+
+Either way it stays inspectable with any ZIP tool and depends on no installed
+BTFViewer or online service.
 
 Layout::
 
     manifest.json
     trace/source.btf              (only when the trace is embedded)
-    state/view.json               (portable session: cursors, marks, viewport…)
-    analysis/health.json          (Trace Health Check result)
-    analysis/findings.json        (Investigation Findings)
-    investigation/bookmarks.json  (Investigation notebook)
+    investigation/ai_case.json    (AI investigation session — either kind)
+    state/view.json               (workspace: cursors, marks, viewport…)
+    analysis/health.json          (workspace: Trace Health Check result)
+    analysis/findings.json        (workspace: Investigation Findings)
+    investigation/bookmarks.json  (workspace: Investigation notebook)
     reports/report.html           (optional)
+    demo/script.xml               (demo: the overlay-tour script)
+    demo/voice/<lang>/*           (demo: pre-rendered narration + voice.json)
     attachments/<name>            (optional)
 
 Security: extraction rejects absolute paths and ``..`` segments, caps entry
@@ -49,8 +59,13 @@ WORKSPACE_VERSION = 1
 WORKSPACE_SCHEMA = f"{WORKSPACE_SCHEMA_PREFIX}{WORKSPACE_VERSION}"
 WORKSPACE_EXT = ".btfw"
 
+# manifest.json → "kind"
+KIND_WORKSPACE = "workspace"
+KIND_DEMO = "demo"
+
 MANIFEST = "manifest.json"
-TRACE_MEMBER = "trace/source.btf"
+TRACE_DIR = "trace/"
+TRACE_MEMBER = "trace/source.btf"  # canonical; the reader also accepts trace/source.*
 STATE_VIEW = "state/view.json"
 ANALYSIS_HEALTH = "analysis/health.json"
 ANALYSIS_FINDINGS = "analysis/findings.json"
@@ -58,6 +73,9 @@ INVESTIGATION_BOOKMARKS = "investigation/bookmarks.json"
 INVESTIGATION_AI_CASE = "investigation/ai_case.json"
 REPORT_HTML = "reports/report.html"
 ATTACHMENTS_PREFIX = "attachments/"
+DEMO_PREFIX = "demo/"
+DEMO_SCRIPT = "demo/script.xml"
+DEMO_VOICE_PREFIX = "demo/voice/"
 
 _KNOWN_MEMBERS = (
     MANIFEST, TRACE_MEMBER, STATE_VIEW, ANALYSIS_HEALTH,
@@ -104,6 +122,7 @@ def _sanitize_attachment_name(name: str) -> str:
 def build_manifest(
     *,
     btfviewer_version: str = "",
+    kind: str = KIND_WORKSPACE,
     trace_name: str = "",
     trace_size: int = 0,
     trace_sha256: str = "",
@@ -113,6 +132,7 @@ def build_manifest(
     rule_set_version: str = "",
     locale: str = "",
     report: Optional[Dict[str, Any]] = None,
+    demo: Optional[Dict[str, Any]] = None,
     attachments: Optional[List[Dict[str, Any]]] = None,
     contents: Optional[List[str]] = None,
     created: Optional[str] = None,
@@ -121,6 +141,7 @@ def build_manifest(
     stamp = now_iso()
     return {
         "schema": WORKSPACE_SCHEMA,
+        "kind": str(kind or KIND_WORKSPACE),
         "btfviewer_version": str(btfviewer_version or ""),
         "created": str(created or stamp),
         "modified": str(modified or stamp),
@@ -137,6 +158,7 @@ def build_manifest(
         },
         "locale": str(locale or ""),
         "report": dict(report) if isinstance(report, dict) else None,
+        "demo": dict(demo) if isinstance(demo, dict) else None,
         "attachments": list(attachments or []),
         "contents": sorted(set(contents or [])),
     }
@@ -187,11 +209,13 @@ def migrate_manifest(manifest: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
 def save_workspace(
     path: str,
     *,
+    kind: str = KIND_WORKSPACE,
     trace_bytes: Optional[bytes] = None,
     trace_ref: str = "",
     trace_name: str = "",
     trace_sha256: str = "",
     trace_size: Optional[int] = None,
+    trace_member: str = TRACE_MEMBER,
     embed_trace: bool = True,
     view_state: Optional[Dict[str, Any]] = None,
     health: Optional[Dict[str, Any]] = None,
@@ -199,6 +223,9 @@ def save_workspace(
     investigation: Optional[Dict[str, Any]] = None,
     ai_case: Optional[Dict[str, Any]] = None,
     report_html: Optional[str] = None,
+    demo_xml: Optional[bytes] = None,
+    demo_voices: Optional[Dict[str, Dict[str, bytes]]] = None,
+    demo_default_language: str = "",
     attachments: Optional[Dict[str, bytes]] = None,
     analysis_settings: Optional[Dict[str, Any]] = None,
     rule_set_version: str = "",
@@ -211,8 +238,21 @@ def save_workspace(
 
     Pass ``created`` (from an earlier manifest) to preserve the original
     creation time across re-saves.
+
+    A ``kind="demo"`` package additionally carries ``demo_xml`` (the overlay
+    tour script → ``demo/script.xml``) and ``demo_voices`` — a mapping
+    ``{lang: {relname: bytes}}`` written under ``demo/voice/<lang>/``.
+
+    ``trace_member`` names the embedded-trace member (default
+    ``trace/source.btf``); pass e.g. ``trace/source.btf.gz`` to keep the real
+    extension. ``attachments`` keys may contain ``/`` — a plain relative POSIX
+    sub-path is preserved under ``attachments/`` (each segment traversal-checked);
+    a bare name is sanitised as before.
     """
     embedded = bool(embed_trace and trace_bytes is not None)
+    trace_member = str(trace_member or TRACE_MEMBER)
+    if not (trace_member.startswith(TRACE_DIR) and is_safe_member(trace_member)):
+        trace_member = TRACE_MEMBER
     if embedded:
         trace_size = len(trace_bytes)
         if not trace_sha256:
@@ -224,14 +264,36 @@ def save_workspace(
     att_manifest: List[Dict[str, Any]] = []
     seen_att: set = set()
     for raw_name, blob in (attachments or {}).items():
-        nm = _sanitize_attachment_name(raw_name)
-        while nm in seen_att:
-            nm = "_" + nm
+        raw = str(raw_name or "").replace("\\", "/").strip("/")
+        if "/" in raw and is_safe_member(raw) and ".." not in raw.split("/"):
+            nm = raw  # keep the relative sub-path
+        else:
+            nm = _sanitize_attachment_name(raw_name)
+            while nm in seen_att:
+                nm = "_" + nm
         seen_att.add(nm)
         data = blob if isinstance(blob, (bytes, bytearray)) else str(blob).encode("utf-8")
         att_items.append((ATTACHMENTS_PREFIX + nm, bytes(data)))
         att_manifest.append({"name": nm, "size": len(data),
                              "sha256": workspace_sha256(bytes(data))})
+
+    # Demo tour members: demo/script.xml + demo/voice/<lang>/<relname>.
+    demo_items: List[Tuple[str, bytes]] = []
+    if demo_xml is not None:
+        demo_items.append((DEMO_SCRIPT, bytes(demo_xml)))
+    demo_langs: List[str] = []
+    for lang, files in (demo_voices or {}).items():
+        lid = str(lang or "").strip()
+        if not lid or not isinstance(files, dict):
+            continue
+        demo_langs.append(lid)
+        for relname, blob in files.items():
+            rel = str(relname or "").replace("\\", "/").lstrip("/")
+            if not rel:
+                continue
+            data = blob if isinstance(blob, (bytes, bytearray)) else str(blob).encode("utf-8")
+            demo_items.append((f"{DEMO_VOICE_PREFIX}{lid}/{rel}", bytes(data)))
+    demo_langs = sorted(set(demo_langs))
 
     contents = [STATE_VIEW] if view_state is not None else []
     if health is not None:
@@ -245,7 +307,8 @@ def save_workspace(
     if report_html is not None:
         contents.append(REPORT_HTML)
     if embedded:
-        contents.append(TRACE_MEMBER)
+        contents.append(trace_member)
+    contents.extend(nm for nm, _ in demo_items)
     contents.extend(nm for nm, _ in att_items)
 
     report_meta = None
@@ -254,8 +317,20 @@ def save_workspace(
         report_meta = {"path": REPORT_HTML, "size": len(rb),
                        "sha256": workspace_sha256(rb)}
 
+    demo_meta = None
+    if demo_xml is not None or demo_langs:
+        default_lang = str(demo_default_language or locale or "").strip()
+        if default_lang not in demo_langs:
+            default_lang = demo_langs[0] if demo_langs else default_lang
+        demo_meta = {
+            "script": DEMO_SCRIPT if demo_xml is not None else "",
+            "languages": demo_langs,
+            "default_language": default_lang,
+        }
+
     manifest = build_manifest(
         btfviewer_version=btfviewer_version,
+        kind=kind,
         trace_name=trace_name or (os.path.basename(trace_ref) if trace_ref else ""),
         trace_size=trace_size,
         trace_sha256=trace_sha256,
@@ -265,6 +340,7 @@ def save_workspace(
         rule_set_version=rule_set_version,
         locale=locale,
         report=report_meta,
+        demo=demo_meta,
         attachments=att_manifest,
         contents=contents,
         created=created,
@@ -273,7 +349,7 @@ def save_workspace(
 
     members: List[Tuple[str, bytes]] = [(MANIFEST, _dumps(manifest))]
     if embedded:
-        members.append((TRACE_MEMBER, bytes(trace_bytes)))
+        members.append((trace_member, bytes(trace_bytes)))
     if view_state is not None:
         members.append((STATE_VIEW, _dumps(view_state)))
     if health is not None:
@@ -286,6 +362,7 @@ def save_workspace(
         members.append((INVESTIGATION_AI_CASE, _dumps(ai_case)))
     if report_html is not None:
         members.append((REPORT_HTML, report_html.encode("utf-8")))
+    members.extend(demo_items)
     members.extend(att_items)
 
     tmp = f"{path}.{os.getpid()}.tmp"
@@ -351,9 +428,41 @@ def open_workspace(
     container = read_zip_container(
         path, container_desc=_CONTAINER_DESC,
         max_entries=max_entries, max_uncompressed=max_uncompressed)
-    members: Dict[str, bytes] = container["members"]
-    warnings: List[str] = list(container["warnings"])
+    return _interpret_workspace_members(
+        container["members"], list(container["warnings"]), load_report=load_report)
 
+
+def read_workspace_dir(dir_path: str, *, load_report: bool = True) -> Dict[str, Any]:
+    """Open an *unpacked* ``.btfw`` — a directory laid out like the archive.
+
+    Same interpretation as :func:`open_workspace`; the demo folder
+    ``demos/demo_8cores/`` is itself a valid unpacked package.
+    """
+    root = os.path.realpath(os.path.expanduser(str(dir_path)))
+    if not os.path.isdir(root):
+        raise ValueError(f"not a directory: {dir_path}")
+    members: Dict[str, bytes] = {}
+    total = 0
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            if not is_safe_member(rel):
+                continue
+            with open(full, "rb") as fh:
+                blob = fh.read()
+            total += len(blob)
+            if total > MAX_UNCOMPRESSED_BYTES:
+                raise ValueError("unpacked workspace exceeds the size limit")
+            members[rel] = blob
+    return _interpret_workspace_members(members, [], load_report=load_report)
+
+
+def _interpret_workspace_members(
+    members: Dict[str, bytes], warnings: List[str], *, load_report: bool = True,
+) -> Dict[str, Any]:
+    """Turn a safe ``{member: bytes}`` map (from a ``.btfw`` archive or an
+    unpacked directory) into the ``open_workspace`` result dict."""
     if MANIFEST not in members:
         raise ValueError("workspace has no manifest.json")
     if len(members[MANIFEST]) > MANIFEST_MAX_BYTES:
@@ -366,10 +475,16 @@ def open_workspace(
 
     trace_bytes = None
     trace_meta = manifest.get("trace") or {}
-    if bool(trace_meta.get("embedded")) and TRACE_MEMBER in members:
-        trace_bytes = members[TRACE_MEMBER]
-        if trace_meta.get("sha256") and workspace_sha256(trace_bytes) != trace_meta["sha256"]:
-            warnings.append("embedded trace hash does not match the manifest")
+    if bool(trace_meta.get("embedded")):
+        # Canonical member first, else the first ``trace/*`` file (so a package
+        # built by zipping a folder can keep ``trace/source.btf.gz``).
+        tname = TRACE_MEMBER if TRACE_MEMBER in members else next(
+            (n for n in sorted(members)
+             if n.startswith(TRACE_DIR) and not n.endswith("/")), None)
+        if tname is not None:
+            trace_bytes = members[tname]
+            if trace_meta.get("sha256") and workspace_sha256(trace_bytes) != trace_meta["sha256"]:
+                warnings.append("embedded trace hash does not match the manifest")
 
     view_state = _read_json_member(members, STATE_VIEW)
     health = _read_json_member(members, ANALYSIS_HEALTH)
@@ -382,6 +497,26 @@ def open_workspace(
     if load_report and REPORT_HTML in members:
         report_html = members[REPORT_HTML].decode("utf-8", "replace")
 
+    kind = str(manifest.get("kind") or KIND_WORKSPACE)
+
+    # Demo tour subtree (``demo/*``) → a flat {relpath: bytes} map plus a
+    # pointer at the entry script. Present for ``kind == "demo"`` packages.
+    demo_files: Dict[str, bytes] = {}
+    for n in sorted(members):
+        if n.startswith(DEMO_PREFIX) and not n.endswith("/"):
+            demo_files[n[len(DEMO_PREFIX):]] = members[n]
+    demo = None
+    if demo_files or kind == KIND_DEMO:
+        script_rel = DEMO_SCRIPT[len(DEMO_PREFIX):]  # "script.xml"
+        demo = {
+            "script": demo_files.get(script_rel),
+            "script_name": script_rel,
+            "files": demo_files,
+            "manifest": manifest.get("demo") or {},
+        }
+        if demo["script"] is None:
+            warnings.append("demo package has no demo/script.xml")
+
     attachments: Dict[str, bytes] = {}
     for n in sorted(members):
         if n.startswith(ATTACHMENTS_PREFIX) and not n.endswith("/"):
@@ -389,12 +524,16 @@ def open_workspace(
 
     extra_members = sorted(
         n for n in members
-        if n not in _KNOWN_MEMBERS and not n.startswith(ATTACHMENTS_PREFIX)
+        if n not in _KNOWN_MEMBERS
+        and not n.startswith(ATTACHMENTS_PREFIX)
+        and not n.startswith(DEMO_PREFIX)
+        and not n.startswith(TRACE_DIR)
     )
 
     return {
         "manifest": manifest,
         "schema": manifest.get("schema"),
+        "kind": kind,
         "read_only": read_only,
         "migrated": migrated,
         "trace_bytes": trace_bytes,
@@ -405,6 +544,7 @@ def open_workspace(
         "findings": findings,
         "investigation": investigation,
         "ai_case": ai_case,
+        "demo": demo,
         "report_html": report_html,
         "attachments": attachments,
         "extra_members": extra_members,

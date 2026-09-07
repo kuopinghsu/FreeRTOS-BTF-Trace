@@ -40,7 +40,7 @@ from btf_viewer_pkg.demo_inapp import (  # noqa: E402
 from btf_viewer_pkg.platform import _stderr_line_is_noise  # noqa: E402
 from btf_viewer_pkg.parser import _BTF_OPEN_FILTER  # noqa: E402
 
-DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml"
+DEMO_XML = BTF_ROOT / "demos" / "demo_8cores" / "demo" / "script.xml"
 WEB_RUNNER = BTF_ROOT / "web" / "src" / "utils" / "demoRunner.js"
 WEB_APP = BTF_ROOT / "web" / "src" / "App.vue"
 WEB_POINTER = BTF_ROOT / "web" / "src" / "utils" / "demoPointer.js"
@@ -170,10 +170,11 @@ class DemoInappParseTests(unittest.TestCase):
             self.assertEqual(got_dir, got)
             self.assertIsNone(discover_demo_pack(str(btf)))
 
-    def test_open_filter_includes_xml(self) -> None:
+    def test_open_filter_includes_xml_and_btfw(self) -> None:
         primary = _BTF_OPEN_FILTER.split(";;")[0]
-        self.assertIn("*.xtf", primary)
+        self.assertIn("*.btfw", primary)
         self.assertIn("*.xml", primary)
+        self.assertNotIn("*.xtf", _BTF_OPEN_FILTER)
 
     def test_truthy_matches_web(self) -> None:
         self.assertFalse(truthy("false"))
@@ -320,8 +321,7 @@ class DemoInappSourceParityTests(unittest.TestCase):
         mw = DESKTOP_MW.read_text(encoding="utf-8")
         app = (BTF_ROOT / "web" / "src" / "App.vue").read_text(encoding="utf-8")
         readme = (BTF_ROOT / "demos" / "README.md").read_text(encoding="utf-8")
-        xml = (BTF_ROOT / "demos" / "demo_8cores" / "demo_8cores.xml").read_text(
-            encoding="utf-8")
+        xml = DEMO_XML.read_text(encoding="utf-8")
         self.assertIn('"rail_heatmap": "heatmap"', mw)
         self.assertIn('data-demo-target="rail_heatmap"', app)
         self.assertIn("`rail_heatmap`", readme)
@@ -336,11 +336,14 @@ class DemoInappSourceParityTests(unittest.TestCase):
         self.assertIn("keys in (\"esc\", \"escape\")", py)
         self.assertIn("keys === 'esc'", js)
 
-    def test_xtf_open_starts_tour_on_desktop(self) -> None:
+    def test_btfw_demo_open_starts_tour_on_desktop(self) -> None:
         mw = DESKTOP_MW.read_text(encoding="utf-8")
-        self.assertIn("self._pending_demo = {\"xml\": xml}", mw)
+        self.assertIn("self._pending_demo = {", mw)
         self.assertIn("_start_pending_demo", mw)
-        self.assertIn("is_xtf_open_path", mw)
+        # A .btfw demo package routes through the unified workspace opener.
+        self.assertIn("_open_workspace_file", mw)
+        self.assertIn('ws.get("kind") == "demo"', mw)
+        self.assertNotIn("is_xtf_open_path", mw)
 
     def test_hover_uses_non_deprecated_qhover_ctor(self) -> None:
         py = DESKTOP_INAPP.read_text(encoding="utf-8")
@@ -353,18 +356,21 @@ class DemoInappSourceParityTests(unittest.TestCase):
         self.assertIn("A parked demo overlay hides as soon as the user moves", js_ptr)
 
 
-class DemoInappXtfTests(unittest.TestCase):
-    def test_xtf_extract_still_returns_xml(self) -> None:
-        from btf_viewer_pkg.parser import extract_xtf_pack
-        with tempfile.TemporaryDirectory(prefix="btf_xtf_") as td:
-            xtf = Path(td) / "demo.xtf"
-            with zipfile.ZipFile(xtf, "w") as zf:
-                zf.writestr("demo_8cores.xml", SAMPLE.encode("utf-8"))
-                zf.writestr("demo_8cores.btf.gz", b"\x1f\x8b")
-            xml, btf = extract_xtf_pack(str(xtf))
-            self.assertTrue(os.path.isfile(xml))
-            self.assertTrue(xml.endswith("demo_8cores.xml"))
-            pack = discover_demo_pack(os.path.dirname(xml))
+class DemoInappAiCaseTests(unittest.TestCase):
+    def test_discover_demo_ai_case_by_convention(self) -> None:
+        from btf_viewer_pkg.demo_inapp import discover_demo_ai_case
+        with tempfile.TemporaryDirectory(prefix="btf_demo_") as td:
+            root = Path(td)
+            xml = root / "demo_8cores.xml"
+            xml.write_text(SAMPLE, encoding="utf-8")
+            (root / "demo_8cores.btf.gz").write_bytes(b"\x1f\x8b")
+            self.assertIsNone(discover_demo_ai_case(str(xml)))
+            inv = root / "investigation"
+            inv.mkdir()
+            (inv / "ai_case.json").write_text('{"v": 1, "messages": []}', encoding="utf-8")
+            case = discover_demo_ai_case(str(xml))
+            self.assertEqual(case, {"v": 1, "messages": []})
+            pack = discover_demo_pack(str(root))
             self.assertIsNotNone(pack)
 
 

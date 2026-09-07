@@ -2,8 +2,8 @@
  * Hardened ZIP-container reader — one safe path for every archive BTFViewer opens.
  * Keep in sync with btf_viewer_pkg/zip_container.py.
  *
- * Shared by the .btfw portable-workspace reader (workspace.js) and the .xtf
- * demo-pack reader (demoPack.js filesFromXtf).
+ * The semantic layer on top is the .btfw package reader (workspace.js), which
+ * covers both portable workspaces and shareable demo tours.
  *
  * Guarantees for any archive read through here:
  *  - member names are plain relative POSIX paths — no `..`, no absolute / drive /

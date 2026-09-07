@@ -12,6 +12,8 @@ from typing import Iterable
 # Load order: dependencies before dependents.
 IMPORT_ORDER: tuple[str, ...] = (
     "config",
+    "zip_container",
+    "anonymize_export",
     "parser",
     "timeline_util",
     "graphics_items",

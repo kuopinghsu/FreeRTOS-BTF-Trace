@@ -8,7 +8,8 @@ from .html_report import html_section_slug
 
 STATS_TOC_GROUPS = (
     ("Overview and Findings", (
-        "Analysis Scope", "Evidence Refs", "Analysis Findings", "Trace Metadata",
+        "Analysis Scope", "Evidence Refs", "Analysis Findings",
+        "Trace Health Check", "Investigation", "Trace Metadata",
     )),
     ("CPU and Scheduling", (
         "Core Utilisation", "Trace Health (TICK)", "Core Time Breakdown",
@@ -38,6 +39,7 @@ STATS_TOC_GROUPS = (
 STATS_DEFAULT_EXPANDED = (
     "Analysis Scope",
     "Analysis Findings",
+    "Trace Health Check",
     "Core Utilisation (excl. IDLE/TICK)",
     "Trace Health (TICK)",
     "Investigate Anomalies",
@@ -89,6 +91,15 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; 
 .findings-list { margin: 8px 0 0 18px; padding: 0; }
 .findings-list li { margin: 8px 0; line-height: 1.45; }
 .analysis-findings { border-left: 4px solid #c0392b; }
+.trace-health { border-left: 4px solid var(--accent); }
+.trace-health-status { font-size: 14px; font-weight: 600; margin: 6px 0 10px; }
+.trace-health-check { margin: 6px 0; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.trace-health-check:last-of-type { border-bottom: 0; }
+.trace-health-check > summary { cursor: pointer; line-height: 1.45; }
+.trace-health-check .finding-meta { margin-left: 16px; }
+.investigation { border-left: 4px solid #7a5cc0; }
+.investigation .finding-meta ul { margin: 4px 0 0 16px; padding: 0; }
+.investigation h3.sub { margin-top: 16px; }
 .finding-cards { display: grid; gap: 10px; }
 .finding-card {
   border: 1px solid var(--line);
@@ -326,6 +337,26 @@ def html_diagnostic_kpi_grid(kpis: Sequence[dict]) -> str:
     return f'<section class="kpi-grid">{"".join(parts)}</section>' if parts else ""
 
 
+def _format_measured_values(values) -> str:
+    """``[{name,value,unit,sample_count?}]`` → "Name value unit (n=…)" list.
+
+    Kept separate from finding display text so exports stay reproducible and
+    localizable (Investigation Findings data model).
+    """
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        return ""
+    parts = []
+    for mv in values:
+        if not isinstance(mv, dict) or "name" not in mv or "value" not in mv:
+            continue
+        unit = str(mv.get("unit") or "")
+        chunk = f"{mv['name']} {mv['value']}{unit}".rstrip()
+        if mv.get("sample_count") is not None:
+            chunk += f" (n={mv['sample_count']})"
+        parts.append(chunk)
+    return "; ".join(parts)
+
+
 def html_finding_cards(findings: Sequence[dict], scope_title: str = "") -> str:
     if not findings:
         return ""
@@ -357,11 +388,15 @@ def html_finding_cards(findings: Sequence[dict], scope_title: str = "") -> str:
             elif ev:
                 evidence = str(ev)
         conf = str(f.get("confidence") or "").strip()
+        basis = str(f.get("comparison_basis") or "").strip()
+        measured = _format_measured_values(f.get("measured_values"))
         cards.append(
             f'<article class="finding-card {cls}">'
             f'<h3>{_esc(sev.title())} · {_esc(f.get("title") or "Finding")}</h3>'
             f'<p>{_esc(f.get("text") or "")}</p>'
             + (f'<div class="finding-meta"><strong>Impact:</strong> {_esc(impact)}</div>' if impact else "")
+            + (f'<div class="finding-meta"><strong>Measured:</strong> {_esc(measured)}</div>' if measured else "")
+            + (f'<div class="finding-meta"><strong>Basis:</strong> {_esc(basis)}</div>' if basis else "")
             + (f'<div class="finding-meta"><strong>Evidence:</strong> {_esc(evidence)}</div>' if evidence else "")
             + inspect_html
             + (f'<div class="finding-meta"><strong>Confidence:</strong> {_esc(conf)}</div>' if conf else "")
@@ -374,6 +409,106 @@ def html_finding_cards(findings: Sequence[dict], scope_title: str = "") -> str:
         "off-CPU gaps, thrashing, deadlines, tick health, and sync. "
         "Exported links open the matching report section; they do not jump back into BTFViewer.</p>"
         f'<div class="finding-cards">{"".join(cards)}</div></section>'
+    )
+
+
+_TRACE_HEALTH_STATUS_META = {
+    "pass": ("finding-ok", "Pass"),
+    "caution": ("sev-warning", "Caution"),
+    "insufficient": ("sev-error", "Insufficient data"),
+}
+
+
+def html_trace_health_card(
+    result: dict,
+    *,
+    format_ns=None,
+    scope_title: str = "",
+) -> str:
+    """Structural Trace Health section (status + per-check detail + limitations).
+
+    Distinct from *Trace Health (TICK)*: this reports whether the parsed event
+    model is internally consistent enough to trust the derived statistics.
+    Keep in sync with ``web/src/utils/statsHtmlReport.js``.
+    """
+    if not result:
+        return ""
+    status = str(result.get("status") or "pass")
+    cls, label = _TRACE_HEALTH_STATUS_META.get(status, ("finding-info", status.title()))
+    checks = list(result.get("checks") or [])
+    n = int(result.get("issue_count") or 0)
+
+    def _fmt(v) -> str:
+        if callable(format_ns):
+            try:
+                return str(format_ns(int(v)))
+            except Exception:
+                return str(v)
+        return str(v)
+
+    rows = []
+    for c in checks:
+        sev = str(c.get("severity") or "info")
+        sev_cls = {"error": "sev-error", "warning": "sev-warning"}.get(sev, "finding-info")
+        meta_bits = []
+        rng = c.get("affected_range")
+        if isinstance(rng, dict) and rng.get("start") is not None:
+            meta_bits.append(
+                f"<strong>Range:</strong> {_esc(_fmt(rng.get('start')))} – "
+                f"{_esc(_fmt(rng.get('end')))}"
+            )
+        ents = [str(e) for e in (c.get("affected_entities") or []) if str(e)]
+        if ents:
+            meta_bits.append(
+                f"<strong>Affected:</strong> {_esc(', '.join(ents[:12]))}"
+            )
+        refs = [str(r) for r in (c.get("evidence_refs") or []) if str(r)]
+        if refs:
+            meta_bits.append(
+                f"<strong>Evidence:</strong> {_esc('; '.join(refs))}"
+            )
+        lims = [str(m) for m in (c.get("metric_limitations") or []) if str(m)]
+        if lims:
+            meta_bits.append(
+                f"<strong>Limited:</strong> {_esc(', '.join(lims))}"
+            )
+        meta_html = "".join(
+            f'<div class="finding-meta">{bit}</div>' for bit in meta_bits
+        )
+        rows.append(
+            f'<details class="trace-health-check {sev_cls}">'
+            f"<summary>{_esc(sev.title())} · {_esc(c.get('summary') or '')}</summary>"
+            f"{meta_html}</details>"
+        )
+
+    if checks:
+        detail = "".join(rows)
+    else:
+        detail = (
+            '<p class="detail-note">No structural inconsistencies found in the '
+            "parsed event model under the current checks.</p>"
+        )
+
+    limitations = [str(m) for m in (result.get("metric_limitations") or []) if str(m)]
+    lim_html = ""
+    if limitations:
+        lis = "".join(f"<li>{_esc(m)}</li>" for m in limitations)
+        lim_html = (
+            '<h3 class="sub">Limited metrics</h3>'
+            '<p class="detail-note">These sections may show <em>Insufficient data</em> '
+            "or a limitation notice instead of a value.</p>"
+            f"<ul>{lis}</ul>"
+        )
+
+    return (
+        '<section class="report-card notes trace-health">'
+        f"<h2>Trace Health Check{_esc(scope_title)}</h2>"
+        '<p class="detail-note">Deterministic structural checks on the parsed '
+        "event model. Independent of AI and of <em>Trace Health (TICK)</em>, "
+        "which only measures tick regularity.</p>"
+        f'<p class="trace-health-status"><span class="{cls}">Status: {_esc(label)}</span>'
+        f" &middot; {n} issue(s)</p>"
+        f"{detail}{lim_html}</section>"
     )
 
 
@@ -606,6 +741,178 @@ def _sparkline(vals: Sequence[float], *, width: int = 420, height: int = 48) -> 
         f'width="{width}" height="{height}" role="img" aria-label="Tag time series">'
         f'<polyline fill="none" stroke="#2a6fb2" stroke-width="1.5" '
         f'points="{" ".join(pts)}"/></svg>'
+    )
+
+
+_BM_TYPE_LABELS = {
+    "observation": "Observation",
+    "hypothesis": "Hypothesis",
+    "supporting": "Supporting evidence",
+    "contradicting": "Contradicting evidence",
+    "verification": "Verification step",
+    "conclusion": "Conclusion",
+}
+_FACT_TYPES = ("observation", "supporting", "verification")
+
+
+def _fmt_ref(ref: dict, format_ns=None) -> str:
+    kind = str(ref.get("kind") or "")
+    if kind == "finding":
+        return f"finding <code>{_esc(ref.get('rule_id') or ref.get('label') or '?')}</code>"
+    if kind == "metric":
+        return f"metric “{_esc(ref.get('metric') or ref.get('label') or '?')}”"
+    if kind == "entity":
+        return f"entity <code>{_esc(ref.get('entity') or ref.get('label') or '?')}</code>"
+    if kind in ("range", "evidence"):
+        rng = ref.get("range") or {}
+        def _f(v):
+            if callable(format_ns):
+                try:
+                    return str(format_ns(int(v)))
+                except Exception:
+                    return str(v)
+            return str(v)
+        if rng.get("start") is not None:
+            return f"range {_esc(_f(rng['start']))} – {_esc(_f(rng['end']))}"
+        if ref.get("time") is not None:
+            return f"time {_esc(_f(ref['time']))}"
+    return _esc(ref.get("label") or kind or "ref")
+
+
+def html_investigation_section(
+    investigation: dict,
+    *,
+    format_ns=None,
+    broken_refs: dict = None,
+    chains: "Sequence[dict]" = None,
+    scope_title: str = "",
+) -> str:
+    """Investigation Bookmarks and Evidence Chain section for the HTML report.
+
+    Facts, hypotheses, contradicting evidence and conclusions are kept in
+    separate blocks; every conclusion lists the bookmarks that back it. Stale
+    references are flagged. Keep in sync with
+    ``web/src/utils/statsHtmlReport.js:htmlInvestigationSection``.
+    """
+    if not investigation:
+        return ""
+    bookmarks = list(investigation.get("bookmarks") or [])
+    if not bookmarks and not str(investigation.get("conclusion") or "").strip():
+        return ""
+
+    broken = broken_refs or {}
+    broken_by_bm: dict = {}
+    for iss in broken.get("issues") or []:
+        broken_by_bm.setdefault(str(iss.get("bookmark_id")), []).append(iss)
+
+    chains_by_id = {
+        str(c.get("conclusion_id")): c for c in (chains or [])
+        if isinstance(c, dict)
+    }
+
+    def _bm_card(b: dict) -> str:
+        bid = str(b.get("id") or "")
+        refs = b.get("refs") or []
+        ref_html = ""
+        if refs:
+            items = "".join(f"<li>{_fmt_ref(r, format_ns)}</li>" for r in refs)
+            ref_html = f'<div class="finding-meta"><strong>References:</strong><ul>{items}</ul></div>'
+        note = str(b.get("note") or "").strip()
+        note_html = f"<p>{_esc(note)}</p>" if note else ""
+        bad = broken_by_bm.get(bid) or []
+        bad_html = ""
+        if bad:
+            reasons = "; ".join(_esc(i.get("reason") or "stale reference") for i in bad)
+            bad_html = f'<div class="finding-meta sev-warning"><strong>Stale:</strong> {reasons}</div>'
+        return (
+            f'<article class="finding-card">'
+            f'<h3>{_esc(_BM_TYPE_LABELS.get(b.get("type"), "Bookmark"))} · {_esc(b.get("title") or "Bookmark")}</h3>'
+            f"{note_html}{ref_html}{bad_html}</article>"
+        )
+
+    def _group(title: str, types) -> str:
+        rows = [_bm_card(b) for b in bookmarks if b.get("type") in types]
+        if not rows:
+            return ""
+        return f'<h3 class="sub">{_esc(title)}</h3><div class="finding-cards">{"".join(rows)}</div>'
+
+    facts = _group("Facts", _FACT_TYPES)
+    hyps = _group("Hypotheses", ("hypothesis",))
+    contra = _group("Contradicting evidence", ("contradicting",))
+
+    # Conclusions + their evidence chains.
+    concl_rows = []
+    for b in bookmarks:
+        if b.get("type") != "conclusion":
+            continue
+        chain = chains_by_id.get(str(b.get("id")))
+        chain_html = ""
+        if chain and chain.get("evidence"):
+            items = "".join(
+                f"<li>{_esc(_BM_TYPE_LABELS.get(e.get('type'), 'Bookmark'))}: {_esc(e.get('title') or e.get('id'))}</li>"
+                for e in chain["evidence"]
+            )
+            chain_html = f'<div class="finding-meta"><strong>Backed by:</strong><ul>{items}</ul></div>'
+        elif chain is not None:
+            chain_html = '<div class="finding-meta sev-warning"><strong>Not grounded:</strong> no linked evidence.</div>'
+        concl_rows.append(
+            f'<article class="finding-card finding-ok">'
+            f'<h3>Conclusion · {_esc(b.get("title") or "Conclusion")}</h3>'
+            + (f"<p>{_esc(b.get('note'))}</p>" if str(b.get("note") or "").strip() else "")
+            + chain_html + "</article>"
+        )
+    free_concl = str(investigation.get("conclusion") or "").strip()
+    if free_concl:
+        concl_rows.append(
+            f'<article class="finding-card finding-ok"><h3>Conclusion</h3>'
+            f"<p>{_esc(free_concl)}</p></article>"
+        )
+    concl_html = (
+        f'<h3 class="sub">Conclusions</h3><div class="finding-cards">{"".join(concl_rows)}</div>'
+        if concl_rows else ""
+    )
+
+    questions = [str(q) for q in (investigation.get("unresolved_questions") or []) if str(q).strip()]
+    q_html = ""
+    if questions:
+        lis = "".join(f"<li>{_esc(q)}</li>" for q in questions)
+        q_html = f'<h3 class="sub">Unresolved questions</h3><ul>{lis}</ul>'
+
+    stale_banner = ""
+    if broken.get("stale_trace"):
+        stale_banner = (
+            '<p class="detail-note sev-warning">The source trace changed since '
+            "these notes were written — references may not line up.</p>"
+        )
+
+    ident = investigation.get("trace_identity") or {}
+    rng = investigation.get("analysis_range") or {}
+    ident_bits = []
+    if ident.get("file"):
+        ident_bits.append(f"Trace: {_esc(ident['file'])}")
+    if isinstance(rng, dict) and rng.get("start") is not None and callable(format_ns):
+        try:
+            ident_bits.append(
+                f"Range: {_esc(str(format_ns(int(rng['start']))))} – "
+                f"{_esc(str(format_ns(int(rng['end']))))}")
+        except Exception:
+            pass
+    ident_html = (
+        f'<p class="detail-note">{" · ".join(ident_bits)}</p>' if ident_bits else ""
+    )
+
+    title = str(investigation.get("title") or "").strip()
+    heading = f"Investigation{_esc(scope_title)}"
+    return (
+        '<section class="report-card notes investigation">'
+        f"<h2>{heading}</h2>"
+        + (f'<p class="detail-note"><strong>{_esc(title)}</strong></p>' if title else "")
+        + '<p class="detail-note">User-authored bookmarks and the evidence chain. '
+        "Facts, hypotheses, contradicting evidence and conclusions are separated; "
+        "notes never change measured values.</p>"
+        + stale_banner + ident_html
+        + facts + hyps + contra + concl_html + q_html
+        + "</section>"
     )
 
 

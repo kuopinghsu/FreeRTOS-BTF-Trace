@@ -238,7 +238,7 @@ _HEADLESS_QPA_PLATFORMS = ("offscreen", "minimal", "vnc")
 # cli._CLI_COMMANDS by tests.
 _HEADLESS_CLI_COMMANDS = frozenset({
     "report", "compare", "analyze", "ai-test", "info", "migrations", "snapshot",
-    "perfetto", "slice",
+    "perfetto", "slice", "workspace", "verify",
 })
 
 def _headless_cli_invocation(argv: list[str] | None = None) -> bool:

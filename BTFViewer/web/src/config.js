@@ -96,6 +96,7 @@ export const STATS_HEAVY_SECTIONS = [
 export const STATS_DEFAULT_EXPANDED_SECTIONS = []
 export const COMMAND_PALETTE_ACTIONS = [
   ['analysis', 'Analysis Findings'],
+  ['notebook', 'Investigation Notebook'],
   ['statistics', 'Statistics'],
   ['find', 'Find'],
   ['marks', 'Marks'],
@@ -118,6 +119,12 @@ export const COMMAND_PALETTE_META = Object.freeze({
   analysis: {
     shortcut: '',
     synonyms: ['findings', 'inbox', 'triage'],
+    requires: 'trace',
+    disabled: 'Open a trace first',
+  },
+  notebook: {
+    shortcut: '',
+    synonyms: ['investigation', 'bookmarks', 'evidence chain', 'case notes'],
     requires: 'trace',
     disabled: 'Open a trace first',
   },

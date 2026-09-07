@@ -739,6 +739,9 @@ import {
   formatToolActionLabel,
   toolResultMessage,
   validateToolCall,
+  canonicalToolName,
+  looksLikeNextstepPseudoTool,
+  AI_VIEWER_TOOL_NAMES,
   btfJumpHref,
 } from '../utils/aiTools.js'
 import {
@@ -2438,18 +2441,25 @@ function ingestTurn(turn) {
     chatMessages.push({ role: 'assistant', content: text })
   }
 
-  const toolsNorm = calls.map((c, i) => {
-    const name = String(c.name || '')
-    const args = c.arguments && typeof c.arguments === 'object' ? c.arguments : {}
-    const checked = validateToolCall(name, args)
-    return {
-      id: String(c.id || `call_${i}`),
-      name,
-      arguments: checked.args || args,
-      error: checked.error || '',
-      status: 'pending',
-    }
-  })
+  const toolsNorm = calls
+    .filter((c) => {
+      const raw = String(c?.name || '')
+      const n = canonicalToolName(raw)
+      // "nextstep:{action}" prose mis-sent as a tool call — drop it silently.
+      return !(!AI_VIEWER_TOOL_NAMES.includes(n) && looksLikeNextstepPseudoTool(raw))
+    })
+    .map((c, i) => {
+      const name = canonicalToolName(String(c.name || ''))
+      const args = c.arguments && typeof c.arguments === 'object' ? c.arguments : {}
+      const checked = validateToolCall(name, args)
+      return {
+        id: String(c.id || `call_${i}`),
+        name,
+        arguments: checked.args || args,
+        error: checked.error || '',
+        status: 'pending',
+      }
+    })
   if (toolsNorm.length) {
     advanceInvestigationPlan(toolsNorm.map(t => t.name))
     batchSeq += 1

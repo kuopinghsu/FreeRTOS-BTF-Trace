@@ -112,6 +112,15 @@ SHARED_ID_PREFIXES: Sequence[Tuple[str, str, str]] = (
     ("README.md", "README_zh-TW.md", "investigation-planner"),
     ("README.md", "README_zh-TW.md", "btf-analysis-pages"),
     ("README.md", "README_zh-TW.md", "headless-cli-desktop-only"),
+    # AI manual: context-sensitive Help fragments promised in both languages
+    # (AI.md / AI_zh-TW.md: "#ai-topic-<id>" per topic, "#ai-action-<id>" per
+    # user action). Prefix sets must be identical EN ↔ zh-TW.
+    ("AI.md", "AI_zh-TW.md", "ai-topic-"),
+    ("AI.md", "AI_zh-TW.md", "ai-action-"),
+    ("AI.md", "AI_zh-TW.md", "analysis-vs-ai-tools"),
+    ("AI.md", "AI_zh-TW.md", "engine-limits"),
+    ("AI.md", "AI_zh-TW.md", "what-if-and-optimize-workflow"),
+    ("AI.md", "AI_zh-TW.md", "workflows-and-use-cases"),
 )
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -457,13 +466,17 @@ def check_section_mappings() -> List[str]:
             en_set = {i for i in en_ids if i.startswith(prefix) or i == prefix}
             zh_set = {i for i in zh_ids if i.startswith(prefix) or i == prefix}
             if not en_set and not zh_set:
-                # Exact README anchors: require presence in both.
+                # Exact anchors: require presence in both.
                 if prefix in {
                     "ai-api-keys",
                     "investigation-case",
                     "investigation-planner",
                     "btf-analysis-pages",
                     "headless-cli-desktop-only",
+                    "analysis-vs-ai-tools",
+                    "engine-limits",
+                    "what-if-and-optimize-workflow",
+                    "workflows-and-use-cases",
                 }:
                     errors.append(
                         f"section: shared id {prefix!r} missing from both "

@@ -4,4 +4,6 @@ Click each jump:TIME link and inspect the corresponding event on the timeline. F
 
 The Evidence and Validation information records the finding, checks, alternative hypothesis, missing evidence, and supporting timeline matches. A Confirmed verdict is useful only when its cited evidence is inside the active scope and agrees with the measured data.
 
+As you confirm each jump, record what you verified in the Investigation Notebook: a Verification-step bookmark with the finding and time range attached. Add to investigation on an Analysis finding, or Add region to investigation from the timeline right-click menu, drops the reference in for you.
+
 If the AI explanation and the trace disagree, use Statistics and the timeline as the source of truth.

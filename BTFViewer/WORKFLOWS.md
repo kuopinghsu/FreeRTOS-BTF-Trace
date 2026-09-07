@@ -545,12 +545,109 @@ Useful outputs include:
 
 - Bookmarks and Annotations for important timestamps;
 - an annotated Snapshot or Timeline SVG;
-- **Save cursor range as BTF** for the selected incident;
+- **Export…** (toolbar, or Ctrl+Shift+E) — one dialog to save a **portable workspace (`.btfw`)**, **Perfetto / Chrome Trace JSON**, or the **cursor range (C1–Cn) as a `.btf` slice**;
 - Statistics **Export HTML** (self-contained report with searchable tables);
 - Trace Compare **Export HTML**; and
 - AI diagnostic report or Investigation Case when AI was used.
 
 Keep the source trace. An exported report summarizes evidence but cannot preserve every interactive timeline action.
+
+**Trace Health pill** — the status bar shows a compact structural-health status (Pass / Caution / Insufficient data); click it for the per-check detail. It reports whether the parsed event model is internally consistent enough to trust the derived statistics — independent of AI and of *Trace Health (TICK)*.
+
+### Investigation notebook
+
+The notebook records **why** you reached a conclusion, not just what you looked at. Open it from the left activity rail (**Investigation notebook**) or the command palette; it is a per-trace document that travels inside the exported HTML report and the portable workspace.
+
+**Bookmark types.** Every entry is one of six kinds, and the report keeps them in separate blocks so a reviewer can tell fact from interpretation:
+
+| Type | Use it for |
+|---|---|
+| **Observation** | Something measured in the trace — a spike, an outlier, a gap. No claim about cause. |
+| **Hypothesis** | A candidate explanation for the observations. |
+| **Supporting evidence** | A measurement that makes a hypothesis more likely. |
+| **Contradicting evidence** | A measurement that argues against a hypothesis. |
+| **Verification step** | A check you ran (or should run) to confirm or rule out a hypothesis. |
+| **Conclusion** | The explanation the evidence supports, with its confidence and open questions. |
+
+**References, not copied text.** Each bookmark can attach stable identifiers instead of prose: a **finding** (its rule id), a **metric / Statistics section**, an **entity** (task or core), and a **time range**. Because these are ids and not text, the notes stay meaningful — and stale ones stay detectable — after the trace or the statistics change. Click a range or evidence reference to jump the timeline there.
+
+**Building the chain.**
+
+- **Add** a bookmark from the dialog: pick a type and title, add a note, optionally attach the current cursor range and link a finding.
+- **Add to investigation** on any Analysis finding drops it in as an Observation with the finding and current cursor range attached; the same action is on the timeline right-click menu as **Add region to investigation** for the C1–Cn window.
+- **✦ Scaffold** seeds the whole structure at once: an Observation for every actionable finding (error before warning, each with its finding / entity / range / metric references) plus a Hypothesis and a Verification-step stub to fill in. It skips findings already in the notebook, so it is safe to re-run as new findings appear.
+- Bookmark edits are **undoable** (per-notebook Undo / Redo, independent of the timeline undo stack).
+
+**Links and the evidence chain.** Connect two bookmarks with a relation — `supports`, `contradicts`, `verifies`, `concludes`, or `relates`. Every **Conclusion** then lists the bookmarks that back it (through explicit links *or* a shared reference); a conclusion with no supporting evidence is flagged as **not grounded**. The report renders each grounded conclusion followed by its chain.
+
+**Stale references.** When the source trace changes (content hash or event count) or a referenced entity or time range no longer exists, the affected bookmarks are flagged in the dialog and the report so a reviewer knows which notes to re-check.
+
+**Conclusion and unresolved questions.** The conclusion is a free-text field kept separate from the measured bookmarks. Unresolved questions are a short list that ships with the investigation so the next reader knows what was left open.
+
+**Keeping and reusing it.**
+
+- **Export… / Import…** save and load the notebook on its own as JSON (`btf-viewer-investigation/1` schema: `title`, `trace_identity`, `analysis_range`, `bookmarks[]`, `links[]`, `conclusion`, `unresolved_questions[]`).
+- It is embedded in the portable workspace (`investigation/bookmarks.json`) and rendered as the **Investigation** section of the exported HTML report — one self-contained offline file.
+- **Evidence pack…** builds a compact, provider-independent AI evidence package (`.json`) from the notebook plus the current question, scope, trace-health status, findings and required statistics — with a token estimate — so a model gets only the evidence needed to answer, with stable ids to cite. The headless equivalent is `btfviewer report trace.btf --ai-package pkg.json --question "…"`.
+
+Headless: `btfviewer report trace.btf --investigation notes.json -o report.html` adds the section from a saved notebook JSON; the report's JSON output echoes it back with resolved `chains` and `broken_references`.
+
+### Portable workspace (`.btfw`)
+
+To hand off the whole investigation as one file, save a **portable workspace** — **Export… → Portable workspace (`.btfw`)** in the GUI, or the headless commands below. A `.btfw` is a plain ZIP container — inspectable with any ZIP tool, dependent on no installed BTFViewer or online service — with a documented layout:
+
+```text
+manifest.json                 format + BTFViewer versions, timestamps, trace name/size/SHA-256, locale, rule-set version
+trace/source.btf              the trace, embedded by default (or referenced by path to save space)
+state/view.json               cursors, marks, viewport, filters
+analysis/health.json          Trace Health Check result
+analysis/findings.json        Investigation Findings
+investigation/bookmarks.json  the notebook above
+investigation/ai_case.json    AI investigation session (evidence payload + plan + chat), when present
+reports/report.html           the exported report (optional)
+attachments/                  optional
+```
+
+Opening a workspace restores the investigation without changing any measured value. The stored trace SHA-256 is checked first, so modified or missing trace data is flagged before the cached analysis is trusted. Saves are atomic (an interrupted save never destroys the previous file). Extraction rejects absolute paths and `..` segments, caps entry count and decompressed size, and never executes workspace content. A workspace written in a newer format opens read-only; unknown fields are preserved.
+
+Headless:
+
+| Command | Effect |
+|---|---|
+| `btfviewer report trace.btf --investigation notes.json --save-workspace inv.btfw -o report.html` | write the report **and** bundle everything into `inv.btfw` |
+| `btfviewer report … --save-workspace inv.btfw --no-embed-trace` | reference the trace by path instead of embedding it |
+| `btfviewer workspace inv.btfw` | print the manifest and a content inventory |
+| `btfviewer workspace inv.btfw --extract DIR` | safely extract every member under `DIR` |
+| `btfviewer workspace inv.btfw --report OUT.html` | write the embedded report to `OUT.html` |
+
+### Headless verification (CI gate)
+
+`btfviewer verify trace.btf --rules project-rules.json` checks a trace against explicit per-metric limits and exits with a stable code, so it drops straight into a pipeline without a display server:
+
+| Exit | Meaning |
+|---|---|
+| `0` | every rule passed (a failed **warning**-severity rule alone still passes unless `--strict`) |
+| `1` | one or more **error**-severity limits failed |
+| `2` | invalid rule file, unknown metric, or insufficient data for a metric |
+| `3` | internal processing error |
+
+The rule file is versioned JSON:
+
+```json
+{
+  "schema_version": 1,
+  "rules": [
+    { "metric": "load_balance_score", "min": 70, "severity": "error" },
+    { "metric": "migrations", "max": 500, "severity": "warning" },
+    { "metric": "gap_max_us", "maximum_us": 50 },
+    { "metric": "trace_health", "expect_one_of": ["pass", "caution"] }
+  ]
+}
+```
+
+Thresholds are `min` / `max` (native units), `minimum_us` / `maximum_us` (also `_ms` / `_ns`) for time metrics, or `expect` / `expect_one_of` for status metrics. `btfviewer verify --list-metrics` prints every supported metric name. `--lo` / `--hi` scope the check to a cursor range; `--json` emits the full result for a build log. This release covers trace-wide and structural-health metrics; a rule scoped to an `entity` on a per-task timing metric is reported as a data error (exit 2).
+
+For baseline regression instead of fixed limits, use `btfviewer analyze candidate.btf --baseline baseline.btf --fail-on-regression` (record a baseline with `--save-baseline base.json`).
 
 ## Complete worked example
 

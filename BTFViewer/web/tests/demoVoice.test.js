@@ -117,8 +117,8 @@ describe('demoVoice', () => {
 })
 
 describe('demo_8cores voice pack parity', () => {
-  const textRoot = fileURLToPath(new URL('../../demos/demo_8cores/text', import.meta.url))
-  const xmlPath = fileURLToPath(new URL('../../demos/demo_8cores/demo_8cores.xml', import.meta.url))
+  const textRoot = fileURLToPath(new URL('../../demos/demo_8cores/attachments/text', import.meta.url))
+  const xmlPath = fileURLToPath(new URL('../../demos/demo_8cores/demo/script.xml', import.meta.url))
 
   it('keeps the same script stems in en and zh-tw', () => {
     const en = readdirSync(`${textRoot}/en`).filter(n => n.endsWith('.txt')).sort()

@@ -1,8 +1,8 @@
 """Hardened ZIP-container reader — one safe path for every archive BTFViewer opens.
 
-Shared by the ``.btfw`` portable-workspace reader (:mod:`btf_viewer_pkg.workspace`)
-and the ``.xtf`` demo-pack reader (:func:`btf_viewer_pkg.parser.extract_xtf_pack`).
-Lockstep with ``web/src/utils/zipContainer.js``.
+The semantic layer on top of this is the ``.btfw`` package reader
+(:mod:`btf_viewer_pkg.workspace`), which covers both portable workspaces and
+shareable demo tours. Lockstep with ``web/src/utils/zipContainer.js``.
 
 Guarantees for any archive opened through here:
 
@@ -22,7 +22,7 @@ import os
 import zipfile
 from typing import Dict, List, Union
 
-# Shared limits. A ``.btfw`` or ``.xtf`` is small; these leave generous headroom.
+# Shared limits. A ``.btfw`` package is small; these leave generous headroom.
 CONTAINER_MAX_ENTRIES = 4096
 CONTAINER_MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 CONTAINER_MAX_COMPRESSION_RATIO = 250

@@ -32,6 +32,7 @@
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
       @traces-loaded="onUserTracesLoaded"
+      @workspace-file="onOpenWorkspaceFile"
       @load-demo="onLoadDemo"
       @demo-pack="startDemoPack"
       @demo-folder="onDemoFolderNeeded"
@@ -46,8 +47,7 @@
       @collapse-all="onCollapseAll"
       @add-mark="onAddMark"
       @export-svg="onExportSvg"
-      @export-perfetto="onExportPerfetto"
-      @export-slice="onExportBtfSlice"
+      @open-export="openExportDialog()"
       @clear-task-filter="clearHeatmapTaskFilter"
       @show-about="openAboutDialog"
     />
@@ -396,6 +396,15 @@
           <span class="rail-tip act-tip">Analysis findings</span>
         </button>
         <button
+          type="button"
+          class="rail-btn act-btn"
+          data-demo-target="rail_notebook"
+          @click="openNotebookDialog"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M4 8h3M4 12h3M4 16h3M10 8h5M10 12h5"/></svg>
+          <span class="rail-tip act-tip">Investigation notebook</span>
+        </button>
+        <button
           v-if="compareTabs.length >= 2"
           type="button"
           class="rail-btn act-btn"
@@ -493,6 +502,7 @@
             @before-mark-change="pushUndoSnapshot"
             @label-width-change="onLabelWidthChange"
             @explain-region="queryExplainRegionWithAi"
+            @add-region-to-investigation="onAddRegionToInvestigation"
             @ask-ai-event="queryAskAiEvent"
             :ai-enabled="appSettings.aiEnabled !== false"
             :colorblind-safe="appSettings.colorblindSafe"
@@ -746,6 +756,7 @@
                 :section-order="appSettings.statsSectionOrder || []"
                 :active-filter-label="activeFilterSummaryLabel"
                 :trace-file-name="activeTab?.name || ''"
+                :investigation="investigation"
                 :on-clear-filters="clearAllActiveFilters"
                 @update:open-plot="onOpenPlotChange"
                 @update:section-heights="onSectionHeightsChange"
@@ -925,11 +936,9 @@
         </div>
 
         <div class="help-body">
-          <div class="help-section">
-            <button type="button" class="help-reference-link" @click="openStatsReference">
-              Statistics Reference — full documentation for every stat →
-            </button>
-          </div>
+          <button type="button" class="help-reference-link" @click="openStatsReference">
+            Statistics Reference — full documentation for every stat →
+          </button>
           <div class="help-section">
             <div class="help-section-title">
               Keyboard
@@ -1149,11 +1158,14 @@
                 Export SVG
               </div><div>Exports the current view; includes CPU load when Load is on</div>
               <div class="k">
-                Perfetto / Ctrl+Shift+E
-              </div><div>Download Chrome Trace JSON for ui.perfetto.dev (full trace or current viewport)</div>
+                Export… / Ctrl+Shift+E
+              </div><div>One dialog to save a portable workspace (.btfw), Perfetto Chrome Trace JSON, or the cursor range (C1–Cn) as a .btf slice</div>
               <div class="k">
-                Save BTF
-              </div><div>Download the cursor range (C1–Cn) as a .btf slice; needs two or more cursors</div>
+                Investigation notebook
+              </div><div>Activity rail: typed bookmarks, evidence chain and a conclusion — travels inside the .btfw and the HTML report</div>
+              <div class="k">
+                Trace health
+              </div><div>Status-bar pill: structural checks on the parsed event model; click for per-check detail</div>
               <div class="k">
                 File names
               </div><div>Exports use timeline-with-load.* when CPU load is included</div>
@@ -1314,9 +1326,40 @@
       @undo-investigate="onUndoInvestigateFinding"
       @show-evidence="onShowFindingEvidence"
       @add-to-case="onAddFindingToCase"
+      @add-to-investigation="onAddFindingToInvestigation"
       @recalculate-context="findingsContextSnapshot = { ...findingsAnalysisContext }"
       @save-recipe="onSaveAnalysisRecipe"
       @save-story="onSaveAnalysisStory"
+    />
+
+    <InvestigationNotebookDialog
+      v-if="notebookDialogOpen && trace && investigation"
+      :investigation="investigation"
+      :history="notebookHistory"
+      :findings="analysisFindings"
+      :trace="trace"
+      :trace-file-name="activeTab?.name || ''"
+      :cursor-range="notebookCursorRange"
+      :format-ns="(ns) => formatTime(ns, trace.timeScale, appSettings.timeDecimals)"
+      @close="notebookDialogOpen = false"
+      @update="notebookApply"
+      @undo="notebookUndoAction"
+      @redo="notebookRedoAction"
+      @scaffold="onScaffoldNotebook"
+      @jump-range="onNotebookJumpRange"
+      @export-evidence-package="onExportAiEvidencePackage"
+    />
+
+    <ExportDialog
+      v-if="exportDialogOpen && trace"
+      :targets="exportTargetRows"
+      :default-target="exportDefaultTarget"
+      :range="exportCursorRangeVal"
+      :has-findings="(analysisFindings || []).length > 0"
+      :has-investigation="!!(investigation && (investigation.bookmarks?.length || investigation.conclusion))"
+      :format-ns="(ns) => formatTime(ns, trace.timeScale, appSettings.timeDecimals)"
+      @close="exportDialogOpen = false"
+      @export="onExportRun"
     />
 
     <TraceCompareDialog
@@ -1403,6 +1446,13 @@
           class="status-inspect"
           :title="taskInspectorText"
         >{{ taskInspectorText }}</span>
+
+        <TraceHealthBadge
+          v-if="traceHealthResult"
+          class="status-health"
+          :result="traceHealthResult"
+          :format-ns="(ns) => formatTime(ns, trace.timeScale, appSettings.timeDecimals)"
+        />
 
         <div
           v-if="activeFilterChips.length"
@@ -1526,11 +1576,15 @@ import TraceCompareDialog from './components/TraceCompareDialog.vue'
 import FindPanel from './components/FindPanel.vue'
 import AiAssistantPanel from './components/AiAssistantPanel.vue'
 import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
+import TraceHealthBadge from './components/TraceHealthBadge.vue'
+import InvestigationNotebookDialog from './components/InvestigationNotebookDialog.vue'
+import ExportDialog from './components/ExportDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import DomSelect from './components/DomSelect.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { zoomStatusFromViewport } from './utils/timeFormat.js'
-import { taskDisplayName, taskMergeKey, setColorblindMode, setDarkMode } from './utils/colors.js'
+import { taskDisplayName, taskMergeKey, setColorblindMode, setDarkMode, parseTaskName, isIdleTaskName } from './utils/colors.js'
+import { buildTaskAliasMap, anonymizeBtfText, anonymizeJsonStrings } from './utils/anonymizeExport.js'
 import { taskPassesRowFilter, rawTaskNameMatchesTextFilter, normalizeTaskFilterText, coreFilterActive, taskRunsOnSelectedCore } from './utils/taskFilter.js'
 import {
   AI_TOOL_ADD_ANNOTATION,
@@ -1715,7 +1769,22 @@ import {
   buildPortableSession, parsePortableSession, applyPortableSession, downloadPortableSession,
   sessionCursorsSlotCount,
 } from './utils/sessionPortable.js'
-import { downloadPerfetto } from './utils/perfettoExport.js'
+import { downloadPerfetto, buildPerfettoChromeTrace } from './utils/perfettoExport.js'
+import { buildTraceHealthResult } from './utils/traceHealth.js'
+import {
+  newInvestigation, loadInvestigation, dumpInvestigation, traceIdentity, addBookmark,
+  emptyNotebookHistory, pushNotebookState, notebookUndo, notebookRedo, notebookHistoryState,
+  scaffoldInvestigationFromFindings,
+} from './utils/investigationNotebook.js'
+import {
+  exportTargets, defaultExportTarget, cursorRange as exportCursorRange,
+  perfettoFilename, workspaceFilename, btfSliceFilename,
+} from './utils/exportActions.js'
+import { buildWorkspaceBlob, openWorkspaceBlob, WORKSPACE_EXT } from './utils/workspace.js'
+import { buildInvestigationFindings, investigationFindingExport } from './utils/investigationFindings.js'
+import {
+  buildEvidencePackage, estimateTokens, formatEvidencePackagePreview,
+} from './utils/aiEvidencePackage.js'
 import { appIconSvgMarkup } from './utils/htmlReport.js'
 import {
   defaultSectionCollapsed,
@@ -1725,6 +1794,8 @@ import {
   normalizeStatsPins,
   normalizeStatsSectionOrder,
   commandPaletteStatsSectionActions,
+  resolveStatsSectionId,
+  statsSectionTitle,
 } from './utils/statsPins.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import {
@@ -1750,11 +1821,12 @@ import {
   buildAnalysisContext,
   isContextStale,
 } from './utils/analysisContext.js'
-import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
+import { isBtfOpenName, loadBtfEntriesFromFile, decompressBtfEntries } from './utils/btfLoad.js'
 import {
   classifyOpenFiles,
   classifyPickedOpen,
   collectDroppedFiles,
+  packFromWorkspaceFile,
   pickDemoPack,
 } from './utils/demoPack.js'
 import { createDemoRunner, parseCursorTimes } from './utils/demoRunner.js'
@@ -2753,6 +2825,17 @@ async function startDemoPack(pack) {
     langs.defaultId,
   )
   demoVoiceLang.value = picked
+  // Pre-seed the AI panel with the demo's investigation case, if it ships one
+  // (packed investigation/ai_case.json, or next to a loose demo folder).
+  if (pack.aiCase) {
+    nextTick(() => {
+      try {
+        aiPanelRef.value?.restoreInvestigation?.(pack.aiCase)
+      } catch (err) {
+        console.error('demo AI-case restore failed:', err)
+      }
+    })
+  }
   const runner = createDemoRunner(demoHost(), pack, { aiWaitCapSec: 4, voiceLang: picked })
   _demoRunner = runner
   demoRunning.value = true
@@ -3329,6 +3412,191 @@ const analysisScopeLabel = computed(() => {
   return range ? ` (C1–C${range.nCursors})` : ''
 })
 
+// Structural Trace Health for the current analysis scope. Pure function of the
+// parsed trace + [lo, hi]; feeds the status-bar badge and the .btfw workspace.
+const traceHealthResult = computed(() => {
+  const tr = trace.value
+  if (!tr) return null
+  const scopeOn = activeTab.value?.scopeToCursors !== false
+  const range = getStatsRange(cursors.value, scopeOn)
+  return buildTraceHealthResult(
+    tr,
+    range?.lo ?? null,
+    range?.hi ?? null,
+    (ns) => formatTime(ns, tr.timeScale, appSettings.timeDecimals),
+  )
+})
+
+// ---- Investigation notebook (Phase 3) ----------------------------------
+const notebookDialogOpen = ref(false)
+
+const investigation = computed({
+  get: () => activeTab.value?.investigation ?? null,
+  set: (v) => { if (activeTab.value) activeTab.value.investigation = v },
+})
+const notebookHistory = computed({
+  get: () => activeTab.value?.notebookHistory ?? emptyNotebookHistory(),
+  set: (v) => { if (activeTab.value) activeTab.value.notebookHistory = v },
+})
+const notebookState = computed(() => notebookHistoryState(notebookHistory.value))
+
+const notebookCursorRange = computed(() => {
+  const placed = getPlacedCursors(cursors.value).map(Number).filter(Number.isFinite)
+  if (placed.length < 2) return null
+  return { start: Math.min(...placed), end: Math.max(...placed) }
+})
+
+/** Create the tab's investigation on first use, seeded with the trace identity. */
+function ensureInvestigation() {
+  if (!activeTab.value) return null
+  if (!activeTab.value.investigation) {
+    const tr = trace.value
+    const ident = tr ? traceIdentity(tr, activeTab.value.name || '') : null
+    const scopeOn = activeTab.value.scopeToCursors !== false
+    const range = tr ? getStatsRange(cursors.value, scopeOn) : null
+    const inv = newInvestigation({
+      title: activeTab.value.name || '',
+      traceIdentity: ident,
+      analysisRange: range ? { start: range.lo, end: range.hi } : null,
+    })
+    activeTab.value.investigation = inv
+    activeTab.value.notebookHistory = pushNotebookState(emptyNotebookHistory(), inv)
+  }
+  return activeTab.value.investigation
+}
+
+/** Apply a new investigation value produced by the notebook dialog + record undo. */
+function notebookApply(nextInv) {
+  if (!activeTab.value) return
+  const inv = loadInvestigation(nextInv)
+  activeTab.value.investigation = inv
+  activeTab.value.notebookHistory = pushNotebookState(
+    activeTab.value.notebookHistory || emptyNotebookHistory(), inv)
+  scheduleSessionSave()
+}
+
+function notebookUndoAction() {
+  if (!activeTab.value) return
+  const hist = notebookUndo(activeTab.value.notebookHistory)
+  activeTab.value.notebookHistory = hist
+  const snap = notebookHistoryState(hist).current
+  if (snap) activeTab.value.investigation = loadInvestigation(snap)
+  scheduleSessionSave()
+}
+function notebookRedoAction() {
+  if (!activeTab.value) return
+  const hist = notebookRedo(activeTab.value.notebookHistory)
+  activeTab.value.notebookHistory = hist
+  const snap = notebookHistoryState(hist).current
+  if (snap) activeTab.value.investigation = loadInvestigation(snap)
+  scheduleSessionSave()
+}
+
+function openNotebookDialog() {
+  if (!trace.value) {
+    showToast('Open a trace before starting an investigation.', 'info')
+    return
+  }
+  ensureInvestigation()
+  notebookDialogOpen.value = true
+}
+
+function onNotebookJumpRange(range) {
+  const start = Number(range?.start)
+  if (Number.isFinite(start)) timelinePanelRef.value?.jumpToNs?.(start)
+}
+
+/** Notebook dialog → "Scaffold": seed the investigation from current findings. */
+function onScaffoldNotebook() {
+  if (!trace.value) return
+  ensureInvestigation()
+  const before = investigation.value.bookmarks?.length || 0
+  const next = scaffoldInvestigationFromFindings(investigation.value, {
+    findings: analysisFindings.value || [],
+    cursorRange: notebookCursorRange.value,
+  })
+  const added = (next.bookmarks?.length || 0) - before
+  if (added <= 0) {
+    showToast('Nothing new to scaffold — every finding is already in the notebook.', 'info')
+    return
+  }
+  notebookApply(next)
+  showToast(`Scaffolded ${added} bookmark${added === 1 ? '' : 's'} from findings`, 'info')
+}
+
+/** Notebook dialog → "Evidence pack…": build + download a compact AI package. */
+function onExportAiEvidencePackage({ question = '' } = {}) {
+  const tr = trace.value
+  if (!tr) return
+  const scopeOn = activeTab.value?.scopeToCursors !== false
+  const range = getStatsRange(cursors.value, scopeOn)
+  const spanNs = (range?.hi ?? tr.timeMax) - (range?.lo ?? tr.timeMin)
+  const findings = buildInvestigationFindings(analysisFindings.value || [], { totalSpanNs: spanNs })
+    .map(investigationFindingExport)
+  const pkg = buildEvidencePackage({
+    question,
+    scope: analysisScopeLabel.value ? analysisScopeLabel.value.trim().replace(/^\(|\)$/g, '') : 'Full trace',
+    analysisRange: range ? { start: range.lo, end: range.hi } : null,
+    traceName: activeTab.value?.name || '',
+    traceSummary: {
+      span_ns: tr.timeMax - tr.timeMin,
+      tasks: (tr.tasks || []).length,
+      segments: (tr.segments || []).length,
+      sti_events: (tr.stiEvents || []).length,
+      migrations: (tr.migrations || []).length,
+      time_scale: tr.timeScale,
+    },
+    health: traceHealthResult.value,
+    findings,
+    investigation: investigation.value,
+    entities: (tr.tasks || []).map(String).slice(0, 40),
+    cores: (tr.coreNames || []).map(String),
+    redactNames: !!appSettings.aiRedactTaskNames,
+  })
+  const base = (activeTab.value?.name || 'trace').replace(/\.btf(\.gz)?$/i, '')
+  downloadBlob(
+    new Blob([JSON.stringify(pkg, null, 2)], { type: 'application/json' }),
+    `${base}-evidence.json`,
+  )
+  console.info(formatEvidencePackagePreview(pkg))
+  showToast(`AI evidence package saved — ~${estimateTokens(pkg)} tokens`, 'info')
+}
+
+/** Timeline context menu → "Add region to investigation". */
+function onAddRegionToInvestigation(range) {
+  if (!trace.value) return
+  const start = Number(range?.start)
+  const end = Number(range?.end)
+  if (!(Number.isFinite(start) && Number.isFinite(end) && end > start)) return
+  ensureInvestigation()
+  const label = `${formatTime(start, trace.value.timeScale, appSettings.timeDecimals)}`
+    + ` – ${formatTime(end, trace.value.timeScale, appSettings.timeDecimals)}`
+  notebookApply(addBookmark(investigation.value, {
+    type: 'observation',
+    title: `Region ${label}`,
+    refs: [{ kind: 'range', range: { start: Math.trunc(start), end: Math.trunc(end) } }],
+  }))
+  showToast('Region added to investigation notebook', 'info')
+  notebookDialogOpen.value = true
+}
+
+/** "Add to investigation" from an Analysis finding row. */
+function onAddFindingToInvestigation(f) {
+  if (!f || !trace.value) return
+  ensureInvestigation()
+  const refs = [{ kind: 'finding', rule_id: String(f.rule_id || f.ruleId || f.id || '') }]
+  const r = notebookCursorRange.value
+  if (r) refs.push({ kind: 'range', range: { start: r.start, end: r.end } })
+  notebookApply(addBookmark(investigation.value, {
+    type: 'observation',
+    title: f.title || f.rule_id || 'Finding',
+    note: f.text || f.impact || '',
+    refs,
+  }))
+  showToast('Added to investigation notebook', 'info')
+  if (!notebookDialogOpen.value) notebookDialogOpen.value = true
+}
+
 const analysisQuality = computed(() => collectTraceQualityWarnings(trace.value))
 const findingHits = computed(() => {
   if (!appSettings.showIncidentOverlay) return []
@@ -3495,6 +3763,9 @@ async function attachParsedTrace(name, packedOrTrace, {
     tab._undoStack = null
     const restored = savedState ?? _savedTabStateByTraceName[name]
     if (restored) applyTabState(tab, restored)
+    if (tab.investigation) {
+      tab.notebookHistory = pushNotebookState(emptyNotebookHistory(), tab.investigation)
+    }
     tab.taskFilterKeys = null
     tab.heatmapFilterLabel = null
     syncFiltersFromTab(tab)
@@ -3730,6 +4001,7 @@ function runPaletteAction(id) {
   closePalette()
   bumpPaletteUsage(aid)
   if (aid === 'analysis') analysisOpen.value = true
+  else if (aid === 'notebook') openNotebookDialog()
   else if (aid === 'statistics') rightPanelTab.value = 'stats'
   else if (aid === 'find') rightPanelTab.value = 'find'
   else if (aid === 'marks') rightPanelTab.value = 'marks'
@@ -4397,7 +4669,8 @@ function onAiJump(t) {
 }
 
 function onAiOpenStats(sectionId) {
-  const sid = String(sectionId || '').trim()
+  // Accept a header title / loose spelling ("Ready-Gap (Starvation)") too.
+  const sid = resolveStatsSectionId(sectionId) || String(sectionId || '').trim()
   if (!sid) return
   rightPanelTab.value = 'stats'
   nextTick(() => {
@@ -4642,8 +4915,10 @@ function dispatchAiTool(name, args) {
   }
   if (name === AI_TOOL_OPEN_STATS_SECTION) {
     const section = String(args.section || args.section_id || '').trim()
-    onAiOpenStats(section)
-    return section ? `Opened Statistics section ${section}` : 'Opened Statistics'
+    const sid = resolveStatsSectionId(section)
+    onAiOpenStats(sid || section)
+    if (sid) return `Opened Statistics section “${statsSectionTitle(sid)}”`
+    return section ? `Opened Statistics (could not match section “${section}”)` : 'Opened Statistics'
   }
   if (name === AI_TOOL_ADD_ANNOTATION) {
     const ns = Math.trunc(Number(args.time))
@@ -5360,7 +5635,12 @@ async function onFileDrop(e) {
     return
   }
   const kind = classifyOpenFiles(files)
-  if (kind === 'demo' || kind === 'xtf') {
+  if (kind === 'workspace') {
+    const wsFile = [...files.values()].find(f => /\.btfw$/i.test(f?.name || ''))
+    if (wsFile) { stopDemo(); await onOpenWorkspaceFile(wsFile) }
+    return
+  }
+  if (kind === 'demo') {
     try {
       const picked = await classifyPickedOpen(files)
       if (picked?.kind === 'demo' && picked.pack?.traceFile) {
@@ -5407,8 +5687,8 @@ async function onFileDrop(e) {
   }
   showToast(
     files.size
-      ? 'Drop a .btf trace, a demo .xml / .xtf, or a pack folder (xml + .btf.gz + voice)'
-      : 'Could not read that drop. Drop the pack folder, .xtf, or the .xml and .btf.gz files together.',
+      ? 'Drop a .btf trace, a .btfw package, a demo .xml, or a pack folder (xml + .btf.gz + voice)'
+      : 'Could not read that drop. Drop the pack folder, a .btfw package, or the .xml and .btf.gz files together.',
     'error',
   )
 }
@@ -5475,7 +5755,19 @@ async function onExportSvg() {
   URL.revokeObjectURL(url)
 }
 
-function onExportBtfSlice() {
+/** `Map<real_task_name, "Task-N">` for the Export dialog's Anonymize option —
+ *  same task set / numbering the desktop `_export_task_alias_map` builds. */
+function exportTaskAliasMap() {
+  const tr = trace.value
+  const names = new Set()
+  for (const raw of (tr?.taskRepr?.values?.() || [])) {
+    const p = parseTaskName(String(raw))
+    if (p.name && p.name !== 'TICK' && !isIdleTaskName(p.name)) names.add(p.name)
+  }
+  return buildTaskAliasMap(names)
+}
+
+function onExportBtfSlice({ anonymize = false } = {}) {
   if (!trace.value) {
     showToast('Open a trace before exporting a BTF slice.', 'error')
     return
@@ -5506,6 +5798,10 @@ function onExportBtfSlice() {
     text = out.text
     kept = out.kept
   }
+  if (anonymize) {
+    const amap = exportTaskAliasMap()
+    if (amap.size) text = anonymizeBtfText(text, amap)
+  }
   const base = (activeTab.value?.name || 'selection').replace(/\.btf(\.gz)?$/i, '')
   const blob = new Blob([text], { type: 'text/plain' })
   const url = URL.createObjectURL(blob)
@@ -5514,21 +5810,16 @@ function onExportBtfSlice() {
   a.download = `${base}_${lo}-${hi}.btf`
   a.click()
   URL.revokeObjectURL(url)
-  showToast(`Saved ${kept} event(s) ${lo}–${hi}`, 'info')
+  showToast(`Saved ${kept} event(s) ${lo}–${hi}${anonymize ? ', anonymized' : ''}`, 'info')
 }
 
-function onExportPerfetto() {
+function onExportPerfetto(scope = 'full', { anonymize = false } = {}) {
   if (!trace.value) {
     showToast('Open a trace before exporting Perfetto.', 'error')
     return
   }
-  const useViewport = window.confirm(
-    'Export the current timeline viewport?\n\n'
-    + 'OK — viewport only\n'
-    + 'Cancel — full loaded trace',
-  )
   let range = {}
-  if (useViewport) {
+  if (scope === 'viewport') {
     const vp = timelineViewport.value
     const lo = Math.floor(Number(vp?.timeStart))
     const hi = Math.ceil(Number(vp?.timeEnd))
@@ -5538,19 +5829,259 @@ function onExportPerfetto() {
     }
     range = { lo, hi }
   }
-  const base = (activeTab.value?.name || 'trace').replace(/\.btf$/i, '')
   try {
-    downloadPerfetto(trace.value, `${base}.json`, range)
+    const fname = perfettoFilename(activeTab.value?.name)
+    const amap = anonymize ? exportTaskAliasMap() : null
+    if (amap && amap.size) {
+      const payload = anonymizeJsonStrings(buildPerfettoChromeTrace(trace.value, range), amap)
+      downloadBlob(new Blob([JSON.stringify(payload)], { type: 'application/json' }), fname)
+    } else {
+      downloadPerfetto(trace.value, fname, range)
+    }
+    const suffix = amap && amap.size ? ', anonymized' : ''
     showToast(
-      useViewport
-        ? `Perfetto exported (viewport [${range.lo}, ${range.hi}))`
-        : 'Perfetto exported (full trace)',
+      scope === 'viewport'
+        ? `Perfetto exported (viewport [${range.lo}, ${range.hi})${suffix})`
+        : `Perfetto exported (full trace${suffix})`,
       'info',
     )
   } catch (err) {
     console.error('Perfetto export failed:', err)
     showToast('Perfetto export failed \u2014 try again, or export a Statistics report instead.', 'error')
   }
+}
+
+// ---- Unified Export dialog (workspace, Perfetto, cursor-range BTF) ----
+const exportDialogOpen = ref(false)
+const exportDefaultTarget = ref('workspace')
+
+const exportCursorRangeVal = computed(
+  () => exportCursorRange(getPlacedCursors(cursors.value)),
+)
+const exportTargetRows = computed(() => exportTargets({
+  hasTrace: !!trace.value,
+  placedCursorCount: getPlacedCursors(cursors.value).length,
+}))
+
+function openExportDialog(preset = 'workspace') {
+  if (!trace.value) {
+    showToast('Open a trace before exporting.', 'info')
+    return
+  }
+  exportDefaultTarget.value = defaultExportTarget(exportTargetRows.value, preset)
+  exportDialogOpen.value = true
+}
+
+function onExportRun({ target, embedTrace, perfettoScope, anonymize }) {
+  exportDialogOpen.value = false
+  const anon = anonymize === true
+  if (target === 'perfetto') {
+    onExportPerfetto(perfettoScope === 'viewport' ? 'viewport' : 'full', { anonymize: anon })
+  } else if (target === 'btf-slice') {
+    onExportBtfSlice({ anonymize: anon })
+  } else if (target === 'workspace') {
+    onExportWorkspace({ embedTrace: embedTrace !== false, anonymize: anon })
+  }
+}
+
+/** AI investigation session for the .btfw — only when there is a real chat. */
+function workspaceAiCase() {
+  const snap = aiPanelRef.value?.investigationSnapshot?.()
+  return (snap && Array.isArray(snap.messages) && snap.messages.length) ? snap : null
+}
+
+function onExportWorkspace({ embedTrace = true, anonymize = false } = {}) {
+  if (!trace.value || !activeTab.value) {
+    showToast('Open a trace before saving a workspace.', 'error')
+    return
+  }
+  try {
+    saveFiltersToActiveTab()
+    const amap = anonymize ? exportTaskAliasMap() : null
+    const anon = (amap && amap.size)
+      ? (obj) => anonymizeJsonStrings(obj, amap)
+      : (obj) => obj
+    const scopeOn = activeTab.value.scopeToCursors !== false
+    const range = getStatsRange(cursors.value, scopeOn)
+    const viewState = buildPortableSession({
+      traceName: activeTab.value.name,
+      cursors: cursors.value,
+      marks: marks.value,
+      markNextId: activeTab.value.markNextId,
+      timelineViewport: { ...timelineViewport.value },
+      timelineOptions,
+      tabFilters: activeTab.value,
+      findQuery: findQuery.value,
+      findMode: findMode.value,
+      pinnedHighlightKey: pinnedHighlightKey.value,
+      scopeToCursors: scopeOn,
+      openPlot: activeTab.value.openPlot ?? null,
+      statsSectionCollapsed: appSettings.statsSectionCollapsed ?? null,
+    })
+    const spanNs = (range?.hi ?? trace.value.timeMax) - (range?.lo ?? trace.value.timeMin)
+    const findings = buildInvestigationFindings(analysisFindings.value || [], { totalSpanNs: spanNs })
+      .map(investigationFindingExport)
+      .map(anon)
+    let reportHtml = null
+    try {
+      reportHtml = statsPanelRef.value?.exportHtml?.({ returnHtml: true, anonymize: !!(amap && amap.size) }) || null
+    } catch (err) {
+      console.error('workspace report render failed:', err)
+    }
+    let srcText = activeTab.value.sourceText || ''
+    if (amap && amap.size && srcText) srcText = anonymizeBtfText(srcText, amap)
+    const traceBytes = embedTrace && srcText ? new TextEncoder().encode(srcText) : null
+    const investigationDump = investigation.value ? dumpInvestigation(investigation.value) : null
+    const { blob } = buildWorkspaceBlob({
+      traceBytes,
+      traceRef: traceBytes ? '' : activeTab.value.name,
+      traceName: activeTab.value.name,
+      traceSize: traceBytes ? traceBytes.length : srcText.length,
+      embedTrace: !!traceBytes,
+      viewState,
+      health: anon(traceHealthResult.value),
+      findings,
+      investigation: investigationDump ? anon(investigationDump) : null,
+      aiCase: anon(workspaceAiCase()),
+      reportHtml,
+      analysisSettings: (amap && amap.size) ? { anonymized: true } : undefined,
+      locale: 'en',
+      btfviewerVersion: appVersion,
+    })
+    downloadBlob(new Blob([blob], { type: 'application/octet-stream' }),
+      workspaceFilename(activeTab.value.name))
+    const kb = Math.max(1, Math.round(blob.length / 1024))
+    showToast(
+      `Workspace saved (${kb} KB, trace ${traceBytes ? 'embedded' : 'referenced'}`
+      + `${amap && amap.size ? ', anonymized' : ''})`,
+      'info',
+    )
+  } catch (err) {
+    console.error('Workspace export failed:', err)
+    showToast('Workspace export failed \u2014 see console for details.', 'error')
+  }
+}
+
+/** Open a portable workspace (.btfw): load the embedded trace, then restore
+ *  view state + the investigation notebook onto its tab. */
+async function onOpenWorkspaceFile(file) {
+  let ws
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    ws = openWorkspaceBlob(bytes)
+  } catch (err) {
+    showToast(err?.message || 'Not a readable .btfw package', 'error')
+    return
+  }
+  // A .btfw demo package: play the guided tour (and pre-seed its AI case)
+  // instead of the workspace-restore path.
+  if (ws.kind === 'demo' || ws.demo) {
+    try {
+      const pack = await packFromWorkspaceFile(file)
+      stopDemo()
+      await startDemoPack(pack)
+    } catch (err) {
+      showToast(err?.message || 'Failed to open demo package', 'error')
+    }
+    return
+  }
+  if (!ws.trace_bytes) {
+    showToast(
+      ws.trace_embedded
+        ? 'Workspace trace is missing or corrupt.'
+        : `Workspace references an external trace (${ws.trace_ref || 'unknown'}). `
+          + 'Open that .btf, then Import Session from the workspace.',
+      'error',
+    )
+    return
+  }
+  const traceName = ws.manifest?.trace?.name
+    || file.name.replace(new RegExp(`\\${WORKSPACE_EXT}$`, 'i'), '.btf')
+  // The embedded bytes may be the raw compressed source OR plain text (an
+  // anonymized / web-authored workspace) — even when the manifest name still
+  // ends in .gz/.bz2/.zip. Strip that suffix so decompressBtfEntries decides
+  // the codec from the actual magic bytes, not the (possibly stale) name.
+  // Fixes "Not a gzipped file (b'#v')" and blank timelines.
+  const decodeName = traceName.replace(/\.(gz|bz2|zip)$/i, '')
+  let entries
+  try {
+    entries = decompressBtfEntries(ws.trace_bytes, decodeName)
+  } catch (err) {
+    showToast(err?.message || 'Workspace trace could not be decoded', 'error')
+    return
+  }
+  try {
+    if (entries.length > 1) {
+      await onTracesLoaded({ entries, sourceName: traceName })
+    } else {
+      await onTraceLoaded({ text: entries[0].text, name: entries[0].name || traceName })
+    }
+    applyWorkspaceRestore(ws)
+  } catch (err) {
+    showToast(err?.message || 'Failed to open workspace trace', 'error')
+  }
+}
+
+function applyWorkspaceRestore(ws) {
+  const tab = activeTab.value
+  if (!tab) return
+  const notes = []
+
+  if (ws.view_state) {
+    try {
+      const data = parsePortableSession(JSON.stringify(ws.view_state))
+      const needed = sessionCursorsSlotCount(data, appSettings.maxCursors)
+      if (needed > appSettings.maxCursors) {
+        appSettings.maxCursors = needed
+        saveSettings(appSettings)
+        resizeTabCursors(tabs.value, appSettings.maxCursors)
+      }
+      applyPortableSession(tab, data, timelineOptions, tab.trace)
+      syncFiltersFromTab(tab)
+      nextTick(() => {
+        applyTimelineViewport()
+        timelineOptions.layoutRev += 1
+        if (findQuery.value) recomputeFind()
+        scheduleRender()
+      })
+      notes.push('view state')
+    } catch (err) {
+      console.error('workspace view-state restore failed:', err)
+    }
+  }
+
+  if (ws.investigation) {
+    tab.investigation = loadInvestigation(ws.investigation)
+    tab.notebookHistory = pushNotebookState(emptyNotebookHistory(), tab.investigation)
+    const n = tab.investigation.bookmarks?.length || 0
+    notes.push(`investigation notebook (${n} bookmark${n === 1 ? '' : 's'})`)
+  }
+
+  if (ws.ai_case) {
+    notes.push('AI investigation')
+    nextTick(() => {
+      try {
+        aiPanelRef.value?.restoreInvestigation?.(ws.ai_case)
+      } catch (err) {
+        console.error('workspace AI-case restore failed:', err)
+      }
+    })
+  }
+
+  for (const w of ws.warnings || []) showToast(w, 'info')
+  if (ws.read_only) {
+    showToast('Workspace was written by a newer BTFViewer \u2014 opened read-only.', 'info')
+  }
+  const extras = []
+  if (ws.health) extras.push('trace health')
+  if (ws.findings?.length) extras.push(`${ws.findings.length} finding${ws.findings.length === 1 ? '' : 's'}`)
+  if (ws.report_html) extras.push('HTML report')
+  showToast(
+    `Workspace opened \u2014 restored ${notes.join(' + ') || 'trace only'}`
+    + (extras.length ? `; also carries ${extras.join(', ')}` : ''),
+    'info',
+  )
+  scheduleSessionSave()
 }
 
 function captureFilter(node) {
@@ -6088,6 +6619,14 @@ function onGlobalKeydown(e) {
     closePalette()
     return
   }
+  // Esc closes the Export / Investigation Notebook dialogs even while a field
+  // inside them is focused (standard modal behaviour).
+  if (e.key === 'Escape' && (exportDialogOpen.value || notebookDialogOpen.value)) {
+    e.preventDefault()
+    if (exportDialogOpen.value) exportDialogOpen.value = false
+    else notebookDialogOpen.value = false
+    return
+  }
   if (isTypingTarget(e.target)) return
 
   if (e.key === 'F3') {
@@ -6244,7 +6783,7 @@ function onGlobalKeydown(e) {
   }
   if (mod && e.shiftKey && e.key.toLowerCase() === 'e') {
     e.preventDefault()
-    onExportPerfetto()
+    openExportDialog('perfetto')
     return
   }
   if (mod && !e.shiftKey && e.key.toLowerCase() === 's') {
@@ -7839,6 +8378,9 @@ body.row-resizing * {
 }
 
 .help-reference-link {
+  /* Full-width banner across the 2-column help grid — no wrapper card, so it
+     doesn't stretch to a neighbour's height and leave a big blank box. */
+  grid-column: 1 / -1;
   appearance: none;
   border: 1px solid var(--border);
   background: var(--app-surface-2, var(--panel-bg));
@@ -7847,7 +8389,7 @@ body.row-resizing * {
   font-size: 12.5px;
   font-weight: 600;
   border-radius: 8px;
-  padding: 10px 14px;
+  padding: 9px 14px;
   width: 100%;
   text-align: left;
   cursor: pointer;
@@ -8389,6 +8931,11 @@ body.col-resizing * {
   white-space: nowrap;
   color: var(--fg-dim);
   padding: 0 8px;
+}
+
+.status-health {
+  flex: none;
+  font-family: var(--font-ui, system-ui, sans-serif);
 }
 
 .status-range {
