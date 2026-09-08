@@ -7,24 +7,25 @@ flowchart TD
   open["1. Open the trace<br/>Fit Trace and identify workload phases"] --> tools["2. Learn the essential tools<br/>View, Load, Find, Cursors, Statistics"]
   tools --> quality{"3. Is the trace usable?"}
   quality -->|No| recapture["Fix instrumentation or capture settings<br/>then capture again"]
-  quality -->|Yes| task["4. Select one task and symptom"]
-  task --> stats["5. Read Statistics<br/>Count, Avg, p95, p99, Max"]
-  stats --> triage["6. Use Analysis Findings<br/>choose evidence, not a conclusion"]
+  recapture --> open
+  quality -->|Yes| task["4. Select one task and one measurable symptom"]
+  task --> stats["5. Measure with Statistics<br/>Count, distribution, tail, worst event"]
+  stats --> triage["6. Use Analysis Findings for triage<br/>choose evidence, not a conclusion"]
   triage --> scope["7. Scope one incident<br/>C1–Cn and Limit to C1–Cn"]
-  scope --> dependency["8. Follow metric dependencies<br/>TIMING, SCHED, SYNC, DETAIL"]
-  dependency --> timeline{"9. Does the timeline support the explanation?"}
+  scope --> dependency["8. Follow the smallest relevant dependency path<br/>TIMING, SCHED, SYNC, DETAIL"]
+  dependency --> timeline{"9. Does the timeline support the hypothesis?"}
   timeline -->|No| refine["Refine Scope or test another hypothesis"]
-  refine --> dependency
-  timeline -->|Yes| ai["10. Ask AI to investigate and verify"]
-  ai --> verify{"Evidence still sufficient?"}
-  verify -->|No| refine
-  verify -->|Yes| change["11. Define one measurable change"]
-  change --> compare["Capture again and Compare<br/>repeat the same measurements"]
-  compare --> record["12. Record the evidence and conclusion"]
+  refine --> scope
+  timeline -->|Yes| ai["10. Optional: use AI to organize and challenge the evidence"]
+  ai --> sufficient{"Evidence sufficient for a testable change?"}
+  sufficient -->|No| refine
+  sufficient -->|Yes| change["11. Define one measurable change<br/>recapture and Compare"]
+  change --> record["12. Record the evidence, result, and remaining uncertainty"]
 ```
 
-The order matters. BTFViewer Statistics and the timeline provide measured evidence. **Analysis Findings** identify where to look. The AI Assistant organizes evidence and tests explanations. **What-if** and **Optimize** provide estimates only.
+The order matters. Statistics and the timeline provide the measured evidence. **Analysis Findings** point to areas worth checking. The AI Assistant is optional; use it only after the symptom and Scope are grounded, to organize evidence, challenge an explanation, or plan the next check. **What-if** and **Optimize** are estimates, not measurements. If AI is not configured, continue from verified evidence to a controlled experiment.
 
+<a id="what-you-will-learn" name="what-you-will-learn"></a>
 ## What you will learn
 
 By the end of this workflow, you should be able to:
@@ -37,6 +38,7 @@ By the end of this workflow, you should be able to:
 - use AI after selecting evidence, not as the source of measurements; and
 - validate a change with a new trace and equivalent measurements.
 
+<a id="running-example" name="running-example"></a>
 ## Running example: one task is sometimes late
 
 This guide uses a generic task named `ControlTask`. Replace it with the task that matters in your trace.
@@ -47,6 +49,7 @@ The reported symptom is:
 
 The workflow does not assume the cause. Long response can come from longer own execution, preemption, an off-CPU wait, dispatch delay, synchronization, migration, or an incomplete trace. The purpose of the investigation is to distinguish these possibilities with evidence.
 
+<a id="essential-terms" name="essential-terms"></a>
 ## Essential terms
 
 | Term | Meaning in this workflow |
@@ -64,6 +67,7 @@ The workflow does not assume the cause. Long response can come from longer own e
 
 Selection and Highlight never silently become Filters. Always check the status bar and the Statistics **Filtered:** indicator before interpreting a value.
 
+<a id="evidence-levels" name="evidence-levels"></a>
 ## Evidence levels
 
 | Evidence level | Examples | How to use it |
@@ -129,6 +133,10 @@ You do not need every toolbar function for a first investigation. Learn these co
 5. Clear the cursor with the context menu or `Shift+C`.
 6. Switch Task/Core View and confirm that Scope and Selection are preserved.
 
+### Optional guided first review
+
+The built-in guided demo can walk a sample trace through the main viewer controls. Use it to learn navigation; the measured workflow below remains the reference for a real investigation.
+
 ### Continue when
 
 You understand which actions only change the view and which actions change the analyzed data.
@@ -158,6 +166,8 @@ Check whether the trace contains the STI data needed for the question. For examp
 - deadline results need a correct configured threshold.
 
 If a required event is missing, record the limitation. Do not replace missing evidence with a precise explanation.
+
+When capture metadata reports overflow, truncation, or missing instrumentation, the **trace-quality banner** offers **Review details**, **Continue with limitations**, and **Open capture guidance**. Review the affected Statistics and AI conclusions before continuing.
 
 ### Continue when
 
@@ -255,9 +265,9 @@ For each relevant finding:
 1. Read its severity, title, measured value, and **Evidence** line.
 2. Treat severity as attention priority, not failure probability.
 3. Select **Show on timeline** to center the timeline on the cited event without changing Scope or Filters.
-4. Select **Investigate** to open the supporting Statistics section and apply a recommended cursor range when offered.
-5. Confirm that the Statistics value, task name, and timestamp match the finding.
-6. Mark **Done** when reviewed, **Dismiss…** with a short reason when not applicable, or **Add to case** to pin the finding on the AI Case.
+4. Confirm that the Statistics value, task name, and timestamp match the finding.
+5. If you use **Investigate** as a shortcut, treat any suggested cursor range as a proposal and verify it in Step 7 before enabling **Limit to C1–Cn**.
+6. Mark **Done** when reviewed, **Dismiss…** with a short reason when not applicable, or add the finding to the investigation when you want to preserve it.
 
 If no relevant finding exists, continue from the measured Statistics sample. A missing finding does not mean the task has no problem; the symptom may not match a built-in heuristic.
 
@@ -298,7 +308,7 @@ Full-trace Statistics can mix startup, steady-state, overload, recovery, and shu
 - Avoid a window so wide that unrelated phases dominate the measurements.
 - Avoid a window so narrow that the cause lies outside it.
 
-Navigation, Scope, and Filter are different. **Show Evidence**, Find, and Fit change where you look. **Limit to C1–Cn** changes which samples are calculated.
+Navigation, Scope, and Filter are different. **Show on timeline**, Find, and Fit change where you look. **Limit to C1–Cn** changes which samples are calculated.
 
 ### Continue when
 
@@ -425,7 +435,7 @@ Use **Confirmed** only when the application requirement and instrumentation defi
 You can write one evidence-based statement without using the AI, for example: “The longest observed `ControlTask` response in this Scope contains a normal execution slice but a long off-CPU interval that overlaps specific preemption activity.”
 
 <a id="workflow-step-10" name="workflow-step-10"></a>
-## Step 10 — Use the AI Assistant
+## Step 10 — Optionally use the AI Assistant to challenge the explanation
 
 AI is optional. Use it after selecting a finding, task, event, distribution, or C1–Cn range. It receives structured Findings and tool results, not the complete raw `.btf` event stream.
 
@@ -554,6 +564,7 @@ Keep the source trace. An exported report summarizes evidence but cannot preserv
 
 **Trace Health pill** — the status bar shows a compact structural-health status (Pass / Caution / Insufficient data); click it for the per-check detail. It reports whether the parsed event model is internally consistent enough to trust the derived statistics — independent of AI and of *Trace Health (TICK)*.
 
+<a id="investigation-notebook" name="investigation-notebook"></a>
 ### Investigation notebook
 
 The notebook records **why** you reached a conclusion, not just what you looked at. Open it from the left activity rail (**Investigation notebook**) or the command palette; it is a per-trace document that travels inside the exported HTML report and the portable workspace.
@@ -592,6 +603,7 @@ The notebook records **why** you reached a conclusion, not just what you looked 
 
 Headless: `btfviewer report trace.btf --investigation notes.json -o report.html` adds the section from a saved notebook JSON; the report's JSON output echoes it back with resolved `chains` and `broken_references`.
 
+<a id="portable-workspace" name="portable-workspace"></a>
 ### Portable workspace (`.btfw`)
 
 To hand off the whole investigation as one file, save a **portable workspace** — **Export… → Portable workspace (`.btfw`)** in the GUI, or the headless commands below. A `.btfw` is a plain ZIP container — inspectable with any ZIP tool, dependent on no installed BTFViewer or online service — with a documented layout:
@@ -620,6 +632,7 @@ Headless:
 | `btfviewer workspace inv.btfw --extract DIR` | safely extract every member under `DIR` |
 | `btfviewer workspace inv.btfw --report OUT.html` | write the embedded report to `OUT.html` |
 
+<a id="headless-verification" name="headless-verification"></a>
 ### Headless verification (CI gate)
 
 `btfviewer verify trace.btf --rules project-rules.json` checks a trace against explicit per-metric limits and exits with a stable code, so it drops straight into a pipeline without a display server:
@@ -649,6 +662,7 @@ Thresholds are `min` / `max` (native units), `minimum_us` / `maximum_us` (also `
 
 For baseline regression instead of fixed limits, use `btfviewer analyze candidate.btf --baseline baseline.btf --fail-on-regression` (record a baseline with `--save-baseline base.json`).
 
+<a id="complete-worked-example" name="complete-worked-example"></a>
 ## Complete worked example
 
 The following example shows the entire path without inventing numeric results.
@@ -660,14 +674,15 @@ The following example shows the entire path without inventing numeric results.
 | 3 | Check Core Utilisation, Trace Health, and instrumentation | Trace is usable for timing analysis |
 | 4 | Open Response, Execution, Blocking, and Period/Jitter | The question becomes “own execution or off-CPU delay?” |
 | 5 | Compare Count, Avg, p95, p99, Max, and distribution | One tail sample or recurring group is selected |
-| 6 | Open Analysis; use Show Evidence or Investigate | Finding and Statistics point to the same episode |
+| 6 | Open Analysis; use Show on timeline and review the supporting Statistics | Finding and Statistics point to the same episode |
 | 7 | Place C1 before the trigger and C2 after completion; enable Limit | Statistics now describe one incident |
 | 8 | Follow Response → Execution/Blocking → Preemption/Mutex/Migration | The smallest supporting dependency path is collected |
 | 9 | Verify exact task/core/event order on the timeline | Explanation is Supported, Plausible, Inconclusive, or Unsupported |
-| 10 | Ask AI to Investigate, then Verify finding; continue with Evidence **[Run]** or a tagged `nextstep:{…}` **[Run]** | AI explanation is checked against the same evidence |
+| 10 | Optionally ask AI to Investigate and Verify finding; use it to challenge the evidence, not replace the timeline check | AI explanation is checked against the same evidence |
 | 11 | Define one expected metric change, capture Candidate, Compare | The change is measured rather than assumed |
 | 12 | Save Scope, values, evidence times, conclusion, and report | Another engineer can reproduce the investigation |
 
+<a id="beginner-completion-checklist" name="beginner-completion-checklist"></a>
 ## Beginner completion checklist
 
 - [ ] I confirmed the active trace, Scope, Filters, and View Mode.
@@ -687,6 +702,7 @@ The following example shows the entire path without inventing numeric results.
 - [ ] I captured an equivalent Candidate and repeated the same measurements.
 - [ ] I recorded enough context for another engineer to reproduce the result.
 
+<a id="common-beginner-mistakes" name="common-beginner-mistakes"></a>
 ## Common beginner mistakes
 
 | Mistake | Better practice |
@@ -704,6 +720,7 @@ The following example shows the entire path without inventing numeric results.
 | Expecting **Next check:** in the reply to be a button | Use Evidence **[Run]**, or a dedicated `nextstep:{action}` line |
 | Treating What-if as a verified improvement | Apply the change, capture again, and Compare |
 
+<a id="when-to-stop-and-recapture" name="when-to-stop-and-recapture"></a>
 ## When to stop and recapture
 
 Stop the current investigation and capture again when:
@@ -717,6 +734,7 @@ Stop the current investigation and capture again when:
 
 An inconclusive result with a clear instrumentation requirement is more useful than a confident explanation without evidence.
 
+<a id="documentation-navigation" name="documentation-navigation"></a>
 ## Documentation navigation
 
 - [`README.md`](README.md) — installation, supported files, toolbar, timeline controls, export, and shortcuts

@@ -296,11 +296,12 @@ def _add_subsection_ids(html: str) -> tuple[str, dict]:
     return _H3_RE.sub(_sub, html), subsections
 
 
-# --heading reuses STATS_CATEGORY_BADGE_COLORS.SCHED's fg (web/src/utils/
-# statsPins.js) rather than --accent (the link color) — headings needed a
-# color of their own so they don't read as clickable, and reusing an
-# existing app color keeps the reference visually tied to the app instead
-# of introducing a one-off.
+# Headings get a color of their own (not --accent, the link color) so they
+# don't read as clickable. Each level has its own hue, matching the per-level
+# palette the PDF manuals use (scripts/heading-color.tex): h1=blue,
+# h2=violet, h3=teal, h4=pink, h5=orange. The light-theme values are
+# identical to the PDF; the dark-theme values are lighter tints of the same
+# hues, tuned for the #1E1E1E page background.
 _PAGE_TEMPLATE = """<!doctype html>
 <html data-theme="dark">
 <head>
@@ -314,7 +315,11 @@ _PAGE_TEMPLATE = """<!doctype html>
   --fg: #D4D4D4;
   --fg-dim: #858585;
   --accent: #4F8BFF;
-  --heading: #C1B7E3;
+  --h1: #7FA9FF;
+  --h2: #C4A5F5;
+  --h3: #5ED9C9;
+  --h4: #F79BC4;
+  --h5: #F0A97A;
   --code-bg: #2D2D2D;
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -326,7 +331,11 @@ html[data-theme="light"] {{
   --fg: #1E1E1E;
   --fg-dim: #666666;
   --accent: #0066CC;
-  --heading: #665A98;
+  --h1: #1D4ED8;
+  --h2: #7C3AED;
+  --h3: #0F766E;
+  --h4: #DB2777;
+  --h5: #C2410C;
   --code-bg: #EEEEEE;
 }}
 * {{ box-sizing: border-box; }}
@@ -342,11 +351,13 @@ body {{
 }}
 a {{ color: var(--accent); text-decoration: none; }}
 a:hover {{ text-decoration: underline; }}
-h1, h2, h3, h4 {{ color: var(--heading); font-weight: 700; line-height: 1.3; }}
-h1 {{ font-size: 22px; margin: 0 0 14px; }}
-h2 {{ font-size: 18px; margin: 40px 0 14px; padding-top: 18px; border-top: 1px solid var(--border); }}
+h1, h2, h3, h4, h5 {{ font-weight: 700; line-height: 1.3; }}
+h1 {{ color: var(--h1); font-size: 22px; margin: 0 0 14px; }}
+h2 {{ color: var(--h2); font-size: 18px; margin: 40px 0 14px; padding-top: 18px; border-top: 1px solid var(--border); }}
 h2:first-of-type {{ border-top: none; padding-top: 0; }}
-h3 {{ font-size: 15.5px; margin: 30px 0 10px; }}
+h3 {{ color: var(--h3); font-size: 15.5px; margin: 30px 0 10px; }}
+h4 {{ color: var(--h4); font-size: 13.5px; margin: 24px 0 8px; }}
+h5 {{ color: var(--h5); font-size: 13.5px; margin: 20px 0 8px; }}
 p {{ margin: 0 0 14px; color: #C7C7C7; }}
 html[data-theme="light"] p {{ color: #333; }}
 code {{

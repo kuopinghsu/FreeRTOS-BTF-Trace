@@ -50,7 +50,7 @@ AI_REPLACE ?=
 
 .PHONY: all help web bundle check-bundle check-web check-docs check-builds \
 	test test-web test-all ai-test ai-test-live ai-test-context ai-prompts \
-	ci ci-gate doc update-images demo demo-voice demo-pack
+	ci ci-gate doc docs-html update-images demo demo-voice demo-pack
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -62,7 +62,8 @@ help:
 	@echo "  make check-web    Rebuild web HTML (local: fail if artifact drifts; CI: build only)"
 	@echo "  make check-docs   Links, EN/zh-TW heading parity + section IDs, PDF freshness"
 	@echo "  make check-builds check-bundle + check-web"
-	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (+ zh-TW) → docs/*.pdf"
+	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (+ zh-TW) → docs/*.pdf (+ docs-html)"
+	@echo "  make docs-html    Rebuild Statistics Reference HTML from STATISTICS*.md (btf_viewer.hlp + web inline)"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
 	@echo "  make demo         Run guided demo via builds/btf_viewer.py (DEMO, DEMO_LANG)"
 	@echo "  make demo-voice   Voice pack status (DEMO). See scripts/demo_voice.py"
@@ -198,7 +199,31 @@ DOC_PDFS := \
 	$(DOCS)/README_zh-TW.pdf $(DOCS)/STATISTICS_zh-TW.pdf \
 	$(DOCS)/AI_zh-TW.pdf $(DOCS)/WORKFLOWS_zh-TW.pdf
 
-doc: $(DOC_PDFS)
+doc: docs-html $(DOC_PDFS)
+
+# Statistics Reference HTML — the desktop help file (builds/btf_viewer.hlp) and
+# the web viewer's inlined copy (web/src/generated/statistics-en.inline.html) —
+# is pre-rendered from STATISTICS.md / STATISTICS_zh-TW.md by
+# scripts/build_docs_html.py (markdown-it + mermaid-cli + MathJax). `make doc`
+# regenerates it whenever those sources or the builder change, keeping
+# `make check-docs` (ci_gate --docs-html freshness check) green.
+#
+# Driven off a stamp so: (a) the single builder invocation isn't run once per
+# output file, and (b) an unchanged STATISTICS*.md doesn't rewrite the embedded
+# mermaid SVGs — on machines without "trebuchet ms" installed those re-render
+# with ~20 KB of cosmetic coordinate drift.
+DOCS_HTML := $(BUILDS)/btf_viewer.hlp web/src/generated/statistics-en.inline.html
+DOCS_HTML_SRCS := STATISTICS.md STATISTICS_zh-TW.md \
+	scripts/build_docs_html.py scripts/render_math.mjs
+
+docs-html: $(BUILDS)/.docs-html-stamp
+
+$(BUILDS)/.docs-html-stamp: $(DOCS_HTML_SRCS)
+	mkdir -p $(BUILDS)
+	$(PYTHON) scripts/build_docs_html.py
+	@touch $@
+
+$(DOCS_HTML): $(BUILDS)/.docs-html-stamp
 
 # Use the vendored Eisvogel template (scripts/eisvogel.latex). Do not pass
 # `--template=eisvogel`: pandoc prefers ~/.local/share/pandoc/templates/eisvogel.latex,
@@ -244,6 +269,7 @@ PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
 	--lua-filter scripts/cjk-image-alt.lua \
 	--include-in-header=scripts/table-layout.tex \
 	--include-in-header=scripts/figure-maxsize.tex \
+	--include-in-header=scripts/heading-color.tex \
 	--resource-path=..:. \
 	-f markdown-blank_before_header \
 	-V mainfont="DejaVu Sans" \
@@ -256,7 +282,8 @@ DOC_LUA := scripts/mermaid-filter.lua scripts/math-codeblock.lua \
 	scripts/html-anchor-filter.lua scripts/md-pdf-links.lua \
 	scripts/emoji-fallback.lua scripts/table-widths.lua \
 	scripts/cjk-image-alt.lua
-DOC_TEX := scripts/table-layout.tex scripts/figure-maxsize.tex
+DOC_TEX := scripts/table-layout.tex scripts/figure-maxsize.tex \
+	scripts/heading-color.tex
 
 # Noto Sans CJK TC for Traditional Chinese manuals (Latin + CJK in one face).
 CJK_FONT_DIR := scripts/fonts
@@ -275,6 +302,7 @@ PANDOC_PDF_FLAGS_ZHTW := --pdf-engine=xelatex \
 	--include-in-header=scripts/table-layout.tex \
 	--include-in-header=scripts/cjk-zh-tw.tex \
 	--include-in-header=scripts/figure-maxsize.tex \
+	--include-in-header=scripts/heading-color.tex \
 	--resource-path=..:. \
 	-f markdown-blank_before_header \
 	-V mainfont="NotoSansCJKtc-Regular.otf" \

@@ -193,7 +193,7 @@ The toolbar groups related controls. Hover over an icon to see its name and shor
 | Zoom | **Zoom in / Zoom out**, **1:1**, **Fit Trace**, **Fit Cursors**, zoom preset | Change the visible time range or select a fixed time-per-pixel scale |
 | View | **Task / Core**, expand or collapse all cores, **Load** | Choose the timeline grouping and show or hide the CPU-load graph |
 | Investigation | **Find**, **Migration & Corridor Inspector**, **Analysis**, **Compare** | Locate evidence, inspect multicore movement, open findings, or compare a Baseline and Candidate |
-| Conditional controls | **All tasks**, **Log₂** | Clear an active Migration Filter, or change an expanded STI waveform between linear and logarithmic scaling |
+| Conditional controls | **All tasks**, **Log<sub>2</sub>** | Clear an active Migration Filter, or change an expanded STI waveform between linear and logarithmic scaling |
 | Display | Light/dark theme | Switch the viewer theme without opening Settings |
 | Support | **C1–Cn**, **Demo**, **Record**, **Settings**, **Help** | Show whether Statistics is limited to C1–Cn (colour on vs off), load the bundled demo, record the current tab as WebM, configure the viewer, or open shortcuts and help |
 
@@ -324,7 +324,7 @@ Each finding includes:
 - The most relevant supporting metric.
 - An **Evidence** line that separates the measured observation from its interpretation.
 - **Investigate** — apply the suggested Scope and open the relevant Statistics section without using AI.
-- **Show Evidence** — move the timeline to the supporting event without changing the Scope or Filters.
+- **Show on timeline** — move the timeline to the supporting event without changing the Scope or Filters.
 - Optional AI actions when the AI Assistant is configured.
 
 Treat findings as leads, not confirmed root causes. Apply cursors when a finding recommends a useful window, then recheck Statistics inside that Scope.

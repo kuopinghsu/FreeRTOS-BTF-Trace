@@ -89,6 +89,7 @@ BTFViewer/scripts/.monolith_doc_cache.py
 # Pandoc/Mermaid intermediates from `make -C BTFViewer doc` (PDFs under builds/ stay committed)
 BTFViewer/docs/.mermaid-cache-stamp
 BTFViewer/builds/.mermaid-cache-stamp
+BTFViewer/builds/.docs-html-stamp
 BTFViewer/builds/cjk-fallback.tex
 BTFViewer/builds/mermaid-cache/
 # Noto CJK OTF fetched on demand for *_zh-TW.pdf (see scripts/fonts/README.md)

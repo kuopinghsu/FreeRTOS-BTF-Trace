@@ -1,4 +1,4 @@
-# BTFViewer Statistics Reference ![](../images/readme/h1.svg)
+# BTFViewer Statistics Reference
 
 This document is both a statistics reference and an analysis tutorial. It explains what BTFViewer measures, how each value is calculated, when to use it, which other statistics are required for confirmation, and what the result cannot prove. It focuses on analysis rather than implementation.
 
@@ -415,7 +415,7 @@ Task rows are matched by display name (`Name[id]`). A changed ID can prevent a l
 
 Useful comparison groups include Summary, Top Tasks, Core Util, Core Migrations, Execution, Blocking, Inter-Arrival, Preemption, Sync, Response, Mutex, Shared Patterns, and Trends. Exported reports include the full tables rather than only the dialog preview.
 
-#### Example: fixed tick compared with tickless idle ![](../images/readme/h5.svg)
+#### Example: fixed tick compared with tickless idle
 
 Capture the same workload once with a fixed tick and once with tickless idle. Keep TICK instrumentation, workload duration, and build options otherwise equivalent.
 
@@ -458,12 +458,12 @@ The categories describe an investigation purpose:
 - **SYNC** explains waits and synchronization objects.
 - **DETAIL** provides supporting measurements and instrumented data.
 
-## 1. OVERVIEW — overall condition ![](../images/readme/h3.svg)
+## 1. OVERVIEW — overall condition
 
 Start here to understand system load, trace quality, and which tasks may need attention.
 
 <a id="statistics-cores" name="statistics-cores"></a>
-### Core Utilisation (excl. IDLE/TICK) ![](../images/readme/h4.svg)
+### Core Utilisation (excl. IDLE/TICK)
 
 **What it tells you**
 
@@ -478,7 +478,7 @@ Use this section to find heavily loaded cores and uneven placement. Confirm the 
 **How to use it.** Compare the busiest and least busy cores, then open **Core Utilization Over Time** to see whether the difference persists. Use **Task × Core** to identify the tasks behind the load. A low score can be correct when affinity intentionally reserves a core or the workload contains a serial stage.
 
 <a id="statistics-health" name="statistics-health"></a>
-### Trace Health (TICK) ![](../images/readme/h4.svg)
+### Trace Health (TICK)
 
 **What it tells you**
 
@@ -500,7 +500,7 @@ A large gap can come from tickless idle, a long critical section, CPU pressure, 
 ![Tick interval distribution chart — scatter and histogram of consecutive TICK gaps in example-8cores.btf.gz](../images/stats/stats-tick.svg)
 
 <a id="statistics-health-check" name="statistics-health-check"></a>
-### Trace Health Check ![](../images/readme/h4.svg)
+### Trace Health Check
 
 **What it tells you**
 
@@ -517,7 +517,7 @@ Deterministic structural checks on the parsed event model, run after parsing and
 **How to use it.** Read the status first. On **Caution** or **Insufficient data**, expand each check for its time range, affected cores or tasks, and the list of metrics it limits — those sections show *Insufficient data* or a limitation notice instead of a number. A warning never suppresses a metric that can still be computed.
 
 <a id="statistics-task_health" name="statistics-task_health"></a>
-### Task Health ![](../images/readme/h4.svg)
+### Task Health
 
 **What it tells you**
 
@@ -540,12 +540,12 @@ The final score is limited to 0–100. The thresholds are screening rules chosen
 
 **How to use it.** Open the score band or contributing metric with the strongest warning. Check its sample count and distribution, then inspect the corresponding event. A lower score can also result from richer instrumentation or a larger sample set, so compare tasks in context.
 
-## 2. TRIAGE — where to investigate first ![](../images/readme/h3.svg)
+## 2. TRIAGE — where to investigate first
 
 These sections reduce a long trace to a short list of events and recurring problems.
 
 <a id="statistics-anomalies" name="statistics-anomalies"></a>
-### Timeline Anomalies ![](../images/readme/h4.svg)
+### Timeline Anomalies
 
 **What it tells you**
 
@@ -558,7 +558,7 @@ Click a row to inspect the evidence on the timeline. An anomaly means “worth i
 **How to use it.** Start with severe or repeated rows, but remember that one physical episode may create several related anomalies. Place C1–C2 around the episode and analyse the related timing, scheduling, and synchronization rows together.
 
 <a id="statistics-worst" name="statistics-worst"></a>
-### Worst Events ![](../images/readme/h4.svg)
+### Worst Events
 
 **What it tells you**
 
@@ -571,7 +571,7 @@ Use it when the first question is “Where is the largest observed delay?” A m
 **How to use it.** Compare Max with p95 and p99. A Max far above p99 suggests a rare episode; high p95, p99, and Max suggest a persistent tail. Longer traces have more opportunities to contain an extreme, so do not compare Max alone across runs.
 
 <a id="statistics-patterns" name="statistics-patterns"></a>
-### Recurring Patterns ![](../images/readme/h4.svg)
+### Recurring Patterns
 
 **What it tells you**
 
@@ -585,14 +585,14 @@ Repeated events are more likely to represent a systematic condition than a singl
 
 ![Recurring Patterns table for example-8cores.btf.gz](../images/stats/stats-patterns.svg)
 
-## 3. TIMING — task latency and variation ![](../images/readme/h3.svg)
+## 3. TIMING — task latency and variation
 
 These sections describe when a task runs, how long it runs, and how long it waits. The metrics observe different boundaries and should not be treated as interchangeable.
 
 ![Execution Time, Block Time, and Inter-Arrival Time on consecutive task slices](../images/slice-timing-metrics.png)
 
 <a id="statistics-response" name="statistics-response"></a>
-### Response Time ![](../images/readme/h4.svg)
+### Response Time
 
 **What it tells you**
 
@@ -617,7 +617,7 @@ The following distribution for `CS[11]` illustrates how to read the metric beyon
 ![Response time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-response-cs11.svg)
 
 <a id="statistics-exec" name="statistics-exec"></a>
-### Execution Time Per Slice ![](../images/readme/h4.svg)
+### Execution Time Per Slice
 
 **What it tells you**
 
@@ -640,7 +640,7 @@ In this example, the scatter reveals when longer slices occur, while the histogr
 ![Execution time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-exec-cs11.svg)
 
 <a id="statistics-dispatch" name="statistics-dispatch"></a>
-### Dispatch / Scheduling Latency ![](../images/readme/h4.svg)
+### Dispatch / Scheduling Latency
 
 **What it tells you**
 
@@ -661,7 +661,7 @@ The distribution for `SR0[271]` demonstrates a lifecycle task with create, suspe
 ![Dispatch latency distribution for SR0[271] in example-8cores.btf.gz](../images/stats/stats-dispatch-sr0.svg)
 
 <a id="statistics-block" name="statistics-block"></a>
-### Blocking Time (off-CPU gap) ![](../images/readme/h4.svg)
+### Blocking Time (off-CPU gap)
 
 **What it tells you**
 
@@ -682,7 +682,7 @@ In this example, large gaps cluster in particular time regions. That pattern is 
 ![Blocking time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-block-cs11.svg)
 
 <a id="statistics-crit_path" name="statistics-crit_path"></a>
-### Critical Path ![](../images/readme/h4.svg)
+### Critical Path
 
 **What it tells you**
 
@@ -697,7 +697,7 @@ Shows the longest estimated ready-to-completion windows and how much time overla
 ![Critical Path table for example-8cores.btf.gz](../images/stats/stats-crit-path.svg)
 
 <a id="statistics-period" name="statistics-period"></a>
-### Period / Jitter ![](../images/readme/h4.svg)
+### Period / Jitter
 
 **What it tells you**
 
@@ -717,7 +717,7 @@ These thresholds describe observed scheduling behavior. They are not application
 **How to use it.** Limit the Scope to one operating mode. Start-up, shutdown, or a deliberately variable rate can create misleading classifications. Confirm missed periods with **Inter-Arrival Time**, **Core Utilization Over Time**, and the timeline. Use the application's configured requirement when it differs from the observed median.
 
 <a id="statistics-jitter" name="statistics-jitter"></a>
-### Unified Jitter ![](../images/readme/h4.svg)
+### Unified Jitter
 
 **What it tells you**
 
@@ -732,7 +732,7 @@ The spread (`Max − Min`) shows the absolute range. **CV** shows variation rela
 ![Unified Jitter table for example-8cores.btf.gz](../images/stats/stats-jitter.svg)
 
 <a id="statistics-inter" name="statistics-inter"></a>
-### Inter-Arrival Time ![](../images/readme/h4.svg)
+### Inter-Arrival Time
 
 **What it tells you**
 
@@ -753,7 +753,7 @@ The example spans very short and much longer activation gaps, so the duration ax
 ![Inter-arrival time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-inter-cs11.svg)
 
 <a id="statistics-activation" name="statistics-activation"></a>
-### Activation Latency ![](../images/readme/h4.svg)
+### Activation Latency
 
 **What it tells you**
 
@@ -764,7 +764,7 @@ For each periodic task, how far every actual activation lands from a fitted idea
 **How to use it.** A near-zero row is a task locked to the schedule. A large Max with a small p50 is an occasional slip; a p50 that is itself large is steady phase drift — check the task's release path and any lower-priority work delaying it. Compare with **Dispatch / Scheduling Latency** (ready → running) and **Ready-Gap** to see whether the late release is the task itself or the scheduler. Click a row to open the activation-latency distribution and highlight the task on the timeline.
 
 <a id="statistics-ready_gap" name="statistics-ready_gap"></a>
-### Ready-Gap (Starvation) ![](../images/readme/h4.svg)
+### Ready-Gap (Starvation)
 
 **What it tells you**
 
@@ -774,12 +774,12 @@ Per task, the off-CPU time it spent while arguably able to run — a starvation 
 
 **How to use it.** Rank by Longest or Total. A high **% preempt** points at priority or affinity — cross-check **Preemption Chain Analysis** and task priorities. A low **% preempt** means the gap is mostly `blocked`; follow it into **Mutex / Semaphore** and **Waiter × Owner**. `blocked` here is a heuristic (STI take/recv near the slice end), not a kernel-recorded wait. Click a row to open the ready-gap distribution and highlight the task on the timeline.
 
-## 4. SCHED — multicore scheduling and placement ![](../images/readme/h3.svg)
+## 4. SCHED — multicore scheduling and placement
 
 These sections explain where tasks run, how they move, and which tasks interfere with one another.
 
 <a id="statistics-task_core" name="statistics-task_core"></a>
-### Task × Core ![](../images/readme/h4.svg)
+### Task × Core
 
 **What it tells you**
 
@@ -792,7 +792,7 @@ Use this table with **Core Affinity** and **Core Migrations**. Click a cell to i
 **How to use it.** A spread row is not automatically harmful. Check whether the task is allowed to migrate, then use **Core Migrations** to distinguish occasional placement from frequent movement. Compare columns with **Core Utilisation** when investigating imbalance.
 
 <a id="statistics-core_time" name="statistics-core_time"></a>
-### Core Utilization Over Time ![](../images/readme/h4.svg)
+### Core Utilization Over Time
 
 **What it tells you**
 
@@ -807,7 +807,7 @@ The overall utilisation summary can hide short bursts. This section reveals when
 ![Core utilization over time bins in example-8cores.btf.gz](../images/stats/stats-core-time.svg)
 
 <a id="statistics-migrations" name="statistics-migrations"></a>
-### Core Migrations ![](../images/readme/h4.svg)
+### Core Migrations
 
 **What it tells you**
 
@@ -846,7 +846,7 @@ The migration plot has three complementary views:
 ![Post-migration gap distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-gap-cs22.svg)
 
 <a id="statistics-core_pairs" name="statistics-core_pairs"></a>
-### Core-Pair Migration Summary ![](../images/readme/h4.svg)
+### Core-Pair Migration Summary
 
 **What it tells you**
 
@@ -863,7 +863,7 @@ Use it to determine whether migrations are distributed broadly or concentrated b
 ![Time between pair migrations for Core_5→Core_7](../images/stats/stats-pair-rate-c5-c7.svg)
 
 <a id="statistics-affinity" name="statistics-affinity"></a>
-### Core Affinity ![](../images/readme/h4.svg)
+### Core Affinity
 
 **What it tells you**
 
@@ -876,7 +876,7 @@ Slices before the first recorded affinity setting are treated as unrestricted. A
 **How to use it.** Inspect violations first because they can indicate configuration, instrumentation, ID mapping, or scheduling problems. When there are no violations, use the allowed-core count with **Task × Core** to determine whether the task actually uses the available placement. No event means “unknown,” not “unrestricted by design.”
 
 <a id="statistics-preempt_matrix" name="statistics-preempt_matrix"></a>
-### Preemption Matrix ![](../images/readme/h4.svg)
+### Preemption Matrix
 
 **What it tells you**
 
@@ -891,7 +891,7 @@ This is evidence of temporal overlap, not proof that one task directly caused an
 ![Preemption Matrix ranking for example-8cores.btf.gz](../images/stats/stats-preempt-matrix.svg)
 
 <a id="statistics-preemption" name="statistics-preemption"></a>
-### Preemption Chain Analysis ![](../images/readme/h4.svg)
+### Preemption Chain Analysis
 
 **What it tells you**
 
@@ -906,7 +906,7 @@ High total overlap indicates a persistent source of interference; a large maximu
 ![Preemption chain distribution CS[24] preempted by CS[25] in example-8cores.btf.gz](../images/stats/stats-preempt-cs24-cs25.svg)
 
 <a id="statistics-priority" name="statistics-priority"></a>
-### Priority Inheritance ![](../images/readme/h4.svg)
+### Priority Inheritance
 
 **What it tells you**
 
@@ -925,7 +925,7 @@ Orange ranges show boosts. A red L/M/H pattern indicates that a medium-priority 
 ![Priority boost distribution chart for Low[266]](../images/stats/stats-priority-low.svg)
 
 <a id="statistics-concurrency" name="statistics-concurrency"></a>
-### Concurrent Core Active Distribution ![](../images/readme/h4.svg)
+### Concurrent Core Active Distribution
 
 **What it tells you**
 
@@ -940,7 +940,7 @@ This measures **temporal parallelism**. It differs from load balance: cores can 
 ![Concurrent core active interval-duration distribution for N=4 in example-8cores.btf.gz](../images/stats/stats-concurrency-4.svg)
 
 <a id="statistics-switch_reason" name="statistics-switch_reason"></a>
-### Switch Reason Breakdown ![](../images/readme/h4.svg)
+### Switch Reason Breakdown
 
 **What it tells you**
 
@@ -953,7 +953,7 @@ Involuntary preemption count is a first-order real-time metric; a high or rising
 **How to use it.** Rank by **Preempted** or **Preempt/s**. Click a row to highlight that task on the timeline. Confirm a high count against **Preemption Matrix** and **Preemption Chain Analysis** for the interfering tasks, and check task priorities. A high **Period** count is normal for a periodic task that sleeps between jobs.
 
 <a id="statistics-sched_load" name="statistics-sched_load"></a>
-### Scheduling Load Over Time ![](../images/readme/h4.svg)
+### Scheduling Load Over Time
 
 **What it tells you**
 
@@ -963,12 +963,12 @@ Divides the Scope into equal time bins and reports, per bin, the **context-switc
 
 **How to use it.** Look for bins with a spike in Ctx sw/s, a persistent low LB score, or a load change aligned with a latency spike elsewhere. Click a row to select that time bin on the timeline, then use **Task × Core** and **Switch Reason Breakdown** to identify the work inside it.
 
-## 5. SYNC — synchronization and waiting ![](../images/readme/h3.svg)
+## 5. SYNC — synchronization and waiting
 
 These sections use STI synchronization events. They appear only when the trace contains the required events.
 
 <a id="statistics-mutex_block" name="statistics-mutex_block"></a>
-### Mutex Blocking ![](../images/readme/h4.svg)
+### Mutex Blocking
 
 **What it tells you**
 
@@ -983,7 +983,7 @@ Because the trace does not expose the kernel wait queue, this is not an exact re
 ![Mutex Blocking table for example-8cores.btf.gz](../images/stats/stats-mutex-block.svg)
 
 <a id="statistics-wait_owner" name="statistics-wait_owner"></a>
-### Waiter × Owner ![](../images/readme/h4.svg)
+### Waiter × Owner
 
 **What it tells you**
 
@@ -996,7 +996,7 @@ Large or frequent cells identify task pairs worth investigating. They do not pro
 **How to use it.** A large cell shows a repeated relationship around one object or set of objects. Open the longest handoff, confirm that the tasks access the same object, and check whether priority and timing support the waiter–owner interpretation.
 
 <a id="statistics-sync" name="statistics-sync"></a>
-### Mutex / Semaphore ![](../images/readme/h4.svg)
+### Mutex / Semaphore
 
 **What it tells you**
 
@@ -1011,7 +1011,7 @@ Common issues include an unmatched take, an orphan give, deletion while held, or
 **How to use it.** Resolve pairing problems before trusting hold or blocking estimates. Rank by **p99 hold** to find the objects with the worst hold tail, then a non-zero **Waiters** tells you that tail actually delayed other tasks — follow it into **Mutex Blocking** and **Waiter × Owner**. A **MaxNest** above 1 means lock nesting; check the acquire order against your locking hierarchy for deadlock risk. A long *uncontended* hold (Waiters 0) may be harmless. Click a row to open the hold-duration distribution. Combine with task priorities and the timeline.
 
 <a id="statistics-queue" name="statistics-queue"></a>
-### Queue ![](../images/readme/h4.svg)
+### Queue
 
 **What it tells you**
 
@@ -1024,7 +1024,7 @@ The table describes recorded queue activity; it does not reconstruct queue conte
 **How to use it.** Check pairing quality and event rates, then correlate queue activity with **Inter-Arrival**, **Dispatch Latency**, Tags such as queue depth, and end-to-end Intervals. Click a row to open the hold-duration distribution. A long send-to-receive interval can include normal batching or consumer scheduling delay.
 
 <a id="statistics-sync_level" name="statistics-sync_level"></a>
-### Queue Backlog / Semaphore Level ![](../images/readme/h4.svg)
+### Queue Backlog / Semaphore Level
 
 **What it tells you**
 
@@ -1034,12 +1034,12 @@ The running fill level of every queue and semaphore over the Scope, reconstructe
 
 **How to use it.** A high Peak with a large Time-at-peak on a queue means the consumer cannot keep up — check the consumer's **Dispatch / Scheduling Latency**, priority, and **Ready-Gap**. A non-zero End level that grows across runs is a leak. Frequent Starved counts on a semaphore point at a mis-sized token pool or a missing release path. Click a row to jump to peak onset (or the first starve when Peak is 0). This reconstruction assumes every `give`/`take` is instrumented; unmatched events (see **Mutex / Semaphore** issues) make the level approximate.
 
-## 6. DETAIL — supporting measurements ![](../images/readme/h3.svg)
+## 6. DETAIL — supporting measurements
 
 Use these sections when the earlier categories identify an area that needs more evidence.
 
 <a id="statistics-core_breakdown" name="statistics-core_breakdown"></a>
-### Core Time Breakdown ![](../images/readme/h4.svg)
+### Core Time Breakdown
 
 **What it tells you**
 
@@ -1059,7 +1059,7 @@ Gap can include scheduling overhead, interrupts, critical sections, trace loss, 
 **How to use it.** Active explains workload, Idle explains unused capacity, and Tick explains recorded tick service. Investigate a large Gap with **Kernel Switch Overhead**, Trace Health, and the timeline. If all cores show a gap at the same time, capture loss or a global event is more plausible than ordinary per-core scheduling. Click a core to switch to Core View, expand that core, and scroll to it.
 
 <a id="statistics-idle" name="statistics-idle"></a>
-### Idle Analysis ![](../images/readme/h4.svg)
+### Idle Analysis
 
 **What it tells you**
 
@@ -1070,7 +1070,7 @@ Per core, how the IDLE time is shaped: the total, the single longest idle stretc
 **How to use it.** Use the total against **Core Utilisation** to size spare capacity. A long all-cores-idle window is fine if nothing was pending — cross-check **Ready-Gap** and **Blocking Time** for the same interval to be sure it was not a system-wide stall. A high fragment count with a small longest stretch usually means fine-grained blocking; follow it into **Switch Reason Breakdown**. Click a row to open the idle-fragment distribution and highlight that core on the timeline.
 
 <a id="statistics-switch_overhead" name="statistics-switch_overhead"></a>
-### Kernel Switch Overhead ![](../images/readme/h4.svg)
+### Kernel Switch Overhead
 
 **What it tells you**
 
@@ -1089,7 +1089,7 @@ The gap is an observed interval around a switch. It can include scheduler work, 
 ![Kernel switch overhead distribution for Core_0 in example-8cores.btf.gz](../images/stats/stats-switch-core0.svg)
 
 <a id="statistics-tasks" name="statistics-tasks"></a>
-### Top Tasks by CPU (excl. IDLE/TICK) ![](../images/readme/h4.svg)
+### Top Tasks by CPU (excl. IDLE/TICK)
 
 **What it tells you**
 
@@ -1102,7 +1102,7 @@ This ranking shows where processor time is spent. A high share is not necessaril
 **How to use it.** Use this as a starting point for CPU optimisation and workload validation. Compare with per-core utilisation and Execution distributions. A low-share task can still be latency-critical, and a high-share task can be healthy when it performs the intended work.
 
 <a id="statistics-distrib" name="statistics-distrib"></a>
-### Distribution Explorer ![](../images/readme/h4.svg)
+### Distribution Explorer
 
 **What it tells you**
 
@@ -1119,7 +1119,7 @@ For example, the CDF crosses p95 at 95%. If a deadline is drawn at that value, a
 **How to use it.** Start with the CDF to assess tail probability, use the histogram to see whether there are multiple operating modes, and use the scatter plot to locate when the mode or outlier occurred. Confirm the selected metric's definition—especially heuristic response, wake, and blocking—before applying a requirement line.
 
 <a id="statistics-intervals" name="statistics-intervals"></a>
-### Interval Analysis ![](../images/readme/h4.svg)
+### Interval Analysis
 
 **What it tells you**
 
@@ -1142,7 +1142,7 @@ Use intervals for code regions with explicit boundaries, such as one loop iterat
 ![Interval duration distribution for interval id 1 in example-8cores.btf.gz](../images/stats/stats-interval-1.svg)
 
 <a id="statistics-tags" name="statistics-tags"></a>
-### Tag Analysis ![](../images/readme/h4.svg)
+### Tag Analysis
 
 **What it tells you**
 
@@ -1159,7 +1159,7 @@ The value axis is not a duration unless the application records a duration. The 
 ![Tag value distribution chart for tag0_event in example-8cores.btf.gz](../images/stats/stats-tag0.svg)
 
 <a id="statistics-lifecycle" name="statistics-lifecycle"></a>
-### Task Lifecycle ![](../images/readme/h4.svg)
+### Task Lifecycle
 
 **What it tells you**
 
@@ -1172,7 +1172,7 @@ Only recorded STI lifecycle events are shown. An absent event may mean the event
 **How to use it.** Check for unexpected creation, deletion, or repeated suspend/resume behavior. Use lifecycle boundaries to avoid interpreting start-up or shutdown as steady state. Missing create events are common when capture begins after tasks already exist.
 
 <a id="statistics-deadline" name="statistics-deadline"></a>
-### Deadlines / CPU Budget ![](../images/readme/h4.svg)
+### Deadlines / CPU Budget
 
 **What it tells you**
 
@@ -1190,7 +1190,7 @@ If no threshold is configured, BTFViewer cannot evaluate compliance. A result of
 ## Trace comparison
 
 <a id="statistics-trace-compare" name="statistics-trace-compare"></a>
-### Trace Compare ![](../images/readme/h4.svg)
+### Trace Compare
 
 **What it tells you**
 

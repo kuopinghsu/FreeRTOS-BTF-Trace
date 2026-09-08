@@ -26,6 +26,14 @@
 \setlist[itemize]{label=\textbullet}
 \setlist[enumerate]{leftmargin=*}
 
+% Glyphs the zh-TW faces (NotoSansCJKtc) lack but DejaVu (the EN build) has,
+% so these substitutions are zh-TW only. GitHub keeps the original glyphs.
+%   ✦ U+2726 — app's "✦ Scaffold" button label, quoted by the manuals
+%   ⠿ U+283F — Braille block used as a drag-handle "grip" mark
+\usepackage{newunicodechar}
+\newunicodechar{✦}{\ensuremath{\star}}
+\newunicodechar{⠿}{\ensuremath{\vdots}}
+
 % table-layout.tex adds allowbreak after \_; undo that for zh-TW filenames.
 % Keep cells justified so CJK fills the column width.
 \AddToHook{env/longtable/begin}{%
