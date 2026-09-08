@@ -1,0 +1,47 @@
+% Colour the PDF headings, echoing how the desktop help file
+% (builds/btf_viewer.hlp) tints its <h1>..<h5> away from body text.
+% Each heading LEVEL gets its own clearly-saturated hue so the document
+% outline reads at a glance even on a phone screen:
+%
+%   \section        (h1) -> btf-h1  blue
+%   \subsection     (h2) -> btf-h2  violet
+%   \subsubsection  (h3) -> btf-h3  teal
+%   \paragraph      (h4) -> btf-h4  pink
+%   \subparagraph   (h5) -> btf-h5  orange
+%
+% Values match the light-theme palette in scripts/build_docs_html.py
+% (_PAGE_TEMPLATE) so the manuals and the in-app reference agree. They are
+% bright enough to obviously read as "coloured" on the white PDF page while
+% still keeping enough contrast for bold heading text.
+%
+% Eisvogel already does \addtokomafont{section}{\color{heading-color}} in its
+% preamble (heading-color = RGB 40,40,40). We re-apply *after* that, inside
+% \AtBeginDocument, so the last \color wins.
+
+\usepackage{xcolor}
+\definecolor{btf-h1}{HTML}{1D4ED8}
+\definecolor{btf-h2}{HTML}{7C3AED}
+\definecolor{btf-h3}{HTML}{0F766E}
+\definecolor{btf-h4}{HTML}{DB2777}
+\definecolor{btf-h5}{HTML}{C2410C}
+
+\AtBeginDocument{%
+  \addtokomafont{section}{\color{btf-h1}}%
+  \addtokomafont{subsection}{\color{btf-h2}}%
+  \addtokomafont{subsubsection}{\color{btf-h3}}%
+  \addtokomafont{paragraph}{\color{btf-h4}}%
+  \addtokomafont{subparagraph}{\color{btf-h5}}%
+}
+
+% --- Single shared heading colour (alternative) ---------------------------
+% To colour every level the same instead, comment out the block above and
+% use:
+%
+% \definecolor{btf-heading}{HTML}{1D4ED8}
+% \AtBeginDocument{%
+%   \addtokomafont{section}{\color{btf-heading}}%
+%   \addtokomafont{subsection}{\color{btf-heading}}%
+%   \addtokomafont{subsubsection}{\color{btf-heading}}%
+%   \addtokomafont{paragraph}{\color{btf-heading}}%
+%   \addtokomafont{subparagraph}{\color{btf-heading}}%
+% }

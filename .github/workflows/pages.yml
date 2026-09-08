@@ -1,0 +1,76 @@
+name: Deploy docs to Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'BTFViewer/*.md'
+      - 'BTFViewer/_config.yml'
+      - 'BTFViewer/assets/**'
+      - 'BTFViewer/docs/**'
+      - 'images/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One concurrent deploy; let a newer push cancel an in-flight run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      # GitHub Pages' "deploy from a folder" only allows / or /docs, so the
+      # site source is assembled here. The manuals are flattened to the site
+      # root and their ../images/ references rewritten to images/ (relative)
+      # so they resolve under the project-page base URL. url/baseurl come
+      # from the configure-pages step above.
+      - name: Stage site source
+        run: |
+          set -eux
+          rm -rf _site_src
+          mkdir -p _site_src/assets/css _site_src/images
+
+          cp BTFViewer/_config.yml           _site_src/_config.yml
+          cp BTFViewer/assets/css/style.scss _site_src/assets/css/style.scss
+          cp -r BTFViewer/docs               _site_src/docs
+          cp -r images/.                      _site_src/images/
+
+          for f in BTFViewer/*.md; do
+            sed 's#(\.\./images/#(images/#g' "$f" > "_site_src/$(basename "$f")"
+          done
+
+          {
+            echo ""
+            echo "url: \"${{ steps.pages.outputs.origin }}\""
+            echo "baseurl: \"${{ steps.pages.outputs.base_path }}\""
+          } >> _site_src/_config.yml
+
+      - name: Build with Jekyll
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./_site_src
+          destination: ./_site
+
+      - uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

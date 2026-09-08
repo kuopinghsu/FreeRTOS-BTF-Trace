@@ -1,0 +1,63 @@
+# Jekyll config for the BTFViewer documentation site (GitHub Pages).
+#
+# Pages is built by .github/workflows/pages.yml, which stages the manuals
+# (README / STATISTICS / WORKFLOWS / AI, plus the zh-TW set), the pre-built
+# docs/*.pdf, and the repo-level images/ tree into a flat site source, then
+# runs this config against it. GitHub's "deploy from a branch folder"
+# setting only accepts / or /docs, so the Action is what lets the sources
+# live under BTFViewer/. The workflow rewrites the manuals' ../images/...
+# references to images/... (relative) so they resolve regardless of the
+# project-page base URL.
+
+title: BTF Trace Viewer
+description: >-
+  Documentation for BTFViewer — statistics reference, analysis workflows,
+  and the AI assistant for BTF/STI scheduling traces.
+theme: jekyll-theme-primer
+
+# github-pages gem plugins we rely on:
+#  - relative-links       rewrites [x](STATISTICS.md#y) -> STATISTICS.html#y
+#  - optional-front-matter renders the manuals even though they have no `---`
+#  - titles-from-headings  uses the first `#` as <title> when none is set
+#  - readme-index          serves README.html as the site index
+plugins:
+  - jekyll-relative-links
+  - jekyll-optional-front-matter
+  - jekyll-titles-from-headings
+  - jekyll-readme-index
+
+relative_links:
+  enabled: true
+  collections: false
+optional_front_matter:
+  remove_originals: true
+titles_from_headings:
+  enabled: true
+  strip_title: false
+  collections: false
+readme_index:
+  enabled: true
+  remove_originals: true
+  with_frontmatter: true
+
+# Every rendered page uses the theme's default layout (this is what pulls in
+# the primer stylesheet and, after it, /assets/css/style.css — the heading
+# colour override).
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+exclude:
+  - Makefile
+  - "*.py"
+  - requirements.txt
+  - TODO.bak
+  - btf_viewer_pkg
+  - scripts
+  - tests
+  - web
+  - builds
+  - demos
+  - examples

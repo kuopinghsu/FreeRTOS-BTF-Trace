@@ -1,0 +1,44 @@
+---
+# Front matter (even empty) is required so Jekyll runs this .scss through
+# the converter. It overrides the jekyll-theme-primer stylesheet, which is
+# pulled in by the @import below.
+---
+
+@import "{{ site.theme }}";
+
+/* Per-level heading colours for the rendered manuals.
+   Same palette as the PDF manuals (scripts/heading-color.tex) and the
+   in-app Statistics Reference (scripts/build_docs_html.py), so all three
+   surfaces agree:
+
+     h1  blue    #1D4ED8
+     h2  violet  #7C3AED
+     h3  teal    #0F766E
+     h4  pink    #DB2777
+     h5  orange  #C2410C
+     h6  muted   #57606A
+
+   Scoped to .markdown-body (the primer theme's content wrapper) so the
+   site chrome is left alone. */
+.markdown-body {
+  h1 { color: #1D4ED8; }
+  h2 { color: #7C3AED; }
+  h3 { color: #0F766E; }
+  h4 { color: #DB2777; }
+  h5 { color: #C2410C; }
+  h6 { color: #57606A; }
+
+  /* Keep the theme's underline rule on h1/h2 readable against the colour. */
+  h1, h2 { border-bottom-color: #D8DEE4; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .markdown-body {
+    h1 { color: #7FA9FF; }
+    h2 { color: #C4A5F5; }
+    h3 { color: #5ED9C9; }
+    h4 { color: #F79BC4; }
+    h5 { color: #F0A97A; }
+    h6 { color: #9AA4AF; }
+  }
+}
