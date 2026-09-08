@@ -375,7 +375,7 @@ class AiPanelUiTests(unittest.TestCase):
         panel._append("assistant", "## Answer\n\nsee jump:12.")
         panel.copy_conversation()
         clip = QApplication.clipboard().text()
-        self.assertIn("# BTF Viewer — AI Conversation", clip)
+        self.assertIn("# BTFViewer — AI Conversation", clip)
         self.assertIn("## Your prompt", clip)
         self.assertIn("## AI Assistant", clip)
         self.assertIn("see jump:12.", clip)

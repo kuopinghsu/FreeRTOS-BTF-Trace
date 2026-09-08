@@ -122,7 +122,7 @@ describe('ai conversation export', () => {
 
   it('writes markdown with roles and original text', () => {
     const md = formatAiConversationMarkdown(entries, when)
-    assert.match(md, /^# BTF Viewer — AI Conversation/)
+    assert.match(md, /^# BTFViewer — AI Conversation/)
     assert.match(md, /_Saved 2026-08-08 08:41:02_/)
     assert.match(md, /## Your prompt\n\nWhy is CS\[22\] late\?/)
     assert.match(md, /## AI Assistant\n\n## Answer\n\nIt migrates at jump:1805000\./)

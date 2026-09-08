@@ -143,7 +143,7 @@ A navigation action does not make the selected event a root cause. It only conne
 - an **Investigation** section when a saved investigation is attached (GUI) or passed with `--investigation` (headless CLI);
 - the same Statistics tables, grouped table of contents, and section notes;
 - search, sorting, Problems only, and Show all for each statistics table; and
-- an SVG load-balance gauge under Core Utilisation.
+- an SVG load-balance gauge under Core Utilization.
 
 The HTML report can identify where to investigate, but it cannot preserve every interactive timeline action. Keep the source trace when another reviewer may need to verify an event.
 
@@ -204,7 +204,7 @@ Use a finding to select the next measurement, not as the conclusion. Confirm the
 
 1. Set the Scope to a meaningful workload phase.
 2. Open **Trace Health** and confirm that the captured TICK pattern and gaps are plausible.
-3. Check **Core Utilisation**, **Core Time Breakdown**, and **Concurrent Core Active Distribution** for overall load and missing time.
+3. Check **Core Utilization**, **Core Time Breakdown**, and **Concurrent Core Active Distribution** for overall load and missing time.
 4. Use **Timeline Anomalies**, **Worst Events**, and **Task Health** to choose a task or time range.
 5. Inspect the relevant **Execution**, **Blocking**, **Response**, or **Period** distribution.
 6. Return to the timeline and place cursors around the selected sample.
@@ -231,7 +231,7 @@ Use a finding to select the next measurement, not as the conclusion. Confirm the
 ### Workflow D — investigate multicore load balance or migration
 
 1. Confirm that load balancing and task migration are enabled by the RTOS design. Migration is not expected for pinned tasks.
-2. Use **Core Utilisation** and **Core Utilization Over Time** to distinguish a persistent imbalance from a short phase.
+2. Use **Core Utilization** and **Core Utilization Over Time** to distinguish a persistent imbalance from a short phase.
 3. Use **Task × Core** to identify which tasks contribute to each core.
 4. Use **Core Migrations** and **Core-Pair Migration Summary** to find frequent moves and bounce paths.
 5. Validate the allowed placement with **Core Affinity**.
@@ -261,7 +261,7 @@ The table below identifies the strongest dependencies. “Requires” describes 
 
 | Statistic | Requires | Confirm with |
 |---|---|---|
-| Core Utilisation | Per-core slices and Scope duration | Core Time Breakdown, Task × Core, Core Time |
+| Core Utilization | Per-core slices and Scope duration | Core Time Breakdown, Task × Core, Core Time |
 | Trace Health | TICK events | Core Breakdown, Timeline |
 | Task Health | Several timing and scheduling statistics | The component section selected by the score |
 | Anomalies / Worst / Patterns | Derived sample sets | Timeline and the named source statistic |
@@ -274,11 +274,11 @@ The table below identifies the strongest dependencies. “Requires” describes 
 | Activation Latency | Activation starts plus fitted period T | Period / Jitter, Dispatch Latency, Ready-Gap |
 | Ready-Gap (Starvation) | Off-CPU gaps, same-core overlap, STI take/suspend | Preemption Chain, Priority, Mutex Blocking |
 | Migration statistics | Consecutive slices and core IDs | Affinity, Task × Core, Switch Overhead |
-| Idle Analysis | Per-core IDLE segments clipped to scope | Core Utilisation, Ready-Gap, Blocking Time |
+| Idle Analysis | Per-core IDLE segments clipped to scope | Core Utilization, Ready-Gap, Blocking Time |
 | Queue Backlog / Semaphore Level | STI give/send and take/recv per object | Mutex / Semaphore, Dispatch Latency, Ready-Gap |
 | Preemption statistics | Off-CPU gaps plus same-core overlap | Priority, Core Time, Timeline |
 | Switch Reason Breakdown | Off-CPU gaps, same-core overlap, STI take/suspend | Preemption Matrix, Preemption Chain, Priority |
-| Scheduling Load Over Time | Per-core slice starts and utilisation bins | Core Utilization Over Time, Task × Core, Core Utilisation |
+| Scheduling Load Over Time | Per-core slice starts and utilisation bins | Core Utilization Over Time, Task × Core, Core Utilization |
 | Mutex statistics | STI synchronization events | Waiter × Owner, Priority, Timeline |
 | Queue statistics | STI queue events | Tags, Intervals, Timeline |
 | Intervals / Tags | Application STI events | Execution, Response, Timeline |
@@ -414,7 +414,7 @@ Trace Compare is most reliable when read in this order:
 
 Task rows are matched by display name (`Name[id]`). A changed ID can prevent a logical match. A dash means unavailable, not zero. CPU and utilisation differences use percentage points (`pp`).
 
-Useful comparison groups include Summary, Top Tasks, Core Util, Core Migrations, Execution, Blocking, Inter-Arrival, Preemption, Sync, Response, Mutex, Shared Patterns, and Trends. Exported reports include the full tables rather than only the dialog preview.
+Useful comparison groups include Summary, Top Tasks, Core Utilization, Core Migrations, Execution, Blocking, Inter-Arrival, Preemption, Sync, Response, Mutex, Shared Patterns, and Trends. Exported reports include the full tables rather than only the dialog preview.
 
 #### Example: fixed tick compared with tickless idle
 
@@ -464,7 +464,7 @@ The categories describe an investigation purpose:
 Start here to understand system load, trace quality, and which tasks may need attention.
 
 <a id="statistics-cores" name="statistics-cores"></a>
-### Core Utilisation (excl. IDLE/TICK)
+### Core Utilization (excl. IDLE/TICK)
 
 **What it tells you**
 
@@ -790,7 +790,7 @@ Use this table with **Core Affinity** and **Core Migrations**. Click a cell to i
 
 **Calculation.** Each cell is the sum of the task's slice overlap on that core within the Scope. Read a row to see a task's placement; read a column to see which tasks consume one core.
 
-**How to use it.** A spread row is not automatically harmful. Check whether the task is allowed to migrate, then use **Core Migrations** to distinguish occasional placement from frequent movement. Compare columns with **Core Utilisation** when investigating imbalance.
+**How to use it.** A spread row is not automatically harmful. Check whether the task is allowed to migrate, then use **Core Migrations** to distinguish occasional placement from frequent movement. Compare columns with **Core Utilization** when investigating imbalance.
 
 <a id="statistics-core_time" name="statistics-core_time"></a>
 ### Core Utilization Over Time
@@ -936,7 +936,7 @@ This measures **temporal parallelism**. It differs from load balance: cores can 
 
 **Calculation.** BTFViewer sweeps the Scope boundaries of user-task slices and measures how long the number of simultaneously active cores equals `0 ... N`. The durations should account for the scoped time, subject to trace gaps and clipping.
 
-**How to use it.** Compare the observed distribution with the workload's expected parallelism. High time at one active core in an SMP workload can indicate serialization, affinity restrictions, or insufficient ready work. Use **Core Utilisation**, **Task × Core**, and synchronization statistics to explain it.
+**How to use it.** Compare the observed distribution with the workload's expected parallelism. High time at one active core in an SMP workload can indicate serialization, affinity restrictions, or insufficient ready work. Use **Core Utilization**, **Task × Core**, and synchronization statistics to explain it.
 
 ![Concurrent core active interval-duration distribution for N=4 in example-8cores.btf.gz](../images/stats/stats-concurrency-4.svg)
 
@@ -1068,7 +1068,7 @@ Per core, how the IDLE time is shaped: the total, the single longest idle stretc
 
 **Calculation.** Every IDLE segment in each core's slice list is clipped to the Scope. **Idle total** is their sum, **Longest** the largest single one, **Frags** the count, **p95** the 95th-percentile fragment. The all-cores-idle window is a sweep over all cores' idle intervals for the longest stretch covered on every core simultaneously. Sorted by idle total, most-idle core first.
 
-**How to use it.** Use the total against **Core Utilisation** to size spare capacity. A long all-cores-idle window is fine if nothing was pending — cross-check **Ready-Gap** and **Blocking Time** for the same interval to be sure it was not a system-wide stall. A high fragment count with a small longest stretch usually means fine-grained blocking; follow it into **Switch Reason Breakdown**. Click a row to open the idle-fragment distribution and highlight that core on the timeline.
+**How to use it.** Use the total against **Core Utilization** to size spare capacity. A long all-cores-idle window is fine if nothing was pending — cross-check **Ready-Gap** and **Blocking Time** for the same interval to be sure it was not a system-wide stall. A high fragment count with a small longest stretch usually means fine-grained blocking; follow it into **Switch Reason Breakdown**. Click a row to open the idle-fragment distribution and highlight that core on the timeline.
 
 <a id="statistics-switch_overhead" name="statistics-switch_overhead"></a>
 ### Kernel Switch Overhead

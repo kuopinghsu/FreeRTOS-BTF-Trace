@@ -81,19 +81,19 @@
           <span
             v-if="sigmaZone === 'amber'"
             class="lb-chip lb-chip-amber"
-            title="Population stddev of core utilisation exceeds 30%"
+            title="Population stddev of core utilization exceeds 30%"
           >σ &gt; 30%</span>
           <span
             v-else-if="sigmaZone === 'red'"
             class="lb-chip lb-chip-red"
-            title="Population stddev of core utilisation exceeds 50%"
+            title="Population stddev of core utilization exceeds 50%"
           >σ &gt; 50%</span>
         </div>
         <svg
           class="lb-svg"
           :viewBox="`0 0 ${G.viewW} ${G.viewH}`"
           role="img"
-          :aria-label="`Core utilisation sigma ${stddevLabel} percent`"
+          :aria-label="`Core Utilization sigma ${stddevLabel} percent`"
         >
           <defs>
             <linearGradient :id="sigmaGradId" x1="0%" y1="0%" x2="100%" y2="0%">

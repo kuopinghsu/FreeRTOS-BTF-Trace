@@ -141,7 +141,7 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("Candidate B", html)
         self.assertIn("Δ = Baseline A", html)
         for section in (
-            "Core Utilisation", "Execution Time", "Blocking Time",
+            "Core Utilization", "Execution Time", "Blocking Time",
             "Inter-Arrival Time", "Sync Objects", "Response P99", "Mutex Blocking",
             "Shared Patterns", "Trends",
         ):
@@ -152,7 +152,7 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("Max A", csv)
         self.assertRegex(html, r'<details class="report-card" id="sec-overview" open>')
         self.assertIn("compare-chart", html)
-        self.assertIn("Core utilisation", html)
+        self.assertIn("Core Utilization", html)
         self.assertIn("Summary changes", html)
         self.assertIn('class="compare-decision"', html)
         self.assertIn('class="compare-verdict-banner tone-', html)

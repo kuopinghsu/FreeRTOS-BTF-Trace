@@ -260,7 +260,7 @@ describe('buildCorridorInspectorModel', () => {
       inspectorFilters: 'None',
       timeScale: 'ns',
     })
-    assert.match(extra, /Analysis scope: Full Trace/)
+    assert.match(extra, /Inspector scope: Full Trace/)
     assert.match(extra, /Handoff suspects/)
     assert.match(extra, /not a measured cache-line transfer/)
     assert.equal(CHORD_GRAD_SOURCE_STOP, 0.7)
@@ -472,7 +472,7 @@ describe('inspectorViewportBanner', () => {
     assert.match(statsPy, /ciCircleToggle/)
     assert.match(statsPy, /_matrix_pad_t/)
     assert.match(ciVue, /inspectorAnalysisScope\(/)
-    assert.match(ciVue, /Analysis Scope/)
+    assert.match(ciVue, /Inspector Scope/)
     assert.doesNotMatch(ciVue, /ci-scope-hint/)
     assert.doesNotMatch(ciVue, /Place at least two cursors/)
     assert.doesNotMatch(statsPy, /_sync_scope_hint/)

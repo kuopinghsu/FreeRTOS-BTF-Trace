@@ -167,7 +167,7 @@ function checkCoreOverlap(segs, formatNs) {
       affectedEntities: [...cores].sort(),
       evidenceRefs: ev,
       metricLimitations: [
-        'Core Utilisation', 'Core Time Breakdown',
+        'Core Utilization', 'Core Time Breakdown',
         'Preemption Chain Analysis', 'Response Time',
       ],
     })
@@ -306,10 +306,10 @@ function checkLongGap(segs, lo, hi, trace, formatNs) {
   return mkCheck(CHECK_LONG_GAP, 'info',
     `No task was scheduled for ${fmt(formatNs, gap)} (${Math.round(gap / span * 100)}% of the `
     + 'analysed span). This may be genuine idle time or a gap in the capture; rates and '
-    + 'utilisation include it in the denominator.',
+    + 'utilization include it in the denominator.',
     {
       affectedRange: { start: Math.trunc(gapLo), end: Math.trunc(gapHi) },
-      metricLimitations: ['Scheduling Load Over Time', 'Core Utilisation'],
+      metricLimitations: ['Scheduling Load Over Time', 'Core Utilization'],
     })
 }
 

@@ -1,4 +1,4 @@
-"""Desktop Trace Compare: the few-column tables (Summary, Core Util, Response,
+"""Desktop Trace Compare: the few-column tables (Summary, Core Utilization, Response,
 …) divide the full page width — no dead strip to the right of the last column,
 whatever the Δ values are.  The 16-column Migrations table keeps content-width
 columns and scrolls horizontally instead.

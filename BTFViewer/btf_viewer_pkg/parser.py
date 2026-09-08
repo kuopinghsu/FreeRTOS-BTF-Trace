@@ -436,7 +436,7 @@ def _interval_instances_for_draw(trace: "BtfTrace",
     return trace.interval_instances_by_id.get(interval_id, []), False
 
 def _core_util_pct_for(trace: "BtfTrace", core: str) -> float:
-    """Full-trace core utilisation % (IDLE/TICK excluded), with parse-time cache."""
+    """Full-trace core utilization % (IDLE/TICK excluded), with parse-time cache."""
     if trace.core_util_pct and core in trace.core_util_pct:
         return trace.core_util_pct[core]
     segs = trace.core_segs.get(core, [])
@@ -5345,7 +5345,7 @@ def _build_corridor_ai_context(
         overview=None, inspector_filters=None, time_scale=None) -> str:
     scale = time_scale or (scope or {}).get("unit") or "ns"
     lines = [
-        f"Analysis scope: {(scope or {}).get('label') or 'Full Trace'}",
+        f"Inspector scope: {(scope or {}).get('label') or 'Full Trace'}",
         f"Trace unit: {scale}",
     ]
     if scope and scope.get("detail"):
@@ -5784,7 +5784,7 @@ def _gini_coefficient(values: List[float]) -> float:
 
 
 def _core_util_stddev(values: List[float]) -> float:
-    """Population standard deviation of core utilisation percentages."""
+    """Population standard deviation of core utilization percentages."""
     n = len(values)
     if n < 2:
         return 0.0
@@ -6821,7 +6821,7 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
 
     _section("Summary", "Metric,Baseline A,Candidate B,Δ", tables.get("summary", []), 4)
     _section("Top Tasks", "Task,CPU A (%),CPU B (%),Δ (pp)", tables.get("top", []), 4)
-    _section("Core Utilisation", "Core,Util A (%),Util B (%),Δ (pp)", tables.get("core_util", []), 4)
+    _section("Core Utilization", "Core,Util A (%),Util B (%),Δ (pp)", tables.get("core_util", []), 4)
     _section(
         "Core Migrations",
         "Task,Migrations A,Migrations B,Δ,Rate A,Rate B,Rate Δ,"
@@ -7005,7 +7005,7 @@ COMPARE_TOC_GROUPS = (
         "Overview", "Summary",
     )),
     ("CPU & Cores", (
-        "Top Tasks", "Core Utilisation", "Core Migrations",
+        "Top Tasks", "Core Utilization", "Core Migrations",
     )),
     ("Timing", (
         "Execution Time", "Blocking Time", "Inter-Arrival Time", "Response P99",
@@ -7302,7 +7302,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               tables.get("top", []), "No user tasks in either trace",
               note="Highest CPU consumers excluding IDLE/TICK. "
                    "Δ is percentage points (pp)."),
-        _card("Core Utilisation",
+        _card("Core Utilization",
               ["Core", "Util A (%)", "Util B (%)", "Δ (pp)"],
               tables.get("core_util", []), "No core util data",
               lead_html=util_lead,

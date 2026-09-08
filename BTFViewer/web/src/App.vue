@@ -370,11 +370,13 @@
           </div>
         </Transition>
       </div>
-      <!-- Left activity rail: investigation entry points that have no panel home. -->
+      <!-- Left activity rail: analysis + application entry points that have no
+           panel home (Analysis, Notebook, Compare, Migration Inspector, plus
+           Snapshot, Help, Settings). -->
       <nav
         v-if="trace"
         class="activity-rail"
-        aria-label="Investigation tools"
+        aria-label="Analysis and application tools"
       >
         <button
           v-if="heatmapEnabled"
@@ -384,7 +386,7 @@
           @click="onOpenHeatmap"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/></svg>
-          <span class="rail-tip act-tip">Migration heatmap</span>
+          <span class="rail-tip act-tip">Migration &amp; Corridor Inspector</span>
         </button>
         <button
           type="button"
@@ -424,7 +426,7 @@
           @click="onCopyScreenshot"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h2.5l1.6-2h5.8L18.5 6H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.5"/></svg>
-          <span class="rail-tip act-tip">Snapshot editor</span>
+          <span class="rail-tip act-tip">Snapshot Editor</span>
         </button>
         <span class="act-spring" aria-hidden="true"></span>
         <button
@@ -1010,6 +1012,12 @@
                 F
               </div><div>Fit Trace — zoom to show the entire trace</div>
               <div class="k">
+                Shift+F
+              </div><div>Toggle Focus Mode</div>
+              <div class="k">
+                Esc
+              </div><div>Exit Focus Mode</div>
+              <div class="k">
                 G
               </div><div>Toggle grid</div>
               <div class="k">
@@ -1020,7 +1028,7 @@
               </div><div>Toggle dark/light mode</div>
               <div class="k">
                 Ctrl+S
-              </div><div>Open snapshot editor</div>
+              </div><div>Open Snapshot Editor</div>
               <div class="k">
                 Ctrl+Shift+S
               </div><div>Save viewport as SVG</div>
@@ -1050,7 +1058,7 @@
               </div><div>Add annotation at current position</div>
               <div class="k">
                 S
-              </div><div>Open screenshot editor</div>
+              </div><div>Open Snapshot Editor</div>
               <div class="k">
                 +
               </div><div>Zoom in</div>
@@ -1152,7 +1160,7 @@
             <div class="help-grid">
               <div class="k">
                 S / Ctrl+S
-              </div><div>Open snapshot editor from the current timeline view</div>
+              </div><div>Open Snapshot Editor from the current timeline view</div>
               <div class="k">
                 Save PNG
               </div><div>In the editor: export the annotated snapshot; includes CPU load when Load is on</div>
@@ -1187,7 +1195,7 @@
         class="about-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="About RTOS BTF Viewer"
+        aria-label="About BTFViewer"
       >
         <div class="about-hero">
           <div
@@ -1195,8 +1203,8 @@
             aria-hidden="true"
             v-html="aboutIconSvg"
           />
-          <div class="about-title">RTOS BTF Viewer</div>
-          <div class="about-subtitle">AI assistant for RTOS trace analysis — find evidence and explain · v{{ appVersion }}</div>
+          <div class="about-title">BTFViewer</div>
+          <div class="about-subtitle">Portable BTF trace analysis and evidence reports · v{{ appVersion }}</div>
         </div>
 
         <div class="about-body">
@@ -1211,8 +1219,9 @@
           <div class="about-section">
             <div class="about-section-title">Application</div>
             <div class="about-grid">
-              <div class="about-key">Product</div><div>RTOS BTF Viewer</div>
-              <div class="about-key">Purpose</div><div>AI assistant for RTOS trace analysis: find evidence and explain</div>
+              <div class="about-key">Product</div><div>BTFViewer</div>
+              <div class="about-key">Purpose</div><div>Portable BTF trace analysis and evidence reports</div>
+              <div class="about-key">AI</div><div>Optional AI-assisted investigation</div>
               <div class="about-key">Runtime</div><div>Vue 3 · Vite · Canvas-based timeline renderer</div>
               <div class="about-key">Build Date</div><div>{{ buildDate }}</div>
             </div>
@@ -1401,7 +1410,7 @@
       v-if="focusMode && trace"
       type="button"
       class="focus-exit"
-      title="Exit focus mode (Esc)"
+      title="Exit Focus Mode (Shift+F or Esc)"
       @click="setFocusMode(false)"
     >
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4"/></svg>
@@ -1706,7 +1715,7 @@ import {
   validateToolCall,
   whatIfEstimate,
 } from './utils/aiTools.js'
-import { detectAnomalies, parseWhatIfChange, snapshotFromSummary, updateBaselineProfile, scoreAgainstBaseline } from './utils/aiInvestigation.js'
+import { detectAnomalies, parseWhatIfChange, snapshotFromSummary, updateBaselineProfile, scoreAgainstBaseline, normalizeComparePayload } from './utils/aiInvestigation.js'
 import { formatAnalysisStory } from './utils/aiPlanner.js'
 import { bestFindingScope, harvestUxEvents, findingOverlayTimes, taskInspectorLine } from './utils/uxExplore.js'
 import { mergeIncidentOverlayTimes } from './utils/incidentOverlay.js'
@@ -3788,7 +3797,7 @@ async function attachParsedTrace(name, packedOrTrace, {
     if (typeof sourceText === 'string' && sourceText) {
       tab.sourceText = sourceText
     }
-    // Fresh open with no saved pins: SMP-aware Core Utilisation presentation.
+    // Fresh open with no saved pins: SMP-aware Core Utilization presentation.
     // Session restore and user pins from localStorage keep their layout.
     if (!fromSession && !(appSettings.statsPinnedSections || []).length) {
       const { pins, collapsed } = defaultStatsPresentation(trace)
@@ -4022,9 +4031,7 @@ function runPaletteAction(id) {
   else if (aid === 'settings') openSettingsDialog()
   else if (aid === 'limit-scope') onStatsScopeChange(true)
   else if (aid === 'fit') onFit()
-  else if (aid === 'inspect-task') {
-    showToast(taskInspectorText.value, 'info')
-  } else if (String(aid).startsWith('preset-')) {
+  else if (String(aid).startsWith('preset-')) {
     applyWorkspacePreset(aid)
   } else if (aid.startsWith('stats-section:')) {
     const sid = aid.slice('stats-section:'.length).trim()
@@ -4041,10 +4048,6 @@ function runPaletteAction(id) {
 }
 
 function applyWorkspacePreset(id) {
-  if (id === 'preset-compare') {
-    compareOpen.value = true
-    return
-  }
   rightPanelTab.value = 'stats'
   appSettings.statsSectionCollapsed = workspacePresetCollapsed(
     id, defaultSectionCollapsed())
@@ -5100,11 +5103,11 @@ function dispatchAiTool(name, args) {
     })
   }
   if (name === AI_TOOL_REGRESSION_LOCALIZE) {
-    const cmp = lastAiCompare || {}
-    return regressionLocalizeTool(cmp.candidate || cmp.a || {}, cmp.baseline || cmp.b || {}, {
+    const norm = normalizeComparePayload(lastAiCompare)
+    return regressionLocalizeTool(norm.candidate_b || {}, norm.baseline_a || {}, {
       findings,
-      labelA: args.label_a || 'A',
-      labelB: args.label_b || 'B',
+      labelA: args.label_a || norm.label_a || 'A',
+      labelB: args.label_b || norm.label_b || 'B',
     })
   }
   if (name === AI_TOOL_BUILD_CAUSAL_CHAIN) return buildCausalChainTool(findings)
@@ -6899,8 +6902,10 @@ function onGlobalKeydown(e) {
       }
       break
     case 'f':
+      // F = Fit Trace; Shift+F = toggle Focus Mode (F never toggles Focus Mode).
       if (!mod) {
-        onFit()
+        if (e.shiftKey) toggleFocusMode()
+        else onFit()
         e.preventDefault()
       }
       break

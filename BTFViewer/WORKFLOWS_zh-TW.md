@@ -152,7 +152,7 @@ flowchart TD
 
 | Statistics 區段 | 要回答的問題 | 注意事項 |
 |---|---|---|
-| **Core Utilisation** | 哪些核心忙碌、閒置或負載不平均？ | 平均負載平衡可能掩蓋短暫過載 |
+| **Core Utilization** | 哪些核心忙碌、閒置或負載不平均？ | 平均負載平衡可能掩蓋短暫過載 |
 | **Trace Health (TICK)** | TICK 間隔、大間隔與 tickless 行為是否合理？ | 無週期滴答閒置可能合理地產生不規則間隔 |
 | **Task Health** | 哪些工作應優先檢查？ | 分數是啟發式指標，不是 AI 機率 |
 | **Core Time Breakdown** | Active、IDLE、TICK 與 Gap 是否合理涵蓋分析範圍？ | Gap 不一定代表核心閒置 |
@@ -345,7 +345,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  load["Core Utilisation 與 Core Time"] --> placement["Task × Core"]
+  load["Core Utilization 與 Core Time"] --> placement["Task × Core"]
   placement --> migration["Core Migrations 與 Core Pairs"]
   migration --> allowed["Core Affinity"]
   allowed --> cost["Switch Overhead、Preemption、Response"]
@@ -356,7 +356,7 @@ flowchart TD
 
 | 問題 | Statistics |
 |---|---|
-| 負載不平衡是長期狀態，還是特定階段？ | Core Utilisation、Core Utilization Over Time |
+| 負載不平衡是長期狀態，還是特定階段？ | Core Utilization、Core Utilization Over Time |
 | 哪些工作造成各核心負載？ | Task × Core |
 | 工作多久移動一次？移動後停留多久？ | Core Migrations：Count、Rate、Dwell、Ping |
 | 哪一個方向的核心路徑最常出現？ | Core-Pair Migration Summary |
@@ -669,7 +669,7 @@ Headless：
 |---:|---|---|
 | 1 | 開啟追蹤資料、Fit Trace、啟用 Load、辨識穩定執行階段 | 問題工作負載確實存在 |
 | 2 | 選取 `ControlTask`，練習 Find 與 Task/Core View | 能看見該工作與周圍核心活動 |
-| 3 | 檢查 Core Utilisation、Trace Health 與追蹤事件 | 追蹤資料可用於時序分析 |
+| 3 | 檢查 Core Utilization、Trace Health 與追蹤事件 | 追蹤資料可用於時序分析 |
 | 4 | 開啟 Response、Execution、Blocking 與 Period/Jitter | 問題轉換成「自身執行，還是 Off-CPU 延遲？」 |
 | 5 | 比較 Count、Avg、p95、p99、Max 與分布 | 選定一個尾端樣本或重複型態 |
 | 6 | 開啟 Analysis，使用 **Show on timeline** 並檢查對應統計資料 | 分析結果與統計資料指向相同事件 |

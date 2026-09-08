@@ -15,6 +15,30 @@ class Step3UxTests(unittest.TestCase):
         self.assertEqual(COMMAND_PALETTE_META["fit"]["shortcut"], "Ctrl+0")
         self.assertEqual(COMMAND_PALETTE_META["marks"]["shortcut"], "Ctrl+B")
 
+    def test_palette_dropped_false_inspect_task_shortcut(self):
+        ids = [aid for aid, _ in COMMAND_PALETTE_ACTIONS]
+        self.assertNotIn("inspect-task", ids)
+        self.assertNotIn("inspect-task", COMMAND_PALETTE_META)
+        # `I` is STI-only; no palette item may advertise it.
+        for meta in COMMAND_PALETTE_META.values():
+            self.assertNotEqual(meta.get("shortcut"), "I")
+
+    def test_palette_statistics_preset_labels(self):
+        labels = dict(COMMAND_PALETTE_ACTIONS)
+        self.assertEqual(labels["preset-triage"], "Statistics preset: Triage")
+        self.assertEqual(labels["preset-latency"], "Statistics preset: Latency")
+        self.assertEqual(labels["preset-smp"], "Statistics preset: SMP")
+        self.assertNotIn("preset-compare", labels)
+        self.assertIn("workspace", COMMAND_PALETTE_META["preset-triage"]["synonyms"])
+        self.assertEqual(labels["heatmap"], "Migration & Corridor Inspector")
+
+    def test_palette_has_notebook_and_focus(self):
+        labels = dict(COMMAND_PALETTE_ACTIONS)
+        self.assertEqual(labels["notebook"], "Investigation Notebook")
+        self.assertEqual(labels["focus"], "Focus Mode")
+        self.assertEqual(COMMAND_PALETTE_META["notebook"]["requires"], "trace")
+        self.assertEqual(COMMAND_PALETTE_META["focus"]["requires"], "trace")
+
     def test_semantic_delta_glyphs(self):
         self.assertIn("↑", format_semantic_delta("+12 µs", "Regressed", True))
         self.assertIn("↓", format_semantic_delta("−3 µs", "Improved", True))

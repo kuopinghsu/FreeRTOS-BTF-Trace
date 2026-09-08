@@ -45,9 +45,12 @@ import {
 } from '../src/utils/aiTools.js'
 
 describe('aiTools', () => {
-  it('exports the viewer tools', () => {
+  it('exports the viewer tools (functional aliases are not schemas)', () => {
     const names = aiViewerTools().map(t => t.function.name)
-    assert.deepEqual(names, [...AI_VIEWER_TOOL_NAMES])
+    const hidden = ['plan_investigation', 'optimize', 'generate_experiment_plan',
+      'cluster_incidents', 'analyze_temporal_causality']
+    assert.deepEqual(names, AI_VIEWER_TOOL_NAMES.filter(n => !hidden.includes(n)))
+    for (const h of hidden) assert.ok(!names.includes(h))
     assert.ok(names.includes('add_annotation'))
     assert.ok(names.includes('query_raw_metric'))
     assert.ok(names.includes('export_report'))

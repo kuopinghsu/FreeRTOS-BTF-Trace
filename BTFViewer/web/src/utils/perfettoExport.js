@@ -370,7 +370,7 @@ export function buildPerfettoChromeTrace(trace, range = {}) {
   const { lo, hi } = normalizeExportRange(range.lo ?? null, range.hi ?? null)
   const meta = trace.meta && typeof trace.meta === 'object' ? { ...trace.meta } : {}
   const otherData = {
-    source: 'RTOS BTF Viewer',
+    source: 'BTFViewer',
     timeScale: trace.timeScale,
     time_min: trace.timeMin,
     time_max: trace.timeMax,

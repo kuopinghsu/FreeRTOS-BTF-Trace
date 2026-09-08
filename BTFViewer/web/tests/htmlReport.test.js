@@ -20,7 +20,7 @@ describe('htmlReport TOC', () => {
     const html = htmlApplyCollapsibleToc(body, [
       'Analysis Findings',
       'Statistics Notes',
-      'Core Utilisation (excl. IDLE/TICK)',
+      'Core Utilization (excl. IDLE/TICK)',
       'Top Tasks by CPU (excl. IDLE/TICK)',
       'Trace Health (TICK)',
     ])

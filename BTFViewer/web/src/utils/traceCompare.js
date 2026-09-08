@@ -1131,7 +1131,7 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
   }
 
   lines.push('')
-  lines.push('Core Util')
+  lines.push('Core Utilization')
   lines.push('Core,Util A (%),Util B (%),Δ (pp)')
   for (const row of t.coreUtil) {
     lines.push([csvCell(row.core), csvCell(row.utilA), csvCell(row.utilB), csvCell(row.delta)].join(','))
@@ -1383,7 +1383,7 @@ ${HTML_REPORT_TOC_CSS}
 // Same grouping as the Trace Compare dialog's nav rail (pageTabs `group`).
 export const COMPARE_TOC_GROUPS = [
   ['Overview', ['Overview', 'Summary']],
-  ['CPU & Cores', ['Top Tasks', 'Core Utilisation', 'Core Migrations']],
+  ['CPU & Cores', ['Top Tasks', 'Core Utilization', 'Core Migrations']],
   ['Timing', ['Execution Time', 'Blocking Time', 'Inter-Arrival Time', 'Response P99']],
   ['Contention', ['Preemption Chains', 'Sync Objects', 'Mutex Blocking']],
   ['Cross-trace', ['Shared Patterns', 'Trends']],
@@ -1517,7 +1517,7 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
 
   const coreHtml = _rowsOrEmpty(t.coreUtil, 4,
     r => `<tr><td>${htmlCell(r.core)}</td><td>${htmlCell(r.utilA)}</td><td>${htmlCell(r.utilB)}</td><td>${htmlCell(r.delta)}</td></tr>`,
-    'No core utilisation data')
+    'No core utilization data')
 
   const migHtml = _rowsOrEmpty(t.migrations, 16,
     r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.migrationsA)}</td><td>${htmlCell(r.migrationsB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.rateA)}</td><td>${htmlCell(r.rateB)}</td><td>${htmlCell(r.rateDelta)}</td><td>${htmlCell(r.dwellA)}</td><td>${htmlCell(r.dwellB)}</td><td>${htmlCell(r.dwellDelta)}</td><td>${htmlCell(r.pingA)}</td><td>${htmlCell(r.pingB)}</td><td>${htmlCell(r.coresA)}</td><td>${htmlCell(r.coresB)}</td><td>${htmlCell(r.primaryA)}</td><td>${htmlCell(r.primaryB)}</td></tr>`,
@@ -1590,7 +1590,7 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       `KPI-style totals and rates. Δ = Baseline A − Candidate B (positive means A is numerically larger). ${COMPARE_NOTE_SIGMA}`),
     _cardHtml('Top Tasks', '<th>Task</th><th>CPU A (%)</th><th>CPU B (%)</th><th>Δ (pp)</th>', topHtml, '',
       'Highest CPU consumers excluding IDLE/TICK. Δ is percentage points (pp).'),
-    _cardHtml('Core Utilisation', '<th>Core</th><th>Util A (%)</th><th>Util B (%)</th><th>Δ (pp)</th>', coreHtml, utilLead,
+    _cardHtml('Core Utilization', '<th>Core</th><th>Util A (%)</th><th>Util B (%)</th><th>Δ (pp)</th>', coreHtml, utilLead,
       'Per-core active util % excluding IDLE/TICK over each side\'s scoped wall-clock span.'),
     _cardHtml('Core Migrations',
       '<th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th><th>Cores A</th><th>Cores B</th><th>Primary A</th><th>Primary B</th>',

@@ -67,7 +67,7 @@ describe('statsPins', () => {
     assert.equal(mergeSectionCollapsed({ exec: false }).health, true)
   })
 
-  it('SMP-active presentation pins Core Utilisation only', () => {
+  it('SMP-active presentation pins Core Utilization only', () => {
     const uni = {
       coreNames: ['Core_0', 'Core_1', 'Core_2'],
       coreUtilPct: { Core_0: 40, Core_1: 0, Core_2: 0 },

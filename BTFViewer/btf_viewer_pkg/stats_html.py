@@ -12,7 +12,7 @@ STATS_TOC_GROUPS = (
         "Trace Health Check", "Investigation", "Trace Metadata",
     )),
     ("CPU and Scheduling", (
-        "Core Utilisation", "Trace Health (TICK)", "Core Time Breakdown",
+        "Core Utilization", "Trace Health (TICK)", "Core Time Breakdown",
         "Concurrent Core Active Distribution", "Switch Reason Breakdown",
         "Scheduling Load Over Time", "Kernel Switch Overhead", "Idle Analysis",
         "Top Tasks by CPU",
@@ -40,7 +40,7 @@ STATS_DEFAULT_EXPANDED = (
     "Analysis Scope",
     "Analysis Findings",
     "Trace Health Check",
-    "Core Utilisation (excl. IDLE/TICK)",
+    "Core Utilization (excl. IDLE/TICK)",
     "Trace Health (TICK)",
     "Investigate Anomalies",
 )
@@ -779,6 +779,30 @@ def _fmt_ref(ref: dict, format_ns=None) -> str:
     return _esc(ref.get("label") or kind or "ref")
 
 
+_EVIDENCE_KIND_LABELS = {
+    "measured": "Measured", "derived": "Derived", "heuristic": "Heuristic",
+    "estimate": "Simulation / estimate", "": "User note",
+}
+_NB_HTML_SECTION_ORDER = (
+    "question", "scope", "hypotheses", "evidence", "open_checks", "conclusion",
+)
+NB_SECTION_HEADING = {
+    "question": "Question",
+    "scope": "Scope",
+    "hypotheses": "Hypotheses",
+    "evidence": "Evidence",
+    "open_checks": "Open checks",
+    "conclusion": "Conclusion",
+}
+
+
+def _nb_item_refs_html(refs, format_ns) -> str:
+    if not refs:
+        return ""
+    items = "".join(f"<li>{_fmt_ref(r, format_ns)}</li>" for r in refs)
+    return f'<div class="finding-meta"><strong>References:</strong><ul>{items}</ul></div>'
+
+
 def html_investigation_section(
     investigation: dict,
     *,
@@ -787,96 +811,130 @@ def html_investigation_section(
     chains: "Sequence[dict]" = None,
     scope_title: str = "",
 ) -> str:
-    """Investigation Bookmarks and Evidence Chain section for the HTML report.
+    """Investigation Notebook section for the HTML report — the same six
+    sections, in the same order, as the Notebook UI (Question, Scope,
+    Hypotheses, Evidence, Open checks, Conclusion).
 
-    Facts, hypotheses, contradicting evidence and conclusions are kept in
-    separate blocks; every conclusion lists the bookmarks that back it. Stale
-    references are flagged. Keep in sync with
-    ``web/src/utils/statsHtmlReport.js:htmlInvestigationSection``.
+    Evidence carries its provenance badge (Measured / Derived / User note …),
+    source and author; stale references stay visible and flagged. Keep in sync
+    with ``web/src/utils/statsHtmlReport.js:htmlInvestigationSection``.
     """
     if not investigation:
         return ""
-    bookmarks = list(investigation.get("bookmarks") or [])
-    if not bookmarks and not str(investigation.get("conclusion") or "").strip():
+    from .investigation_notebook import investigation_sections, load_investigation
+
+    inv = load_investigation(investigation)
+    if not (inv.get("bookmarks") or str(inv.get("conclusion") or "").strip()
+            or str(inv.get("title") or "").strip()):
         return ""
 
     broken = broken_refs or {}
-    broken_by_bm: dict = {}
-    for iss in broken.get("issues") or []:
-        broken_by_bm.setdefault(str(iss.get("bookmark_id")), []).append(iss)
-
+    sections = {
+        s["id"]: s for s in investigation_sections(inv, broken=broken)
+    }
     chains_by_id = {
         str(c.get("conclusion_id")): c for c in (chains or [])
         if isinstance(c, dict)
     }
 
-    def _bm_card(b: dict) -> str:
-        bid = str(b.get("id") or "")
-        refs = b.get("refs") or []
-        ref_html = ""
-        if refs:
-            items = "".join(f"<li>{_fmt_ref(r, format_ns)}</li>" for r in refs)
-            ref_html = f'<div class="finding-meta"><strong>References:</strong><ul>{items}</ul></div>'
-        note = str(b.get("note") or "").strip()
-        note_html = f"<p>{_esc(note)}</p>" if note else ""
-        bad = broken_by_bm.get(bid) or []
-        bad_html = ""
-        if bad:
-            reasons = "; ".join(_esc(i.get("reason") or "stale reference") for i in bad)
-            bad_html = f'<div class="finding-meta sev-warning"><strong>Stale:</strong> {reasons}</div>'
+    def _sub(label: str, body: str) -> str:
         return (
-            f'<article class="finding-card">'
-            f'<h3>{_esc(_BM_TYPE_LABELS.get(b.get("type"), "Bookmark"))} · {_esc(b.get("title") or "Bookmark")}</h3>'
-            f"{note_html}{ref_html}{bad_html}</article>"
+            f'<h3 class="sub">{_esc(label)}</h3>{body}' if body else ""
         )
 
-    def _group(title: str, types) -> str:
-        rows = [_bm_card(b) for b in bookmarks if b.get("type") in types]
-        if not rows:
-            return ""
-        return f'<h3 class="sub">{_esc(title)}</h3><div class="finding-cards">{"".join(rows)}</div>'
-
-    facts = _group("Facts", _FACT_TYPES)
-    hyps = _group("Hypotheses", ("hypothesis",))
-    contra = _group("Contradicting evidence", ("contradicting",))
-
-    # Conclusions + their evidence chains.
+    # 1 — Question
+    q_items = sections["question"]["items"]
+    question_html = (
+        f'<p class="detail-note"><strong>{_esc(q_items[0]["text"])}</strong></p>'
+        if q_items else ""
+    )
+    # 2 — Scope
+    scope_bits = [_esc(it["text"]) for it in sections["scope"]["items"] if it.get("text")]
+    scope_html = (
+        f'<p class="detail-note">{" · ".join(scope_bits)}</p>' if scope_bits else ""
+    )
+    # 3 — Hypotheses
+    hyp_rows = []
+    for it in sections["hypotheses"]["items"]:
+        status = _esc(str(it.get("status") or "open"))
+        note = str(it.get("note") or "").strip()
+        hyp_rows.append(
+            f'<article class="finding-card"><h3>Hypothesis · {_esc(it["text"])} '
+            f'<span class="finding-meta">[{status}]</span></h3>'
+            + (f"<p>{_esc(note)}</p>" if note else "")
+            + _nb_item_refs_html(it.get("refs"), format_ns)
+            + "</article>"
+        )
+    hyp_html = (
+        f'<div class="finding-cards">{"".join(hyp_rows)}</div>' if hyp_rows else ""
+    )
+    # 4 — Evidence (cards with provenance)
+    ev_rows = []
+    for it in sections["evidence"]["items"]:
+        card = it.get("card") or {}
+        kind = _EVIDENCE_KIND_LABELS.get(str(it.get("kind") or ""), "User note")
+        source = _esc(str(card.get("source") or ""))
+        author = str(card.get("author") or "")
+        author_tag = " · AI" if author == "ai" else (" · BTFViewer" if author == "btfviewer" else "")
+        note = str(it.get("note") or "").strip()
+        stale_html = (
+            '<div class="finding-meta sev-warning"><strong>Stale:</strong> '
+            "reference no longer resolves against the current trace.</div>"
+            if it.get("stale") else ""
+        )
+        ev_rows.append(
+            f'<article class="finding-card"><h3>{_esc(it.get("role") or "evidence").title()} · '
+            f'{_esc(it["text"])} <span class="finding-meta">[{_esc(kind)}'
+            + (f" · {source}" if source else "") + f"{author_tag}]</span></h3>"
+            + (f"<p>{_esc(note)}</p>" if note else "")
+            + _nb_item_refs_html(it.get("refs"), format_ns)
+            + stale_html + "</article>"
+        )
+    ev_html = (
+        f'<div class="finding-cards">{"".join(ev_rows)}</div>' if ev_rows else ""
+    )
+    # 5 — Open checks
+    check_lis = []
+    for it in sections["open_checks"]["items"]:
+        src = str(it.get("source") or "")
+        prefix = "Verify: " if src == "verification" else ""
+        check_lis.append(f"<li>{_esc(prefix + str(it.get('text') or ''))}</li>")
+    checks_html = f"<ul>{''.join(check_lis)}</ul>" if check_lis else ""
+    # 6 — Conclusion (+ grounding chains)
     concl_rows = []
-    for b in bookmarks:
-        if b.get("type") != "conclusion":
+    for it in sections["conclusion"]["items"]:
+        if it.get("kind") == "verification_state":
+            concl_rows.append(
+                f'<div class="finding-meta">{_esc(it.get("text") or "")}</div>'
+            )
             continue
-        chain = chains_by_id.get(str(b.get("id")))
+        bid = str(it.get("bookmark_id") or "")
+        chain = chains_by_id.get(bid) if bid else None
         chain_html = ""
         if chain and chain.get("evidence"):
-            items = "".join(
-                f"<li>{_esc(_BM_TYPE_LABELS.get(e.get('type'), 'Bookmark'))}: {_esc(e.get('title') or e.get('id'))}</li>"
+            lis = "".join(
+                f"<li>{_esc(_BM_TYPE_LABELS.get(e.get('type'), 'Bookmark'))}: "
+                f"{_esc(e.get('title') or e.get('id'))}</li>"
                 for e in chain["evidence"]
             )
-            chain_html = f'<div class="finding-meta"><strong>Backed by:</strong><ul>{items}</ul></div>'
+            chain_html = (
+                f'<div class="finding-meta"><strong>Backed by:</strong><ul>{lis}</ul></div>'
+            )
         elif chain is not None:
-            chain_html = '<div class="finding-meta sev-warning"><strong>Not grounded:</strong> no linked evidence.</div>'
+            chain_html = (
+                '<div class="finding-meta sev-warning"><strong>Not grounded:</strong> '
+                "no linked evidence.</div>"
+            )
         concl_rows.append(
-            f'<article class="finding-card finding-ok">'
-            f'<h3>Conclusion · {_esc(b.get("title") or "Conclusion")}</h3>'
-            + (f"<p>{_esc(b.get('note'))}</p>" if str(b.get("note") or "").strip() else "")
+            f'<article class="finding-card finding-ok"><h3>Conclusion'
+            + (f" · {_esc(it['text'])}" if it.get("bookmark_id") else "")
+            + "</h3>"
+            + (f"<p>{_esc(it['text'])}</p>" if not it.get("bookmark_id") else "")
             + chain_html + "</article>"
         )
-    free_concl = str(investigation.get("conclusion") or "").strip()
-    if free_concl:
-        concl_rows.append(
-            f'<article class="finding-card finding-ok"><h3>Conclusion</h3>'
-            f"<p>{_esc(free_concl)}</p></article>"
-        )
     concl_html = (
-        f'<h3 class="sub">Conclusions</h3><div class="finding-cards">{"".join(concl_rows)}</div>'
-        if concl_rows else ""
+        f'<div class="finding-cards">{"".join(concl_rows)}</div>' if concl_rows else ""
     )
-
-    questions = [str(q) for q in (investigation.get("unresolved_questions") or []) if str(q).strip()]
-    q_html = ""
-    if questions:
-        lis = "".join(f"<li>{_esc(q)}</li>" for q in questions)
-        q_html = f'<h3 class="sub">Unresolved questions</h3><ul>{lis}</ul>'
 
     stale_banner = ""
     if broken.get("stale_trace"):
@@ -885,33 +943,26 @@ def html_investigation_section(
             "these notes were written — references may not line up.</p>"
         )
 
-    ident = investigation.get("trace_identity") or {}
-    rng = investigation.get("analysis_range") or {}
-    ident_bits = []
-    if ident.get("file"):
-        ident_bits.append(f"Trace: {_esc(ident['file'])}")
-    if isinstance(rng, dict) and rng.get("start") is not None and callable(format_ns):
-        try:
-            ident_bits.append(
-                f"Range: {_esc(str(format_ns(int(rng['start']))))} – "
-                f"{_esc(str(format_ns(int(rng['end']))))}")
-        except Exception:
-            pass
-    ident_html = (
-        f'<p class="detail-note">{" · ".join(ident_bits)}</p>' if ident_bits else ""
+    body_by_id = {
+        "question": question_html,
+        "scope": scope_html,
+        "hypotheses": hyp_html,
+        "evidence": ev_html,
+        "open_checks": checks_html,
+        "conclusion": concl_html,
+    }
+    blocks = "".join(
+        _sub(NB_SECTION_HEADING[sid], body_by_id[sid])
+        for sid in _NB_HTML_SECTION_ORDER
     )
-
-    title = str(investigation.get("title") or "").strip()
     heading = f"Investigation{_esc(scope_title)}"
     return (
         '<section class="report-card notes investigation">'
         f"<h2>{heading}</h2>"
-        + (f'<p class="detail-note"><strong>{_esc(title)}</strong></p>' if title else "")
-        + '<p class="detail-note">User-authored bookmarks and the evidence chain. '
-        "Facts, hypotheses, contradicting evidence and conclusions are separated; "
-        "notes never change measured values.</p>"
-        + stale_banner + ident_html
-        + facts + hyps + contra + concl_html + q_html
+        + '<p class="detail-note">The Notebook, in the same six sections as the '
+        "app. Evidence keeps its provenance; notes never change measured "
+        "values.</p>"
+        + stale_banner + blocks
         + "</section>"
     )
 
@@ -959,9 +1010,9 @@ def html_glossary(*, range_note: str = "") -> str:
         "It may include preemption, suspension, periodic waiting, or scheduling delay — not necessarily resource blocking. "
         "It is not end-to-end response time.",
         "<strong>CPU% (task):</strong> Share of total non-IDLE/TICK <em>active CPU time</em> in scope, not wall-clock span and not total multicore capacity.",
-        "<strong>Core utilisation:</strong> Non-IDLE/TICK active time on that core divided by the scoped wall-clock span (one-core capacity = 100%).",
-        "<strong>Load Balance Score:</strong> 100% × (1 − Gini of core utilisation). "
-        "100 = evenly distributed utilisation; 0 = highly uneven. Even overload or even idle can still score high.",
+        "<strong>Core Utilization:</strong> Non-IDLE/TICK active time on that core divided by the scoped wall-clock span (one-core capacity = 100%).",
+        "<strong>Load Balance Score:</strong> 100% × (1 − Gini of core utilization). "
+        "100 = evenly distributed utilization; 0 = highly uneven. Even overload or even idle can still score high.",
         "<strong>Preemption Chain Analysis:</strong> For each off-CPU gap of a victim task, which task ran on the same core during that gap.",
         "<strong>Priority Inheritance:</strong> Tasks boosted above base priority when <code>create pri:N</code> and <code>set_priority</code> STI events are present.",
         "<strong>Mutex / Semaphore:</strong> Paired <code>take</code>/<code>give</code> STI events by object pointer.",

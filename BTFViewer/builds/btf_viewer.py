@@ -446,7 +446,7 @@ STATS_TABLE_HEADER_H     =  18  # QTableWidget header row height (px).
 STATS_TABLE_ROW_H        =  16  # QTableWidget body row height (px).
 STATS_TABLE_HSCROLL_H    =  14  # Horizontal scrollbar strip inside wide tables (px).
 STATS_MAX_VISIBLE_ROWS   =   8  # Default viewport shows this many rows before v-scroll.
-# Core Utilisation scroll content includes the Load Balance gauges; default
+# Core Utilization scroll content includes the Load Balance gauges; default
 # viewport shows gauges + this many core bars (more cores scroll). Matches web.
 STATS_CORES_DEFAULT_VISIBLE_ROWS = 2
 # Desktop _LoadBalanceGaugeWidget sizeHint height (must match stats.py _VH).
@@ -469,7 +469,7 @@ def _stats_util_viewport_height(visible_rows: int = STATS_MAX_VISIBLE_ROWS) -> i
             + max(0, visible_rows - 1) * STATS_UTIL_ROW_GAP + 2)
 
 STATS_UTIL_DEFAULT_H     = _stats_util_viewport_height()
-# Default Core Utilisation viewport: gauges + two core rows (no scroll needed).
+# Default Core Utilization viewport: gauges + two core rows (no scroll needed).
 STATS_CORES_UTIL_DEFAULT_H = (
     STATS_LB_GAUGE_H + _stats_util_viewport_height(STATS_CORES_DEFAULT_VISIBLE_ROWS))
 # Util lists (core/task bars) may shrink to a single row; metric tables keep
@@ -495,7 +495,7 @@ STATS_HEAVY_SECTIONS         = frozenset({
     "activation", "ready_gap", "idle", "sync_level",
 })
 # Factory default: every Statistics section starts collapsed. SMP-active traces
-# expand+pin Core Utilisation via ``default_stats_presentation`` (Step 1.1).
+# expand+pin Core Utilization via ``default_stats_presentation`` (Step 1.1).
 STATS_DEFAULT_EXPANDED_SECTIONS = frozenset()
 
 # Investigation categories (Step 1.1). Category is a property of the section —
@@ -515,20 +515,20 @@ STATS_CATEGORY_LABELS: Dict[str, str] = {
 }
 COMMAND_PALETTE_ACTIONS = (
     ("analysis", "Analysis Findings"),
+    ("notebook", "Investigation Notebook"),
     ("statistics", "Statistics"),
     ("find", "Find"),
     ("marks", "Marks"),
     ("ai", "AI Assistant"),
     ("compare", "Trace Compare"),
-    ("heatmap", "Migration heatmap"),
+    ("heatmap", "Migration & Corridor Inspector"),
+    ("focus", "Focus Mode"),
     ("settings", "Settings"),
     ("limit-scope", "Limit to C1–Cn"),
     ("fit", "Fit Trace"),
-    ("inspect-task", "Inspect task"),
-    ("preset-triage", "Workspace: Triage"),
-    ("preset-latency", "Workspace: Latency"),
-    ("preset-smp", "Workspace: SMP"),
-    ("preset-compare", "Workspace: Compare"),
+    ("preset-triage", "Statistics preset: Triage"),
+    ("preset-latency", "Statistics preset: Latency"),
+    ("preset-smp", "Statistics preset: SMP"),
 )
 # Per-action palette chrome. Keep (id, label) tuples above for compatibility.
 # requires: none | trace | two_traces | cursors2
@@ -536,6 +536,12 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
     "analysis": {
         "shortcut": "",
         "synonyms": ("findings", "inbox", "triage"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "notebook": {
+        "shortcut": "",
+        "synonyms": ("investigation", "bookmarks", "evidence chain", "case notes"),
         "requires": "trace",
         "disabled": "Open a trace first",
     },
@@ -571,7 +577,13 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
     },
     "heatmap": {
         "shortcut": "",
-        "synonyms": ("migration", "corridor"),
+        "synonyms": ("migration", "corridor", "heatmap"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "focus": {
+        "shortcut": "",
+        "synonyms": ("zen", "distraction-free", "fullscreen", "hide panels"),
         "requires": "trace",
         "disabled": "Open a trace first",
     },
@@ -593,12 +605,6 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
         "requires": "trace",
         "disabled": "Open a trace first",
     },
-    "inspect-task": {
-        "shortcut": "I",
-        "synonyms": ("inspector", "task info", "quality"),
-        "requires": "trace",
-        "disabled": "Open a trace first",
-    },
     "preset-triage": {
         "shortcut": "",
         "synonyms": ("workspace", "health"),
@@ -616,12 +622,6 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
         "synonyms": ("workspace", "multicore", "cores"),
         "requires": "trace",
         "disabled": "Open a trace first",
-    },
-    "preset-compare": {
-        "shortcut": "",
-        "synonyms": ("workspace", "diff"),
-        "requires": "two_traces",
-        "disabled": "Open at least two traces",
     },
 }
 COMMAND_PALETTE_RECENT_MAX = 8
@@ -641,7 +641,6 @@ WORKSPACE_PRESETS = {
     "preset-smp": (
         "cores", "migrations", "core_pairs", "affinity", "task_core", "core_time",
     ),
-    "preset-compare": (),
 }
 
 
@@ -822,7 +821,7 @@ def cap_stats_table_rows(rows: list, cap: int = STATS_TABLE_DISPLAY_ROW_CAP) -> 
 def default_section_collapsed() -> Dict[str, bool]:
     """Factory collapsed flags for statistics panel sections (shared with MVVM).
 
-    All sections start collapsed. SMP-active traces expand+pin Core Utilisation
+    All sections start collapsed. SMP-active traces expand+pin Core Utilization
     via ``default_stats_presentation``. Keep keys in lockstep with web
     ``SECTION_COLLAPSE_REFS`` / ``STATS_PINNABLE_SECTIONS``.
     """
@@ -991,7 +990,7 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
 # Section id → StatisticsPanel header title (no scope suffix).
 # Keep lockstep with web/src/utils/statsPins.js STATS_SECTION_TITLES.
 STATS_SECTION_TITLES: Dict[str, str] = {
-    "cores": "Core Utilisation (excl. IDLE/TICK)",
+    "cores": "Core Utilization (excl. IDLE/TICK)",
     "health": "Trace Health (TICK)",
     "task_health": "Task Health",
     "anomalies": "Timeline Anomalies",
@@ -2638,7 +2637,7 @@ def safe_extract_all(
 APP_VERSION = _APP_VERSION
 APP_ICON_SVG = _APP_ICON_SVG
 PRODUCT_NAME = "BTFViewer"
-PRODUCT_TAGLINE = "AI assistant for RTOS trace analysis — find evidence and explain"
+PRODUCT_TAGLINE = "Portable BTF trace analysis and evidence reports"
 
 
 def app_icon_svg_markup(size: int = 48) -> str:
@@ -3517,7 +3516,7 @@ STATS_TOC_GROUPS = (
         "Trace Health Check", "Investigation", "Trace Metadata",
     )),
     ("CPU and Scheduling", (
-        "Core Utilisation", "Trace Health (TICK)", "Core Time Breakdown",
+        "Core Utilization", "Trace Health (TICK)", "Core Time Breakdown",
         "Concurrent Core Active Distribution", "Switch Reason Breakdown",
         "Scheduling Load Over Time", "Kernel Switch Overhead", "Idle Analysis",
         "Top Tasks by CPU",
@@ -3545,7 +3544,7 @@ STATS_DEFAULT_EXPANDED = (
     "Analysis Scope",
     "Analysis Findings",
     "Trace Health Check",
-    "Core Utilisation (excl. IDLE/TICK)",
+    "Core Utilization (excl. IDLE/TICK)",
     "Trace Health (TICK)",
     "Investigate Anomalies",
 )
@@ -4284,6 +4283,30 @@ def _fmt_ref(ref: dict, format_ns=None) -> str:
     return _esc(ref.get("label") or kind or "ref")
 
 
+_EVIDENCE_KIND_LABELS = {
+    "measured": "Measured", "derived": "Derived", "heuristic": "Heuristic",
+    "estimate": "Simulation / estimate", "": "User note",
+}
+_NB_HTML_SECTION_ORDER = (
+    "question", "scope", "hypotheses", "evidence", "open_checks", "conclusion",
+)
+NB_SECTION_HEADING = {
+    "question": "Question",
+    "scope": "Scope",
+    "hypotheses": "Hypotheses",
+    "evidence": "Evidence",
+    "open_checks": "Open checks",
+    "conclusion": "Conclusion",
+}
+
+
+def _nb_item_refs_html(refs, format_ns) -> str:
+    if not refs:
+        return ""
+    items = "".join(f"<li>{_fmt_ref(r, format_ns)}</li>" for r in refs)
+    return f'<div class="finding-meta"><strong>References:</strong><ul>{items}</ul></div>'
+
+
 def html_investigation_section(
     investigation: dict,
     *,
@@ -4292,96 +4315,131 @@ def html_investigation_section(
     chains: "Sequence[dict]" = None,
     scope_title: str = "",
 ) -> str:
-    """Investigation Bookmarks and Evidence Chain section for the HTML report.
+    """Investigation Notebook section for the HTML report — the same six
+    sections, in the same order, as the Notebook UI (Question, Scope,
+    Hypotheses, Evidence, Open checks, Conclusion).
 
-    Facts, hypotheses, contradicting evidence and conclusions are kept in
-    separate blocks; every conclusion lists the bookmarks that back it. Stale
-    references are flagged. Keep in sync with
-    ``web/src/utils/statsHtmlReport.js:htmlInvestigationSection``.
+    Evidence carries its provenance badge (Measured / Derived / User note …),
+    source and author; stale references stay visible and flagged. Keep in sync
+    with ``web/src/utils/statsHtmlReport.js:htmlInvestigationSection``.
     """
     if not investigation:
         return ""
-    bookmarks = list(investigation.get("bookmarks") or [])
-    if not bookmarks and not str(investigation.get("conclusion") or "").strip():
+    investigation_sections = globals().get("investigation_sections")
+    load_investigation = globals().get("load_investigation")
+
+    inv = load_investigation(investigation)
+    if not (inv.get("bookmarks") or str(inv.get("conclusion") or "").strip()
+            or str(inv.get("title") or "").strip()):
         return ""
 
     broken = broken_refs or {}
-    broken_by_bm: dict = {}
-    for iss in broken.get("issues") or []:
-        broken_by_bm.setdefault(str(iss.get("bookmark_id")), []).append(iss)
-
+    sections = {
+        s["id"]: s for s in investigation_sections(inv, broken=broken)
+    }
     chains_by_id = {
         str(c.get("conclusion_id")): c for c in (chains or [])
         if isinstance(c, dict)
     }
 
-    def _bm_card(b: dict) -> str:
-        bid = str(b.get("id") or "")
-        refs = b.get("refs") or []
-        ref_html = ""
-        if refs:
-            items = "".join(f"<li>{_fmt_ref(r, format_ns)}</li>" for r in refs)
-            ref_html = f'<div class="finding-meta"><strong>References:</strong><ul>{items}</ul></div>'
-        note = str(b.get("note") or "").strip()
-        note_html = f"<p>{_esc(note)}</p>" if note else ""
-        bad = broken_by_bm.get(bid) or []
-        bad_html = ""
-        if bad:
-            reasons = "; ".join(_esc(i.get("reason") or "stale reference") for i in bad)
-            bad_html = f'<div class="finding-meta sev-warning"><strong>Stale:</strong> {reasons}</div>'
+    def _sub(label: str, body: str) -> str:
         return (
-            f'<article class="finding-card">'
-            f'<h3>{_esc(_BM_TYPE_LABELS.get(b.get("type"), "Bookmark"))} · {_esc(b.get("title") or "Bookmark")}</h3>'
-            f"{note_html}{ref_html}{bad_html}</article>"
+            f'<h3 class="sub">{_esc(label)}</h3>{body}' if body else ""
         )
 
-    def _group(title: str, types) -> str:
-        rows = [_bm_card(b) for b in bookmarks if b.get("type") in types]
-        if not rows:
-            return ""
-        return f'<h3 class="sub">{_esc(title)}</h3><div class="finding-cards">{"".join(rows)}</div>'
-
-    facts = _group("Facts", _FACT_TYPES)
-    hyps = _group("Hypotheses", ("hypothesis",))
-    contra = _group("Contradicting evidence", ("contradicting",))
-
-    # Conclusions + their evidence chains.
+    # 1 — Question
+    q_items = sections["question"]["items"]
+    question_html = (
+        f'<p class="detail-note"><strong>{_esc(q_items[0]["text"])}</strong></p>'
+        if q_items else ""
+    )
+    # 2 — Scope
+    scope_bits = [_esc(it["text"]) for it in sections["scope"]["items"] if it.get("text")]
+    scope_html = (
+        f'<p class="detail-note">{" · ".join(scope_bits)}</p>' if scope_bits else ""
+    )
+    # 3 — Hypotheses
+    hyp_rows = []
+    for it in sections["hypotheses"]["items"]:
+        status = _esc(str(it.get("status") or "open"))
+        note = str(it.get("note") or "").strip()
+        hyp_rows.append(
+            f'<article class="finding-card"><h3>Hypothesis · {_esc(it["text"])} '
+            f'<span class="finding-meta">[{status}]</span></h3>'
+            + (f"<p>{_esc(note)}</p>" if note else "")
+            + _nb_item_refs_html(it.get("refs"), format_ns)
+            + "</article>"
+        )
+    hyp_html = (
+        f'<div class="finding-cards">{"".join(hyp_rows)}</div>' if hyp_rows else ""
+    )
+    # 4 — Evidence (cards with provenance)
+    ev_rows = []
+    for it in sections["evidence"]["items"]:
+        card = it.get("card") or {}
+        kind = _EVIDENCE_KIND_LABELS.get(str(it.get("kind") or ""), "User note")
+        source = _esc(str(card.get("source") or ""))
+        author = str(card.get("author") or "")
+        author_tag = " · AI" if author == "ai" else (" · BTFViewer" if author == "btfviewer" else "")
+        note = str(it.get("note") or "").strip()
+        stale_html = (
+            '<div class="finding-meta sev-warning"><strong>Stale:</strong> '
+            "reference no longer resolves against the current trace.</div>"
+            if it.get("stale") else ""
+        )
+        ev_rows.append(
+            f'<article class="finding-card"><h3>{_esc(it.get("role") or "evidence").title()} · '
+            f'{_esc(it["text"])} <span class="finding-meta">[{_esc(kind)}'
+            + (f" · {source}" if source else "") + f"{author_tag}]</span></h3>"
+            + (f"<p>{_esc(note)}</p>" if note else "")
+            + _nb_item_refs_html(it.get("refs"), format_ns)
+            + stale_html + "</article>"
+        )
+    ev_html = (
+        f'<div class="finding-cards">{"".join(ev_rows)}</div>' if ev_rows else ""
+    )
+    # 5 — Open checks
+    check_lis = []
+    for it in sections["open_checks"]["items"]:
+        src = str(it.get("source") or "")
+        prefix = "Verify: " if src == "verification" else ""
+        check_lis.append(f"<li>{_esc(prefix + str(it.get('text') or ''))}</li>")
+    checks_html = f"<ul>{''.join(check_lis)}</ul>" if check_lis else ""
+    # 6 — Conclusion (+ grounding chains)
     concl_rows = []
-    for b in bookmarks:
-        if b.get("type") != "conclusion":
+    for it in sections["conclusion"]["items"]:
+        if it.get("kind") == "verification_state":
+            concl_rows.append(
+                f'<div class="finding-meta">{_esc(it.get("text") or "")}</div>'
+            )
             continue
-        chain = chains_by_id.get(str(b.get("id")))
+        bid = str(it.get("bookmark_id") or "")
+        chain = chains_by_id.get(bid) if bid else None
         chain_html = ""
         if chain and chain.get("evidence"):
-            items = "".join(
-                f"<li>{_esc(_BM_TYPE_LABELS.get(e.get('type'), 'Bookmark'))}: {_esc(e.get('title') or e.get('id'))}</li>"
+            lis = "".join(
+                f"<li>{_esc(_BM_TYPE_LABELS.get(e.get('type'), 'Bookmark'))}: "
+                f"{_esc(e.get('title') or e.get('id'))}</li>"
                 for e in chain["evidence"]
             )
-            chain_html = f'<div class="finding-meta"><strong>Backed by:</strong><ul>{items}</ul></div>'
+            chain_html = (
+                f'<div class="finding-meta"><strong>Backed by:</strong><ul>{lis}</ul></div>'
+            )
         elif chain is not None:
-            chain_html = '<div class="finding-meta sev-warning"><strong>Not grounded:</strong> no linked evidence.</div>'
+            chain_html = (
+                '<div class="finding-meta sev-warning"><strong>Not grounded:</strong> '
+                "no linked evidence.</div>"
+            )
         concl_rows.append(
-            f'<article class="finding-card finding-ok">'
-            f'<h3>Conclusion · {_esc(b.get("title") or "Conclusion")}</h3>'
-            + (f"<p>{_esc(b.get('note'))}</p>" if str(b.get("note") or "").strip() else "")
+            f'<article class="finding-card finding-ok"><h3>Conclusion'
+            + (f" · {_esc(it['text'])}" if it.get("bookmark_id") else "")
+            + "</h3>"
+            + (f"<p>{_esc(it['text'])}</p>" if not it.get("bookmark_id") else "")
             + chain_html + "</article>"
         )
-    free_concl = str(investigation.get("conclusion") or "").strip()
-    if free_concl:
-        concl_rows.append(
-            f'<article class="finding-card finding-ok"><h3>Conclusion</h3>'
-            f"<p>{_esc(free_concl)}</p></article>"
-        )
     concl_html = (
-        f'<h3 class="sub">Conclusions</h3><div class="finding-cards">{"".join(concl_rows)}</div>'
-        if concl_rows else ""
+        f'<div class="finding-cards">{"".join(concl_rows)}</div>' if concl_rows else ""
     )
-
-    questions = [str(q) for q in (investigation.get("unresolved_questions") or []) if str(q).strip()]
-    q_html = ""
-    if questions:
-        lis = "".join(f"<li>{_esc(q)}</li>" for q in questions)
-        q_html = f'<h3 class="sub">Unresolved questions</h3><ul>{lis}</ul>'
 
     stale_banner = ""
     if broken.get("stale_trace"):
@@ -4390,33 +4448,26 @@ def html_investigation_section(
             "these notes were written — references may not line up.</p>"
         )
 
-    ident = investigation.get("trace_identity") or {}
-    rng = investigation.get("analysis_range") or {}
-    ident_bits = []
-    if ident.get("file"):
-        ident_bits.append(f"Trace: {_esc(ident['file'])}")
-    if isinstance(rng, dict) and rng.get("start") is not None and callable(format_ns):
-        try:
-            ident_bits.append(
-                f"Range: {_esc(str(format_ns(int(rng['start']))))} – "
-                f"{_esc(str(format_ns(int(rng['end']))))}")
-        except Exception:
-            pass
-    ident_html = (
-        f'<p class="detail-note">{" · ".join(ident_bits)}</p>' if ident_bits else ""
+    body_by_id = {
+        "question": question_html,
+        "scope": scope_html,
+        "hypotheses": hyp_html,
+        "evidence": ev_html,
+        "open_checks": checks_html,
+        "conclusion": concl_html,
+    }
+    blocks = "".join(
+        _sub(NB_SECTION_HEADING[sid], body_by_id[sid])
+        for sid in _NB_HTML_SECTION_ORDER
     )
-
-    title = str(investigation.get("title") or "").strip()
     heading = f"Investigation{_esc(scope_title)}"
     return (
         '<section class="report-card notes investigation">'
         f"<h2>{heading}</h2>"
-        + (f'<p class="detail-note"><strong>{_esc(title)}</strong></p>' if title else "")
-        + '<p class="detail-note">User-authored bookmarks and the evidence chain. '
-        "Facts, hypotheses, contradicting evidence and conclusions are separated; "
-        "notes never change measured values.</p>"
-        + stale_banner + ident_html
-        + facts + hyps + contra + concl_html + q_html
+        + '<p class="detail-note">The Notebook, in the same six sections as the '
+        "app. Evidence keeps its provenance; notes never change measured "
+        "values.</p>"
+        + stale_banner + blocks
         + "</section>"
     )
 
@@ -4464,9 +4515,9 @@ def html_glossary(*, range_note: str = "") -> str:
         "It may include preemption, suspension, periodic waiting, or scheduling delay — not necessarily resource blocking. "
         "It is not end-to-end response time.",
         "<strong>CPU% (task):</strong> Share of total non-IDLE/TICK <em>active CPU time</em> in scope, not wall-clock span and not total multicore capacity.",
-        "<strong>Core utilisation:</strong> Non-IDLE/TICK active time on that core divided by the scoped wall-clock span (one-core capacity = 100%).",
-        "<strong>Load Balance Score:</strong> 100% × (1 − Gini of core utilisation). "
-        "100 = evenly distributed utilisation; 0 = highly uneven. Even overload or even idle can still score high.",
+        "<strong>Core Utilization:</strong> Non-IDLE/TICK active time on that core divided by the scoped wall-clock span (one-core capacity = 100%).",
+        "<strong>Load Balance Score:</strong> 100% × (1 − Gini of core utilization). "
+        "100 = evenly distributed utilization; 0 = highly uneven. Even overload or even idle can still score high.",
         "<strong>Preemption Chain Analysis:</strong> For each off-CPU gap of a victim task, which task ran on the same core during that gap.",
         "<strong>Priority Inheritance:</strong> Tasks boosted above base priority when <code>create pri:N</code> and <code>set_priority</code> STI events are present.",
         "<strong>Mutex / Semaphore:</strong> Paired <code>take</code>/<code>give</code> STI events by object pointer.",
@@ -4931,7 +4982,7 @@ def _interval_instances_for_draw(trace: "BtfTrace",
     return trace.interval_instances_by_id.get(interval_id, []), False
 
 def _core_util_pct_for(trace: "BtfTrace", core: str) -> float:
-    """Full-trace core utilisation % (IDLE/TICK excluded), with parse-time cache."""
+    """Full-trace core utilization % (IDLE/TICK excluded), with parse-time cache."""
     if trace.core_util_pct and core in trace.core_util_pct:
         return trace.core_util_pct[core]
     segs = trace.core_segs.get(core, [])
@@ -9841,7 +9892,7 @@ def _build_corridor_ai_context(
         overview=None, inspector_filters=None, time_scale=None) -> str:
     scale = time_scale or (scope or {}).get("unit") or "ns"
     lines = [
-        f"Analysis scope: {(scope or {}).get('label') or 'Full Trace'}",
+        f"Inspector scope: {(scope or {}).get('label') or 'Full Trace'}",
         f"Trace unit: {scale}",
     ]
     if scope and scope.get("detail"):
@@ -10280,7 +10331,7 @@ def _gini_coefficient(values: List[float]) -> float:
 
 
 def _core_util_stddev(values: List[float]) -> float:
-    """Population standard deviation of core utilisation percentages."""
+    """Population standard deviation of core utilization percentages."""
     n = len(values)
     if n < 2:
         return 0.0
@@ -11317,7 +11368,7 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
 
     _section("Summary", "Metric,Baseline A,Candidate B,Δ", tables.get("summary", []), 4)
     _section("Top Tasks", "Task,CPU A (%),CPU B (%),Δ (pp)", tables.get("top", []), 4)
-    _section("Core Utilisation", "Core,Util A (%),Util B (%),Δ (pp)", tables.get("core_util", []), 4)
+    _section("Core Utilization", "Core,Util A (%),Util B (%),Δ (pp)", tables.get("core_util", []), 4)
     _section(
         "Core Migrations",
         "Task,Migrations A,Migrations B,Δ,Rate A,Rate B,Rate Δ,"
@@ -11501,7 +11552,7 @@ COMPARE_TOC_GROUPS = (
         "Overview", "Summary",
     )),
     ("CPU & Cores", (
-        "Top Tasks", "Core Utilisation", "Core Migrations",
+        "Top Tasks", "Core Utilization", "Core Migrations",
     )),
     ("Timing", (
         "Execution Time", "Blocking Time", "Inter-Arrival Time", "Response P99",
@@ -11794,7 +11845,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               tables.get("top", []), "No user tasks in either trace",
               note="Highest CPU consumers excluding IDLE/TICK. "
                    "Δ is percentage points (pp)."),
-        _card("Core Utilisation",
+        _card("Core Utilization",
               ["Core", "Util A (%)", "Util B (%)", "Δ (pp)"],
               tables.get("core_util", []), "No core util data",
               lead_html=util_lead,
@@ -16634,7 +16685,7 @@ class TimelineScene(QGraphicsScene):
                 lbl_item.setAcceptHoverEvents(False)
                 self._frozen_items.append((lbl_item, arrow_w + 20))
 
-                # --- Core utilisation % (IDLE excluded) ---
+                # --- Core Utilization % (IDLE excluded) ---
                 _util_pct  = _core_util_pct_for(trace, core)
                 _util_item = self.addSimpleText(f"{_util_pct:.0f}%", font_sm)
                 _util_item.setBrush(QBrush(QColor("#77BB77")))
@@ -23340,8 +23391,10 @@ AI_EMPTY_REPLY_NUDGE = (
 )
 
 # Stage-only tool names for Compact; Balanced adds neighbours + extras.
+# Clustering, simulation, optimization, memory and export are on-request
+# capabilities (see AI_CONTEXT_ON_REQUEST_TOOLS) — never baseline triage.
 AI_CONTEXT_STAGE_TOOLS: Dict[str, Tuple[str, ...]] = {
-    "triage": ("detect_anomalies", "cluster_findings", "suggest_scope"),
+    "triage": ("detect_anomalies", "suggest_scope"),
     "scope": ("set_cursors", "zoom_to_range", "highlight_task", "open_statistics_section"),
     "investigate": ("investigate", "correlate_events", "find_critical_path"),
     "verify": ("verify_claim", "detect_contradictions", "challenge_conclusion"),
@@ -23356,6 +23409,30 @@ AI_CONTEXT_BALANCED_EXTRA_TOOLS: Tuple[str, ...] = (
     "detect_anomalies", "investigate", "set_cursors", "zoom_to_range",
     "highlight_task", "challenge_conclusion",
 )
+# Full Evidence adds the deeper *read-only* evidence / reasoning / navigation
+# tools on top of every core-loop stage. Simulation, optimization, memory,
+# clustering and export stay stage-gated (AI_CONTEXT_ON_REQUEST_TOOLS).
+AI_CONTEXT_FULL_EXTRA_TOOLS: Tuple[str, ...] = (
+    "detect_priority_inversion", "find_related_findings", "compare_tasks",
+    "explain_finding", "interpret_query", "decompose_response_time",
+    "analyze_distribution", "analyze_periodicity", "build_task_dependency_graph",
+    "rank_root_causes", "build_causal_chain", "regression_explain",
+    "regression_localize", "assess_evidence_sufficiency", "generate_fingerprint",
+    "manage_hypotheses", "analyze_traces", "check_budget", "baseline_score",
+    "set_view_mode", "open_corridor_inspector", "add_annotation",
+    "clear_marks", "reset_view", "trigger_compare", "bookmark_finding",
+)
+# Only exposed when the active stage / request calls for them (never baseline
+# triage — that keeps simulation, optimization, memory and export out of the
+# fast path).
+AI_CONTEXT_ON_REQUEST_TOOLS: Dict[str, Tuple[str, ...]] = {
+    "experiment": ("what_if", "optimize_experiment", "recommend_experiments"),
+    "export": ("export_investigation",),
+    "memory": (
+        "investigation_memory", "find_similar_investigations",
+        "record_experiment_outcome", "close_investigation",
+    ),
+}
 _CONTEXT_TOOL_ROW_KEYS: Tuple[str, ...] = (
     "rows", "episodes", "slices", "events", "gaps", "hits", "times",
     "experiments", "anomalies", "candidates", "samples", "values",
@@ -23510,14 +23587,25 @@ def _stage_tool_names(stage: Any) -> Tuple[str, ...]:
     return AI_CONTEXT_STAGE_TOOLS.get(sid, AI_CONTEXT_STAGE_TOOLS["triage"])
 
 
+_AI_TOOL_MODEL_HIDDEN_NAMES: Tuple[str, ...] = (
+    "plan_investigation", "optimize", "generate_experiment_plan",
+    "cluster_incidents", "analyze_temporal_causality",
+)
+
+
 def tool_names_for_context_mode(
     mode: Any = None,
     stage: Any = "",
-) -> Optional[List[str]]:
-    """Tool names to send, or None to send the full catalog."""
+) -> List[str]:
+    """Model-visible tool names for a context mode + workflow stage.
+
+    Every mode now returns an explicit, auditable list — Full Evidence sends a
+    broad but bounded set (the core evidence / verification / reasoning loop plus
+    navigation), not the whole catalog. Simulation, optimization, memory,
+    clustering and investigation export appear only when the active stage calls
+    for them.
+    """
     key = normalize_ai_context_mode(mode)
-    if key == AI_CONTEXT_MODE_FULL:
-        return None
     names: List[str] = []
     seen = set()
 
@@ -23531,6 +23619,24 @@ def tool_names_for_context_mode(
     sid = str(stage or "").strip().lower()
     if sid in ("", "idle", "start"):
         sid = "triage"
+
+    if key == AI_CONTEXT_MODE_FULL:
+        # Whole core loop (triage → verify) + compare, always available in the
+        # deep-verification mode.
+        for core in ("triage", "scope", "investigate", "verify", "compare"):
+            _add(AI_CONTEXT_STAGE_TOOLS[core])
+        _add(AI_CONTEXT_ALWAYS_TOOLS)
+        _add(AI_CONTEXT_BALANCED_EXTRA_TOOLS)
+        _add(AI_CONTEXT_FULL_EXTRA_TOOLS)
+        if sid == "experiment":
+            _add(AI_CONTEXT_ON_REQUEST_TOOLS["experiment"])
+        if sid == "report":
+            _add(AI_CONTEXT_STAGE_TOOLS["report"])
+            _add(AI_CONTEXT_ON_REQUEST_TOOLS["export"])
+        if sid in ("verify", "report"):
+            _add(AI_CONTEXT_ON_REQUEST_TOOLS["memory"])
+        return [n for n in names if n not in _AI_TOOL_MODEL_HIDDEN_NAMES]
+
     _add(_stage_tool_names(sid))
     _add(AI_CONTEXT_ALWAYS_TOOLS)
     if key == AI_CONTEXT_MODE_BALANCED:
@@ -23550,7 +23656,7 @@ def tool_names_for_context_mode(
                 if 0 <= j < len(GUIDED_STAGES) and GUIDED_STAGES[j] == "report":
                     _add(AI_CONTEXT_STAGE_TOOLS["report"])
                     break
-    return names
+    return [n for n in names if n not in _AI_TOOL_MODEL_HIDDEN_NAMES]
 
 
 def filter_tools_for_context_mode(
@@ -24872,7 +24978,7 @@ def falsification_checks(finding: Optional[dict] = None) -> Dict[str, Any]:
             "Load Balance Score is in the green zone for this window",
             "Concurrent-active distribution is even across cores",
         ]
-        next_check = "Open Core Utilisation / Load Balance Score"
+        next_check = "Open Core Utilization / Load Balance Score"
     else:
         checks = [
             "Cited jump:TIME is outside the cursor region",
@@ -26843,7 +26949,7 @@ STATS_UX_PAGE_ALIASES: Dict[str, Tuple[str, ...]] = {
     "preemption matrix": ("preemption matrix",),
     "mutex blocking": ("mutex blocking", "mutex-blocking"),
     "core utilization over time": (
-        "core utilization over time", "core utilisation over time",
+        "core utilization over time", "core utilization over time",
     ),
     "switch reason breakdown": (
         "switch reason breakdown", "switch reason", "switch-reason",
@@ -28990,7 +29096,19 @@ def evaluate_regression(
     }
 
 
-def format_regression_report(result: Dict[str, Any], *, title: str = "") -> str:
+def format_regression_report(
+    result: Dict[str, Any], *, title: str = "", a_role: str = "candidate",
+) -> str:
+    """Text CI report for an ``evaluate_regression`` result.
+
+    ``a_role`` names which side the ``A=`` / ``B=`` columns describe:
+
+    - ``"candidate"`` (default, CLI low-level gate): ``A`` is the candidate
+      under test, ``B`` is the baseline.
+    - ``"baseline"`` (Trace Compare contract): ``A`` is Baseline A, ``B`` is
+      Candidate B, matching ``compare_performance`` payloads.
+    """
+    a_first_is_baseline = str(a_role or "candidate").strip().lower() == "baseline"
     lines = [
         "BTF AI / CI Analysis" + (f" — {title}" if title else ""),
         "",
@@ -28999,9 +29117,11 @@ def format_regression_report(result: Dict[str, Any], *, title: str = "") -> str:
     ]
     for c in result.get("checks") or []:
         mark = {"pass": "✓", "fail": "✗", "skip": "·"}.get(c.get("status"), "?")
+        a_val = c.get("baseline") if a_first_is_baseline else c.get("candidate")
+        b_val = c.get("candidate") if a_first_is_baseline else c.get("baseline")
         lines.append(
             f"{mark} {c.get('label')}: {c.get('detail')} "
-            f"(A={c.get('candidate')}, B={c.get('baseline')})"
+            f"(A={a_val}, B={b_val})"
         )
     lines.append("")
     lines.append(
@@ -32062,20 +32182,28 @@ def classify_regression_type(
 
 
 def compare_performance_metrics(
-    candidate: Dict[str, Any],
-    baseline: Dict[str, Any],
+    baseline_a: Dict[str, Any],
+    candidate_b: Dict[str, Any],
     *,
     label_a: str = "A",
     label_b: str = "B",
 ) -> Dict[str, Any]:
-    """Structured A vs B performance deltas using regression rules."""
-    snap_a = candidate if "metrics" in (candidate or {}) else {
-        "metrics": dict(candidate or {}),
+    """Structured Trace Compare deltas using regression rules.
+
+    Public contract: the first argument is **Baseline A** (Trace A), the second
+    is **Candidate B** (Trace B). Verdicts describe Candidate B relative to
+    Baseline A, so the low-level gate is evaluated as
+    ``evaluate_regression(candidate_b, baseline_a)``. The displayed table delta
+    stays ``A - B``.
+    """
+    snap_base = baseline_a if "metrics" in (baseline_a or {}) else {
+        "metrics": dict(baseline_a or {}),
     }
-    snap_b = baseline if "metrics" in (baseline or {}) else {
-        "metrics": dict(baseline or {}),
+    snap_cand = candidate_b if "metrics" in (candidate_b or {}) else {
+        "metrics": dict(candidate_b or {}),
     }
-    result = evaluate_regression(snap_a, snap_b)
+    # evaluate_regression keeps its low-level (candidate, baseline) contract.
+    result = evaluate_regression(snap_cand, snap_base)
     primary = next((c for c in result.get("checks") or [] if c.get("status") == "fail"), None)
     if primary is None:
         primary = next((c for c in result.get("checks") or [] if c.get("status") == "pass"), None)
@@ -32088,6 +32216,8 @@ def compare_performance_metrics(
         "message": str(result.get("summary") or "compared"),
         "label_a": label_a,
         "label_b": label_b,
+        "baseline_a": dict(snap_base.get("metrics") or {}),
+        "candidate_b": dict(snap_cand.get("metrics") or {}),
         "failed": bool(result.get("failed")),
         "checks": result.get("checks") or [],
         "primary_regression": primary,
@@ -32101,8 +32231,49 @@ def compare_performance_metrics(
             {"name": "correlate_events", "arguments": {}, "reason": "Timeline correlation"},
         ],
         "report": format_regression_report(
-            result, title=f"{label_a} vs {label_b}",
+            result, title=f"{label_a} vs {label_b}", a_role="baseline",
         ),
+    }
+
+
+def normalize_compare_payload(payload: Any) -> Dict[str, Any]:
+    """Canonicalise a compare_performance / Trace Compare payload.
+
+    Reads the current ``baseline_a`` / ``candidate_b`` fields and older shapes
+    (``baseline`` / ``candidate`` or ``a`` / ``b``), optionally nested under a
+    ``data`` envelope, and returns metric dicts in the public A/B direction:
+    ``baseline_a`` is Baseline A (Trace A), ``candidate_b`` is Candidate B
+    (Trace B).
+    """
+    d = payload if isinstance(payload, dict) else {}
+    inner = d.get("data")
+    if isinstance(inner, dict) and not (
+        d.get("checks") or d.get("baseline_a") or d.get("candidate_b")
+    ):
+        d = inner
+
+    def _metrics(v: Any) -> Dict[str, Any]:
+        if not isinstance(v, dict):
+            return {}
+        m = v.get("metrics")
+        return dict(m) if isinstance(m, dict) else {
+            k: vv for k, vv in v.items() if k != "metrics"
+        }
+
+    baseline_a = d.get("baseline_a")
+    if baseline_a is None:
+        baseline_a = d.get("baseline") if d.get("baseline") is not None else d.get("a")
+    candidate_b = d.get("candidate_b")
+    if candidate_b is None:
+        candidate_b = d.get("candidate") if d.get("candidate") is not None else d.get("b")
+    return {
+        "baseline_a": _metrics(baseline_a),
+        "candidate_b": _metrics(candidate_b),
+        "label_a": str(d.get("label_a") or "A"),
+        "label_b": str(d.get("label_b") or "B"),
+        "checks": list(d.get("checks") or []),
+        "failed": bool(d.get("failed")),
+        "primary_regression": d.get("primary_regression"),
     }
 
 
@@ -32735,7 +32906,7 @@ def build_optimization_advice(
         "ok": True,
         "message": f"{len(ideas)} optimization idea(s)",
         "recommendations": ideas,
-        "disclaimer": "Simulation / estimate — not measured behavior",
+        "disclaimer": "Simulation / estimate — not measured RTOS behavior",
     }
 
 
@@ -33024,7 +33195,7 @@ def estimate_what_if(
     return {
         "ok": True,
         "message": "What-if estimate (not measured)",
-        "disclaimer": "Simulation / estimate — not measured behavior",
+        "disclaimer": "Simulation / estimate — not measured RTOS behavior",
         "change": change,
         "task": task,
         "estimated_effect": effect,
@@ -33358,7 +33529,7 @@ def simulate_what_if(
     return {
         "ok": True,
         "message": "What-if heuristic simulation",
-        "disclaimer": "Heuristic simulator — not an RTOS kernel / not measured",
+        "disclaimer": "Simulation / estimate — not measured RTOS behavior (heuristic slice-replay, not an RTOS kernel)",
         "simulator": "slice_replay_v1",
         "change": change,
         "task": task,
@@ -33522,7 +33693,7 @@ def run_optimization_experiments(
             f"{len(results)} experiment(s); best={best['change']}" if best
             else "No runnable experiments (need task slices / metrics)"
         ),
-        "disclaimer": "Heuristic simulator — not an RTOS kernel / not measured",
+        "disclaimer": "Simulation / estimate — not measured RTOS behavior (heuristic slice-replay, not an RTOS kernel)",
         "experiments": results,
         "best": best,
         "suggested_tools": ([
@@ -33850,7 +34021,7 @@ def recommend_validation_experiments(
         "message": f"{len(experiments)} validation experiment(s) suggested",
         "experiments": experiments,
         "disclaimer": (
-            "Simulation / estimate — not measured behavior; firmware steps "
+            "Simulation / estimate — not measured RTOS behavior; firmware steps "
             "are suggestions to implement and re-trace, not applied automatically"
         ),
     }
@@ -35997,6 +36168,19 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
 )
 
+# Functional aliases of a canonical tool: kept dispatchable (stored workflows and
+# older models still emit them) but NOT sent to the model as separate schemas, so
+# no two model-visible tools do the same job. Keep in lockstep with
+# web/src/utils/aiTools.js AI_TOOL_MODEL_HIDDEN.
+AI_TOOL_CANONICAL_ALIASES: Dict[str, str] = {
+    AI_TOOL_PLAN_INVESTIGATION: AI_TOOL_INVESTIGATE,
+    AI_TOOL_OPTIMIZE: AI_TOOL_OPTIMIZE_EXPERIMENT,
+    AI_TOOL_GENERATE_EXPERIMENT_PLAN: AI_TOOL_RECOMMEND_EXPERIMENTS,
+    AI_TOOL_CLUSTER_INCIDENTS: AI_TOOL_CLUSTER_FINDINGS,
+    AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY: AI_TOOL_CORRELATE_EVENTS,
+}
+_AI_TOOL_MODEL_HIDDEN: frozenset = frozenset(AI_TOOL_CANONICAL_ALIASES)
+
 # Namespace / prose junk models sometimes glue onto a tool name. ``nextstep:`` is
 # the big one: the model confuses the ``nextstep:{action}`` prose follow-up
 # convention with an actual tool call and emits e.g. ``nextstep:open_statistics``.
@@ -36247,7 +36431,7 @@ def parse_btf_stats_href(href: Any) -> str:
     return ""
 
 # Tool-use policy (also AI_TOOL_PROMPT). Keep in sync with web aiTools.js.
-AI_TOOL_PROMPT = ("Use native tools only when evidence or an explicit viewer action requires them.\n\n1. Establish scope, subject, and comparison direction.\n2. Use the minimum sufficient evidence tool.\n3. Check missing links, contradictions, and credible alternatives.\n4. Continue only if another result could change the verdict.\n5. Verify before asserting a high-confidence root cause.\n\n- Use planning tools only for broad or ambiguous investigations.\n- Use exact metric or timeline tools when summaries lack required evidence.\n- For comparisons, A is candidate, B is baseline, and delta = A - B.\n- Use simulation or optimization only when requested.\n- Generate a report when requested. For Report mode or an explicit save/download,\n  call export_report after generate_report; otherwise export only when asked.\n- Analysis alone does not authorize viewer changes. Apply viewer changes only\n  when explicitly requested or promised by the selected workflow.\n- Stop when evidence is sufficient or tools cannot resolve the uncertainty.\n- Empty tool results mean no matching data in scope; say so and do not invent\n  values. Failed tools are failures \u2014 never claim the action or export succeeded.\n- Never claim an unconfirmed result, viewer change, or export.\n- After tools, separate retrieved evidence from applied viewer changes.\n- Use Mermaid only when it clarifies a supported relationship and the mode\n  permits it.").rstrip("\n")
+AI_TOOL_PROMPT = ("Use native tools only when evidence or an explicit viewer action requires them.\n\n1. Establish scope, subject, and comparison direction.\n2. Use the minimum sufficient evidence tool.\n3. Check missing links, contradictions, and credible alternatives.\n4. Continue only if another result could change the verdict.\n5. Verify before asserting a high-confidence root cause.\n\n- Use planning tools only for broad or ambiguous investigations.\n- Use exact metric or timeline tools when summaries lack required evidence.\n- For comparisons, A is Baseline A, B is Candidate B, table delta = A - B, and verdicts describe Candidate B versus Baseline A.\n- Use simulation or optimization only when requested.\n- Generate a report when requested. For Report mode or an explicit save/download,\n  call export_report after generate_report; otherwise export only when asked.\n- Analysis alone does not authorize viewer changes. Apply viewer changes only\n  when explicitly requested or promised by the selected workflow.\n- Stop when evidence is sufficient or tools cannot resolve the uncertainty.\n- Empty tool results mean no matching data in scope; say so and do not invent\n  values. Failed tools are failures \u2014 never claim the action or export succeeded.\n- Never claim an unconfirmed result, viewer change, or export.\n- After tools, separate retrieved evidence from applied viewer changes.\n- Use Mermaid only when it clarifies a supported relationship and the mode\n  permits it.").rstrip("\n")
 AI_TOOL_SYSTEM_ADDENDUM = AI_TOOL_PROMPT
 
 AI_MERMAID_SEQUENCE_EXAMPLE = """```mermaid
@@ -36281,8 +36465,12 @@ def ai_viewer_tools_for_mode(mode: Any = None, stage: Any = "") -> List[Dict[str
 
 
 def ai_viewer_tools() -> List[Dict[str, Any]]:
-    """OpenAI-compatible ``tools`` array."""
-    return annotate_tool_capabilities([
+    """OpenAI-compatible ``tools`` array (model-visible schemas only).
+
+    Functional aliases in ``AI_TOOL_CANONICAL_ALIASES`` stay dispatchable but are
+    not emitted as separate schemas.
+    """
+    catalog = annotate_tool_capabilities([
         {
             "type": "function",
             "function": {
@@ -37628,6 +37816,10 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
             },
         },
     ])
+    return [
+        t for t in catalog
+        if str((t.get("function") or {}).get("name") or "") not in _AI_TOOL_MODEL_HIDDEN
+    ]
 
 
 def parse_tool_arguments(raw: Any) -> Dict[str, Any]:
@@ -41256,15 +41448,22 @@ def generate_report_finding(
 
 
 def compare_performance_tabs(
-    candidate_summary: Dict[str, Any],
-    baseline_summary: Dict[str, Any],
+    baseline_a_summary: Dict[str, Any],
+    candidate_b_summary: Dict[str, Any],
     *,
     label_a: str = "A",
     label_b: str = "B",
 ) -> Dict[str, Any]:
-    snap_a = snapshot_from_summary(candidate_summary or {}, name=label_a)
-    snap_b = snapshot_from_summary(baseline_summary or {}, name=label_b)
-    ctx = compare_performance_metrics(snap_a, snap_b, label_a=label_a, label_b=label_b)
+    """Trace Compare deltas from two ``_trace_summary_snapshot`` dicts.
+
+    First argument is Baseline A (Trace A), second is Candidate B (Trace B);
+    verdicts describe Candidate B versus Baseline A.
+    """
+    snap_base = snapshot_from_summary(baseline_a_summary or {}, name=label_a)
+    snap_cand = snapshot_from_summary(candidate_b_summary or {}, name=label_b)
+    ctx = compare_performance_metrics(
+        snap_base, snap_cand, label_a=label_a, label_b=label_b,
+    )
     ok = bool(ctx.get("ok"))
     msg = str(ctx.get("message") or ("ok" if ok else "failed"))
     data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
@@ -45488,7 +45687,7 @@ def format_ai_conversation_markdown(
 ) -> str:
     """Markdown transcript of the conversation (assistant replies kept as-is)."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    out = ["# BTF Viewer — AI Conversation", "", f"_Saved {stamp}_", ""]
+    out = ["# BTFViewer — AI Conversation", "", f"_Saved {stamp}_", ""]
     for entry in entries:
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
@@ -45510,7 +45709,7 @@ def format_ai_conversation_text(
 ) -> str:
     """Plain-text transcript of the conversation."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    out = ["BTF Viewer — AI Conversation", f"Saved {stamp}", ""]
+    out = ["BTFViewer — AI Conversation", f"Saved {stamp}", ""]
     for entry in entries:
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
@@ -51923,7 +52122,7 @@ COMPARE_SECTION_LABELS: Dict[str, str] = {
     "mutex_block": "Mutex Blocking",
     "deadline": "Deadlines / CPU budget",
     "migrations": "Core Migrations",
-    "cores": "Core utilisation",
+    "cores": "Core Utilization",
     "health": "Trace Health (TICK)",
     "preempt_matrix": "Preemption Chain",
     "switch_overhead": "Switch Overhead",
@@ -52394,9 +52593,9 @@ def compare_core_util_chart_svg(rows: Sequence[dict], width: int = 640) -> str:
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
         f'width="{w}" height="{h}" role="img" '
-        'aria-label="Core utilisation Baseline A vs Candidate B">',
+        'aria-label="Core Utilization Baseline A vs Candidate B">',
         f'<text x="{pad}" y="16" font-size="12" fill="#123355" font-weight="600">'
-        "Core utilisation</text>",
+        "Core Utilization</text>",
         f'<text x="{w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
         '<tspan fill="#2a6fb2">Baseline A</tspan>'
         '<tspan fill="#5f6f82"> · </tspan>'
@@ -56136,14 +56335,14 @@ def _spec(*args) -> RuleSpec:
 RULE_CATALOG: Dict[str, RuleSpec] = {
     r.rule_id: r for r in (
         _spec("load_imbalance", "warning", "load", "load_spike",
-              "Gini of per-core utilisation vs even distribution",
-              "Core Utilisation (excl. IDLE/TICK)"),
+              "Gini of per-core utilization vs even distribution",
+              "Core Utilization (excl. IDLE/TICK)"),
         _spec("load_balance_ok", "info", "load", "load_spike",
-              "Gini of per-core utilisation vs even distribution",
-              "Core Utilisation (excl. IDLE/TICK)"),
+              "Gini of per-core utilization vs even distribution",
+              "Core Utilization (excl. IDLE/TICK)"),
         _spec("load_balance_moderate", "info", "load", "load_spike",
-              "Gini of per-core utilisation vs even distribution",
-              "Core Utilisation (excl. IDLE/TICK)"),
+              "Gini of per-core utilization vs even distribution",
+              "Core Utilization (excl. IDLE/TICK)"),
         _spec("top_cpu", "info", "execution", "execution_time_high",
               "share of active CPU time in scope",
               "Top Tasks by CPU (excl. IDLE/TICK)"),
@@ -56612,7 +56811,41 @@ def investigation_finding_export(finding: Dict[str, Any]) -> Dict[str, Any]:
 # investigation_notebook
 # ===========================================================================
 
-INVESTIGATION_SCHEMA = "btf-viewer-investigation/1"
+INVESTIGATION_SCHEMA = "btf-viewer-investigation/2"
+
+# --- Durable investigation status (schema/2) -----------------------------
+# One durable status only. The AI workflow *stage* is transient and must never
+# be shown as a second Notebook status.
+NB_STATUS_OPEN = "open"
+NB_STATUS_NEEDS_EVIDENCE = "needs_evidence"
+NB_STATUS_READY = "ready_to_conclude"
+NB_STATUS_CLOSED = "closed"
+NOTEBOOK_STATUSES = (
+    NB_STATUS_OPEN, NB_STATUS_NEEDS_EVIDENCE, NB_STATUS_READY, NB_STATUS_CLOSED,
+)
+NOTEBOOK_STATUS_LABELS = {
+    NB_STATUS_OPEN: "Open",
+    NB_STATUS_NEEDS_EVIDENCE: "Needs evidence",
+    NB_STATUS_READY: "Ready to conclude",
+    NB_STATUS_CLOSED: "Closed",
+}
+
+# --- Six-section presentation ------------------------------------------
+NB_SECTION_ORDER = (
+    "question", "scope", "hypotheses", "evidence", "open_checks", "conclusion",
+)
+NB_SECTION_LABELS = {
+    "question": "Question",
+    "scope": "Scope",
+    "hypotheses": "Hypotheses",
+    "evidence": "Evidence",
+    "open_checks": "Open checks",
+    "conclusion": "Conclusion",
+}
+
+# Empty-state entry points (replace the old generic hint).
+NB_EMPTY_FROM_FINDINGS = "Start from current Findings"
+NB_EMPTY_BLANK = "Start a blank investigation"
 
 # --- Bookmark types --------------------------------------------------------
 BM_OBSERVATION = "observation"
@@ -56651,6 +56884,147 @@ LINK_RELATIONS = ("supports", "contradicts", "verifies", "concludes", "relates")
 # Which link relations a reviewer follows backwards from a conclusion to reach
 # its evidence.
 _CHAIN_RELATIONS = ("supports", "verifies", "contradicts", "concludes", "relates")
+
+# --- Structured evidence cards (schema/2, §8) --------------------------
+# Where an evidence card came from.
+EV_SOURCE_TIMELINE = "Timeline"
+EV_SOURCE_STATISTICS = "Statistics"
+EV_SOURCE_FINDINGS = "Analysis Findings"
+EV_SOURCE_COMPARE = "Trace Compare"
+EV_SOURCE_USER = "User note"
+EV_SOURCE_AI = "AI suggestion"
+EVIDENCE_SOURCES = (
+    EV_SOURCE_TIMELINE, EV_SOURCE_STATISTICS, EV_SOURCE_FINDINGS,
+    EV_SOURCE_COMPARE, EV_SOURCE_USER, EV_SOURCE_AI,
+)
+# How strong the claim is. "" = an unclassified user note.
+EV_KIND_MEASURED = "measured"
+EV_KIND_DERIVED = "derived"
+EV_KIND_HEURISTIC = "heuristic"
+EV_KIND_ESTIMATE = "estimate"
+EVIDENCE_KINDS = (
+    EV_KIND_MEASURED, EV_KIND_DERIVED, EV_KIND_HEURISTIC, EV_KIND_ESTIMATE,
+)
+EVIDENCE_KIND_LABELS = {
+    EV_KIND_MEASURED: "Measured",
+    EV_KIND_DERIVED: "Derived",
+    EV_KIND_HEURISTIC: "Heuristic",
+    EV_KIND_ESTIMATE: "Simulation / estimate",
+    "": "User note",
+}
+EV_AUTHOR_USER = "user"
+EV_AUTHOR_BTFVIEWER = "btfviewer"
+EV_AUTHOR_AI = "ai"
+EVIDENCE_AUTHORS = (EV_AUTHOR_USER, EV_AUTHOR_BTFVIEWER, EV_AUTHOR_AI)
+# Only BTFViewer-supplied measured cards carry these; user edits and AI
+# proposals must never change them.
+EVIDENCE_PROTECTED_FIELDS = (
+    "source", "kind", "author", "trace_id", "scope",
+    "task", "core", "value", "unit",
+)
+# Evidence-bearing bookmark types (the ones the Evidence section renders).
+EVIDENCE_BOOKMARK_TYPES = (BM_OBSERVATION, BM_SUPPORTING, BM_CONTRADICTING)
+
+
+def _measured_ref(refs: Optional[Sequence[Dict[str, Any]]]) -> str:
+    """The strongest measured-output ref kind on a bookmark, or ""."""
+    kinds = {str(r.get("kind")) for r in (refs or []) if isinstance(r, dict)}
+    if REF_FINDING in kinds:
+        return EV_SOURCE_FINDINGS
+    if REF_METRIC in kinds:
+        return EV_SOURCE_STATISTICS
+    if kinds & {REF_RANGE, REF_EVIDENCE}:
+        return EV_SOURCE_TIMELINE
+    return ""
+
+
+def normalize_evidence_card(
+    card: Optional[Dict[str, Any]],
+    *,
+    refs: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Coerce a raw evidence card to a valid one, enforcing provenance rules.
+
+    - AI-authored or ``AI suggestion`` cards can never be ``measured``.
+    - A ``measured`` kind is only kept when the card is BTFViewer/User authored
+      *and* the bookmark references measured output (a finding / metric / range).
+    - Source data fields are kept as-is; the editable text lives on the
+      bookmark's ``note``.
+    """
+    if not isinstance(card, dict):
+        return None
+    src = str(card.get("source") or "").strip()
+    if src not in EVIDENCE_SOURCES:
+        src = _measured_ref(refs) or EV_SOURCE_USER
+    author = str(card.get("author") or "").strip().lower()
+    if author not in EVIDENCE_AUTHORS:
+        author = EV_AUTHOR_AI if src == EV_SOURCE_AI else EV_AUTHOR_USER
+    if src == EV_SOURCE_AI:
+        author = EV_AUTHOR_AI
+    kind = str(card.get("kind") or "").strip().lower()
+    if kind not in EVIDENCE_KINDS:
+        kind = ""
+    if kind == EV_KIND_MEASURED and (
+        author == EV_AUTHOR_AI or not _measured_ref(refs)
+    ):
+        # Never label AI prose or an unreferenced claim as Measured.
+        kind = EV_KIND_DERIVED if author != EV_AUTHOR_AI else ""
+    out: Dict[str, Any] = {
+        "source": src,
+        "kind": kind,
+        "author": author,
+        "trace_id": str(card.get("trace_id") or ""),
+        "task": str(card.get("task") or ""),
+        "core": str(card.get("core") or ""),
+        "unit": str(card.get("unit") or ""),
+        "hypothesis_id": str(card.get("hypothesis_id") or ""),
+        "created_at": str(card.get("created_at") or ""),
+        "updated_at": str(card.get("updated_at") or ""),
+    }
+    val = card.get("value")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        out["value"] = val
+    else:
+        try:
+            out["value"] = float(val) if str(val).strip() != "" else None
+        except (TypeError, ValueError):
+            out["value"] = None
+    sc = card.get("scope")
+    if isinstance(sc, dict) and sc.get("start") is not None and sc.get("end") is not None:
+        out["scope"] = {"start": int(sc["start"]), "end": int(sc["end"])}
+    else:
+        out["scope"] = None
+    return out
+
+
+def evidence_card_is_measured(card: Optional[Dict[str, Any]]) -> bool:
+    return isinstance(card, dict) and card.get("kind") == EV_KIND_MEASURED
+
+
+def guard_evidence_changes(
+    card: Optional[Dict[str, Any]],
+    changes: Optional[Dict[str, Any]],
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Split proposed card ``changes`` into (allowed, rejected-field-names).
+
+    Protected fields on a measured card are never mutable by a user edit or an
+    AI proposal; a change that would set ``kind`` to ``measured`` is rejected
+    unless the card already is.
+    """
+    ch = dict(changes or {})
+    allowed: Dict[str, Any] = {}
+    rejected: List[str] = []
+    measured = evidence_card_is_measured(card)
+    for key, val in ch.items():
+        if key == "kind" and str(val).strip().lower() == EV_KIND_MEASURED and not measured:
+            rejected.append(key)
+            continue
+        if measured and key in EVIDENCE_PROTECTED_FIELDS:
+            rejected.append(key)
+            continue
+        allowed[key] = val
+    return allowed, rejected
+
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -56715,6 +57089,8 @@ def new_investigation(
         "links": [],
         "conclusion": "",
         "unresolved_questions": [],
+        "status": NB_STATUS_OPEN,
+        "updated_at": "",
         "next_seq": 1,
     }
 
@@ -56726,6 +57102,10 @@ def _clone(inv: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["bookmarks"] = [dict(b) for b in (inv.get("bookmarks") or [])]
     for b in out["bookmarks"]:
         b["refs"] = [dict(r) for r in (b.get("refs") or [])]
+        if isinstance(b.get("evidence"), dict):
+            b["evidence"] = dict(b["evidence"])
+            if isinstance(b["evidence"].get("scope"), dict):
+                b["evidence"]["scope"] = dict(b["evidence"]["scope"])
     out["links"] = [dict(link) for link in (inv.get("links") or [])]
     out["unresolved_questions"] = list(inv.get("unresolved_questions") or [])
     out["trace_identity"] = dict(inv.get("trace_identity") or {})
@@ -56765,6 +57145,7 @@ def add_bookmark(
     note: str = "",
     refs: Optional[Sequence[Dict[str, Any]]] = None,
     bookmark_id: str = "",
+    evidence: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     out = _clone(inv)
     btype = str(type or "").strip().lower()
@@ -56779,15 +57160,108 @@ def add_bookmark(
     seq = int(out.get("next_seq") or 1)
     out["next_seq"] = seq + 1
     clean_refs = [r for r in (normalize_ref(x) for x in (refs or [])) if r]
-    out["bookmarks"].append({
+    row: Dict[str, Any] = {
         "id": bid,
         "type": btype,
         "title": str(title or "").strip() or BOOKMARK_TYPE_LABELS[btype],
         "note": str(note or ""),
         "refs": clean_refs,
         "seq": seq,
-    })
+    }
+    if evidence is not None and btype in EVIDENCE_BOOKMARK_TYPES:
+        card = normalize_evidence_card(evidence, refs=clean_refs)
+        if card is not None:
+            row["evidence"] = card
+    out["bookmarks"].append(row)
     return out
+
+
+def add_evidence(
+    inv: Optional[Dict[str, Any]],
+    *,
+    title: str,
+    note: str = "",
+    role: str = BM_SUPPORTING,
+    source: str = EV_SOURCE_USER,
+    kind: str = "",
+    author: str = EV_AUTHOR_USER,
+    refs: Optional[Sequence[Dict[str, Any]]] = None,
+    task: str = "",
+    core: str = "",
+    value: Any = None,
+    unit: str = "",
+    scope: Optional[Dict[str, int]] = None,
+    trace_id: str = "",
+    hypothesis_id: str = "",
+    created_at: str = "",
+    bookmark_id: str = "",
+) -> Dict[str, Any]:
+    """Add a structured evidence card (a bookmark with an ``evidence`` dict).
+
+    Source data (``kind`` / ``value`` / ``unit`` / ``task`` / ``core`` /
+    ``scope`` / ``trace_id`` / ``refs``) is stored separately from the editable
+    explanation (``note``). Provenance rules are enforced by
+    :func:`normalize_evidence_card`.
+    """
+    r = str(role or "").strip().lower()
+    if r not in EVIDENCE_BOOKMARK_TYPES:
+        r = BM_SUPPORTING
+    return add_bookmark(
+        inv, type=r, title=title, note=note, refs=refs, bookmark_id=bookmark_id,
+        evidence={
+            "source": source, "kind": kind, "author": author, "task": task,
+            "core": core, "value": value, "unit": unit, "scope": scope,
+            "trace_id": trace_id, "hypothesis_id": hypothesis_id,
+            "created_at": created_at, "updated_at": created_at,
+        },
+    )
+
+
+def update_evidence_explanation(
+    inv: Optional[Dict[str, Any]], bookmark_id: str, note: str,
+    *, updated_at: str = "",
+) -> Dict[str, Any]:
+    """Edit *only* the explanation text of an evidence card — never source data."""
+    out = _clone(inv)
+    bid = str(bookmark_id or "").strip()
+    for b in out["bookmarks"]:
+        if str(b.get("id")) != bid:
+            continue
+        b["note"] = str(note or "")
+        if isinstance(b.get("evidence"), dict) and updated_at:
+            b["evidence"]["updated_at"] = str(updated_at)
+        break
+    return out
+
+
+def apply_evidence_edit(
+    inv: Optional[Dict[str, Any]], bookmark_id: str,
+    changes: Optional[Dict[str, Any]], *, updated_at: str = "",
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Merge proposed card ``changes`` for one evidence bookmark.
+
+    Protected fields on a measured card (and any attempt to set ``kind`` to
+    ``measured``) are dropped; the returned list names the rejected fields so
+    the caller can surface "measured data not changed".
+    """
+    out = _clone(inv)
+    bid = str(bookmark_id or "").strip()
+    rejected: List[str] = []
+    for b in out["bookmarks"]:
+        if str(b.get("id")) != bid:
+            continue
+        card = b.get("evidence") if isinstance(b.get("evidence"), dict) else {}
+        allowed, rejected = guard_evidence_changes(card, changes)
+        if "note" in allowed:
+            b["note"] = str(allowed.pop("note") or "")
+        if allowed:
+            merged = dict(card)
+            merged.update(allowed)
+            b["evidence"] = normalize_evidence_card(merged, refs=b.get("refs"))
+        if isinstance(b.get("evidence"), dict) and updated_at:
+            b["evidence"]["updated_at"] = str(updated_at)
+        break
+    return out, rejected
 
 
 def update_bookmark(
@@ -56879,6 +57353,282 @@ def remove_unresolved_question(inv: Optional[Dict[str, Any]], text: str) -> Dict
         q for q in out["unresolved_questions"] if q != str(text or "").strip()
     ]
     return out
+
+
+# ---------------------------------------------------------------------------
+# Durable status (schema/2)
+# ---------------------------------------------------------------------------
+def derive_status(inv: Optional[Dict[str, Any]]) -> str:
+    """Best-effort durable status for a schema/1 investigation being upgraded.
+
+    Never returns ``closed`` — closing an investigation is an explicit act.
+    """
+    inv = inv if isinstance(inv, dict) else {}
+    bms = inv.get("bookmarks") or []
+    types = [str(b.get("type") or "") for b in bms if isinstance(b, dict)]
+    has_hypothesis = BM_HYPOTHESIS in types
+    has_evidence = any(t in (BM_SUPPORTING, BM_VERIFICATION) for t in types)
+    has_conclusion = bool(str(inv.get("conclusion") or "").strip()) or (
+        BM_CONCLUSION in types
+    )
+    has_open = bool(inv.get("unresolved_questions"))
+    if has_conclusion:
+        return NB_STATUS_READY
+    if has_hypothesis and not has_evidence:
+        return NB_STATUS_NEEDS_EVIDENCE
+    if has_open:
+        return NB_STATUS_NEEDS_EVIDENCE
+    return NB_STATUS_OPEN
+
+
+def set_status(
+    inv: Optional[Dict[str, Any]], status: str, *, updated_at: str = "",
+) -> Dict[str, Any]:
+    out = _clone(inv)
+    s = str(status or "").strip().lower()
+    out["status"] = s if s in NOTEBOOK_STATUSES else NB_STATUS_OPEN
+    if updated_at:
+        out["updated_at"] = str(updated_at)
+    return out
+
+
+def touch_investigation(inv: Optional[Dict[str, Any]], updated_at: str) -> Dict[str, Any]:
+    """Stamp the caller-supplied last-updated time (kept pure — no clock here)."""
+    out = _clone(inv)
+    out["updated_at"] = str(updated_at or "")
+    return out
+
+
+def migrate_investigation(inv: Dict[str, Any]) -> Dict[str, Any]:
+    """Bring a normalised investigation dict up to the current schema.
+
+    Keeps every existing bookmark, link, question and conclusion. A schema/1
+    payload (no ``status``) gets a derived durable status; a valid stored
+    status is preserved. A transient ``workflow_stage`` key, if present, is
+    left untouched — it is never promoted to the Notebook status.
+    """
+    stored = str(inv.get("status") or "").strip().lower()
+    inv["status"] = stored if stored in NOTEBOOK_STATUSES else derive_status(inv)
+    inv["updated_at"] = str(inv.get("updated_at") or "")
+    # Wrap legacy evidence bookmarks (schema/1) in a provenance card, keeping
+    # every id / ref / note. Provenance is inferred conservatively: a bookmark
+    # that references measured BTFViewer output is Measured; a bare note is a
+    # user note. Never retroactively AI-attributed.
+    for b in inv.get("bookmarks") or []:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") not in EVIDENCE_BOOKMARK_TYPES or isinstance(b.get("evidence"), dict):
+            continue
+        refs = b.get("refs") or []
+        src = _measured_ref(refs) or EV_SOURCE_USER
+        b["evidence"] = normalize_evidence_card(
+            {
+                "source": src,
+                "kind": EV_KIND_MEASURED if src != EV_SOURCE_USER else "",
+                "author": EV_AUTHOR_USER,
+                "trace_id": str((inv.get("trace_identity") or {}).get("hash") or ""),
+            },
+            refs=refs,
+        )
+    inv["schema"] = INVESTIGATION_SCHEMA
+    return inv
+
+
+# ---------------------------------------------------------------------------
+# Six-section presentation (pure projection of the stored investigation)
+# ---------------------------------------------------------------------------
+def _evidence_kind(bookmark: Dict[str, Any]) -> str:
+    """Coarse provenance for an evidence bookmark. §8 refines this into cards;
+    here a bookmark that points at measured BTFViewer output is ``measured``,
+    everything else is a plain ``note``."""
+    for r in bookmark.get("refs") or []:
+        if str(r.get("kind")) in (REF_FINDING, REF_METRIC, REF_RANGE):
+            return "measured"
+    return "note"
+
+
+def _hypothesis_status(inv: Dict[str, Any], bid: str) -> str:
+    rels = {
+        str(link.get("relation"))
+        for link in inv.get("links") or []
+        if str(link.get("to")) == bid or str(link.get("from")) == bid
+    }
+    if "contradicts" in rels:
+        return "contradicted"
+    if rels & {"supports", "verifies"}:
+        return "supported"
+    return "open"
+
+
+def _scope_summary(inv: Dict[str, Any]) -> str:
+    rng = inv.get("analysis_range")
+    if isinstance(rng, dict) and rng.get("start") is not None:
+        return f"{int(rng['start'])}–{int(rng['end'])}"
+    return "Full trace"
+
+
+def _stale_bookmark_ids(broken: Optional[Dict[str, Any]]) -> set:
+    if not isinstance(broken, dict):
+        return set()
+    return {
+        str(i.get("bookmark_id"))
+        for i in (broken.get("issues") or [])
+        if isinstance(i, dict) and i.get("bookmark_id")
+    }
+
+
+def _evidence_is_stale(
+    bid: str, nav: Dict[str, Any], stale_ids: set, broken: Optional[Dict[str, Any]],
+) -> bool:
+    if bid in stale_ids:
+        return True
+    # A whole-trace change makes every trace-bound reference (a time / range /
+    # finding / metric) unverifiable — flag it, never hide it.
+    if isinstance(broken, dict) and broken.get("stale_trace"):
+        return bool(nav)
+    return False
+
+
+def evidence_nav_targets(bookmark: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Resolvable navigation targets for one evidence bookmark — no scope change.
+
+    Returns ``{jump: TIME}`` / ``{range: [LO, HI]}`` / ``{stats_metric: NAME}``
+    only for refs that carry a target; an empty dict when nothing resolves.
+    """
+    out: Dict[str, Any] = {}
+    for r in (bookmark or {}).get("refs") or []:
+        if not isinstance(r, dict):
+            continue
+        if r.get("time") is not None and "jump" not in out:
+            out["jump"] = int(r["time"])
+        rng = r.get("range")
+        if isinstance(rng, dict) and rng.get("start") is not None and "range" not in out:
+            out["range"] = [int(rng["start"]), int(rng["end"])]
+        if str(r.get("kind")) == REF_METRIC and r.get("metric") and "stats_metric" not in out:
+            out["stats_metric"] = str(r["metric"])
+        if str(r.get("kind")) == REF_FINDING and r.get("rule_id") and "finding" not in out:
+            out["finding"] = str(r["rule_id"])
+    return out
+
+
+def investigation_sections(
+    inv: Optional[Dict[str, Any]],
+    *,
+    broken: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Project a stored investigation onto the six report sections, in order.
+
+    Purely derived from existing fields — no data is invented or relabelled as
+    measured. Existing bookmark ids / links / conclusions are preserved
+    verbatim in ``bookmark_id`` / ``refs`` on each item. Evidence items carry
+    the full provenance ``card`` and a ``stale`` flag (from an optional
+    :func:`detect_broken_references` result); stale evidence stays visible.
+    """
+    inv = load_investigation(inv)
+    bms = inv.get("bookmarks") or []
+    ident = inv.get("trace_identity") or {}
+    stale = _stale_bookmark_ids(broken)
+
+    scope_items: List[Dict[str, Any]] = []
+    if ident.get("file"):
+        scope_items.append({"kind": "trace", "text": str(ident["file"])})
+    scope_items.append({"kind": "range", "text": _scope_summary(inv)})
+    if ident.get("time_scale"):
+        scope_items.append({"kind": "unit", "text": str(ident["time_scale"])})
+
+    hyp_items = [
+        {
+            "bookmark_id": b["id"], "text": b["title"], "note": b["note"],
+            "refs": b["refs"], "status": _hypothesis_status(inv, b["id"]),
+        }
+        for b in bms if b["type"] == BM_HYPOTHESIS
+    ]
+    evidence_items = []
+    for b in bms:
+        if b["type"] not in EVIDENCE_BOOKMARK_TYPES:
+            continue
+        card = b.get("evidence") if isinstance(b.get("evidence"), dict) else None
+        nav = evidence_nav_targets(b)
+        evidence_items.append({
+            "bookmark_id": b["id"], "text": b["title"], "note": b["note"],
+            "refs": b["refs"],
+            "role": (
+                "supporting" if b["type"] == BM_SUPPORTING
+                else "contradicting" if b["type"] == BM_CONTRADICTING
+                else "observation"
+            ),
+            "kind": (card or {}).get("kind", _evidence_kind(b)),
+            "card": card,
+            "stale": _evidence_is_stale(b["id"], nav, stale, broken),
+            "nav": nav,
+        })
+    open_items = [
+        {"source": "question", "text": q}
+        for q in inv.get("unresolved_questions") or []
+    ] + [
+        {
+            "source": "verification", "bookmark_id": b["id"], "text": b["title"],
+            "note": b["note"], "refs": b["refs"],
+        }
+        for b in bms if b["type"] == BM_VERIFICATION
+    ]
+    conclusion_items: List[Dict[str, Any]] = []
+    if str(inv.get("conclusion") or "").strip():
+        conclusion_items.append({"kind": "verdict", "text": inv["conclusion"]})
+    for b in bms:
+        if b["type"] == BM_CONCLUSION:
+            conclusion_items.append({
+                "kind": "verdict", "bookmark_id": b["id"], "text": b["title"],
+                "note": b["note"], "refs": b["refs"],
+            })
+    verified = sum(1 for b in bms if b["type"] == BM_VERIFICATION)
+    conclusion_items.append({
+        "kind": "verification_state",
+        "text": (
+            f"{verified} verification step(s) recorded"
+            if verified else "No verification steps recorded"
+        ),
+    })
+
+    by_id = {
+        "question": [{"text": inv["title"]}] if inv.get("title") else [],
+        "scope": scope_items,
+        "hypotheses": hyp_items,
+        "evidence": evidence_items,
+        "open_checks": open_items,
+        "conclusion": conclusion_items,
+    }
+    return [
+        {"id": sid, "title": NB_SECTION_LABELS[sid], "items": by_id[sid]}
+        for sid in NB_SECTION_ORDER
+    ]
+
+
+def investigation_header(
+    inv: Optional[Dict[str, Any]],
+    *,
+    broken: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Compact header row for the Notebook — usable with AI disabled.
+
+    ``broken`` is an optional :func:`detect_broken_references` result so the
+    stale-reference count stays a pure function of its inputs.
+    """
+    inv = load_investigation(inv)
+    secs = {s["id"]: s for s in investigation_sections(inv)}
+    status = str(inv.get("status") or NB_STATUS_OPEN)
+    ident = inv.get("trace_identity") or {}
+    return {
+        "status": status,
+        "status_label": NOTEBOOK_STATUS_LABELS.get(status, "Open"),
+        "trace": str(ident.get("file") or ""),
+        "scope": _scope_summary(inv),
+        "hypothesis_count": len(secs["hypotheses"]["items"]),
+        "evidence_count": len(secs["evidence"]["items"]),
+        "open_check_count": len(secs["open_checks"]["items"]),
+        "stale_ref_count": len((broken or {}).get("issues") or []),
+        "updated_at": str(inv.get("updated_at") or ""),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -57165,14 +57915,20 @@ def load_investigation(raw: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             seq = 0
         max_seq = max(max_seq, seq)
-        bookmarks.append({
+        clean_refs = [r for r in (normalize_ref(x) for x in (b.get("refs") or [])) if r]
+        row: Dict[str, Any] = {
             "id": bid,
             "type": btype,
             "title": str(b.get("title") or "").strip() or BOOKMARK_TYPE_LABELS[btype],
             "note": str(b.get("note") or ""),
-            "refs": [r for r in (normalize_ref(x) for x in (b.get("refs") or [])) if r],
+            "refs": clean_refs,
             "seq": seq or (len(bookmarks) + 1),
-        })
+        }
+        if isinstance(b.get("evidence"), dict) and btype in EVIDENCE_BOOKMARK_TYPES:
+            card = normalize_evidence_card(b["evidence"], refs=clean_refs)
+            if card is not None:
+                row["evidence"] = card
+        bookmarks.append(row)
     bookmarks.sort(key=lambda b: (b["seq"], b["id"]))
     ids = {b["id"] for b in bookmarks}
     links = []
@@ -57196,9 +57952,13 @@ def load_investigation(raw: Any) -> Dict[str, Any]:
     out["unresolved_questions"] = [
         str(q).strip() for q in (raw.get("unresolved_questions") or []) if str(q).strip()
     ]
+    # base (from new_investigation) carries default status/updated_at; keep any
+    # stored values so migrate_investigation can honour an explicit status.
+    out["status"] = raw.get("status") or ""
+    out["updated_at"] = str(raw.get("updated_at") or "")
     out["next_seq"] = max(int(base["next_seq"]), max_seq + 1)
     out["schema"] = INVESTIGATION_SCHEMA
-    return out
+    return migrate_investigation(out)
 
 
 # ---------------------------------------------------------------------------
@@ -57326,6 +58086,454 @@ def scaffold_investigation_from_findings(
             note=("Which measurement, cursor window, or experiment would confirm "
                   "or rule out the hypothesis?"))
     return out
+# ===========================================================================
+# investigation_ai
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# §9 — one Notebook-level "Collaborate with AI" entry point
+# ---------------------------------------------------------------------------
+NB_AI_DISABLED_REASON = "Enable AI Assistant in Settings → AI"
+
+NB_AI_ACTIONS: Tuple[Tuple[str, str, str], ...] = (
+    ("review_investigation", "Review investigation",
+     "Review this investigation. List unsupported claims, contradictions and "
+     "missing evidence. Do not change anything — return findings only."),
+    ("suggest_next_check", "Suggest next check",
+     "Recommend exactly one evidence-producing action available in BTFViewer "
+     "(a tool call or a Statistics/Timeline step) that would most advance this "
+     "investigation. One action, with the reason."),
+    ("draft_hypotheses", "Draft hypotheses",
+     "Propose up to three hypotheses for the open question. Mark each 'open' — "
+     "never 'supported'. Cite the evidence id(s) each rests on."),
+    ("draft_conclusion", "Draft conclusion",
+     "Draft a conclusion using only the accepted Notebook evidence. State "
+     "limitations and the verification state. Cite the evidence ids used."),
+    ("update_from_findings", "Update from Findings",
+     "Propose evidence cards from the current deterministic Analysis Findings. "
+     "Each card must reference the finding's rule_id; never label a card "
+     "Measured unless it references measured BTFViewer output."),
+    ("compare_trace", "Compare with another trace",
+     "Compare with the other open trace. Baseline A is Trace A, Candidate B is "
+     "Trace B; verdicts describe Candidate B versus Baseline A. Use the current "
+     "Compare Scope."),
+)
+_NB_AI_ACTION_IDS = frozenset(a[0] for a in NB_AI_ACTIONS)
+NB_AI_ACTION_LABELS = {a[0]: a[1] for a in NB_AI_ACTIONS}
+NB_AI_ACTION_PROMPTS = {a[0]: a[2] for a in NB_AI_ACTIONS}
+
+
+def nb_ai_action_reason(
+    action_id: str,
+    inv: Optional[Dict[str, Any]],
+    *,
+    ai_enabled: bool,
+    has_second_trace: bool = False,
+) -> str:
+    """"" if the action is available, else why it is disabled."""
+    if not ai_enabled:
+        return NB_AI_DISABLED_REASON
+    aid = str(action_id or "").strip()
+    if aid == "compare_trace" and not has_second_trace:
+        return "Open a second trace to compare"
+    if aid == "draft_conclusion":
+        secs = {s["id"]: s for s in investigation_sections(inv)}
+        if not secs["evidence"]["items"]:
+            return "Add evidence before drafting a conclusion"
+    return ""
+
+
+def collaborate_header(
+    inv: Optional[Dict[str, Any]],
+    *,
+    broken: Optional[Dict[str, Any]] = None,
+    selected_count: int = 0,
+) -> Dict[str, Any]:
+    """Compact context header for the AI panel while collaborating on a Notebook."""
+    inv = load_investigation(inv)
+    hdr = investigation_header(inv, broken=broken)
+    stale = int(hdr.get("stale_ref_count") or 0)
+    return {
+        "investigation_title": str(inv.get("title") or "Untitled investigation"),
+        "status_label": hdr["status_label"],
+        "trace": hdr["trace"],
+        "scope": hdr["scope"],
+        "evidence_count": hdr["evidence_count"],
+        "selected_count": int(selected_count or 0),
+        "stale_warning": (
+            f"{stale} reference(s) no longer resolve" if stale else ""
+        ),
+    }
+
+
+def collaborate_context(
+    inv: Optional[Dict[str, Any]],
+    *,
+    action: str = "",
+    findings: Optional[Sequence[Dict[str, Any]]] = None,
+    selected_evidence_ids: Optional[Sequence[str]] = None,
+    broken: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """The exact Notebook content sent to the AI — the active investigation and
+    the selected (or all) evidence, nothing else. The caller can show this to
+    the user verbatim.
+    """
+    inv = load_investigation(inv)
+    aid = str(action or "").strip()
+    if aid and aid not in _NB_AI_ACTION_IDS:
+        aid = ""
+    sections = investigation_sections(inv, broken=broken)
+    ev_items = next((s["items"] for s in sections if s["id"] == "evidence"), [])
+    want = {str(x) for x in (selected_evidence_ids or [])}
+    selected = [
+        it for it in ev_items
+        if not want or str(it.get("bookmark_id")) in want
+    ]
+    ctx: Dict[str, Any] = {
+        "action": aid,
+        "prompt": NB_AI_ACTION_PROMPTS.get(aid, ""),
+        "header": collaborate_header(
+            inv, broken=broken, selected_count=len(selected),
+        ),
+        "investigation": {
+            "title": str(inv.get("title") or ""),
+            "status": str(inv.get("status") or ""),
+            "trace_identity": dict(inv.get("trace_identity") or {}),
+            "sections": sections,
+        },
+        "selected_evidence": selected,
+    }
+    if aid == "update_from_findings":
+        ctx["findings"] = [
+            {
+                "rule_id": str(f.get("rule_id") or f.get("id") or ""),
+                "title": str(f.get("title") or ""),
+                "severity": str(f.get("severity") or ""),
+                "task": str(f.get("task") or ""),
+            }
+            for f in (findings or []) if isinstance(f, dict)
+        ][:20]
+    return ctx
+
+
+# ---------------------------------------------------------------------------
+# §10 — require proposal review before AI changes the Notebook
+# ---------------------------------------------------------------------------
+PROPOSAL_SCHEMA = "btf-viewer-nb-proposal/1"
+PROPOSAL_OPS = ("add", "update", "link", "change_status", "remove")
+# Op outcomes.
+OP_OK = "ok"
+OP_CONFIRM = "needs_confirmation"
+OP_REJECTED = "rejected"
+
+
+
+def strip_model_secrets(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Keep model / provider identity only — never keys, tokens or prompts."""
+    m = meta if isinstance(meta, dict) else {}
+    out: Dict[str, Any] = {}
+    for k in ("model", "provider", "context_mode"):
+        if m.get(k):
+            out[k] = str(m[k])
+    return out
+
+
+def _bookmark_index(inv: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return {str(b.get("id")): b for b in (inv.get("bookmarks") or [])}
+
+
+def _annotate_op(
+    inv: Dict[str, Any],
+    op: Dict[str, Any],
+    *,
+    trace_hash: str,
+    allow_other_trace: bool,
+) -> Dict[str, Any]:
+    kind = str(op.get("op") or "").strip().lower()
+    out = dict(op)
+    out["op"] = kind
+    if kind not in PROPOSAL_OPS:
+        out["status"], out["reason"] = OP_REJECTED, f"unknown op {kind!r}"
+        return out
+    bidx = _bookmark_index(inv)
+
+    # An op that points at another trace needs an explicit Compare action.
+    op_trace = str(op.get("trace_id") or "")
+    if op_trace and op_trace != trace_hash and not allow_other_trace:
+        out["status"] = OP_REJECTED
+        out["reason"] = "references another trace without an explicit Compare action"
+        return out
+
+    if kind == "add":
+        role = str(op.get("role") or op.get("type") or "").strip().lower()
+        if role not in EVIDENCE_BOOKMARK_TYPES:
+            out["status"], out["reason"] = OP_REJECTED, "add needs an evidence role"
+            return out
+        card = normalize_evidence_card(
+            {
+                "source": op.get("source"), "kind": op.get("kind"),
+                "author": op.get("author") or EV_AUTHOR_AI,
+                "task": op.get("task"), "unit": op.get("unit"),
+                "value": op.get("value"), "scope": op.get("scope"),
+            },
+            refs=op.get("refs"),
+        )
+        out["card"] = card
+        if str(op.get("kind") or "").lower() == EV_KIND_MEASURED and (
+            not card or card.get("kind") != EV_KIND_MEASURED
+        ):
+            out["reason"] = "downgraded from Measured — AI prose is not measured"
+        if role in ("supporting", "contradicting") and not (
+            op.get("evidence_ids") or op.get("rationale")
+        ):
+            out.setdefault("reason", "no supporting evidence id cited")
+        out["status"] = OP_OK
+        return out
+
+    if kind == "update":
+        target = bidx.get(str(op.get("bookmark_id") or ""))
+        if target is None:
+            out["status"], out["reason"] = OP_REJECTED, "unknown bookmark_id"
+            return out
+        card = target.get("evidence") if isinstance(target.get("evidence"), dict) else {}
+        _allowed, rejected = guard_evidence_changes(card, op.get("changes") or {})
+        if rejected:
+            out["status"] = OP_REJECTED
+            out["reason"] = "measured data not changed: " + ", ".join(sorted(rejected))
+            return out
+        if target.get("type") == BM_CONCLUSION or "conclusion" in (op.get("changes") or {}):
+            out["status"], out["reason"] = OP_CONFIRM, "replaces a conclusion"
+            return out
+        out["status"] = OP_OK
+        return out
+
+    if kind == "link":
+        a, b = str(op.get("from") or ""), str(op.get("to") or "")
+        if a not in bidx or b not in bidx or a == b:
+            out["status"], out["reason"] = OP_REJECTED, "link needs two existing bookmarks"
+            return out
+        rel = str(op.get("relation") or "relates").strip().lower()
+        if rel not in LINK_RELATIONS:
+            out["status"], out["reason"] = OP_REJECTED, f"unknown relation {rel!r}"
+            return out
+        out["relation"] = rel
+        out["status"] = OP_OK
+        return out
+
+    if kind == "change_status":
+        s = str(op.get("status") or "").strip().lower()
+        if s not in NOTEBOOK_STATUSES:
+            out["status"], out["reason"] = OP_REJECTED, f"unknown status {s!r}"
+            return out
+        out["status_value"] = s
+        if s == NB_STATUS_CLOSED:
+            out["status"], out["reason"] = OP_CONFIRM, "closes the investigation"
+            return out
+        out["status"] = OP_OK
+        return out
+
+    # remove
+    target = bidx.get(str(op.get("bookmark_id") or ""))
+    if target is None:
+        out["status"], out["reason"] = OP_REJECTED, "unknown bookmark_id"
+        return out
+    out["status"] = OP_CONFIRM
+    out["reason"] = (
+        "removes evidence" if target.get("type") in EVIDENCE_BOOKMARK_TYPES
+        else "removes a bookmark"
+    )
+    return out
+
+
+def validate_proposal(
+    inv: Optional[Dict[str, Any]],
+    proposal: Optional[Dict[str, Any]],
+    *,
+    findings: Optional[Sequence[Dict[str, Any]]] = None,  # noqa: ARG001 - reserved
+    allow_other_trace: bool = False,
+) -> Dict[str, Any]:
+    """Validate every proposed op against references and protected fields.
+
+    Returns ``{schema, ok, operations:[…annotated…], model}``; ``ok`` is True
+    when at least one op is applicable (``ok`` or ``needs_confirmation``).
+    """
+    inv = load_investigation(inv)
+    trace_hash = str((inv.get("trace_identity") or {}).get("hash") or "")
+    raw = proposal if isinstance(proposal, dict) else {}
+    ops = raw.get("operations") if isinstance(raw.get("operations"), list) else []
+    annotated = [
+        _annotate_op(
+            inv, op if isinstance(op, dict) else {},
+            trace_hash=trace_hash, allow_other_trace=bool(allow_other_trace),
+        )
+        for op in ops
+    ]
+    for i, op in enumerate(annotated):
+        op["index"] = i
+    applicable = any(o["status"] in (OP_OK, OP_CONFIRM) for o in annotated)
+    return {
+        "schema": PROPOSAL_SCHEMA,
+        "ok": bool(applicable),
+        "operations": annotated,
+        "model": strip_model_secrets(raw.get("model")),
+    }
+
+
+def proposal_diff(
+    inv: Optional[Dict[str, Any]],
+    validated: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Compact diff grouped by Notebook section for the review UI."""
+    v = validated if isinstance(validated, dict) else {}
+    by_section: Dict[str, List[Dict[str, Any]]] = {
+        "hypotheses": [], "evidence": [], "conclusion": [], "status": [],
+        "links": [],
+    }
+    needs_confirmation: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    for op in v.get("operations") or []:
+        st = op.get("status")
+        if st == OP_REJECTED:
+            rejected.append(op)
+            continue
+        if st == OP_CONFIRM:
+            needs_confirmation.append(op)
+        kind = op.get("op")
+        if kind == "add":
+            role = str(op.get("role") or op.get("type") or "")
+            by_section["hypotheses" if role == BM_HYPOTHESIS else "evidence"].append(op)
+        elif kind == "update":
+            by_section["conclusion" if "conclusion" in (op.get("changes") or {})
+                       else "evidence"].append(op)
+        elif kind == "change_status":
+            by_section["status"].append(op)
+        elif kind == "link":
+            by_section["links"].append(op)
+        elif kind == "remove":
+            by_section["evidence"].append(op)
+    return {
+        "by_section": by_section,
+        "needs_confirmation": needs_confirmation,
+        "rejected": rejected,
+    }
+
+
+def apply_proposal(
+    inv: Optional[Dict[str, Any]],
+    validated: Optional[Dict[str, Any]],
+    *,
+    accept_indices: Optional[Sequence[int]] = None,
+    accept_all: bool = False,
+    confirmed_indices: Optional[Sequence[int]] = None,
+    now: str = "",
+) -> Tuple[Dict[str, Any], List[int], List[int]]:
+    """Commit the accepted ops as one transaction. Returns ``(inv, applied,
+    skipped)`` (op indices). The caller wraps the result in one
+    ``push_notebook_state`` so undo reverts the whole proposal in one step.
+
+    Nothing is applied without explicit acceptance — a ``needs_confirmation`` op
+    is applied only when its index is in ``confirmed_indices`` *and* accepted.
+    """
+    v = validated if isinstance(validated, dict) else {}
+    ops = v.get("operations") or []
+    model = strip_model_secrets(v.get("model"))
+    want = None if accept_all else {int(i) for i in (accept_indices or [])}
+    confirmed = {int(i) for i in (confirmed_indices or [])}
+    cur = load_investigation(inv)
+    applied: List[int] = []
+    skipped: List[int] = []
+    for op in ops:
+        i = int(op.get("index", -1))
+        st = op.get("status")
+        take = st == OP_OK or (st == OP_CONFIRM and i in confirmed)
+        if want is not None:
+            take = take and i in want
+        if not take:
+            skipped.append(i)
+            continue
+        cur = _apply_one(cur, op, model=model, now=now)
+        applied.append(i)
+    if applied:
+        events = list(cur.get("proposal_events") or [])
+        events.append({
+            "schema": PROPOSAL_SCHEMA,
+            "at": str(now or ""),
+            "accepted": applied,
+            "rejected": [
+                int(o.get("index", -1)) for o in ops if o.get("status") == OP_REJECTED
+            ],
+            "model": model,
+        })
+        cur["proposal_events"] = events
+    return cur, applied, skipped
+
+
+def _apply_one(
+    inv: Dict[str, Any], op: Dict[str, Any], *, model: Dict[str, Any], now: str,
+) -> Dict[str, Any]:
+    kind = op.get("op")
+    if kind == "add":
+        card = op.get("card") or {}
+        out = add_evidence(
+            inv,
+            title=str(op.get("title") or "AI evidence"),
+            note=str(op.get("note") or op.get("rationale") or ""),
+            role=str(op.get("role") or op.get("type") or "supporting"),
+            source=str(card.get("source") or "AI suggestion"),
+            kind=str(card.get("kind") or ""),
+            author=EV_AUTHOR_AI,
+            refs=op.get("refs"),
+            task=str(card.get("task") or ""),
+            value=card.get("value"),
+            unit=str(card.get("unit") or ""),
+            scope=card.get("scope"),
+            hypothesis_id=str(op.get("hypothesis_id") or ""),
+            created_at=str(now or ""),
+        )
+        return _tag_ai_prov(
+            out,
+            {
+                "model": model.get("model", ""),
+                "provider": model.get("provider", ""),
+                "source_evidence_ids": [
+                    str(x) for x in (op.get("evidence_ids") or [])
+                ],
+            },
+            now,
+        )
+    if kind == "update":
+        if "conclusion" in (op.get("changes") or {}):
+            return set_conclusion(inv, str(op["changes"]["conclusion"] or ""))
+        note = (op.get("changes") or {}).get("note")
+        if note is not None:
+            return update_evidence_explanation(
+                inv, str(op.get("bookmark_id") or ""), str(note), updated_at=now,
+            )
+        return inv
+    if kind == "link":
+        return link_bookmarks(
+            inv, str(op.get("from") or ""), str(op.get("to") or ""),
+            str(op.get("relation") or "relates"),
+        )
+    if kind == "change_status":
+        return set_status(inv, str(op.get("status_value") or op.get("status") or ""),
+                          updated_at=now)
+    if kind == "remove":
+        return remove_bookmark(inv, str(op.get("bookmark_id") or ""))
+    return inv
+
+
+def _tag_ai_prov(inv: Dict[str, Any], prov: Dict[str, Any], now: str) -> Dict[str, Any]:
+    """Stamp AI provenance on the just-added last bookmark's evidence card."""
+    bms = inv.get("bookmarks") or []
+    if bms and isinstance(bms[-1].get("evidence"), dict):
+        bms[-1]["evidence"]["ai_provenance"] = {
+            "model": str(prov.get("model") or ""),
+            "provider": str(prov.get("provider") or ""),
+            "source_evidence_ids": list(prov.get("source_evidence_ids") or []),
+        }
+        bms[-1]["evidence"]["updated_at"] = str(now or "")
+    return inv
 # ===========================================================================
 # ai_evidence_package
 # ===========================================================================
@@ -60718,7 +61926,7 @@ class _MetricsPlotDialog(QDialog):
             gen.setSize(sz)
             gen.setViewBox(QRectF(0, 0, sz.width(), sz.height()))
             gen.setTitle(self._title)
-            gen.setDescription("Generated by RTOS BTF Viewer")
+            gen.setDescription("Generated by BTFViewer")
             with _svg_safe_app_style():
                 painter = QPainter(gen)
                 try:
@@ -61400,7 +62608,7 @@ class _StatsSectionGrip(QWidget):
 
 
 class _CompareBarChart(QWidget):
-    """Theme-aware Core Util paired bars or Response/Summary/Migration diverging bars."""
+    """Theme-aware Core Utilization paired bars or Response/Summary/Migration diverging bars."""
 
     def __init__(self, kind: str, parent=None) -> None:
         super().__init__(parent)
@@ -61445,7 +62653,7 @@ class _CompareBarChart(QWidget):
         p.setPen(ink)
         p.setFont(self.font())
         if self._kind == "util":
-            title = "Core utilisation"
+            title = "Core Utilization"
         elif self._kind == "summary":
             title = "Summary changes"
         elif self._kind == "heatmap":
@@ -61543,7 +62751,7 @@ class _CompareNavPages(QWidget):
     _GROUPS = {
         "Summary": "Overview",
         "Top Tasks": "CPU & Cores",
-        "Core Util": "CPU & Cores",
+        "Core Utilization": "CPU & Cores",
         "Core Migrations": "CPU & Cores",
         "Execution": "Timing",
         "Blocking": "Timing",
@@ -61729,7 +62937,8 @@ class _TraceCompareDialog(QDialog):
         lay.addLayout(row)
 
         self._scope_cb = QCheckBox(
-            "Limit to each tab's cursor range (C1–Cn, when 2+ cursors placed)")
+            "Compare Scope — limit to each tab's cursor range "
+            "(C1–Cn, when 2+ cursors placed)")
         self._scope_cb.setChecked(True)
         lay.addWidget(self._scope_cb)
 
@@ -61940,7 +63149,7 @@ class _TraceCompareDialog(QDialog):
 
         self._pages.addTab(summary_page, "Summary")
         self._pages.addTab(self._top_table, "Top Tasks")
-        self._pages.addTab(core_page, "Core Util")
+        self._pages.addTab(core_page, "Core Utilization")
         self._pages.addTab(mig_page, "Core Migrations")
         self._pages.addTab(self._exec_table, "Execution")
         self._pages.addTab(self._block_table, "Blocking")
@@ -62545,970 +63754,11 @@ class _TraceCompareDialog(QDialog):
             wnd.statusBar().showMessage(f"Exported trace compare: {path}", 4000)
 
 
-class _MigrationHeatmapWidget(QWidget):
-    """Paint labelled rows × time-bin migration counts (pairs or core×core matrix)."""
-
-    cell_clicked = Signal(int, int)
-    row_clicked = Signal(int)
-
-    _ROW_H = 16
-    _CELL_MIN_W = 8
-    _MATRIX_CELL_MIN_W = 8
-    _LEFT_PAD = 6
-    _COL_HEADER_H = 40
-    _MATRIX_HEADER_LABEL_PITCH = 12
-
-    def __init__(self, row_labels: List[str], grid: list, parent=None):
-        super().__init__(parent)
-        self._mode = 'pairs'
-        self._row_labels: List[str] = []
-        self._col_labels: List[str] = []
-        self._grid: list = [[]]
-        self._max_val = 0
-        self._label_w = 52
-        self._hover_ri: Optional[int] = None
-        self.setMouseTracking(True)
-        self.set_data(row_labels, grid)
-
-    def _scroll_offsets(self) -> Tuple[int, int]:
-        parent = self.parentWidget()
-        if isinstance(parent, QScrollArea):
-            return (parent.horizontalScrollBar().value(),
-                    parent.verticalScrollBar().value())
-        return 0, 0
-
-    def _header_h(self) -> int:
-        return self._COL_HEADER_H if self._mode == 'matrix' else 0
-
-    def _content_size(self) -> QSize:
-        if self._mode == 'matrix':
-            n_bins = len(self._col_labels) or 1
-            cell_w = self._MATRIX_CELL_MIN_W
-            w = self._LEFT_PAD + self._label_w + n_bins * cell_w + 8
-            h = max(60, self._header_h() + len(self._row_labels) * self._ROW_H + 8)
-        else:
-            n_bins = len(self._grid[0]) if self._grid and self._grid[0] else 1
-            w = self._LEFT_PAD + self._label_w + n_bins * self._CELL_MIN_W + 8
-            h = max(60, len(self._row_labels) * self._ROW_H + 8)
-        return QSize(w, h)
-
-    def _sync_widget_size(self) -> None:
-        """Match widget geometry to grid so QScrollArea range updates on drill-down."""
-        size = self._content_size()
-        parent = self.parentWidget()
-        if isinstance(parent, QScrollArea):
-            vp_w = parent.viewport().width()
-            if vp_w > 0:
-                size.setWidth(max(size.width(), vp_w))
-        self.setMinimumSize(size)
-        self.resize(size)
-        self.updateGeometry()
-
-    def set_data(self, row_labels: List[str], grid: list) -> None:
-        self._mode = 'pairs'
-        self._hover_ri = None
-        self._row_labels = list(row_labels)
-        self._col_labels = []
-        self._grid = grid if grid else [[]]
-        self._max_val = max((v for row in self._grid for v in row), default=0)
-        fm = QFontMetrics(self.font())
-        max_lbl = max((fm.horizontalAdvance(lbl) for lbl in self._row_labels), default=0)
-        self._label_w = max(52, max_lbl + 10)
-        self._sync_widget_size()
-        self.update()
-
-    def set_matrix_data(self, row_labels: List[str], col_labels: List[str],
-                        grid: list) -> None:
-        self._mode = 'matrix'
-        self._hover_ri = None
-        self._row_labels = list(row_labels)
-        self._col_labels = list(col_labels)
-        self._grid = grid if grid else [[]]
-        self._max_val = max((v for row in self._grid for v in row), default=0)
-        fm = QFontMetrics(self.font())
-        max_lbl = max(
-            (fm.horizontalAdvance(lbl) for lbl in self._row_labels + self._col_labels),
-            default=0)
-        self._label_w = max(52, max_lbl + 10)
-        self._sync_widget_size()
-        self.update()
-
-    def sizeHint(self) -> QSize:
-        return self._content_size()
-
-    def _cell_geometry(self, layout_w: Optional[int] = None) -> Tuple[int, float]:
-        if self._mode == 'matrix':
-            n_bins = len(self._col_labels) or 1
-            x0 = self._LEFT_PAD + self._label_w
-            return x0, float(self._MATRIX_CELL_MIN_W)
-        n_bins = len(self._grid[0]) if self._grid else 1
-        x0 = self._LEFT_PAD + self._label_w
-        w = layout_w if layout_w is not None else self.width()
-        cell_w = max(self._CELL_MIN_W, (w - x0 - 4) // max(1, n_bins))
-        return x0, float(cell_w)
-
-    def _matrix_col_label_step(self, cell_w: float) -> int:
-        return max(1, int(math.ceil(self._MATRIX_HEADER_LABEL_PITCH / max(cell_w, 1))))
-
-    def _matrix_row_has_migrations(self, ri: int) -> bool:
-        if ri < 0 or ri >= len(self._grid):
-            return False
-        for bi, v in enumerate(self._grid[ri]):
-            if self._mode == 'matrix' and ri == bi:
-                continue
-            if v > 0:
-                return True
-        return False
-
-    def set_hover_pos(self, _x: float, y: float) -> None:
-        header_h = self._header_h()
-        if y < header_h + 4:
-            hover_ri = None
-        else:
-            ri = int((y - header_h - 4) // self._ROW_H)
-            hover_ri = ri if 0 <= ri < len(self._row_labels) else None
-        if hover_ri != self._hover_ri:
-            self._hover_ri = hover_ri
-            self.update()
-
-    def set_hover_row(self, ri: Optional[int]) -> None:
-        """Programmatically highlight a row (e.g. Core-Pair focus)."""
-        hover_ri = ri if ri is not None and 0 <= ri < len(self._row_labels) else None
-        if hover_ri != self._hover_ri:
-            self._hover_ri = hover_ri
-            self.update()
-
-    def clear_hover(self) -> None:
-        if self._hover_ri is not None:
-            self._hover_ri = None
-            self.update()
-
-    def mouseMoveEvent(self, event) -> None:
-        pos = event.position() if hasattr(event, "position") else None
-        self.set_hover_pos(
-            pos.x() if pos else event.position().x(),
-            pos.y() if pos else event.position().y(),
-        )
-        return super().mouseMoveEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        self.clear_hover()
-        return super().leaveEvent(event)
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() != Qt.MouseButton.LeftButton or not self._row_labels:
-            return super().mousePressEvent(event)
-        pos = event.position() if hasattr(event, "position") else None
-        x = pos.x() if pos else event.position().x()
-        y = pos.y() if pos else event.position().y()
-        header_h = self._header_h()
-        if y < header_h + 4:
-            return super().mousePressEvent(event)
-        ri = int((y - header_h - 4) // self._ROW_H)
-        if ri < 0 or ri >= len(self._row_labels):
-            return super().mousePressEvent(event)
-        if self._mode == 'matrix':
-            if self._matrix_row_has_migrations(ri):
-                self.row_clicked.emit(ri)
-            return super().mousePressEvent(event)
-        x0, cell_w = self._cell_geometry()
-        if x < x0:
-            return super().mousePressEvent(event)
-        bi = int((x - x0) // cell_w)
-        n_cols = len(self._col_labels) if self._mode == 'matrix' else len(self._grid[0])
-        if bi < 0 or bi >= n_cols:
-            return super().mousePressEvent(event)
-        if self._grid[ri][bi] <= 0:
-            return super().mousePressEvent(event)
-        self.cell_clicked.emit(ri, bi)
-        return super().mousePressEvent(event)
-
-    def _paint_matrix_headers(self, p: QPainter, clip: QRect, scroll_x: int,
-                              scroll_y: int, x0: int, cell_w: float) -> None:
-        if scroll_y > self._COL_HEADER_H:
-            return
-        label_right = self._LEFT_PAD + self._label_w
-        header_top = scroll_y
-        axis_y = header_top + self._COL_HEADER_H - 3
-        if clip.bottom() < header_top or clip.top() > axis_y + 4:
-            return
-        p.fillRect(QRectF(scroll_x, header_top, label_right, self._COL_HEADER_H),
-                   self.palette().color(QPalette.Window))
-        p.setPen(QPen(QColor("#888888")))
-        p.drawText(QRectF(scroll_x, header_top, label_right - 4, self._COL_HEADER_H),
-                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "to→")
-        step = self._matrix_col_label_step(cell_w)
-        small = QFont(self.font())
-        small.setPointSize(max(7, small.pointSize() - 2))
-        p.setFont(small)
-        for bi, lbl in enumerate(self._col_labels):
-            if bi % step != 0:
-                continue
-            hx = x0 + bi * cell_w
-            if hx + cell_w <= label_right:
-                continue
-            cx = hx + (cell_w * step) / 2
-            cy = header_top + self._COL_HEADER_H - 4
-            p.save()
-            p.translate(cx, cy)
-            p.rotate(-90)
-            p.drawText(0, 0, lbl)
-            p.restore()
-        p.setFont(self.font())
-
-    def paintEvent(self, event) -> None:
-        if not self._row_labels:
-            return
-        clip = event.rect()
-        p = QPainter(self)
-        p.setClipRect(clip)
-        scroll_x, scroll_y = self._scroll_offsets()
-        try:
-            self._paint_grid(p, scroll_x, scroll_y, clip, show_hover=True)
-        finally:
-            p.end()
-
-    def _paint_grid(self, p: QPainter, scroll_x: int, scroll_y: int, clip: QRect,
-                    *, show_hover: bool = True, layout_w: Optional[int] = None) -> None:
-        if not self._row_labels:
-            return
-        header_h = self._header_h()
-        w = layout_w if layout_w is not None else self.width()
-        x0, cell_w = self._cell_geometry(layout_w=w)
-        n_cols = len(self._col_labels) if self._mode == 'matrix' else (
-            len(self._grid[0]) if self._grid and self._grid[0] else 1)
-        label_right = self._LEFT_PAD + self._label_w
-        bg = self.palette().color(QPalette.Window)
-        ri_start = max(0, int((clip.top() - header_h - 4) // self._ROW_H))
-        ri_end = min(len(self._row_labels),
-                     int((clip.bottom() - header_h - 4) // self._ROW_H) + 1)
-
-        if self._mode == 'matrix':
-            self._paint_matrix_headers(p, clip, scroll_x, scroll_y, x0, cell_w)
-
-        for ri in range(ri_start, ri_end):
-            if ri >= len(self._grid):
-                continue
-            y = header_h + 4 + ri * self._ROW_H
-            lbl = self._row_labels[ri]
-            p.fillRect(QRectF(scroll_x, y, label_right, self._ROW_H - 1), bg)
-            p.setPen(QPen(QColor("#888888")))
-            p.drawText(
-                QRectF(self._LEFT_PAD + scroll_x, y, self._label_w, self._ROW_H),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                lbl,
-            )
-            x = x0
-            for bi, v in enumerate(self._grid[ri]):
-                if bi >= n_cols:
-                    break
-                is_diag = self._mode == 'matrix' and ri == bi
-                cell_right = x + cell_w
-                if cell_right > label_right and x < w:
-                    if is_diag:
-                        p.fillRect(QRectF(x, y, cell_w - 1, self._ROW_H - 3),
-                                   QColor(91, 155, 213, 8))
-                    else:
-                        alpha = int(50 + 180 * v / self._max_val) if self._max_val else 30
-                        p.fillRect(QRectF(x, y, cell_w - 1, self._ROW_H - 3),
-                                   QColor(91, 155, 213, alpha if v else 15))
-                x += cell_w
-            if show_hover and self._hover_ri == ri:
-                row_w = label_right + n_cols * cell_w
-                p.fillRect(QRectF(0, y, row_w, self._ROW_H - 1),
-                           QColor(91, 155, 213, 46))
-
-    def render_full_pixmap(self) -> QPixmap:
-        """Render the full heatmap grid (all rows/columns) for PNG export."""
-        size = self._content_size()
-        pix = QPixmap(size)
-        pix.fill(self.palette().color(QPalette.Window))
-        saved_hover = self._hover_ri
-        self._hover_ri = None
-        p = QPainter(pix)
-        try:
-            self._paint_grid(
-                p, 0, 0, QRect(0, 0, size.width(), size.height()),
-                show_hover=False, layout_w=size.width())
-        finally:
-            p.end()
-            self._hover_ri = saved_hover
-        return pix
-
-    def render_full_svg(self, path: str, title: str) -> None:
-        """Render the full heatmap grid to an SVG file."""
-        size = self._content_size()
-        gen = QSvgGenerator()
-        gen.setFileName(path)
-        gen.setSize(size)
-        gen.setViewBox(QRectF(0, 0, size.width(), size.height()))
-        gen.setTitle(title)
-        gen.setDescription("Generated by RTOS BTF Viewer")
-        saved_hover = self._hover_ri
-        self._hover_ri = None
-        p = QPainter(gen)
-        try:
-            self._paint_grid(
-                p, 0, 0, QRect(0, 0, size.width(), size.height()),
-                show_hover=False, layout_w=size.width())
-        finally:
-            p.end()
-            self._hover_ri = saved_hover
-
-class _MigrationHeatmapDialog(QDialog):
-    """Popup: hierarchical migration heatmap (core-pair → task drill-down)."""
-
-    def __init__(self, trace: "BtfTrace", parent=None,
-                 on_drill: Optional[Callable] = None,
-                 on_clear: Optional[Callable] = None):
-        super().__init__(parent)
-        self.setWindowTitle("Migration Heatmap")
-        self.setMinimumSize(480, 320)
-        self.setModal(False)
-        self._trace = trace
-        self._on_drill = on_drill
-        self._on_clear = on_clear
-        self._level = 0
-        self._scope_lo: Optional[int] = None
-        self._scope_hi: Optional[int] = None
-        self._scope_suffix = ""
-        self._pairs: list = []
-        self._grid0: list = []
-        self._t_min = trace.time_min
-        self._t_max = trace.time_max
-        self._bin_w = 1.0
-        self._time_bins = 32
-        self._task_rows: list = []
-        self._task_grid: list = []
-        self._drill_fc = ""
-        self._drill_tc = ""
-        self._drill_label = ""
-        self._drill_bin_lo = 0
-        self._drill_bin_hi = 0
-        self._filter_count = 0
-        self._owner_tab_path: Optional[str] = None
-        self._scope_cache: Dict[Tuple[Optional[int], Optional[int]], dict] = {}
-        self._uses_matrix = _migration_heatmap_uses_matrix(trace)
-        self._matrix_cores: list = []
-        self._matrix_grid: list = []
-        self._bounce_only: bool = False
-
-        lo = hi = None
-        wnd = parent
-        if isinstance(wnd, QMainWindow):
-            tab = wnd._active_tab
-            if tab is not None:
-                times = sorted(tab.view._scene.cursor_times())
-                if len(times) >= 2:
-                    lo, hi = times[0], times[-1]
-                    self._scope_suffix = (
-                        f"  (C1–C{len(times)}: "
-                        f"{_format_time(lo, trace.time_scale)} … "
-                        f"{_format_time(hi, trace.time_scale)})")
-        self._scope_lo = lo
-        self._scope_hi = hi
-        pairs, grid, time_bins = _migration_heatmap_data(trace, lo, hi)
-        self._pairs = pairs
-        self._grid0 = grid
-        if self._uses_matrix:
-            self._matrix_cores, self._matrix_grid = _migration_heatmap_matrix(
-                trace, lo, hi)
-        self._time_bins = time_bins
-        t_min = lo if lo is not None else trace.time_min
-        t_hi = hi if hi is not None else trace.time_max
-        span = max(t_hi - t_min, 1)
-        self._t_min = t_min
-        self._t_max = t_hi
-        self._bin_w = span / time_bins
-        self._ov_t_min = t_min
-        self._ov_t_max = t_hi
-        self._ov_bin_w = span / time_bins
-        self._ov_time_bins = time_bins
-        self._cache_scope_grid(lo, hi, pairs, grid, time_bins, t_min, t_hi, span)
-
-        lay = QVBoxLayout(self)
-        nav = QHBoxLayout()
-        self._back_btn = QPushButton("← Back")
-        self._back_btn.setVisible(False)
-        self._back_btn.clicked.connect(self._go_back)
-        nav.addWidget(self._back_btn)
-        nav.addStretch(1)
-        self._bounce_filter_btn = QPushButton("Show: All Migrations")
-        self._bounce_filter_btn.setCheckable(True)
-        self._bounce_filter_btn.setChecked(False)
-        self._bounce_filter_btn.setToolTip(
-            "Toggle between showing all migrations and only lock-bounce migrations\n"
-            "(migrations that occurred while a mutex was held across different cores).")
-        self._bounce_filter_btn.clicked.connect(self._on_bounce_filter_toggled)
-        self._bounce_filter_btn.setVisible(_trace_has_core_bounce_holds(trace))
-        nav.addWidget(self._bounce_filter_btn)
-        lay.addLayout(nav)
-
-        self._sub_label = QLabel()
-        lay.addWidget(self._sub_label)
-
-        self._empty_label = QLabel("No migrations in scope.")
-        self._empty_label.setVisible(False)
-        lay.addWidget(self._empty_label)
-
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(False)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._scroll.setFrameShape(QFrame.NoFrame)
-        self._canvas = _MigrationHeatmapWidget([], [[]])
-        self._canvas.cell_clicked.connect(self._on_cell_clicked)
-        self._canvas.row_clicked.connect(self._on_matrix_row_clicked)
-        self._scroll.setWidget(self._canvas)
-        self._scroll.viewport().setMouseTracking(True)
-        self._scroll.viewport().installEventFilter(self)
-        self._scroll.verticalScrollBar().valueChanged.connect(
-            lambda _v: self._canvas.update())
-        self._scroll.horizontalScrollBar().valueChanged.connect(
-            lambda _v: self._canvas.update())
-        lay.addWidget(self._scroll, 1)
-
-        self._hint_label = QLabel()
-        self._hint_label.setStyleSheet("color:#888888;")
-        lay.addWidget(self._hint_label)
-
-        self._filter_bar = QLabel()
-        self._filter_bar.setVisible(False)
-        self._filter_bar.setStyleSheet(
-            "color:#5B9BD5; padding:6px 8px; background:rgba(91,155,213,0.12);"
-            "border:1px solid rgba(91,155,213,0.35); border-radius:4px;")
-        lay.addWidget(self._filter_bar)
-
-        export_row = QHBoxLayout()
-        export_row.setContentsMargins(0, 4, 0, 0)
-        self._btn_export_png = QPushButton("Export PNG")
-        self._btn_export_svg = QPushButton("Export SVG")
-        self._btn_export_png.clicked.connect(self._export_png)
-        self._btn_export_svg.clicked.connect(self._export_svg)
-        self._btn_export_png.setEnabled(False)
-        self._btn_export_svg.setEnabled(False)
-        export_row.addWidget(self._btn_export_png)
-        export_row.addWidget(self._btn_export_svg)
-        export_row.addStretch(1)
-        lay.addLayout(export_row)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Close)
-        if on_clear is not None:
-            self._show_all_btn = btns.addButton(
-                "Show all tasks", QDialogButtonBox.ActionRole)
-            self._show_all_btn.setToolTip(
-                "Clear Migration Filter and show all tasks")
-            self._show_all_btn.clicked.connect(on_clear)
-        else:
-            self._show_all_btn = None
-        btns.rejected.connect(self.reject)
-        btns.accepted.connect(self.accept)
-        lay.addWidget(btns)
-
-        self._go_level0()
-
-    def focus_pair(self, from_core: str, to_core: str,
-                   bounce_only: bool = False) -> bool:
-        """Open (or re-filter) the heatmap focused on a directed core pair.
-
-        Prefer Bounce Only when *bounce_only* is true. Returns False if the
-        pair has no migrations under the current scope/filter.
-        """
-        if bool(self._bounce_only) != bool(bounce_only):
-            self._bounce_filter_btn.setChecked(bool(bounce_only))
-            self._on_bounce_filter_toggled(bool(bounce_only))
-        else:
-            self._go_level0()
-        label = f"{_core_short_name(from_core)}→{_core_short_name(to_core)}"
-        if self._uses_matrix:
-            if from_core not in self._matrix_cores:
-                return False
-            self._show_outgoing_level(from_core)
-            found = next(
-                ((fc, tc, lbl) for fc, tc, lbl in self._pairs
-                 if fc == from_core and tc == to_core),
-                None,
-            )
-            if found is None:
-                return False
-            self._show_pair_time_level(found[0], found[1], found[2])
-            return True
-        # Non-matrix: top level is already pair × time — scroll to the row.
-        ri = next(
-            (i for i, (fc, tc, _lbl) in enumerate(self._pairs)
-             if fc == from_core and tc == to_core),
-            -1,
-        )
-        if ri < 0:
-            return False
-        self._canvas.set_hover_row(ri)
-        self._scroll_heatmap_to_row(ri)
-        self._sub_label.setText(
-            f"Core-pair migrations over time bins · focused {label}"
-            f"{self._scope_suffix}")
-        return True
-
-    def eventFilter(self, watched, event) -> bool:
-        if watched is self._scroll.viewport():
-            et = event.type()
-            if et == QEvent.Type.MouseMove:
-                pos = self._canvas.mapFrom(self._scroll.viewport(), event.position().toPoint())
-                self._canvas.set_hover_pos(pos.x(), pos.y())
-            elif et == QEvent.Type.Leave:
-                self._canvas.clear_hover()
-        return super().eventFilter(watched, event)
-
-    def set_filter_banner(self, label: Optional[str], count: int) -> None:
-        self._filter_count = count
-        active = count > 0
-        self._filter_bar.setVisible(active)
-        if active:
-            self._filter_bar.setText(
-                f"Showing {count} task{'s' if count != 1 else ''}: "
-                f"{label or 'filtered'}")
-        self._update_show_all_btn()
-
-    def _update_show_all_btn(self) -> None:
-        if self._show_all_btn is not None:
-            self._show_all_btn.setEnabled(self._filter_count > 0)
-
-    def _owner_tab_still_active(self, owner_tab_path: Optional[str]) -> bool:
-        if owner_tab_path is None:
-            return True
-        wnd = self.parent()
-        if not isinstance(wnd, QMainWindow):
-            return True
-        tab = wnd._active_tab
-        return tab is not None and tab.path == owner_tab_path
-
-    def _cache_scope_grid(self, lo: Optional[int], hi: Optional[int],
-                          pairs: list, grid: list, time_bins: int,
-                          t_min: int, t_hi: int, span: int) -> None:
-        ent = {
-            'pairs': pairs,
-            'grid0': grid,
-            'time_bins': time_bins,
-            'ov_t_min': t_min,
-            'ov_t_max': t_hi,
-            'ov_bin_w': span / time_bins,
-            'ov_time_bins': time_bins,
-        }
-        if self._uses_matrix:
-            ent['matrix_cores'], ent['matrix_grid'] = _migration_heatmap_matrix(
-                self._trace, lo, hi)
-        self._scope_cache[(lo, hi)] = ent
-
-    def _apply_scope_cache(self, lo: Optional[int], hi: Optional[int]) -> bool:
-        ent = self._scope_cache.get((lo, hi))
-        if ent is None:
-            return False
-        self._pairs = ent['pairs']
-        self._grid0 = ent['grid0']
-        self._time_bins = ent['time_bins']
-        self._ov_t_min = ent['ov_t_min']
-        self._ov_t_max = ent['ov_t_max']
-        self._ov_bin_w = ent['ov_bin_w']
-        self._ov_time_bins = ent['ov_time_bins']
-        if self._uses_matrix:
-            self._matrix_cores = ent.get('matrix_cores', [])
-            self._matrix_grid = ent.get('matrix_grid', [])
-        return True
-
-    def _on_bounce_filter_toggled(self, checked: bool) -> None:
-        """Toggle heatmap between all migrations and lock-bounce-only migrations."""
-        self._bounce_only = checked
-        self._bounce_filter_btn.setText(
-            "Show: Bounce Only" if checked else "Show: All Migrations")
-        # Invalidate scope cache so grids are recomputed with the new filter
-        self._scope_cache.clear()
-        lo, hi = self._scope_lo, self._scope_hi
-        pairs, grid, time_bins = _migration_heatmap_data(
-            self._trace, lo, hi, bounce_only=self._bounce_only)
-        self._pairs = pairs
-        self._grid0 = grid
-        if self._uses_matrix:
-            self._matrix_cores, self._matrix_grid = _migration_heatmap_matrix(
-                self._trace, lo, hi, bounce_only=self._bounce_only)
-        t_min = lo if lo is not None else self._trace.time_min
-        t_hi = hi if hi is not None else self._trace.time_max
-        span = max(t_hi - t_min, 1)
-        self._ov_t_min = t_min
-        self._ov_t_max = t_hi
-        self._ov_bin_w = span / time_bins
-        self._ov_time_bins = time_bins
-        self._cache_scope_grid(lo, hi, pairs, grid, time_bins, t_min, t_hi, span)
-        self._go_level0()
-
-    def refresh_scope(self) -> None:
-        """Rebuild level-0 grid from current cursor scope (full trace if <2 cursors)."""
-        lo = hi = None
-        suffix = ""
-        wnd = self.parent()
-        if isinstance(wnd, QMainWindow):
-            tab = wnd._active_tab
-            if tab is not None:
-                times = sorted(tab.view._scene.cursor_times())
-                if len(times) >= 2:
-                    lo, hi = times[0], times[-1]
-                    suffix = (
-                        f"  (C1–C{len(times)}: "
-                        f"{_format_time(lo, self._trace.time_scale)} … "
-                        f"{_format_time(hi, self._trace.time_scale)})")
-        self._scope_suffix = suffix
-        if self._apply_scope_cache(lo, hi):
-            self._go_level0()
-            return
-        pairs, grid, time_bins = _migration_heatmap_data(
-            self._trace, lo, hi, bounce_only=self._bounce_only)
-        self._pairs = pairs
-        self._grid0 = grid
-        if self._uses_matrix:
-            self._matrix_cores, self._matrix_grid = _migration_heatmap_matrix(
-                self._trace, lo, hi, bounce_only=self._bounce_only)
-        t_min = lo if lo is not None else self._trace.time_min
-        t_hi = hi if hi is not None else self._trace.time_max
-        span = max(t_hi - t_min, 1)
-        self._cache_scope_grid(lo, hi, pairs, grid, time_bins, t_min, t_hi, span)
-        self._ov_t_min = t_min
-        self._ov_t_max = t_hi
-        self._ov_bin_w = span / time_bins
-        self._ov_time_bins = time_bins
-        self._go_level0()
-
-    def _set_canvas(self, row_labels: List[str], grid: list) -> None:
-        self._canvas.set_data(row_labels, grid)
-
-    def _schedule_level1(self, fc: str, tc: str, label: str,
-                         bin_lo: int, bin_hi: int, parent_bin_index: int) -> None:
-        owner = self._owner_tab_path
-        QTimer.singleShot(
-            0, lambda fc=fc, tc=tc, label=label, bin_lo=bin_lo, bin_hi=bin_hi,
-            parent_bin_index=parent_bin_index, owner=owner:
-                self._go_level1(
-                    fc, tc, label, bin_lo, bin_hi, parent_bin_index, owner))
-
-    def _schedule_drill(self, fc: str, tc: str, label: str,
-                        bin_lo: int, bin_hi: int, merge_keys: set) -> None:
-        if not self._on_drill:
-            return
-        owner = self._owner_tab_path
-        QTimer.singleShot(
-            0, lambda fc=fc, tc=tc, label=label, bin_lo=bin_lo, bin_hi=bin_hi,
-            merge_keys=merge_keys, owner=owner:
-                self._dispatch_drill(
-                    fc, tc, label, bin_lo, bin_hi, merge_keys, owner))
-
-    def _dispatch_drill(self, fc: str, tc: str, label: str,
-                        bin_lo: int, bin_hi: int, merge_keys: set,
-                        owner_tab_path: Optional[str]) -> None:
-        if not self._on_drill or not self._owner_tab_still_active(owner_tab_path):
-            return
-        self._on_drill(fc, tc, label, bin_lo, bin_hi, merge_keys)
-
-    def _export_level_slug(self) -> str:
-        if self._uses_matrix:
-            if self._level == 0:
-                return "matrix"
-            if self._level == 1:
-                return "outgoing"
-            return "tasks"
-        if self._level >= 1:
-            return "tasks"
-        return "pairs"
-
-    def _export_base_name(self) -> str:
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        return f"migration-heatmap-{self._export_level_slug()}-{stamp}"
-
-    def _export_png(self) -> None:
-        if not self._canvas._row_labels:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Migration Heatmap PNG",
-            self._export_base_name() + ".png",
-            "PNG files (*.png);;All files (*)",
-        )
-        if not path:
-            return
-        try:
-            if self._canvas.render_full_pixmap().save(path):
-                wnd = self.parent()
-                if isinstance(wnd, QMainWindow):
-                    wnd.statusBar().showMessage(f"Exported heatmap: {path}", 4000)
-            else:
-                QMessageBox.critical(self, "Export Error", "Could not save PNG.")
-        except (OSError, RuntimeError) as exc:
-            QMessageBox.critical(self, "Export Error", str(exc))
-
-    def _export_svg(self) -> None:
-        if not self._canvas._row_labels:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Migration Heatmap SVG",
-            self._export_base_name() + ".svg",
-            "SVG files (*.svg);;All files (*)",
-        )
-        if not path:
-            return
-        try:
-            self._canvas.render_full_svg(path, "Migration Heatmap")
-            wnd = self.parent()
-            if isinstance(wnd, QMainWindow):
-                wnd.statusBar().showMessage(f"Exported heatmap: {path}", 4000)
-        except (OSError, RuntimeError) as exc:
-            QMessageBox.critical(self, "Export Error", str(exc))
-
-    def _scroll_heatmap_to_top(self) -> None:
-        """Reset scroll after level/content change (level-1 grid is often shorter)."""
-        def _do() -> None:
-            self._canvas._sync_widget_size()
-            self._scroll.updateGeometry()
-            self._scroll.verticalScrollBar().setValue(0)
-            self._scroll.horizontalScrollBar().setValue(0)
-        QTimer.singleShot(0, _do)
-
-    def _scroll_heatmap_to_row(self, ri: int) -> None:
-        """Scroll so *ri* is near the top of the viewport."""
-        def _do() -> None:
-            self._canvas._sync_widget_size()
-            self._scroll.updateGeometry()
-            y = max(0, ri * self._canvas._ROW_H)
-            self._scroll.verticalScrollBar().setValue(y)
-            self._scroll.horizontalScrollBar().setValue(0)
-        QTimer.singleShot(0, _do)
-
-    def _go_back(self) -> None:
-        if self._level <= 0:
-            return
-        if self._uses_matrix and self._level == 2:
-            self._show_outgoing_level(self._drill_fc)
-        elif self._uses_matrix and self._level == 1:
-            self._go_level0()
-        else:
-            self._go_level0()
-        self._scroll_heatmap_to_top()
-
-    def _set_heatmap_has_data(self, has_data: bool) -> None:
-        self._empty_label.setVisible(not has_data)
-        self._scroll.setVisible(has_data)
-        self._btn_export_png.setEnabled(has_data)
-        self._btn_export_svg.setEnabled(has_data)
-
-    def _go_level0(self) -> None:
-        self._level = 0
-        self._back_btn.setVisible(False)
-        self._t_min = self._ov_t_min
-        self._t_max = self._ov_t_max
-        self._bin_w = self._ov_bin_w
-        self._time_bins = self._ov_time_bins
-        if self._uses_matrix:
-            n = len(self._matrix_cores)
-            self._sub_label.setText(
-                f"Core × core migration counts ({n} cores, row = from, "
-                f"column = to){self._scope_suffix}")
-            has_data = (self._matrix_cores
-                        and any(self._matrix_grid[i][j] > 0
-                                for i in range(len(self._matrix_grid))
-                                for j in range(len(self._matrix_grid[i]))
-                                if i != j))
-            self._set_heatmap_has_data(has_data)
-            if has_data:
-                row_lbls = [_core_short_name(c) for c in self._matrix_cores]
-                col_lbls = row_lbls
-                self._canvas.set_matrix_data(row_lbls, col_lbls, self._matrix_grid)
-            self._hint_label.setText(
-                "Rows: source (from) core · Columns: destination (to) core · "
-                "Hover a row to highlight · Click a row for outgoing pairs")
-        else:
-            self._sub_label.setText(
-                f"Core-pair migrations over time bins{self._scope_suffix}")
-            has_data = (self._pairs
-                        and any(any(r for r in row) for row in self._grid0))
-            self._set_heatmap_has_data(has_data)
-            if has_data:
-                labels = [p[2] for p in self._pairs]
-                self._set_canvas(labels, self._grid0)
-            self._hint_label.setText(
-                "Rows: from→to core pairs · Columns: time bins · "
-                "Click a cell to drill into tasks")
-        self._update_show_all_btn()
-        self._scroll_heatmap_to_top()
-
-    def _show_outgoing_level(self, from_core: str) -> None:
-        """Matrix drill-down: outgoing pairs × time bins for one source core."""
-        self._level = 1
-        self._drill_fc = from_core
-        self._drill_tc = ""
-        self._drill_label = _core_short_name(from_core)
-        self._back_btn.setVisible(True)
-        lo = self._scope_lo
-        hi = self._scope_hi
-        pairs, grid, time_bins, t_min, t_hi, bin_w = _migration_core_outgoing_heatmap(
-            self._trace, from_core, lo, hi, self._ov_time_bins)
-        self._pairs = pairs
-        self._grid0 = grid
-        self._t_min = t_min
-        self._t_max = t_hi
-        self._bin_w = bin_w
-        self._time_bins = time_bins
-        src = _core_short_name(from_core)
-        self._sub_label.setText(
-            f"Outgoing migrations from {src} · rows = destination cores · "
-            f"columns = time bins{self._scope_suffix}")
-        has_data = bool(grid and any(any(r for r in row) for row in grid))
-        self._set_heatmap_has_data(has_data)
-        self._empty_label.setText("No migrations in scope.")
-        if has_data:
-            self._set_canvas([p[2] for p in pairs], grid)
-        self._hint_label.setText(
-            "Rows: outgoing core pairs · Columns: time bins · "
-            "Hover a row to highlight · Click a cell to drill into tasks")
-        self._update_show_all_btn()
-        self._scroll_heatmap_to_top()
-
-    def _on_matrix_row_clicked(self, ri: int) -> None:
-        if not self._uses_matrix or self._level != 0:
-            return
-        if ri < 0 or ri >= len(self._matrix_cores):
-            return
-        self._show_outgoing_level(self._matrix_cores[ri])
-
-    def _show_pair_time_level(self, fc: str, tc: str, label: str) -> None:
-        """Matrix drill-down: time bins for one core pair."""
-        self._level = 1
-        self._drill_fc = fc
-        self._drill_tc = tc
-        self._drill_label = label
-        self._back_btn.setVisible(True)
-        lo = self._scope_lo
-        hi = self._scope_hi
-        pairs, grid, time_bins, t_min, t_hi, bin_w = _migration_pair_time_bins(
-            self._trace, fc, tc, lo, hi, self._ov_time_bins)
-        self._t_min = t_min
-        self._t_max = t_hi
-        self._bin_w = bin_w
-        self._time_bins = time_bins
-        self._sub_label.setText(
-            f"Time bins · {label}{self._scope_suffix}")
-        has_data = bool(grid and any(any(r for r in row) for row in grid))
-        self._set_heatmap_has_data(has_data)
-        self._empty_label.setText("No migrations in scope.")
-        if has_data:
-            self._set_canvas([label], grid)
-        self._hint_label.setText(
-            "Columns: time bins · Click a cell to drill into tasks")
-        self._update_show_all_btn()
-        self._scroll_heatmap_to_top()
-
-    def _go_level1(self, fc: str, tc: str, label: str,
-                    bin_lo: int, bin_hi: int, parent_bin_index: int,
-                    owner_tab_path: Optional[str] = None) -> None:
-        if not self._owner_tab_still_active(owner_tab_path):
-            return
-        self._level = 2 if self._uses_matrix else 1
-        self._drill_fc = fc
-        self._drill_tc = tc
-        self._drill_label = label
-        self._drill_bin_lo = bin_lo
-        self._drill_bin_hi = bin_hi
-        self._back_btn.setVisible(True)
-        ts = self._trace.time_scale
-        self._sub_label.setText(
-            f"Tasks · {label} · "
-            f"{_format_time(bin_lo, ts)}–{_format_time(bin_hi, ts)}")
-        rows, grid, time_bins, t_min, t_hi, bin_w = _migration_task_heatmap_data(
-            self._trace, fc, tc, bin_lo, bin_hi, self._ov_time_bins,
-            parent_bin_index=parent_bin_index,
-            parent_time_bins=self._ov_time_bins)
-        self._task_rows = rows
-        self._task_grid = grid
-        self._t_min = t_min
-        self._t_max = t_hi
-        self._bin_w = bin_w
-        self._time_bins = time_bins
-        has_data = bool(rows)
-        self._set_heatmap_has_data(has_data)
-        self._empty_label.setText("No task migrations in this cell.")
-        if has_data:
-            # Annotate row labels with ingress (▼) / egress (▲) / balanced (⇄)
-            # indicators by comparing this direction vs. the reverse direction
-            # for each task over the full cursor scope.
-            scope_lo = self._scope_lo
-            scope_hi = self._scope_hi
-            rev_totals: Dict[str, int] = {}
-            for _m in self._trace.migrations:
-                if _m.from_core != tc or _m.to_core != fc:
-                    continue
-                if scope_lo is not None and _m.ns < scope_lo:
-                    continue
-                if scope_hi is not None and _m.ns > scope_hi:
-                    continue
-                rev_totals[_m.merge_key] = rev_totals.get(_m.merge_key, 0) + 1
-            annotated_labels: List[str] = []
-            for (mk, disp), row_counts in zip(rows, grid):
-                fwd = sum(row_counts)
-                rev = rev_totals.get(mk, 0)
-                if fwd > rev * 1.5:
-                    sym = "▲"   # primarily egress from fc
-                elif rev > fwd * 1.5:
-                    sym = "▼"   # primarily ingress back to fc
-                else:
-                    sym = "⇄"   # balanced / symmetric
-                annotated_labels.append(f"{sym} {disp}")
-            self._set_canvas(annotated_labels, grid)
-        self._hint_label.setText(
-            "Rows: tasks · Columns: sub-bins · "
-            "Click a cell to zoom and filter in Task View")
-        self._update_show_all_btn()
-        self._scroll_heatmap_to_top()
-
-    def _on_cell_clicked(self, ri: int, bi: int) -> None:
-        if self._uses_matrix and self._level == 1:
-            if ri < 0 or bi < 0 or bi >= self._time_bins:
-                return
-            if (not self._canvas._grid or ri >= len(self._canvas._grid)
-                    or bi >= len(self._canvas._grid[ri])
-                    or self._canvas._grid[ri][bi] <= 0):
-                return
-            if ri >= len(self._pairs):
-                return
-            fc, tc, label = self._pairs[ri]
-            bin_lo, bin_hi = _heatmap_bin_range(
-                self._t_min, self._bin_w, self._time_bins, self._t_max, bi)
-            self._schedule_level1(
-                fc, tc, label, bin_lo, bin_hi, bi)
-            return
-        if self._level == 0:
-            if ri < 0 or ri >= len(self._pairs):
-                return
-            fc, tc, label = self._pairs[ri]
-            if bi < 0 or bi >= len(self._grid0[0]) or self._grid0[ri][bi] <= 0:
-                return
-            bin_lo, bin_hi = _heatmap_bin_range(
-                self._t_min, self._bin_w, self._time_bins, self._t_max, bi)
-            self._schedule_level1(fc, tc, label, bin_lo, bin_hi, bi)
-            return
-        task_level = 2 if self._uses_matrix else 1
-        if self._level != task_level:
-            return
-        if ri < 0 or ri >= len(self._task_rows):
-            return
-        mk, disp = self._task_rows[ri]
-        if bi < 0 or bi >= len(self._task_grid[0]) or self._task_grid[ri][bi] <= 0:
-            return
-        sub_lo, sub_hi = _heatmap_bin_range(
-            self._t_min, self._bin_w, self._time_bins, self._t_max, bi)
-        pair_lbl = f"{self._drill_label} · {disp}"
-        self._schedule_drill(self._drill_fc, self._drill_tc, pair_lbl,
-                             sub_lo, sub_hi, {mk})
-
 class _ChordDiagramWidget(QWidget):
     """Paint core-to-core migration volume as a circular chord diagram.
 
-    *compact=True* matches web MiniChordPanel (inspector sidebar).
-    *compact=False* matches web ChordDiagramDialog (standalone popup).
+    *compact=True* matches web MiniChordPanel (the Corridor Inspector sidebar).
+    *compact=False* is the roomier standalone geometry.
     """
 
     hover_changed = Signal(object)  # emits int core index, or None
@@ -63521,7 +63771,7 @@ class _ChordDiagramWidget(QWidget):
     def __init__(self, parent=None, *, compact: bool = False):
         super().__init__(parent)
         self._compact = bool(compact)
-        # MiniChordPanel OUTER_PAD=36; standalone ChordDiagramDialog = 48.
+        # MiniChordPanel OUTER_PAD=36; roomier standalone geometry = 48.
         self._outer_pad = 36.0 if self._compact else 48.0
         self._min_radius = 16.0 if self._compact else 20.0
         self._bidir_sep = 5.0 if self._compact else 6.0
@@ -64749,6 +64999,14 @@ _CI_TOOLBAR_GAP = 8
 # Web .ci-sidebar-body height 220px + chrome.
 _CI_SIDEBAR_H = 248
 
+# "Focus this window" is a multi-state action — disclose every change up front.
+# Keep in lockstep with web CorridorInspectorDialog.vue FOCUS_WINDOW_TIP.
+_CI_FOCUS_WINDOW_TIP = (
+    "Focus this window — places cursors C1–C2 on the selected bin, zooms the "
+    "timeline to it, sets Statistics scope to the cursor range, opens the CPU "
+    "Load pane, and opens the Core Pair Summary statistics section."
+)
+
 
 def _hex_mix(fg: str, bg: str, t: float) -> str:
     """Blend hex *fg* into *bg* by *t* (0=bg, 1=fg)."""
@@ -65202,7 +65460,7 @@ class _CorridorInspectorDialog(QDialog):
         toolbar.setContentsMargins(0, _CI_TOOLBAR_PAD, 0, _CI_TOOLBAR_PAD)
         toolbar.setSpacing(_CI_TOOLBAR_GAP)
         toolbar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        scope_lbl = QLabel("Analysis Scope")
+        scope_lbl = QLabel("Inspector Scope")
         self._scope_lbl = scope_lbl
         toolbar.addWidget(scope_lbl)
         self._scope_combo = _CiComboBox()
@@ -65479,9 +65737,13 @@ class _CorridorInspectorDialog(QDialog):
         actions_col.setSpacing(6)
         self._actions_label = QLabel()
         self._actions_label.setStyleSheet("font-weight:600; font-size:12px;")
-        self._show_events_btn = QPushButton("Show events")
+        self._show_events_btn = QPushButton("Focus this window")
+        self._show_events_btn.setToolTip(_CI_FOCUS_WINDOW_TIP)
         self._show_events_btn.clicked.connect(self._on_show_events)
         self._filter_tl_btn = QPushButton("Filter timeline")
+        self._filter_tl_btn.setToolTip(
+            "Filter the timeline to the selected corridor's task / core — the "
+            "Inspector filter status shows what is applied")
         self._filter_tl_btn.clicked.connect(self._on_inspect_in_timeline)
         self._inspect_task_btn = QPushButton("Inspect task")
         self._inspect_task_btn.clicked.connect(self._on_inspect_task)
@@ -65519,7 +65781,8 @@ class _CorridorInspectorDialog(QDialog):
         self._card_empty.setStyleSheet(f"color:{_dim_css_color(self)};")
         ev_btns = QHBoxLayout()
         ev_btns.setContentsMargins(0, 4, 0, 0)
-        self._show_tl_btn = QPushButton("Show on timeline")
+        self._show_tl_btn = QPushButton("Focus this window")
+        self._show_tl_btn.setToolTip(_CI_FOCUS_WINDOW_TIP)
         self._show_tl_btn.clicked.connect(self._on_show_events)
         self._inspect_ev_btn = QPushButton("Inspect task")
         self._inspect_ev_btn.clicked.connect(self._on_inspect_task)
@@ -66745,219 +67008,6 @@ class _CorridorInspectorDialog(QDialog):
         self._rebuild()
 
 
-class _ChordDiagramDialog(QDialog):
-    """Popup: core-to-core migration volume as a directional chord diagram."""
-
-    def __init__(self, trace: "BtfTrace", parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Migration Chord Diagram")
-        self.setMinimumSize(420, 420)
-        self.resize(520, 560)
-        self.setModal(False)
-        self._trace = trace
-        self._bounce_only = False
-        self._scope_lo: Optional[int] = None
-        self._scope_hi: Optional[int] = None
-        self._scope_suffix = ""
-        self._owner_tab_path: Optional[str] = None
-        self._cores: list = []
-        self._grid: list = []
-
-        lay = QVBoxLayout(self)
-
-        nav = QHBoxLayout()
-        nav.addStretch(1)
-        self._bounce_filter_btn = QPushButton("Show: All Migrations")
-        self._bounce_filter_btn.setCheckable(True)
-        self._bounce_filter_btn.setChecked(False)
-        self._bounce_filter_btn.setToolTip(
-            "Toggle between showing all migrations and only lock-bounce migrations\n"
-            "(migrations that occurred while a mutex was held across different cores).")
-        self._bounce_filter_btn.clicked.connect(self._on_bounce_filter_toggled)
-        self._bounce_filter_btn.setVisible(_trace_has_core_bounce_holds(trace))
-        nav.addWidget(self._bounce_filter_btn)
-        lay.addLayout(nav)
-
-        self._sub_label = QLabel()
-        lay.addWidget(self._sub_label)
-
-        self._empty_label = QLabel("No migrations in scope.")
-        self._empty_label.setVisible(False)
-        lay.addWidget(self._empty_label)
-
-        self._canvas = _ChordDiagramWidget()
-        self._canvas.hover_changed.connect(self._on_hover_changed)
-        lay.addWidget(self._canvas, 1)
-
-        # Fixed-height hover label (never conditionally hidden) so its
-        # reserved space never shifts the canvas's available height — the
-        # chord diagram's radius derives from the canvas's own size, so any
-        # layout jump here would visibly resize the diagram on hover.
-        self._hover_label = QLabel(" ")
-        self._hover_label.setFixedHeight(
-            QFontMetrics(self._hover_label.font()).height() + 2)
-        lay.addWidget(self._hover_label)
-
-        self._hint_label = QLabel(
-            "Hover a core arc to highlight its migrations · chord width = "
-            "migration count · color fades from source to destination core")
-        self._hint_label.setStyleSheet(f"color:{_dim_css_color(self)};")
-        self._hint_label.setWordWrap(True)
-        lay.addWidget(self._hint_label)
-
-        export_row = QHBoxLayout()
-        export_row.setContentsMargins(0, 4, 0, 0)
-        self._btn_export_png = QPushButton("Export PNG")
-        self._btn_export_png.clicked.connect(self._export_png)
-        export_row.addWidget(self._btn_export_png)
-        self._btn_export_svg = QPushButton("Export SVG")
-        self._btn_export_svg.clicked.connect(self._export_svg)
-        export_row.addWidget(self._btn_export_svg)
-        export_row.addStretch(1)
-        lay.addLayout(export_row)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Close)
-        btns.rejected.connect(self.reject)
-        btns.accepted.connect(self.accept)
-        lay.addWidget(btns)
-
-        self.refresh_scope()
-
-    def _on_hover_changed(self, index) -> None:
-        self._hover_label.setText(self._hover_title(index))
-
-    def _hover_title(self, index) -> str:
-        if index is None:
-            return " "
-        cores = self._cores
-        grid = self._grid
-        if index < 0 or index >= len(cores):
-            return " "
-        core = cores[index]
-        out_total = 0
-        in_total = 0
-        parts = []
-        for j in range(len(cores)):
-            if j == index:
-                continue
-            o = grid[index][j] if index < len(grid) and j < len(grid[index]) else 0
-            i_ = grid[j][index] if j < len(grid) and index < len(grid[j]) else 0
-            out_total += o
-            in_total += i_
-            if o:
-                parts.append(
-                    f"{_core_short_name(core)}→{_core_short_name(cores[j])}: {o}")
-            if i_:
-                parts.append(
-                    f"{_core_short_name(cores[j])}→{_core_short_name(core)}: {i_}")
-        summary = f"{_core_short_name(core)} · {out_total} out / {in_total} in"
-        return f"{summary} · {' · '.join(parts)}" if parts else summary
-
-    def _has_data(self) -> bool:
-        cores = self._cores
-        grid = self._grid
-        for i in range(len(cores)):
-            row = grid[i] if i < len(grid) else []
-            for j in range(len(cores)):
-                if i != j and (row[j] if j < len(row) else 0) > 0:
-                    return True
-        return False
-
-    def _rebuild(self) -> None:
-        n = len(self._cores)
-        self._sub_label.setText(
-            f"Core-to-core migration volume as directional chords ({n} cores)"
-            f"{self._scope_suffix}")
-        has_data = self._has_data()
-        self._empty_label.setVisible(not has_data)
-        self._canvas.setVisible(has_data)
-        self._btn_export_png.setEnabled(has_data)
-        self._btn_export_svg.setEnabled(has_data)
-        if has_data:
-            self._canvas.set_data(self._cores, self._grid)
-        self._hover_label.setText(" ")
-
-    def focus_pair(self, from_core: str, to_core: str,
-                   bounce_only: bool = False) -> bool:
-        """Re-filter and pin-highlight the source core of a directed pair."""
-        if bool(self._bounce_only) != bool(bounce_only):
-            self._bounce_filter_btn.setChecked(bool(bounce_only))
-            self._on_bounce_filter_toggled(bool(bounce_only))
-        else:
-            self._reload_data()
-            self._rebuild()
-        try:
-            fi = self._cores.index(from_core)
-        except ValueError:
-            return False
-        if to_core not in self._cores:
-            return False
-        self._canvas.set_hover_index(fi, pinned=True)
-        label = f"{_core_short_name(from_core)}→{_core_short_name(to_core)}"
-        self._sub_label.setText(
-            f"Core-to-core migration volume · focused {label}"
-            f"{self._scope_suffix}")
-        self._hover_label.setText(self._hover_title(fi) or " ")
-        return True
-
-    def _on_bounce_filter_toggled(self, checked: bool) -> None:
-        self._bounce_only = checked
-        self._bounce_filter_btn.setText(
-            "Show: Lock-Bounce Only" if checked else "Show: All Migrations")
-        self._reload_data()
-        self._rebuild()
-
-    def _reload_data(self) -> None:
-        cores, grid = _migration_heatmap_matrix(
-            self._trace, self._scope_lo, self._scope_hi,
-            bounce_only=self._bounce_only)
-        self._cores = cores
-        self._grid = grid
-
-    def refresh_scope(self) -> None:
-        """Rebuild from current cursor scope (full trace if <2 cursors)."""
-        lo = hi = None
-        suffix = ""
-        wnd = self.parent()
-        if isinstance(wnd, QMainWindow):
-            tab = wnd._active_tab
-            if tab is not None:
-                times = sorted(tab.view._scene.cursor_times())
-                if len(times) >= 2:
-                    lo, hi = times[0], times[-1]
-                    suffix = (
-                        f"  (C1–C{len(times)}: "
-                        f"{_format_time(lo, self._trace.time_scale)} … "
-                        f"{_format_time(hi, self._trace.time_scale)})")
-        self._scope_lo, self._scope_hi = lo, hi
-        self._scope_suffix = suffix
-        self._reload_data()
-        self._rebuild()
-
-    def _export_base_name(self) -> str:
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        return f"migration-chord-{stamp}"
-
-    def _export_png(self) -> None:
-        if not self._has_data():
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export Chord Diagram PNG",
-            self._export_base_name() + ".png", "PNG Image (*.png)")
-        if not path:
-            return
-        self._canvas.grab_full_pixmap().save(path, "PNG")
-
-    def _export_svg(self) -> None:
-        if not self._has_data():
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export Chord Diagram SVG",
-            self._export_base_name() + ".svg", "SVG Image (*.svg)")
-        if not path:
-            return
-        self._canvas.render_full_svg(path, "Migration Chord Diagram")
-
 def _load_balance_metrics(pcts: List[float]) -> Optional[dict]:
     """Return {score, gini, stddev, zone, amber, red} for ≥2 core util %, else None."""
     if len(pcts) < 2:
@@ -67554,9 +67604,9 @@ def _build_workflow_analysis_findings(
                 f"{metrics}. Uneven core placement — "
                 "check Core Affinity and Core Migrations.",
                 fid="load_imbalance",
-                impact="Uneven utilisation can hide a hot core even when average load looks fine.",
-                inspect="Core Utilisation (excl. IDLE/TICK)",
-                confidence="High — derived from measured core utilisation",
+                impact="Uneven utilization can hide a hot core even when average load looks fine.",
+                inspect="Core Utilization (excl. IDLE/TICK)",
+                confidence="High — derived from measured core utilization",
                 evidence_text=metrics,
                 comparison_basis=(
                     f"Load Balance Score < {_WF_LOAD_SCORE_WARN:.0f}% or "
@@ -67566,23 +67616,23 @@ def _build_workflow_analysis_findings(
         elif score >= _WF_LOAD_SCORE_OK:
             findings.append(_finding(
                 "info",
-                "Core utilisation balance",
+                "Core Utilization balance",
                 f"{metrics} — cores look reasonably balanced. "
-                "A high score means even distribution, not healthy utilisation.",
+                "A high score means even distribution, not healthy utilization.",
                 fid="load_balance_ok",
-                inspect="Core Utilisation (excl. IDLE/TICK)",
-                confidence="High — derived from measured core utilisation",
+                inspect="Core Utilization (excl. IDLE/TICK)",
+                confidence="High — derived from measured core utilization",
                 evidence_text=metrics,
             ))
         else:
             findings.append(_finding(
                 "info",
-                "Core utilisation balance",
-                f"{metrics} — moderate spread; review Core Utilisation "
+                "Core Utilization balance",
+                f"{metrics} — moderate spread; review Core Utilization "
                 "if the workload is expected to be even.",
                 fid="load_balance_moderate",
-                inspect="Core Utilisation (excl. IDLE/TICK)",
-                confidence="High — derived from measured core utilisation",
+                inspect="Core Utilization (excl. IDLE/TICK)",
+                confidence="High — derived from measured core utilization",
                 evidence_text=metrics,
             ))
 
@@ -69037,7 +69087,7 @@ def _parse_task_deadlines_text(text: str) -> Dict[str, int]:
 
 
 class _StatsPanel(QWidget):
-    """Dock panel showing trace statistics (span, core utilisation, top tasks)."""
+    """Dock panel showing trace statistics (span, core utilization, top tasks)."""
 
     task_clicked = Signal(str)   # merge key of the clicked task row
     segment_jump   = Signal(int)    # ns - scroll timeline to this timestamp
@@ -73496,7 +73546,7 @@ class _StatsPanel(QWidget):
             _lb_badge_html = _load_balance_gauge_img_html(_lb, width=300)
         core_util_html = (
             self._html_export_util_section(
-                f"Core Utilisation (excl. IDLE/TICK){scope_title}",
+                f"Core Utilization (excl. IDLE/TICK){scope_title}",
                 [(core, pct) for core, pct in core_rows],
                 "core",
             ).replace("<div class=\"util-list\">", _lb_badge_html + "<div class=\"util-list\">", 1)
@@ -73985,7 +74035,7 @@ class _StatsPanel(QWidget):
                 ]
                 for r in (_tc.get("rows") or [])[:24]
             ],
-            title="Task × Core utilisation (% of span)",
+            title="Task × Core Utilization (% of span)",
             unit="%",
         )
         task_core_html = (
@@ -74276,7 +74326,7 @@ class _StatsPanel(QWidget):
                 [float(((r.get("cells") or {}).get(c) or {}).get("pct") or 0) for c in _ct_cores]
                 for r in (_ct.get("bins") or [])
             ],
-            title="Core utilisation over time",
+            title="Core Utilization Over Time",
             unit="%",
         )
         core_time_html = (
@@ -74382,7 +74432,7 @@ class _StatsPanel(QWidget):
              "kind": _th_kind},
             {"label": "Load balance", "value": lb_txt, "hint": lb_hint,
              "kind": "warn" if _lb and (_lb["score"] < 70 or _lb["stddev"] > 30) else "ok"},
-            {"label": "Core utilisation range",
+            {"label": "Core Utilization range",
              "value": f"{util_lo:.1f}–{util_hi:.1f}%",
              "hint": "Wall-clock span, one-core = 100%"},
             {"label": "Worst response P99",
@@ -74717,7 +74767,7 @@ class _StatsPanel(QWidget):
                 writer.writerow(["", "", NO_FINDINGS_UNDER_RULES, "", ""])
 
             writer.writerow([])
-            writer.writerow([f"Core Utilisation (excl. IDLE/TICK){scope_suffix}"])
+            writer.writerow([f"Core Utilization (excl. IDLE/TICK){scope_suffix}"])
             writer.writerow(["Core", "CPU %"])
             if core_rows:
                 for core, pct in core_rows:
@@ -74727,7 +74777,7 @@ class _StatsPanel(QWidget):
                     _csv_gini = _gini_coefficient(_csv_pcts)
                     _csv_stddev = _core_util_stddev(_csv_pcts)
                     writer.writerow(["Load Balance Score", f"{max(0.0, 100.0*(1.0-_csv_gini)):.0f}%"])
-                    writer.writerow(["Core Util Std Dev (σ)", f"{_csv_stddev:.1f}%"])
+                    writer.writerow(["Core Utilization Std Dev (σ)", f"{_csv_stddev:.1f}%"])
                     writer.writerow(["Gini Coefficient (G)", f"{_csv_gini:.4f}"])
             else:
                 writer.writerow(["No data", ""])
@@ -75678,7 +75728,7 @@ class _StatsPanel(QWidget):
             self.clear_trace()
             return
         self._trace = trace
-        # Fresh open / empty pins: SMP-active → expand+pin Core Utilisation once.
+        # Fresh open / empty pins: SMP-active → expand+pin Core Utilization once.
         # Persisted pins and later rebuilds (scope/filter) keep user state.
         if getattr(self, "_needs_presentation_defaults", False):
             self._needs_presentation_defaults = False
@@ -75736,7 +75786,7 @@ class _StatsPanel(QWidget):
         )
         self._util_label_col_natural = self._compute_util_label_col_width(_util_labels)
 
-        # -- Summary (dense 3 lines; demo target: status, not Core Util) ---
+        # -- Summary (dense 3 lines; demo target: status, not Core Utilization) ---
         summary = QWidget()
         summary.setObjectName("stats_summary")
         sum_lay = QVBoxLayout(summary)
@@ -75767,7 +75817,7 @@ class _StatsPanel(QWidget):
         self._stats_summary = summary
         self._ilay.addWidget(summary)
 
-        # -- Core utilisation (excl. IDLE) ---------------------------------
+        # -- Core Utilization (excl. IDLE) ---------------------------------
         if trace.core_names:
             def _populate_cores(blay: QVBoxLayout) -> None:
                 # Gauges live inside the util scroll so the default viewport
@@ -75792,7 +75842,7 @@ class _StatsPanel(QWidget):
 
             self._add_collapsible_section(
                 "cores",
-                f"Core Utilisation (excl. IDLE/TICK){scope}",
+                f"Core Utilization (excl. IDLE/TICK){scope}",
                 _fs,
                 _populate_cores,
             )
@@ -78417,7 +78467,7 @@ class _RcSettings:
         """Write current state to disk immediately."""
         try:
             with open(self.RC_PATH, "w", encoding="utf-8") as fh:
-                fh.write("# btf_viewer.rc - RTOS BTF Viewer settings\n")
+                fh.write("# btf_viewer.rc - BTFViewer settings\n")
                 fh.write("# This file is managed automatically; you may edit it by hand.\n")
                 fh.write(
                     "# [ai] *_api_key values are stored encrypted (enc1:…) for "
@@ -78544,7 +78594,7 @@ class _AboutDialog(QDialog):
     def __init__(self, parent, *, is_dark: bool,
                  ui_font_size: int = UI_FONT_SIZE):
         super().__init__(parent, Qt.WindowType.Dialog)
-        self.setWindowTitle("About RTOS BTF Viewer")
+        self.setWindowTitle("About BTFViewer")
         self.setModal(True)
 
         ui_font_size = max(6, min(int(ui_font_size), 24))
@@ -78594,12 +78644,12 @@ class _AboutDialog(QDialog):
         icon_lbl.setPixmap(_pixmap_from_embedded_app_icon(72))
         hv.addWidget(icon_lbl)
 
-        name_lbl = QLabel("RTOS BTF Viewer")
+        name_lbl = QLabel("BTFViewer")
         name_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         name_lbl.setObjectName("about_title")
         hv.addWidget(name_lbl)
 
-        sub_lbl = QLabel(f"AI assistant for RTOS trace analysis — find evidence and explain  *  v{_APP_VERSION}")
+        sub_lbl = QLabel(f"Portable BTF trace analysis and evidence reports  *  v{_APP_VERSION}")
         sub_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         sub_lbl.setObjectName("about_sub")
         hv.addWidget(sub_lbl)
@@ -78662,8 +78712,9 @@ class _AboutDialog(QDialog):
             ("Tab / Shift+Tab",  "cycle to next / previous task segment"),
         ]))
         iv.addWidget(_block("Application", [
-            ("Product",   "RTOS BTF Viewer"),
-            ("Purpose",   "AI assistant for RTOS trace analysis: find evidence and explain"),
+            ("Product",   "BTFViewer"),
+            ("Purpose",   "Portable BTF trace analysis and evidence reports"),
+            ("AI",        "Optional AI-assisted investigation"),
             ("Runtime",   f"Python {sys.version_info.major}.{sys.version_info.minor}  *  PySide6 desktop application"),
         ]))
         iv.addWidget(_block("License", [
@@ -84794,7 +84845,7 @@ def _check_core_overlap(
         affected_entities=sorted(cores),
         evidence_refs=ev,
         metric_limitations=[
-            "Core Utilisation", "Core Time Breakdown",
+            "Core Utilization", "Core Time Breakdown",
             "Preemption Chain Analysis", "Response Time",
         ],
     )
@@ -84932,10 +84983,10 @@ def _check_long_gap(
         CHECK_LONG_GAP, "info",
         f"No task was scheduled for {_fmt(format_ns, gap)} "
         f"({gap / span * 100:.0f}% of the analysed span). This may be genuine "
-        "idle time or a gap in the capture; rates and utilisation include it "
+        "idle time or a gap in the capture; rates and utilization include it "
         "in the denominator.",
         affected_range={"start": int(gap_lo), "end": int(gap_hi)},
-        metric_limitations=["Scheduling Load Over Time", "Core Utilisation"],
+        metric_limitations=["Scheduling Load Over Time", "Core Utilization"],
     )
 
 
@@ -85770,7 +85821,7 @@ def build_perfetto_chrome_trace(
     """Return a Chrome Trace JSON object for *trace*."""
     meta = dict(trace.meta or {})
     other = {
-        "source": "RTOS BTF Viewer",
+        "source": "BTFViewer",
         "timeScale": trace.time_scale,
         "time_min": trace.time_min,
         "time_max": trace.time_max,
@@ -88952,6 +89003,9 @@ class _ActivityRail(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("activity_rail")
+        # Rail also holds Snapshot / Help / Settings, so it is not "investigation
+        # tools" — mirror web App.vue .activity-rail aria-label.
+        self.setAccessibleName("Analysis and application tools")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(self.RAIL_W)
         self._lay = QVBoxLayout(self)
@@ -89901,6 +89955,23 @@ class _InvestigationNotebookDialog(QDialog):
         root.addLayout(header)
         self._sync_scaffold_tooltip()
 
+        # ---- §7 compact context row: durable status · scope · counts ----
+        ctx_row = QHBoxLayout()
+        ctx_row.setSpacing(10)
+        ctx_row.setContentsMargins(0, 0, 0, 0)
+        self._nb_status_combo = QComboBox()
+        self._nb_status_combo.setObjectName("nb_status_combo")
+        for _s in NOTEBOOK_STATUSES:
+            self._nb_status_combo.addItem(NOTEBOOK_STATUS_LABELS[_s], _s)
+        self._nb_status_combo.setToolTip("Durable investigation status")
+        self._nb_status_combo.currentIndexChanged.connect(self._on_nb_status_changed)
+        ctx_row.addWidget(self._nb_status_combo)
+        self._nb_context_lbl = QLabel("")
+        self._nb_context_lbl.setObjectName("nb_context_lbl")
+        self._nb_context_lbl.setStyleSheet("font-size:11px; color:palette(mid);")
+        ctx_row.addWidget(self._nb_context_lbl, 1)
+        root.addLayout(ctx_row)
+
         # ---- Body (scrolls) ----
         body = QWidget()
         bl = QVBoxLayout(body)
@@ -90102,6 +90173,16 @@ class _InvestigationNotebookDialog(QDialog):
             self._on_change(self._inv)
         self._render()
 
+    def _on_nb_status_changed(self, _idx: int = 0) -> None:
+        if getattr(self, "_building", False):
+            return
+        combo = getattr(self, "_nb_status_combo", None)
+        if combo is None:
+            return
+        want = combo.currentData()
+        if want and want != self._inv.get("status"):
+            self._commit(set_status(self._inv, want))
+
     def _restore_snapshot(self, history) -> None:
         self._history = history
         snap = notebook_history_state(self._history).get("current")
@@ -90140,6 +90221,30 @@ class _InvestigationNotebookDialog(QDialog):
             f"{n_flag} bookmark reference(s) no longer resolve")
         self._broken_lbl.setVisible(n_flag > 0)
 
+        # §7 compact context row.
+        hdr = investigation_header(self._inv, broken=broken)
+        combo = getattr(self, "_nb_status_combo", None)
+        if combo is not None:
+            j = combo.findData(hdr["status"])
+            combo.blockSignals(True)
+            combo.setCurrentIndex(j if j >= 0 else 0)
+            combo.blockSignals(False)
+        lbl = getattr(self, "_nb_context_lbl", None)
+        if lbl is not None:
+            bits = []
+            if hdr["trace"]:
+                bits.append(str(hdr["trace"]))
+            bits.append(f"Scope: {hdr['scope']}")
+            bits.append(f"{hdr['evidence_count']} evidence")
+            n_oc = hdr["open_check_count"]
+            bits.append(f"{n_oc} open check{'' if n_oc == 1 else 's'}")
+            if hdr["stale_ref_count"]:
+                bits.append(f"{hdr['stale_ref_count']} stale ref"
+                            f"{'' if hdr['stale_ref_count'] == 1 else 's'}")
+            if hdr["updated_at"]:
+                bits.append(f"updated {hdr['updated_at']}")
+            lbl.setText("  ·  ".join(bits))
+
         if self._title_edit.text() != (self._inv.get("title") or ""):
             self._title_edit.setText(self._inv.get("title") or "")
         if self._concl.toPlainText() != (self._inv.get("conclusion") or ""):
@@ -90169,7 +90274,30 @@ class _InvestigationNotebookDialog(QDialog):
 
         # bookmark groups
         self._clear_layout(self._groups_lay)
-        if not bms:
+        inv_is_empty = (
+            not bms
+            and not str(self._inv.get("title") or "").strip()
+            and not str(self._inv.get("conclusion") or "").strip()
+            and not self._inv.get("unresolved_questions")
+        )
+        if inv_is_empty:
+            # §7 empty-state: two explicit entry points, mirroring the web dialog.
+            has_findings = bool(self._finding_options())
+            b_from = QPushButton(NB_EMPTY_FROM_FINDINGS)
+            b_from.setEnabled(has_findings)
+            b_from.setToolTip("" if has_findings else "No Analysis findings to seed from")
+            b_from.clicked.connect(self._scaffold_from_findings)
+            b_blank = QPushButton(NB_EMPTY_BLANK)
+            b_blank.clicked.connect(lambda: self._title_edit.setFocus())
+            erow = QHBoxLayout()
+            erow.setSpacing(8)
+            erow.addWidget(b_from)
+            erow.addWidget(b_blank)
+            erow.addStretch(1)
+            wrap = QWidget()
+            wrap.setLayout(erow)
+            self._groups_lay.addWidget(wrap)
+        elif not bms:
             hint = QLabel(
                 "No bookmarks yet. Add an observation, hypothesis, supporting or "
                 "contradicting evidence, a verification step, or a conclusion above.")
@@ -91076,7 +91204,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._cpu_load_autofit_timer.setInterval(80)
         self._cpu_load_autofit_timer.timeout.connect(self._on_cpu_load_autofit_timeout)
 
-        self.setWindowTitle("RTOS BTF Viewer")
+        self.setWindowTitle("BTFViewer")
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
 
         # Apply saved theme BEFORE building the UI (affects the Qt stylesheet).
@@ -91257,6 +91385,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if key == Qt.Key.Key_Space:
                     if self._demo_nav_armed:
                         self._demo_runner.toggle_pause()
+                    return True
+            # Esc leaves Focus Mode — but only when nothing else owns the key:
+            # no guided demo (handled above), no modal dialog / popup, the main
+            # window is active, and the user is not typing in a field or editor.
+            if (event.type() == QEvent.Type.KeyPress
+                    and event.key() == Qt.Key.Key_Escape
+                    and not getattr(event, "isAutoRepeat", lambda: False)()
+                    and getattr(self, "_focus_mode", False)
+                    and self._demo_runner is None
+                    and QApplication.activeModalWidget() is None
+                    and QApplication.activePopupWidget() is None
+                    and QApplication.activeWindow() in (None, self)):
+                fw = QApplication.focusWidget()
+                typing = isinstance(fw, (
+                    QLineEdit, QComboBox, QPlainTextEdit, QTextEdit,
+                    QSpinBox, QDoubleSpinBox,
+                ))
+                other_window = fw is not None and not (
+                    fw is self or self.isAncestorOf(fw))
+                if not typing and not other_window:
+                    self._set_focus_mode(False)
                     return True
             return False
         except RuntimeError:
@@ -92070,7 +92219,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                                "true" if on else "false", flush=False)
         if on:
             self.statusBar().showMessage(
-                "Focus Mode — View ▸ Focus Mode (F) to exit", 4000)
+                "Focus Mode — Shift+F or Esc to exit", 4000)
 
     def _apply_focus_mode_from_settings(self) -> None:
         s = getattr(self, "_settings", None)
@@ -92377,7 +92526,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if trace is None:
             self._status_file.setText("  No file loaded")
             self._status_file.setToolTip("")
-            self.setWindowTitle("RTOS BTF Viewer")
+            self.setWindowTitle("BTFViewer")
             self._refresh_trace_health()
             return
         fname = _trace_display_name(self._current_file)
@@ -92396,7 +92545,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         parts.append(f"{n_sti:,} STI events")
         parts.append(f"{ts} total")
         summary = " · ".join(parts)
-        self.setWindowTitle(f"RTOS BTF Viewer – {fname}")
+        self.setWindowTitle(f"BTFViewer – {fname}")
         self._status_file.setText(f"  {fname}  |  {summary}")
         tip = self._current_file or fname
         self._status_file.setToolTip(f"{tip}\n{summary}")
@@ -94431,11 +94580,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # stack — mirror of the web App.vue .activity-rail next to .left-pane.
         self._activity_rail = _ActivityRail()
         for _k, _p, _lbl in (
-            ("heatmap", _RG_HEATMAP, "Migration heatmap"),
+            ("heatmap", _RG_HEATMAP, "Migration & Corridor Inspector"),
             ("analysis", _RG_ANALYSIS, "Analysis findings"),
             ("notebook", _RG_NOTEBOOK, "Investigation notebook"),
             ("compare", _RG_COMPARE, "Compare traces"),
-            ("snapshot", _RG_SNAPSHOT, "Snapshot editor"),
+            ("snapshot", _RG_SNAPSHOT, "Snapshot Editor"),
         ):
             self._activity_rail.add_item(_k, _p, _lbl)
         self._activity_rail.add_spring()
@@ -95133,7 +95282,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_focus_mode.setChecked(self._focus_mode)
         self._act_focus_mode.setShortcut(QKeySequence("Shift+F"))
         self._act_focus_mode.setToolTip(
-            "Hide the side panel, activity rail and trace tabs — timeline only")
+            "Hide the side panel, activity rail and trace tabs — timeline only "
+            "(Shift+F or Esc to exit)")
         vm.addSeparator()
         self._act_notebook = vm.addAction(
             "&Investigation Notebook…", self._open_investigation_notebook)
@@ -96217,7 +96367,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._demo_analysis({"close": True})
         for title_prefix in (
             "Keyboard & Mouse Shortcuts",
-            "About RTOS BTF Viewer",
+            "About BTFViewer",
             "Jump to Time",
             "Snapshot Editor",
         ):
@@ -97210,7 +97360,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         headers = getattr(panel, "_section_headers", None) or {}
         widgets = {
             # Prefer Span/Tasks summary (statistics status), not panel center
-            # (which lands in Core Utilisation).
+            # (which lands in Core Utilization).
             "stats_summary": (
                 getattr(panel, "_stats_summary", None)
                 or getattr(panel, "_scope_label", None)
@@ -98400,13 +98550,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             )
             return payload
         if name == AI_TOOL_REGRESSION_LOCALIZE:
-            cmp_ = getattr(self, "_last_ai_compare", None) or {}
+            norm = normalize_compare_payload(getattr(self, "_last_ai_compare", None))
             return regression_localize_tool(
-                cmp_.get("candidate") or cmp_.get("a") or {},
-                cmp_.get("baseline") or cmp_.get("b") or {},
+                norm.get("candidate_b") or {},
+                norm.get("baseline_a") or {},
                 findings=findings,
-                label_a=str(args.get("label_a") or "A"),
-                label_b=str(args.get("label_b") or "B"),
+                label_a=str(args.get("label_a") or norm.get("label_a") or "A"),
+                label_b=str(args.get("label_b") or norm.get("label_b") or "B"),
             )
         if name == AI_TOOL_BUILD_CAUSAL_CHAIN:
             return build_causal_chain_tool(findings)
@@ -98692,7 +98842,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         name_a: str = "A",
         name_b: str = "B",
     ) -> None:
-        """Stash Trace Compare dialog deltas for validate_experiment."""
+        """Stash Trace Compare dialog deltas for validate_experiment.
+
+        ``ta`` / ``tb`` are Trace A (Baseline A) and Trace B (Candidate B); the
+        helper takes Baseline A first, Candidate B second.
+        """
         snap_a = _trace_summary_snapshot(ta, lo_a, hi_a)
         snap_b = _trace_summary_snapshot(tb, lo_b, hi_b)
         self._last_ai_compare = compare_performance_tabs(
@@ -99103,6 +99257,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._palette_bump_usage(aid)
         if aid == "analysis":
             self._open_analysis_findings()
+        elif aid == "notebook":
+            self._open_investigation_notebook()
         elif aid == "statistics":
             self._focus_statistics_panel(force=True)
         elif aid == "find":
@@ -99115,6 +99271,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._open_trace_compare()
         elif aid == "heatmap":
             self._open_migration_heatmap()
+        elif aid == "focus":
+            self._toggle_focus_mode()
         elif aid == "settings":
             self._open_settings()
         elif aid == "limit-scope":
@@ -99126,11 +99284,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             view = getattr(self, "_view", None)
             if view is not None and hasattr(view, "zoom_fit"):
                 view.zoom_fit()
-        elif aid == "inspect-task":
-            self._refresh_task_inspector()
-            self.statusBar().showMessage(
-                self._status_inspect.text() if hasattr(self, "_status_inspect") else "Inspect task",
-                4000)
         elif str(aid).startswith("preset-"):
             self._apply_workspace_preset(aid)
         elif aid.startswith("stats-section:"):
@@ -99141,9 +99294,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 QTimer.singleShot(0, lambda s=sid: panel.scroll_to_section(s))
 
     def _apply_workspace_preset(self, preset_id: str) -> None:
-        if preset_id == "preset-compare":
-            self._open_trace_compare()
-            return
         panel = getattr(self, "_stats_panel", None)
         if panel is not None:
             panel.set_section_collapsed_map(
@@ -101311,7 +101461,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             gen.setSize(QSize(int(w), int(total_h)))
             gen.setViewBox(QRectF(0, 0, w, total_h))
             gen.setTitle("BTF Timeline")
-            gen.setDescription("Generated by RTOS BTF Viewer")
+            gen.setDescription("Generated by BTFViewer")
             with _svg_safe_app_style():
                 painter = QPainter(gen)
                 try:
@@ -101421,7 +101571,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         base = _export_base_name(self._current_file, "workspace")
         path, _ = QFileDialog.getSaveFileName(
             self, "Save workspace", base + ".btfw",
-            "BTF Viewer workspace (*.btfw);;All files (*)")
+            "BTFViewer workspace (*.btfw);;All files (*)")
         if not path:
             return
         amap = self._export_task_alias_map() if anonymize else {}
@@ -102995,7 +103145,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+W",       "Close active tab"),
                 ("Ctrl+Tab",     "Next trace tab"),
                 ("Ctrl+Shift+Tab", "Previous trace tab"),
-                ("Ctrl+S",       "Open snapshot editor"),
+                ("Ctrl+S",       "Open Snapshot Editor"),
                 ("Ctrl+Shift+S", "Save viewport as SVG"),
                 ("Ctrl+Shift+C", "Copy viewport to clipboard"),
                 ("Ctrl+Shift+E", "Export… (workspace · Perfetto · BTF slice)"),
@@ -103012,6 +103162,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),
                 ("Ctrl+K",               "Command palette"),
+                ("Shift+F",              "Toggle Focus Mode"),
+                ("Esc",                  "Exit Focus Mode (or stop guided demo)"),
                 ("G",                    "Toggle grid lines on/off"),
                 ("I",                    "Toggle STI event rows on/off"),
                 ("D",                    "Toggle dark / light theme"),
@@ -103764,7 +103916,9 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     parser = argparse.ArgumentParser(
         prog="btf_viewer.py",
         description=(
-            "AI assistant for RTOS trace analysis (interactive GUI) and headless analysis (CLI).\n\n"
+            "BTFViewer — portable BTF trace analysis and evidence reports: "
+            "interactive GUI and headless CLI, with optional AI-assisted "
+            "investigation.\n\n"
             + _CLI_HELP
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -104792,10 +104946,13 @@ def _cli_analyze_run(args: argparse.Namespace) -> int:
 
     if args.ai:
         try:
+            # Trace Compare contract: Baseline A first, Candidate B second.
+            # The CLI's `--baseline` is Baseline A; the primary trace is the
+            # candidate under test (Candidate B).
             cmp = compare_performance_metrics(
-                cand_snap, base_snap,
-                label_a=str(cand_snap.get("name") or "A"),
-                label_b=str(base_snap.get("name") or "B"),
+                base_snap, cand_snap,
+                label_a=str(base_snap.get("name") or "baseline"),
+                label_b=str(cand_snap.get("name") or "candidate"),
             )
             explained = explain_regression(cmp)
             print(explained.get("markdown") or "", end="")
@@ -105022,7 +105179,7 @@ def _cli_save_widget_svg(widget: "QWidget", path: str, title: str) -> None:
     gen.setSize(sz)
     gen.setViewBox(QRectF(0, 0, sz.width(), sz.height()))
     gen.setTitle(title)
-    gen.setDescription("Generated by RTOS BTF Viewer")
+    gen.setDescription("Generated by BTFViewer")
     with _svg_safe_app_style():
         painter = QPainter(gen)
         try:
@@ -105051,7 +105208,7 @@ def _cli_save_timeline_svg(view: "TimelineView", path: str,
     gen.setSize(QSize(int(w), int(total_h)))
     gen.setViewBox(QRectF(0, 0, w, total_h))
     gen.setTitle("BTF Timeline")
-    gen.setDescription("Generated by RTOS BTF Viewer")
+    gen.setDescription("Generated by BTFViewer")
     with _svg_safe_app_style():
         painter = QPainter(gen)
         try:
@@ -105872,8 +106029,8 @@ def main() -> None:
     _platform_preflight()
     app = _bootstrap_qt_app(sys.argv)
     _install_macos_stderr_filter()
-    app.setApplicationName("RTOS BTF Viewer")
-    app.setApplicationDisplayName("RTOS BTF Viewer")
+    app.setApplicationName("BTFViewer")
+    app.setApplicationDisplayName("BTFViewer")
     app.setOrganizationName("btf_viewer")
     app.setWindowIcon(app_icon())
 

@@ -731,7 +731,7 @@ export const COMPARE_SECTION_LABELS = Object.freeze({
   mutex_block: 'Mutex Blocking',
   deadline: 'Deadlines / CPU budget',
   migrations: 'Core Migrations',
-  cores: 'Core utilisation',
+  cores: 'Core Utilization',
   health: 'Trace Health (TICK)',
   preempt_matrix: 'Preemption Chain',
   switch_overhead: 'Switch Overhead',
@@ -1125,8 +1125,8 @@ export function compareCoreUtilChartSvg(rows, width = 640) {
   const plotW = Math.max(80, w - labelW - pad - pctW)
   const ax = labelW
   const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Core utilisation Baseline A vs Candidate B">`,
-    `<text x="${pad}" y="16" font-size="12" fill="#123355" font-weight="600">Core utilisation</text>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Core Utilization Baseline A vs Candidate B">`,
+    `<text x="${pad}" y="16" font-size="12" fill="#123355" font-weight="600">Core Utilization</text>`,
     `<text x="${w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">`,
     `<tspan fill="${COMPARE_CHART_BASELINE}">Baseline A</tspan>`,
     '<tspan fill="#5f6f82"> · </tspan>',

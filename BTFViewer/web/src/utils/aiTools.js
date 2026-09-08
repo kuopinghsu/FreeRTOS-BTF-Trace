@@ -44,6 +44,7 @@ import {
   snapshotFromSummary,
 } from './aiInvestigation.js'
 import {
+  AI_TOOL_MODEL_HIDDEN,
   explainFindingPayload,
   filterToolsForContextMode,
   interpretInvestigationQuery,
@@ -482,7 +483,7 @@ export function parseBtfStatsHref(href) {
 }
 
 // Tool-use policy (also AI_TOOL_PROMPT). Keep in sync with btf_viewer_pkg/ai_tools.py.
-export const AI_TOOL_PROMPT = "Use native tools only when evidence or an explicit viewer action requires them.\n\n1. Establish scope, subject, and comparison direction.\n2. Use the minimum sufficient evidence tool.\n3. Check missing links, contradictions, and credible alternatives.\n4. Continue only if another result could change the verdict.\n5. Verify before asserting a high-confidence root cause.\n\n- Use planning tools only for broad or ambiguous investigations.\n- Use exact metric or timeline tools when summaries lack required evidence.\n- For comparisons, A is candidate, B is baseline, and delta = A - B.\n- Use simulation or optimization only when requested.\n- Generate a report when requested. For Report mode or an explicit save/download,\n  call export_report after generate_report; otherwise export only when asked.\n- Analysis alone does not authorize viewer changes. Apply viewer changes only\n  when explicitly requested or promised by the selected workflow.\n- Stop when evidence is sufficient or tools cannot resolve the uncertainty.\n- Empty tool results mean no matching data in scope; say so and do not invent\n  values. Failed tools are failures \u2014 never claim the action or export succeeded.\n- Never claim an unconfirmed result, viewer change, or export.\n- After tools, separate retrieved evidence from applied viewer changes.\n- Use Mermaid only when it clarifies a supported relationship and the mode\n  permits it."
+export const AI_TOOL_PROMPT = "Use native tools only when evidence or an explicit viewer action requires them.\n\n1. Establish scope, subject, and comparison direction.\n2. Use the minimum sufficient evidence tool.\n3. Check missing links, contradictions, and credible alternatives.\n4. Continue only if another result could change the verdict.\n5. Verify before asserting a high-confidence root cause.\n\n- Use planning tools only for broad or ambiguous investigations.\n- Use exact metric or timeline tools when summaries lack required evidence.\n- For comparisons, A is Baseline A, B is Candidate B, table delta = A - B, and verdicts describe Candidate B versus Baseline A.\n- Use simulation or optimization only when requested.\n- Generate a report when requested. For Report mode or an explicit save/download,\n  call export_report after generate_report; otherwise export only when asked.\n- Analysis alone does not authorize viewer changes. Apply viewer changes only\n  when explicitly requested or promised by the selected workflow.\n- Stop when evidence is sufficient or tools cannot resolve the uncertainty.\n- Empty tool results mean no matching data in scope; say so and do not invent\n  values. Failed tools are failures \u2014 never claim the action or export succeeded.\n- Never claim an unconfirmed result, viewer change, or export.\n- After tools, separate retrieved evidence from applied viewer changes.\n- Use Mermaid only when it clarifies a supported relationship and the mode\n  permits it."
 export const AI_TOOL_SYSTEM_ADDENDUM = AI_TOOL_PROMPT
 export const AI_MERMAID_SEQUENCE_EXAMPLE = `\`\`\`mermaid
 sequenceDiagram
@@ -512,6 +513,7 @@ export function aiViewerToolsForMode(mode = null, stage = '') {
 }
 
 export function aiViewerTools() {
+  const hidden = new Set(AI_TOOL_MODEL_HIDDEN)
   return annotateToolCapabilities([
     {
       type: 'function',
@@ -1707,7 +1709,7 @@ export function aiViewerTools() {
         },
       },
     },
-  ])
+  ]).filter(t => !hidden.has(String(t?.function?.name || '')))
 }
 
 export function parseToolArguments(raw) {
@@ -4712,12 +4714,14 @@ export function generateReportFinding(findings, {
   return { ok, message, data }
 }
 
-export function comparePerformanceTabs(candidateSummary, baselineSummary, {
+export function comparePerformanceTabs(baselineASummary, candidateBSummary, {
   labelA = 'A', labelB = 'B',
 } = {}) {
-  const snapA = snapshotFromSummary(candidateSummary || {}, { name: labelA })
-  const snapB = snapshotFromSummary(baselineSummary || {}, { name: labelB })
-  const ctx = comparePerformanceMetrics(snapA, snapB, { labelA, labelB })
+  // First argument is Baseline A (Trace A), second is Candidate B (Trace B);
+  // verdicts describe Candidate B versus Baseline A.
+  const snapBase = snapshotFromSummary(baselineASummary || {}, { name: labelA })
+  const snapCand = snapshotFromSummary(candidateBSummary || {}, { name: labelB })
+  const ctx = comparePerformanceMetrics(snapBase, snapCand, { labelA, labelB })
   const ok = !!ctx.ok
   const message = String(ctx.message || (ok ? 'ok' : 'failed'))
   const data = { ...ctx }

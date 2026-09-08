@@ -38,6 +38,7 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_VERIFY_CLAIM,
     AI_TOOL_ZOOM_TO_RANGE,
     AI_VIEWER_TOOL_NAMES,
+    AI_TOOL_CANONICAL_ALIASES,
     ai_viewer_tools,
     ai_viewer_tools_for_mode,
     classify_viewer_tool,
@@ -76,7 +77,12 @@ from btf_viewer_pkg.parser import _task_merge_key  # noqa: E402
 class AiToolsTests(unittest.TestCase):
     def test_schema_names(self) -> None:
         names = [t["function"]["name"] for t in ai_viewer_tools()]
-        self.assertEqual(tuple(names), AI_VIEWER_TOOL_NAMES)
+        # Functional aliases are dispatchable but never emitted as schemas.
+        expected = tuple(
+            n for n in AI_VIEWER_TOOL_NAMES if n not in AI_TOOL_CANONICAL_ALIASES
+        )
+        self.assertEqual(tuple(names), expected)
+        self.assertFalse(set(names) & set(AI_TOOL_CANONICAL_ALIASES))
 
     def test_schema_names_for_compact_mode(self) -> None:
         names = [
@@ -87,11 +93,30 @@ class AiToolsTests(unittest.TestCase):
         self.assertIn("query_raw_metric", names)
         self.assertNotIn("what_if", names)
         self.assertLess(len(names), len(AI_VIEWER_TOOL_NAMES))
-        full = [
+
+    def test_full_mode_is_bounded_not_the_whole_catalog(self) -> None:
+        emitted = {t["function"]["name"] for t in ai_viewer_tools()}
+        full = {
             t["function"]["name"]
             for t in ai_viewer_tools_for_mode("full", "triage")
-        ]
-        self.assertEqual(tuple(full), AI_VIEWER_TOOL_NAMES)
+        }
+        self.assertTrue(full < emitted, "Full Evidence still sends every schema")
+        # Deep-verification loop is present…
+        for keep in ("investigate", "correlate_events", "compare_performance",
+                     "regression_explain", "detect_anomalies"):
+            self.assertIn(keep, full, keep)
+        # …but simulation / optimization / memory / export are stage-gated.
+        for gated in ("what_if", "optimize_experiment", "recommend_experiments",
+                      "investigation_memory", "generate_report", "export_report",
+                      "export_investigation"):
+            self.assertNotIn(gated, full, gated)
+        # The experiment stage brings the simulation tools back.
+        full_experiment = {
+            t["function"]["name"]
+            for t in ai_viewer_tools_for_mode("full", "experiment")
+        }
+        self.assertIn("what_if", full_experiment)
+        self.assertIn("optimize_experiment", full_experiment)
 
     def test_validate_set_cursors_and_zoom(self) -> None:
         args, err = validate_tool_call(

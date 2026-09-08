@@ -149,7 +149,12 @@ class AiWebParityTests(unittest.TestCase):
         schema_names = tuple(
             t["function"]["name"] for t in ai_viewer_tools()
         )
-        self.assertEqual(schema_names, AI_VIEWER_TOOL_NAMES)
+        from btf_viewer_pkg.ai_tools import AI_TOOL_CANONICAL_ALIASES
+        self.assertEqual(
+            schema_names,
+            tuple(n for n in AI_VIEWER_TOOL_NAMES
+                  if n not in AI_TOOL_CANONICAL_ALIASES),
+        )
         self.assertIn(AI_TOOL_WHAT_IF, AI_VIEWER_TOOL_NAMES)
         self.assertIn(AI_TOOL_OPTIMIZE_EXPERIMENT, AI_VIEWER_TOOL_NAMES)
         self.assertTrue(is_query_tool(AI_TOOL_WHAT_IF))
@@ -430,10 +435,10 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("Load Balance Score", web)
         self.assertIn("Load Balance Score", stats)
         # Desktop CLI CSV still labels σ; Web gauge module matches that wording.
-        self.assertIn("Core Util Std Dev (σ)", stats)
+        self.assertIn("Core Utilization Std Dev (σ)", stats)
         lb_js = (BTF_ROOT / "web/src/utils/loadBalanceGauge.js").read_text(
             encoding="utf-8")
-        self.assertIn("population stddev of core utilisation", lb_js)
+        self.assertIn("population stddev of core utilization", lb_js)
         self.assertIn("def _open(_checked: bool = False)", stats)
         self.assertIn("openPreemptPlot(mk, label)", web)
         self.assertIn("Open histogram", stats)
@@ -521,10 +526,14 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8")
         self.assertIn("statsSectionCollapsed", main)
         self.assertIn("_apply_workspace_preset", main)
-        self.assertIn("inspect-task", main)
+        # `inspect-task` was retired from both Command Palettes (the `I` key only
+        # toggles STI); the selected-task status summary stays outside the palette.
+        # (The web STI inspector panel still emits an `@inspect-task` component
+        # event — unrelated to the palette action id.)
+        self.assertNotIn("inspect-task", main)
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
         self.assertIn("function applyWorkspacePreset", app)
-        self.assertIn("inspect-task", app)
+        self.assertNotIn("'inspect-task'", app)
         self.assertIn("statsSectionCollapsed", portable_js)
         self.assertNotIn("statsSectionCollapsed:", store)
         settings = (BTF_ROOT / "web/src/utils/settingsStore.js").read_text(
@@ -594,11 +603,13 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("id: 'trends', label: 'Trends'", compare)
         self.assertIn("Start Investigation", assist)
         self.assertIn("Start Investigation", panel)
-        self.assertIn("Inspect task", mw)
+        # The selected-task inspector lives in the status bar (not the Command
+        # Palette): desktop `task_inspector_line`, web `taskInspectorLine`.
+        self.assertIn("task_inspector_line", mw)
         cfg_js = (BTF_ROOT / "web/src/config.js").read_text(encoding="utf-8")
-        self.assertIn("['inspect-task', 'Inspect task']", cfg_js)
-        self.assertIn("inspect-task", app)
-        self.assertIn("inspect-task", mw)
+        self.assertNotIn("inspect-task", cfg_js)
+        self.assertNotIn("'inspect-task'", app)
+        self.assertNotIn("inspect-task", mw)
         self.assertIn("investigation_session", mw)
         self.assertIn("investigation_session", assist)
         self.assertIn("investigation_session_has_chat", assist)
@@ -1161,10 +1172,13 @@ class AiWebParityTests(unittest.TestCase):
         # Shell redesign: Focus mode folds every chrome pane but the timeline —
         # web via the command palette (`focusMode`), desktop via View ▸ Focus Mode.
         self.assertIn("focusMode", app)
-        self.assertIn("'focus', 'Focus mode'", (
-            BTF_ROOT / "web/src/config.js").read_text(encoding="utf-8"))
+        cfg_js_focus = (BTF_ROOT / "web/src/config.js").read_text(encoding="utf-8")
+        self.assertIn("['focus', 'Focus Mode']", cfg_js_focus)
         self.assertIn("def _set_focus_mode", mw)
         self.assertIn('"Focus &Mode"', mw)
+        # Focus Mode is reachable from the Command Palette on both platforms.
+        self.assertIn('("focus", "Focus Mode")', (
+            BTF_ROOT / "btf_viewer_pkg/config.py").read_text(encoding="utf-8"))
         # Shell redesign: loading is an inline skeleton + status-bar progress,
         # not a modal card — web `.timeline-skeleton` / `.status-loading`,
         # desktop `_LoadSkeleton` + `_status_load_lbl` (the old `_LoadProgressDialog`

@@ -101,8 +101,8 @@ class InspectorViewportParityTests(unittest.TestCase):
         self.assertIn("ci-scope-viewport", CI_VUE)
         self.assertIn("ci-scope-full", CI_VUE)
         self.assertIn(':viewport="timelineViewport"', APP_VUE)
-        self.assertIn("Analysis Scope", CI_VUE)
-        self.assertIn("Analysis Scope", STATS_PY)
+        self.assertIn("Inspector Scope", CI_VUE)
+        self.assertIn("Inspector Scope", STATS_PY)
         self.assertIn("Investigate with AI", CI_VUE)
         self.assertIn("Investigate with AI", STATS_PY)
         self.assertIn("Handoff suspects only", CI_VUE)
@@ -146,7 +146,7 @@ class InspectorViewportParityTests(unittest.TestCase):
         self.assertNotIn("mainTab = 'activity'", CI_VUE)
         ci_cls = STATS_PY[
             STATS_PY.find("class _CorridorInspectorDialog"):
-            STATS_PY.find("class _ChordDiagramDialog")]
+            STATS_PY.find("\ndef _load_balance_metrics")]
         self.assertNotIn('QPushButton("Activity")', ci_cls)
         self.assertIn('QPushButton("Path info")', ci_cls)
         self.assertNotIn('QLabel("Sort by")', ci_cls)
@@ -211,8 +211,8 @@ class InspectorViewportParityTests(unittest.TestCase):
         self.assertIn("rightPane.value = 'info'", CI_VUE)
         self.assertIn("Select a core path to inspect ping-pong", STATS_PY)
         self.assertIn("Select a core path to inspect ping-pong", CI_VUE)
-        self.assertIn("Show on timeline", STATS_PY)
-        self.assertIn("Show on timeline", CI_VUE)
+        self.assertIn("Focus this window", STATS_PY)
+        self.assertIn("Focus this window", CI_VUE)
         self.assertIn("Migration activity over time", STATS_PY)
         self.assertIn("Migration activity over time", CI_VUE)
         self.assertIn("Color: migration count", STATS_PY)
@@ -232,7 +232,7 @@ class InspectorViewportParityTests(unittest.TestCase):
         self.assertIn("ci-actions-row", CI_VUE)
         self.assertIn("ci-card-actions", CI_VUE)
         self.assertIn("flex-direction: column", CI_VUE)
-        self.assertIn('QPushButton("Show events")', STATS_PY)
+        self.assertIn('QPushButton("Focus this window")', STATS_PY)
         self.assertIn('QPushButton("Filter timeline")', STATS_PY)
         self.assertIn('QPushButton("Inspect task")', STATS_PY)
         self.assertIn('QPushButton("Ask AI")', STATS_PY)
@@ -264,7 +264,7 @@ class InspectorViewportParityTests(unittest.TestCase):
         self.assertNotIn("lock bounce", canvas_py)
         ci_cls = STATS_PY[
             STATS_PY.find("class _CorridorInspectorDialog"):
-            STATS_PY.find("class _ChordDiagramDialog")]
+            STATS_PY.find("\ndef _load_balance_metrics")]
         tree_dbl = ci_cls[ci_cls.find("def _on_tree_dbl"):]
         tree_dbl = tree_dbl[:tree_dbl.find("\n    def ", 1)]
         self.assertIn("self._on_show_events()", tree_dbl)

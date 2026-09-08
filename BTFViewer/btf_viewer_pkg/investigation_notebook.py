@@ -18,9 +18,43 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-INVESTIGATION_SCHEMA = "btf-viewer-investigation/1"
+INVESTIGATION_SCHEMA = "btf-viewer-investigation/2"
+
+# --- Durable investigation status (schema/2) -----------------------------
+# One durable status only. The AI workflow *stage* is transient and must never
+# be shown as a second Notebook status.
+NB_STATUS_OPEN = "open"
+NB_STATUS_NEEDS_EVIDENCE = "needs_evidence"
+NB_STATUS_READY = "ready_to_conclude"
+NB_STATUS_CLOSED = "closed"
+NOTEBOOK_STATUSES = (
+    NB_STATUS_OPEN, NB_STATUS_NEEDS_EVIDENCE, NB_STATUS_READY, NB_STATUS_CLOSED,
+)
+NOTEBOOK_STATUS_LABELS = {
+    NB_STATUS_OPEN: "Open",
+    NB_STATUS_NEEDS_EVIDENCE: "Needs evidence",
+    NB_STATUS_READY: "Ready to conclude",
+    NB_STATUS_CLOSED: "Closed",
+}
+
+# --- Six-section presentation ------------------------------------------
+NB_SECTION_ORDER = (
+    "question", "scope", "hypotheses", "evidence", "open_checks", "conclusion",
+)
+NB_SECTION_LABELS = {
+    "question": "Question",
+    "scope": "Scope",
+    "hypotheses": "Hypotheses",
+    "evidence": "Evidence",
+    "open_checks": "Open checks",
+    "conclusion": "Conclusion",
+}
+
+# Empty-state entry points (replace the old generic hint).
+NB_EMPTY_FROM_FINDINGS = "Start from current Findings"
+NB_EMPTY_BLANK = "Start a blank investigation"
 
 # --- Bookmark types --------------------------------------------------------
 BM_OBSERVATION = "observation"
@@ -59,6 +93,147 @@ LINK_RELATIONS = ("supports", "contradicts", "verifies", "concludes", "relates")
 # Which link relations a reviewer follows backwards from a conclusion to reach
 # its evidence.
 _CHAIN_RELATIONS = ("supports", "verifies", "contradicts", "concludes", "relates")
+
+# --- Structured evidence cards (schema/2, §8) --------------------------
+# Where an evidence card came from.
+EV_SOURCE_TIMELINE = "Timeline"
+EV_SOURCE_STATISTICS = "Statistics"
+EV_SOURCE_FINDINGS = "Analysis Findings"
+EV_SOURCE_COMPARE = "Trace Compare"
+EV_SOURCE_USER = "User note"
+EV_SOURCE_AI = "AI suggestion"
+EVIDENCE_SOURCES = (
+    EV_SOURCE_TIMELINE, EV_SOURCE_STATISTICS, EV_SOURCE_FINDINGS,
+    EV_SOURCE_COMPARE, EV_SOURCE_USER, EV_SOURCE_AI,
+)
+# How strong the claim is. "" = an unclassified user note.
+EV_KIND_MEASURED = "measured"
+EV_KIND_DERIVED = "derived"
+EV_KIND_HEURISTIC = "heuristic"
+EV_KIND_ESTIMATE = "estimate"
+EVIDENCE_KINDS = (
+    EV_KIND_MEASURED, EV_KIND_DERIVED, EV_KIND_HEURISTIC, EV_KIND_ESTIMATE,
+)
+EVIDENCE_KIND_LABELS = {
+    EV_KIND_MEASURED: "Measured",
+    EV_KIND_DERIVED: "Derived",
+    EV_KIND_HEURISTIC: "Heuristic",
+    EV_KIND_ESTIMATE: "Simulation / estimate",
+    "": "User note",
+}
+EV_AUTHOR_USER = "user"
+EV_AUTHOR_BTFVIEWER = "btfviewer"
+EV_AUTHOR_AI = "ai"
+EVIDENCE_AUTHORS = (EV_AUTHOR_USER, EV_AUTHOR_BTFVIEWER, EV_AUTHOR_AI)
+# Only BTFViewer-supplied measured cards carry these; user edits and AI
+# proposals must never change them.
+EVIDENCE_PROTECTED_FIELDS = (
+    "source", "kind", "author", "trace_id", "scope",
+    "task", "core", "value", "unit",
+)
+# Evidence-bearing bookmark types (the ones the Evidence section renders).
+EVIDENCE_BOOKMARK_TYPES = (BM_OBSERVATION, BM_SUPPORTING, BM_CONTRADICTING)
+
+
+def _measured_ref(refs: Optional[Sequence[Dict[str, Any]]]) -> str:
+    """The strongest measured-output ref kind on a bookmark, or ""."""
+    kinds = {str(r.get("kind")) for r in (refs or []) if isinstance(r, dict)}
+    if REF_FINDING in kinds:
+        return EV_SOURCE_FINDINGS
+    if REF_METRIC in kinds:
+        return EV_SOURCE_STATISTICS
+    if kinds & {REF_RANGE, REF_EVIDENCE}:
+        return EV_SOURCE_TIMELINE
+    return ""
+
+
+def normalize_evidence_card(
+    card: Optional[Dict[str, Any]],
+    *,
+    refs: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Coerce a raw evidence card to a valid one, enforcing provenance rules.
+
+    - AI-authored or ``AI suggestion`` cards can never be ``measured``.
+    - A ``measured`` kind is only kept when the card is BTFViewer/User authored
+      *and* the bookmark references measured output (a finding / metric / range).
+    - Source data fields are kept as-is; the editable text lives on the
+      bookmark's ``note``.
+    """
+    if not isinstance(card, dict):
+        return None
+    src = str(card.get("source") or "").strip()
+    if src not in EVIDENCE_SOURCES:
+        src = _measured_ref(refs) or EV_SOURCE_USER
+    author = str(card.get("author") or "").strip().lower()
+    if author not in EVIDENCE_AUTHORS:
+        author = EV_AUTHOR_AI if src == EV_SOURCE_AI else EV_AUTHOR_USER
+    if src == EV_SOURCE_AI:
+        author = EV_AUTHOR_AI
+    kind = str(card.get("kind") or "").strip().lower()
+    if kind not in EVIDENCE_KINDS:
+        kind = ""
+    if kind == EV_KIND_MEASURED and (
+        author == EV_AUTHOR_AI or not _measured_ref(refs)
+    ):
+        # Never label AI prose or an unreferenced claim as Measured.
+        kind = EV_KIND_DERIVED if author != EV_AUTHOR_AI else ""
+    out: Dict[str, Any] = {
+        "source": src,
+        "kind": kind,
+        "author": author,
+        "trace_id": str(card.get("trace_id") or ""),
+        "task": str(card.get("task") or ""),
+        "core": str(card.get("core") or ""),
+        "unit": str(card.get("unit") or ""),
+        "hypothesis_id": str(card.get("hypothesis_id") or ""),
+        "created_at": str(card.get("created_at") or ""),
+        "updated_at": str(card.get("updated_at") or ""),
+    }
+    val = card.get("value")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        out["value"] = val
+    else:
+        try:
+            out["value"] = float(val) if str(val).strip() != "" else None
+        except (TypeError, ValueError):
+            out["value"] = None
+    sc = card.get("scope")
+    if isinstance(sc, dict) and sc.get("start") is not None and sc.get("end") is not None:
+        out["scope"] = {"start": int(sc["start"]), "end": int(sc["end"])}
+    else:
+        out["scope"] = None
+    return out
+
+
+def evidence_card_is_measured(card: Optional[Dict[str, Any]]) -> bool:
+    return isinstance(card, dict) and card.get("kind") == EV_KIND_MEASURED
+
+
+def guard_evidence_changes(
+    card: Optional[Dict[str, Any]],
+    changes: Optional[Dict[str, Any]],
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Split proposed card ``changes`` into (allowed, rejected-field-names).
+
+    Protected fields on a measured card are never mutable by a user edit or an
+    AI proposal; a change that would set ``kind`` to ``measured`` is rejected
+    unless the card already is.
+    """
+    ch = dict(changes or {})
+    allowed: Dict[str, Any] = {}
+    rejected: List[str] = []
+    measured = evidence_card_is_measured(card)
+    for key, val in ch.items():
+        if key == "kind" and str(val).strip().lower() == EV_KIND_MEASURED and not measured:
+            rejected.append(key)
+            continue
+        if measured and key in EVIDENCE_PROTECTED_FIELDS:
+            rejected.append(key)
+            continue
+        allowed[key] = val
+    return allowed, rejected
+
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -123,6 +298,8 @@ def new_investigation(
         "links": [],
         "conclusion": "",
         "unresolved_questions": [],
+        "status": NB_STATUS_OPEN,
+        "updated_at": "",
         "next_seq": 1,
     }
 
@@ -134,6 +311,10 @@ def _clone(inv: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["bookmarks"] = [dict(b) for b in (inv.get("bookmarks") or [])]
     for b in out["bookmarks"]:
         b["refs"] = [dict(r) for r in (b.get("refs") or [])]
+        if isinstance(b.get("evidence"), dict):
+            b["evidence"] = dict(b["evidence"])
+            if isinstance(b["evidence"].get("scope"), dict):
+                b["evidence"]["scope"] = dict(b["evidence"]["scope"])
     out["links"] = [dict(link) for link in (inv.get("links") or [])]
     out["unresolved_questions"] = list(inv.get("unresolved_questions") or [])
     out["trace_identity"] = dict(inv.get("trace_identity") or {})
@@ -173,6 +354,7 @@ def add_bookmark(
     note: str = "",
     refs: Optional[Sequence[Dict[str, Any]]] = None,
     bookmark_id: str = "",
+    evidence: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     out = _clone(inv)
     btype = str(type or "").strip().lower()
@@ -187,15 +369,108 @@ def add_bookmark(
     seq = int(out.get("next_seq") or 1)
     out["next_seq"] = seq + 1
     clean_refs = [r for r in (normalize_ref(x) for x in (refs or [])) if r]
-    out["bookmarks"].append({
+    row: Dict[str, Any] = {
         "id": bid,
         "type": btype,
         "title": str(title or "").strip() or BOOKMARK_TYPE_LABELS[btype],
         "note": str(note or ""),
         "refs": clean_refs,
         "seq": seq,
-    })
+    }
+    if evidence is not None and btype in EVIDENCE_BOOKMARK_TYPES:
+        card = normalize_evidence_card(evidence, refs=clean_refs)
+        if card is not None:
+            row["evidence"] = card
+    out["bookmarks"].append(row)
     return out
+
+
+def add_evidence(
+    inv: Optional[Dict[str, Any]],
+    *,
+    title: str,
+    note: str = "",
+    role: str = BM_SUPPORTING,
+    source: str = EV_SOURCE_USER,
+    kind: str = "",
+    author: str = EV_AUTHOR_USER,
+    refs: Optional[Sequence[Dict[str, Any]]] = None,
+    task: str = "",
+    core: str = "",
+    value: Any = None,
+    unit: str = "",
+    scope: Optional[Dict[str, int]] = None,
+    trace_id: str = "",
+    hypothesis_id: str = "",
+    created_at: str = "",
+    bookmark_id: str = "",
+) -> Dict[str, Any]:
+    """Add a structured evidence card (a bookmark with an ``evidence`` dict).
+
+    Source data (``kind`` / ``value`` / ``unit`` / ``task`` / ``core`` /
+    ``scope`` / ``trace_id`` / ``refs``) is stored separately from the editable
+    explanation (``note``). Provenance rules are enforced by
+    :func:`normalize_evidence_card`.
+    """
+    r = str(role or "").strip().lower()
+    if r not in EVIDENCE_BOOKMARK_TYPES:
+        r = BM_SUPPORTING
+    return add_bookmark(
+        inv, type=r, title=title, note=note, refs=refs, bookmark_id=bookmark_id,
+        evidence={
+            "source": source, "kind": kind, "author": author, "task": task,
+            "core": core, "value": value, "unit": unit, "scope": scope,
+            "trace_id": trace_id, "hypothesis_id": hypothesis_id,
+            "created_at": created_at, "updated_at": created_at,
+        },
+    )
+
+
+def update_evidence_explanation(
+    inv: Optional[Dict[str, Any]], bookmark_id: str, note: str,
+    *, updated_at: str = "",
+) -> Dict[str, Any]:
+    """Edit *only* the explanation text of an evidence card — never source data."""
+    out = _clone(inv)
+    bid = str(bookmark_id or "").strip()
+    for b in out["bookmarks"]:
+        if str(b.get("id")) != bid:
+            continue
+        b["note"] = str(note or "")
+        if isinstance(b.get("evidence"), dict) and updated_at:
+            b["evidence"]["updated_at"] = str(updated_at)
+        break
+    return out
+
+
+def apply_evidence_edit(
+    inv: Optional[Dict[str, Any]], bookmark_id: str,
+    changes: Optional[Dict[str, Any]], *, updated_at: str = "",
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Merge proposed card ``changes`` for one evidence bookmark.
+
+    Protected fields on a measured card (and any attempt to set ``kind`` to
+    ``measured``) are dropped; the returned list names the rejected fields so
+    the caller can surface "measured data not changed".
+    """
+    out = _clone(inv)
+    bid = str(bookmark_id or "").strip()
+    rejected: List[str] = []
+    for b in out["bookmarks"]:
+        if str(b.get("id")) != bid:
+            continue
+        card = b.get("evidence") if isinstance(b.get("evidence"), dict) else {}
+        allowed, rejected = guard_evidence_changes(card, changes)
+        if "note" in allowed:
+            b["note"] = str(allowed.pop("note") or "")
+        if allowed:
+            merged = dict(card)
+            merged.update(allowed)
+            b["evidence"] = normalize_evidence_card(merged, refs=b.get("refs"))
+        if isinstance(b.get("evidence"), dict) and updated_at:
+            b["evidence"]["updated_at"] = str(updated_at)
+        break
+    return out, rejected
 
 
 def update_bookmark(
@@ -287,6 +562,282 @@ def remove_unresolved_question(inv: Optional[Dict[str, Any]], text: str) -> Dict
         q for q in out["unresolved_questions"] if q != str(text or "").strip()
     ]
     return out
+
+
+# ---------------------------------------------------------------------------
+# Durable status (schema/2)
+# ---------------------------------------------------------------------------
+def derive_status(inv: Optional[Dict[str, Any]]) -> str:
+    """Best-effort durable status for a schema/1 investigation being upgraded.
+
+    Never returns ``closed`` — closing an investigation is an explicit act.
+    """
+    inv = inv if isinstance(inv, dict) else {}
+    bms = inv.get("bookmarks") or []
+    types = [str(b.get("type") or "") for b in bms if isinstance(b, dict)]
+    has_hypothesis = BM_HYPOTHESIS in types
+    has_evidence = any(t in (BM_SUPPORTING, BM_VERIFICATION) for t in types)
+    has_conclusion = bool(str(inv.get("conclusion") or "").strip()) or (
+        BM_CONCLUSION in types
+    )
+    has_open = bool(inv.get("unresolved_questions"))
+    if has_conclusion:
+        return NB_STATUS_READY
+    if has_hypothesis and not has_evidence:
+        return NB_STATUS_NEEDS_EVIDENCE
+    if has_open:
+        return NB_STATUS_NEEDS_EVIDENCE
+    return NB_STATUS_OPEN
+
+
+def set_status(
+    inv: Optional[Dict[str, Any]], status: str, *, updated_at: str = "",
+) -> Dict[str, Any]:
+    out = _clone(inv)
+    s = str(status or "").strip().lower()
+    out["status"] = s if s in NOTEBOOK_STATUSES else NB_STATUS_OPEN
+    if updated_at:
+        out["updated_at"] = str(updated_at)
+    return out
+
+
+def touch_investigation(inv: Optional[Dict[str, Any]], updated_at: str) -> Dict[str, Any]:
+    """Stamp the caller-supplied last-updated time (kept pure — no clock here)."""
+    out = _clone(inv)
+    out["updated_at"] = str(updated_at or "")
+    return out
+
+
+def migrate_investigation(inv: Dict[str, Any]) -> Dict[str, Any]:
+    """Bring a normalised investigation dict up to the current schema.
+
+    Keeps every existing bookmark, link, question and conclusion. A schema/1
+    payload (no ``status``) gets a derived durable status; a valid stored
+    status is preserved. A transient ``workflow_stage`` key, if present, is
+    left untouched — it is never promoted to the Notebook status.
+    """
+    stored = str(inv.get("status") or "").strip().lower()
+    inv["status"] = stored if stored in NOTEBOOK_STATUSES else derive_status(inv)
+    inv["updated_at"] = str(inv.get("updated_at") or "")
+    # Wrap legacy evidence bookmarks (schema/1) in a provenance card, keeping
+    # every id / ref / note. Provenance is inferred conservatively: a bookmark
+    # that references measured BTFViewer output is Measured; a bare note is a
+    # user note. Never retroactively AI-attributed.
+    for b in inv.get("bookmarks") or []:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") not in EVIDENCE_BOOKMARK_TYPES or isinstance(b.get("evidence"), dict):
+            continue
+        refs = b.get("refs") or []
+        src = _measured_ref(refs) or EV_SOURCE_USER
+        b["evidence"] = normalize_evidence_card(
+            {
+                "source": src,
+                "kind": EV_KIND_MEASURED if src != EV_SOURCE_USER else "",
+                "author": EV_AUTHOR_USER,
+                "trace_id": str((inv.get("trace_identity") or {}).get("hash") or ""),
+            },
+            refs=refs,
+        )
+    inv["schema"] = INVESTIGATION_SCHEMA
+    return inv
+
+
+# ---------------------------------------------------------------------------
+# Six-section presentation (pure projection of the stored investigation)
+# ---------------------------------------------------------------------------
+def _evidence_kind(bookmark: Dict[str, Any]) -> str:
+    """Coarse provenance for an evidence bookmark. §8 refines this into cards;
+    here a bookmark that points at measured BTFViewer output is ``measured``,
+    everything else is a plain ``note``."""
+    for r in bookmark.get("refs") or []:
+        if str(r.get("kind")) in (REF_FINDING, REF_METRIC, REF_RANGE):
+            return "measured"
+    return "note"
+
+
+def _hypothesis_status(inv: Dict[str, Any], bid: str) -> str:
+    rels = {
+        str(link.get("relation"))
+        for link in inv.get("links") or []
+        if str(link.get("to")) == bid or str(link.get("from")) == bid
+    }
+    if "contradicts" in rels:
+        return "contradicted"
+    if rels & {"supports", "verifies"}:
+        return "supported"
+    return "open"
+
+
+def _scope_summary(inv: Dict[str, Any]) -> str:
+    rng = inv.get("analysis_range")
+    if isinstance(rng, dict) and rng.get("start") is not None:
+        return f"{int(rng['start'])}–{int(rng['end'])}"
+    return "Full trace"
+
+
+def _stale_bookmark_ids(broken: Optional[Dict[str, Any]]) -> set:
+    if not isinstance(broken, dict):
+        return set()
+    return {
+        str(i.get("bookmark_id"))
+        for i in (broken.get("issues") or [])
+        if isinstance(i, dict) and i.get("bookmark_id")
+    }
+
+
+def _evidence_is_stale(
+    bid: str, nav: Dict[str, Any], stale_ids: set, broken: Optional[Dict[str, Any]],
+) -> bool:
+    if bid in stale_ids:
+        return True
+    # A whole-trace change makes every trace-bound reference (a time / range /
+    # finding / metric) unverifiable — flag it, never hide it.
+    if isinstance(broken, dict) and broken.get("stale_trace"):
+        return bool(nav)
+    return False
+
+
+def evidence_nav_targets(bookmark: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Resolvable navigation targets for one evidence bookmark — no scope change.
+
+    Returns ``{jump: TIME}`` / ``{range: [LO, HI]}`` / ``{stats_metric: NAME}``
+    only for refs that carry a target; an empty dict when nothing resolves.
+    """
+    out: Dict[str, Any] = {}
+    for r in (bookmark or {}).get("refs") or []:
+        if not isinstance(r, dict):
+            continue
+        if r.get("time") is not None and "jump" not in out:
+            out["jump"] = int(r["time"])
+        rng = r.get("range")
+        if isinstance(rng, dict) and rng.get("start") is not None and "range" not in out:
+            out["range"] = [int(rng["start"]), int(rng["end"])]
+        if str(r.get("kind")) == REF_METRIC and r.get("metric") and "stats_metric" not in out:
+            out["stats_metric"] = str(r["metric"])
+        if str(r.get("kind")) == REF_FINDING and r.get("rule_id") and "finding" not in out:
+            out["finding"] = str(r["rule_id"])
+    return out
+
+
+def investigation_sections(
+    inv: Optional[Dict[str, Any]],
+    *,
+    broken: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Project a stored investigation onto the six report sections, in order.
+
+    Purely derived from existing fields — no data is invented or relabelled as
+    measured. Existing bookmark ids / links / conclusions are preserved
+    verbatim in ``bookmark_id`` / ``refs`` on each item. Evidence items carry
+    the full provenance ``card`` and a ``stale`` flag (from an optional
+    :func:`detect_broken_references` result); stale evidence stays visible.
+    """
+    inv = load_investigation(inv)
+    bms = inv.get("bookmarks") or []
+    ident = inv.get("trace_identity") or {}
+    stale = _stale_bookmark_ids(broken)
+
+    scope_items: List[Dict[str, Any]] = []
+    if ident.get("file"):
+        scope_items.append({"kind": "trace", "text": str(ident["file"])})
+    scope_items.append({"kind": "range", "text": _scope_summary(inv)})
+    if ident.get("time_scale"):
+        scope_items.append({"kind": "unit", "text": str(ident["time_scale"])})
+
+    hyp_items = [
+        {
+            "bookmark_id": b["id"], "text": b["title"], "note": b["note"],
+            "refs": b["refs"], "status": _hypothesis_status(inv, b["id"]),
+        }
+        for b in bms if b["type"] == BM_HYPOTHESIS
+    ]
+    evidence_items = []
+    for b in bms:
+        if b["type"] not in EVIDENCE_BOOKMARK_TYPES:
+            continue
+        card = b.get("evidence") if isinstance(b.get("evidence"), dict) else None
+        nav = evidence_nav_targets(b)
+        evidence_items.append({
+            "bookmark_id": b["id"], "text": b["title"], "note": b["note"],
+            "refs": b["refs"],
+            "role": (
+                "supporting" if b["type"] == BM_SUPPORTING
+                else "contradicting" if b["type"] == BM_CONTRADICTING
+                else "observation"
+            ),
+            "kind": (card or {}).get("kind", _evidence_kind(b)),
+            "card": card,
+            "stale": _evidence_is_stale(b["id"], nav, stale, broken),
+            "nav": nav,
+        })
+    open_items = [
+        {"source": "question", "text": q}
+        for q in inv.get("unresolved_questions") or []
+    ] + [
+        {
+            "source": "verification", "bookmark_id": b["id"], "text": b["title"],
+            "note": b["note"], "refs": b["refs"],
+        }
+        for b in bms if b["type"] == BM_VERIFICATION
+    ]
+    conclusion_items: List[Dict[str, Any]] = []
+    if str(inv.get("conclusion") or "").strip():
+        conclusion_items.append({"kind": "verdict", "text": inv["conclusion"]})
+    for b in bms:
+        if b["type"] == BM_CONCLUSION:
+            conclusion_items.append({
+                "kind": "verdict", "bookmark_id": b["id"], "text": b["title"],
+                "note": b["note"], "refs": b["refs"],
+            })
+    verified = sum(1 for b in bms if b["type"] == BM_VERIFICATION)
+    conclusion_items.append({
+        "kind": "verification_state",
+        "text": (
+            f"{verified} verification step(s) recorded"
+            if verified else "No verification steps recorded"
+        ),
+    })
+
+    by_id = {
+        "question": [{"text": inv["title"]}] if inv.get("title") else [],
+        "scope": scope_items,
+        "hypotheses": hyp_items,
+        "evidence": evidence_items,
+        "open_checks": open_items,
+        "conclusion": conclusion_items,
+    }
+    return [
+        {"id": sid, "title": NB_SECTION_LABELS[sid], "items": by_id[sid]}
+        for sid in NB_SECTION_ORDER
+    ]
+
+
+def investigation_header(
+    inv: Optional[Dict[str, Any]],
+    *,
+    broken: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Compact header row for the Notebook — usable with AI disabled.
+
+    ``broken`` is an optional :func:`detect_broken_references` result so the
+    stale-reference count stays a pure function of its inputs.
+    """
+    inv = load_investigation(inv)
+    secs = {s["id"]: s for s in investigation_sections(inv)}
+    status = str(inv.get("status") or NB_STATUS_OPEN)
+    ident = inv.get("trace_identity") or {}
+    return {
+        "status": status,
+        "status_label": NOTEBOOK_STATUS_LABELS.get(status, "Open"),
+        "trace": str(ident.get("file") or ""),
+        "scope": _scope_summary(inv),
+        "hypothesis_count": len(secs["hypotheses"]["items"]),
+        "evidence_count": len(secs["evidence"]["items"]),
+        "open_check_count": len(secs["open_checks"]["items"]),
+        "stale_ref_count": len((broken or {}).get("issues") or []),
+        "updated_at": str(inv.get("updated_at") or ""),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -573,14 +1124,20 @@ def load_investigation(raw: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             seq = 0
         max_seq = max(max_seq, seq)
-        bookmarks.append({
+        clean_refs = [r for r in (normalize_ref(x) for x in (b.get("refs") or [])) if r]
+        row: Dict[str, Any] = {
             "id": bid,
             "type": btype,
             "title": str(b.get("title") or "").strip() or BOOKMARK_TYPE_LABELS[btype],
             "note": str(b.get("note") or ""),
-            "refs": [r for r in (normalize_ref(x) for x in (b.get("refs") or [])) if r],
+            "refs": clean_refs,
             "seq": seq or (len(bookmarks) + 1),
-        })
+        }
+        if isinstance(b.get("evidence"), dict) and btype in EVIDENCE_BOOKMARK_TYPES:
+            card = normalize_evidence_card(b["evidence"], refs=clean_refs)
+            if card is not None:
+                row["evidence"] = card
+        bookmarks.append(row)
     bookmarks.sort(key=lambda b: (b["seq"], b["id"]))
     ids = {b["id"] for b in bookmarks}
     links = []
@@ -604,9 +1161,13 @@ def load_investigation(raw: Any) -> Dict[str, Any]:
     out["unresolved_questions"] = [
         str(q).strip() for q in (raw.get("unresolved_questions") or []) if str(q).strip()
     ]
+    # base (from new_investigation) carries default status/updated_at; keep any
+    # stored values so migrate_investigation can honour an explicit status.
+    out["status"] = raw.get("status") or ""
+    out["updated_at"] = str(raw.get("updated_at") or "")
     out["next_seq"] = max(int(base["next_seq"]), max_seq + 1)
     out["schema"] = INVESTIGATION_SCHEMA
-    return out
+    return migrate_investigation(out)
 
 
 # ---------------------------------------------------------------------------

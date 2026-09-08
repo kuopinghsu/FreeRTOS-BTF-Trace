@@ -350,11 +350,15 @@ describe('html section', () => {
       formatNs: ns => `${ns}us`, chains: conclusionEvidenceChains(inv), scopeTitle: ' (C1–C2)',
     })
     assert.match(html, /<h2>Investigation \(C1–C2\)<\/h2>/)
-    for (const label of ['Facts', 'Hypotheses', 'Conclusions', 'Unresolved questions']) {
-      assert.ok(html.includes(`${label}</h3>`), label)
-    }
+    // Same six sections, same order, as the Notebook UI.
+    assert.deepEqual(
+      [...html.matchAll(/<h3 class="sub">([^<]+)<\/h3>/g)].map(m => m[1]),
+      ['Question', 'Scope', 'Hypotheses', 'Evidence', 'Open checks', 'Conclusion'],
+    )
     assert.match(html, /Backed by:/)
     assert.match(html, /CS holds 300us/)
+    assert.match(html, /Runner stall/)
+    assert.match(html, /\[Measured/)
     assert.equal((html.match(/<section/g) || []).length, 1)
     assert.equal((html.match(/<\/section>/g) || []).length, 1)
   })

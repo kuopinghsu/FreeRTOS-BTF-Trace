@@ -66,13 +66,13 @@
 
       <label
         class="compare-scope"
-        title="Needs 2+ cursors placed on a tab; otherwise the full trace span is used."
+        title="Compare Scope — needs 2+ cursors placed on a tab; otherwise the full trace span is used."
       >
         <input
           v-model="scopeToCursors"
           type="checkbox"
         >
-        Compare only the selected cursor range on each tab
+        Compare Scope — compare only the selected cursor range on each tab
       </label>
 
       <div class="compare-formula">
@@ -356,7 +356,7 @@
               class="compare-chart"
             >
               <div class="compare-chart-head">
-                <span class="compare-chart-title">Core utilisation</span>
+                <span class="compare-chart-title">Core Utilization</span>
                 <span class="compare-chart-legend">
                   <span class="swatch swatch-a" />Baseline A
                   <span class="swatch swatch-b" />Candidate B
@@ -436,7 +436,7 @@
                     colspan="4"
                     class="compare-empty"
                   >
-                    No core utilisation data
+                    No core utilization data
                   </td>
                 </tr>
               </tbody>
@@ -1498,7 +1498,7 @@ function pickTabId(preferred, fallbackIndex) {
 const pageTabs = [
   { id: 'summary', label: 'Summary', group: 'Overview' },
   { id: 'top', label: 'Top Tasks', group: 'CPU & Cores' },
-  { id: 'coreUtil', label: 'Core Utilisation', group: 'CPU & Cores' },
+  { id: 'coreUtil', label: 'Core Utilization', group: 'CPU & Cores' },
   { id: 'migrations', label: 'Migrations', group: 'CPU & Cores' },
   { id: 'execution', label: 'Execution', group: 'Timing' },
   { id: 'blocking', label: 'Blocking', group: 'Timing' },

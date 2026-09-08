@@ -2015,7 +2015,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
             ("assistant", "## Answer\n\nIt migrates at jump:1805000."),
         ]
         md = format_ai_conversation_markdown(entries)
-        self.assertTrue(md.startswith("# BTF Viewer — AI Conversation"))
+        self.assertTrue(md.startswith("# BTFViewer — AI Conversation"))
         self.assertIn("## Your prompt\n\nWhy is CS[22] late?", md)
         self.assertIn("## AI Assistant\n\n## Answer\n\nIt migrates at jump:1805000.", md)
         self.assertTrue(md.endswith("\n"))

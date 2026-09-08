@@ -197,7 +197,7 @@ STATS_TABLE_HEADER_H     =  18  # QTableWidget header row height (px).
 STATS_TABLE_ROW_H        =  16  # QTableWidget body row height (px).
 STATS_TABLE_HSCROLL_H    =  14  # Horizontal scrollbar strip inside wide tables (px).
 STATS_MAX_VISIBLE_ROWS   =   8  # Default viewport shows this many rows before v-scroll.
-# Core Utilisation scroll content includes the Load Balance gauges; default
+# Core Utilization scroll content includes the Load Balance gauges; default
 # viewport shows gauges + this many core bars (more cores scroll). Matches web.
 STATS_CORES_DEFAULT_VISIBLE_ROWS = 2
 # Desktop _LoadBalanceGaugeWidget sizeHint height (must match stats.py _VH).
@@ -220,7 +220,7 @@ def _stats_util_viewport_height(visible_rows: int = STATS_MAX_VISIBLE_ROWS) -> i
             + max(0, visible_rows - 1) * STATS_UTIL_ROW_GAP + 2)
 
 STATS_UTIL_DEFAULT_H     = _stats_util_viewport_height()
-# Default Core Utilisation viewport: gauges + two core rows (no scroll needed).
+# Default Core Utilization viewport: gauges + two core rows (no scroll needed).
 STATS_CORES_UTIL_DEFAULT_H = (
     STATS_LB_GAUGE_H + _stats_util_viewport_height(STATS_CORES_DEFAULT_VISIBLE_ROWS))
 # Util lists (core/task bars) may shrink to a single row; metric tables keep
@@ -246,7 +246,7 @@ STATS_HEAVY_SECTIONS         = frozenset({
     "activation", "ready_gap", "idle", "sync_level",
 })
 # Factory default: every Statistics section starts collapsed. SMP-active traces
-# expand+pin Core Utilisation via ``default_stats_presentation`` (Step 1.1).
+# expand+pin Core Utilization via ``default_stats_presentation`` (Step 1.1).
 STATS_DEFAULT_EXPANDED_SECTIONS = frozenset()
 
 # Investigation categories (Step 1.1). Category is a property of the section —
@@ -266,20 +266,20 @@ STATS_CATEGORY_LABELS: Dict[str, str] = {
 }
 COMMAND_PALETTE_ACTIONS = (
     ("analysis", "Analysis Findings"),
+    ("notebook", "Investigation Notebook"),
     ("statistics", "Statistics"),
     ("find", "Find"),
     ("marks", "Marks"),
     ("ai", "AI Assistant"),
     ("compare", "Trace Compare"),
-    ("heatmap", "Migration heatmap"),
+    ("heatmap", "Migration & Corridor Inspector"),
+    ("focus", "Focus Mode"),
     ("settings", "Settings"),
     ("limit-scope", "Limit to C1–Cn"),
     ("fit", "Fit Trace"),
-    ("inspect-task", "Inspect task"),
-    ("preset-triage", "Workspace: Triage"),
-    ("preset-latency", "Workspace: Latency"),
-    ("preset-smp", "Workspace: SMP"),
-    ("preset-compare", "Workspace: Compare"),
+    ("preset-triage", "Statistics preset: Triage"),
+    ("preset-latency", "Statistics preset: Latency"),
+    ("preset-smp", "Statistics preset: SMP"),
 )
 # Per-action palette chrome. Keep (id, label) tuples above for compatibility.
 # requires: none | trace | two_traces | cursors2
@@ -287,6 +287,12 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
     "analysis": {
         "shortcut": "",
         "synonyms": ("findings", "inbox", "triage"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "notebook": {
+        "shortcut": "",
+        "synonyms": ("investigation", "bookmarks", "evidence chain", "case notes"),
         "requires": "trace",
         "disabled": "Open a trace first",
     },
@@ -322,7 +328,13 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
     },
     "heatmap": {
         "shortcut": "",
-        "synonyms": ("migration", "corridor"),
+        "synonyms": ("migration", "corridor", "heatmap"),
+        "requires": "trace",
+        "disabled": "Open a trace first",
+    },
+    "focus": {
+        "shortcut": "",
+        "synonyms": ("zen", "distraction-free", "fullscreen", "hide panels"),
         "requires": "trace",
         "disabled": "Open a trace first",
     },
@@ -344,12 +356,6 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
         "requires": "trace",
         "disabled": "Open a trace first",
     },
-    "inspect-task": {
-        "shortcut": "I",
-        "synonyms": ("inspector", "task info", "quality"),
-        "requires": "trace",
-        "disabled": "Open a trace first",
-    },
     "preset-triage": {
         "shortcut": "",
         "synonyms": ("workspace", "health"),
@@ -367,12 +373,6 @@ COMMAND_PALETTE_META: Dict[str, Dict[str, Any]] = {
         "synonyms": ("workspace", "multicore", "cores"),
         "requires": "trace",
         "disabled": "Open a trace first",
-    },
-    "preset-compare": {
-        "shortcut": "",
-        "synonyms": ("workspace", "diff"),
-        "requires": "two_traces",
-        "disabled": "Open at least two traces",
     },
 }
 COMMAND_PALETTE_RECENT_MAX = 8
@@ -392,7 +392,6 @@ WORKSPACE_PRESETS = {
     "preset-smp": (
         "cores", "migrations", "core_pairs", "affinity", "task_core", "core_time",
     ),
-    "preset-compare": (),
 }
 
 
@@ -573,7 +572,7 @@ def cap_stats_table_rows(rows: list, cap: int = STATS_TABLE_DISPLAY_ROW_CAP) -> 
 def default_section_collapsed() -> Dict[str, bool]:
     """Factory collapsed flags for statistics panel sections (shared with MVVM).
 
-    All sections start collapsed. SMP-active traces expand+pin Core Utilisation
+    All sections start collapsed. SMP-active traces expand+pin Core Utilization
     via ``default_stats_presentation``. Keep keys in lockstep with web
     ``SECTION_COLLAPSE_REFS`` / ``STATS_PINNABLE_SECTIONS``.
     """
@@ -742,7 +741,7 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
 # Section id → StatisticsPanel header title (no scope suffix).
 # Keep lockstep with web/src/utils/statsPins.js STATS_SECTION_TITLES.
 STATS_SECTION_TITLES: Dict[str, str] = {
-    "cores": "Core Utilisation (excl. IDLE/TICK)",
+    "cores": "Core Utilization (excl. IDLE/TICK)",
     "health": "Trace Health (TICK)",
     "task_health": "Task Health",
     "anomalies": "Timeline Anomalies",

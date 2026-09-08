@@ -143,7 +143,7 @@ BTFViewer 先依追蹤資料中的排程事件，重建工作連續執行的區�
 - 附加已儲存的調查時（GUI）或以 `--investigation` 傳入時（headless CLI）的 **Investigation** 區段；
 - 與統計面板相同的表格、分組目錄及區段說明；
 - 各統計表格的搜尋、排序、Problems only 與 Show all；
-- Core Utilisation 下方的 SVG 負載平衡量表。
+- Core Utilization 下方的 SVG 負載平衡量表。
 
 HTML 報告可指出應調查的位置，但無法保留所有 時間軸互動。若其他人需要驗證事件，仍應保留原始追蹤資料。
 
@@ -464,7 +464,7 @@ STATISTICS_zh-TW.md#statistics-<section-id>
 先從這裡了解系統負載、追蹤資料品質，以及哪些工作可能需要進一步檢查。
 
 <a id="statistics-cores" name="statistics-cores"></a>
-### 核心使用率（Core Utilisation，排除 IDLE/TICK）
+### 核心使用率（Core Utilization，排除 IDLE/TICK）
 
 **這項統計代表什麼**
 

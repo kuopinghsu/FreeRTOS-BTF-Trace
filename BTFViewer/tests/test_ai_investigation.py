@@ -166,15 +166,19 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertEqual(ranked["anomalies"][0]["band"], "critical")
         payload = detect_anomalies_finding(findings, limit=5)
         self.assertTrue(payload["ok"])
-        cand = snapshot_from_summary({
-            "migrations": 120, "migrated_tasks": 40,
-            "load_balance_score": 70.0, "missed_ticks": 3,
-        }, name="A")
-        base = snapshot_from_summary({
+        # Trace Compare contract: first arg is Baseline A, second is Candidate B.
+        # Candidate B here has worse migrations / load balance, so it regresses.
+        baseline_a = snapshot_from_summary({
             "migrations": 80, "migrated_tasks": 30,
             "load_balance_score": 90.0, "missed_ticks": 0,
+        }, name="A")
+        candidate_b = snapshot_from_summary({
+            "migrations": 120, "migrated_tasks": 40,
+            "load_balance_score": 70.0, "missed_ticks": 3,
         }, name="B")
-        cmp = compare_performance_metrics(cand, base, label_a="A", label_b="B")
+        cmp = compare_performance_metrics(
+            baseline_a, candidate_b, label_a="A", label_b="B",
+        )
         self.assertTrue(cmp["failed"])
         report = generate_structured_report(
             findings, report_type="root_cause", focus_id="deadline_breach",
@@ -207,15 +211,17 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertEqual(budgets["violations"], 1)
         ideas = build_optimization_advice(findings, limit=3)
         self.assertTrue(ideas["recommendations"])
-        cand = snapshot_from_summary({
-            "migrations": 120, "migrated_tasks": 40,
-            "load_balance_score": 70.0, "missed_ticks": 3,
-        }, name="A")
+        # Baseline A first, Candidate B second (Candidate B is the worse trace).
         base = snapshot_from_summary({
             "migrations": 80, "migrated_tasks": 30,
             "load_balance_score": 90.0, "missed_ticks": 0,
+        }, name="A")
+        cand = snapshot_from_summary({
+            "migrations": 120, "migrated_tasks": 40,
+            "load_balance_score": 70.0, "missed_ticks": 3,
         }, name="B")
-        cmp = compare_performance_metrics(cand, base, label_a="A", label_b="B")
+        cmp = compare_performance_metrics(base, cand, label_a="A", label_b="B")
+        self.assertTrue(cmp["failed"])
         expl = explain_regression(cmp, findings)
         self.assertIn("Regression explanation", expl["markdown"])
         self.assertTrue(format_bookmark_label("root_cause", "Mutex3").startswith("🔴"))
@@ -229,7 +235,7 @@ class AiInvestigationTests(unittest.TestCase):
         what = estimate_what_if(change="pin CS[28] to Core0", task="CS[28]", findings=findings)
         self.assertEqual(what["confidence"], "Medium")
         ranked = analyze_multi_traces([cand, base])
-        self.assertEqual(ranked["best"], "B")
+        self.assertEqual(ranked["best"], "A")
         for name in (
             AI_TOOL_CHECK_BUDGET,
             AI_TOOL_OPTIMIZE,

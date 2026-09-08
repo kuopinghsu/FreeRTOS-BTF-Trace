@@ -303,7 +303,16 @@ describe('aiCase investigation lifecycle', () => {
     assert.equal(balancedTriage.includes('what_if'), false)
     assert.equal(balancedTriage.includes('export_report'), false)
     assert.ok(balancedTriage.includes('challenge_conclusion'))
-    assert.equal(toolNamesForContextMode('full', 'triage'), null)
+    const fullTriage = toolNamesForContextMode('full', 'triage')
+    assert.ok(Array.isArray(fullTriage))
+    assert.ok(fullTriage.includes('investigate'))
+    assert.ok(fullTriage.includes('compare_performance'))
+    assert.equal(fullTriage.includes('what_if'), false)          // simulation gated
+    assert.equal(fullTriage.includes('export_report'), false)    // export gated
+    assert.equal(fullTriage.includes('investigation_memory'), false)  // memory gated
+    const fullReport = toolNamesForContextMode('full', 'report')
+    assert.ok(fullReport.includes('export_report'))
+    assert.ok(fullReport.includes('export_investigation'))
     const reportTools = toolNamesForContextMode('compact', 'report')
     assert.ok(reportTools.includes('generate_report'))
     assert.ok(reportTools.includes('export_report'))

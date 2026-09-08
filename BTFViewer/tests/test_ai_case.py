@@ -286,7 +286,16 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("detect_anomalies", compact_tools)
         self.assertIn("search_timeline", compact_tools)
         self.assertNotIn("what_if", compact_tools)
-        self.assertIsNone(tool_names_for_context_mode("full", "triage"))
+        full_triage = tool_names_for_context_mode("full", "triage")
+        self.assertIsInstance(full_triage, list)
+        self.assertIn("investigate", full_triage)
+        self.assertIn("compare_performance", full_triage)
+        self.assertNotIn("what_if", full_triage)          # simulation stage-gated
+        self.assertNotIn("export_report", full_triage)    # export stage-gated
+        self.assertNotIn("investigation_memory", full_triage)  # memory stage-gated
+        full_report = tool_names_for_context_mode("full", "report")
+        self.assertIn("export_report", full_report)
+        self.assertIn("export_investigation", full_report)
         balanced_triage = tool_names_for_context_mode("balanced", "triage")
         self.assertNotIn("what_if", balanced_triage)
         self.assertNotIn("export_report", balanced_triage)
@@ -584,10 +593,12 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("Call validate_experiment. Omit actual", VALIDATE_EXPERIMENT_PROMPT)
         from btf_viewer_pkg.ai_investigation import compare_performance_metrics
         from btf_viewer_pkg.ai_tools import compare_performance_tabs
+        # Baseline A ("before") first, Candidate B ("after") second: migrations
+        # dropped 40 -> 10, so the Candidate-B-vs-Baseline-A percent is negative.
         tabs = compare_performance_tabs(
-            {"migrations": 10, "missed_ticks": 0},
             {"migrations": 40, "missed_ticks": 0},
-            label_a="after", label_b="before",
+            {"migrations": 10, "missed_ticks": 0},
+            label_a="before", label_b="after",
         )
         filled = experiment_percents_from_compare(tabs)
         self.assertIn("migrations", filled)

@@ -64,9 +64,9 @@ function specOf(ruleId, severity, category, observationKind, comparisonBasis, me
 
 /** Every rule_id the Analysis Findings engine can emit + its stable metadata. */
 export const RULE_CATALOG = Object.freeze(Object.fromEntries([
-  specOf('load_imbalance', 'warning', 'load', 'load_spike', 'Gini of per-core utilisation vs even distribution', 'Core Utilisation (excl. IDLE/TICK)'),
-  specOf('load_balance_ok', 'info', 'load', 'load_spike', 'Gini of per-core utilisation vs even distribution', 'Core Utilisation (excl. IDLE/TICK)'),
-  specOf('load_balance_moderate', 'info', 'load', 'load_spike', 'Gini of per-core utilisation vs even distribution', 'Core Utilisation (excl. IDLE/TICK)'),
+  specOf('load_imbalance', 'warning', 'load', 'load_spike', 'Gini of per-core utilization vs even distribution', 'Core Utilization (excl. IDLE/TICK)'),
+  specOf('load_balance_ok', 'info', 'load', 'load_spike', 'Gini of per-core utilization vs even distribution', 'Core Utilization (excl. IDLE/TICK)'),
+  specOf('load_balance_moderate', 'info', 'load', 'load_spike', 'Gini of per-core utilization vs even distribution', 'Core Utilization (excl. IDLE/TICK)'),
   specOf('top_cpu', 'info', 'execution', 'execution_time_high', 'share of active CPU time in scope', 'Top Tasks by CPU (excl. IDLE/TICK)'),
   specOf('exec_max', 'info', 'execution', 'execution_time_high', 'observed slice maxima (not proven WCET)', 'Execution Time Per Slice'),
   specOf('wcet_anomaly', 'warning', 'execution', 'execution_time_high', "slice Max vs the entity's own average", 'Execution Time Per Slice'),

@@ -208,7 +208,7 @@
         @toggle-pin="toggleSectionPin('cores')"
         @open-reference="onOpenReference"
       >
-        Core Utilisation (excl. IDLE/TICK){{ scopeSuffixStr }}
+        Core Utilization (excl. IDLE/TICK){{ scopeSuffixStr }}
       </StatsSectionHeader>
       <template v-if="!coresCollapsed">
         <div
@@ -241,7 +241,7 @@
         <div
           class="stats-section-resizer"
           role="separator"
-          aria-label="Resize core utilisation"
+          aria-label="Resize core utilization"
           @mousedown="onTableResizeStart('cores', $event, coreStats.length)"
         />
       </template>
@@ -6613,7 +6613,7 @@ const schedulingSummary = computed(() => {
   }
 })
 
-// ---- Core utilisation (excl. IDLE/TICK) --------------------------------
+// ---- Core Utilization (excl. IDLE/TICK) --------------------------------
 const coreStats = computed(() => {
   const tr = props.trace
   if (!tr || !tr.coreNames || tr.coreNames.length === 0) return []
@@ -8828,7 +8828,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
   const schedKpi = schedulingSummary.value
   const coreHtml = (() => {
     const section = _htmlUtilSection(
-      `Core Utilisation (excl. IDLE/TICK)${suffix}`,
+      `Core Utilization (excl. IDLE/TICK)${suffix}`,
       coreRows.map(r => ({ label: r.core, pct: r.pct })),
       'core',
     )
@@ -8931,7 +8931,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
       kind: lbKpi && (lbKpi.score < 70 || lbKpi.stddev > 30) ? 'warn' : 'ok',
     },
     {
-      label: 'Core utilisation range',
+      label: 'Core Utilization range',
       value: `${utilLo.toFixed(1)}–${utilHi.toFixed(1)}%`,
       hint: 'Wall-clock span, one-core = 100%',
     },
@@ -9194,7 +9194,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
         (matrix.rows || []).slice(0, 24).map(row => row.task || ''),
         cores,
         (matrix.rows || []).slice(0, 24).map(row => cores.map(c => Number(row.cells?.[c]?.pct_span) || 0)),
-        { title: 'Task × Core utilisation (% of span)', unit: '%' },
+        { title: 'Task × Core Utilization (% of span)', unit: '%' },
       )
       return `<section class="report-card"><h2>Task × Core${_htmlCell(suffix)}</h2>` +
         heat +
@@ -9217,7 +9217,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
         (grid.bins || []).map(row => formatTime(row.start, tr.timeScale)),
         cores,
         (grid.bins || []).map(row => cores.map(c => Number(row.cells?.[c]?.pct) || 0)),
-        { title: 'Core utilisation over time', unit: '%' },
+        { title: 'Core Utilization Over Time', unit: '%' },
       )
       return `<section class="report-card"><h2>Core Utilization Over Time${_htmlCell(suffix)}</h2>` +
         heat +

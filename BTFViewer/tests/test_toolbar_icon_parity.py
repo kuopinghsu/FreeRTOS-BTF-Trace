@@ -48,7 +48,7 @@ class ToolbarIconParityTests(unittest.TestCase):
         self.assertNotIn('_ia("Save PNG"', mw)
         # Shell redesign: Snapshot / Help / Settings moved to the left activity
         # rail (web-parity glyphs); the File / Help menus keep their entries.
-        self.assertIn('("snapshot", _RG_SNAPSHOT, "Snapshot editor")', mw)
+        self.assertIn('("snapshot", _RG_SNAPSHOT, "Snapshot Editor")', mw)
         self.assertIn('("help", _RG_HELP, ', mw)
         self.assertIn('("settings", _RG_SETTINGS, "Settings")', mw)
         self.assertIn('Snapshot &Editor', mw)

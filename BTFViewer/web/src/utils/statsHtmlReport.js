@@ -3,6 +3,7 @@
  * Keep in sync with btf_viewer_pkg/stats_html.py.
  */
 import { htmlSectionSlug } from './htmlReport.js'
+import { investigationSections, loadInvestigation } from './investigationNotebook.js'
 
 export const STATS_TOC_GROUPS = [
   ['Overview and Findings', [
@@ -10,7 +11,7 @@ export const STATS_TOC_GROUPS = [
     'Trace Health Check', 'Investigation', 'Trace Metadata',
   ]],
   ['CPU and Scheduling', [
-    'Core Utilisation', 'Trace Health (TICK)', 'Core Time Breakdown',
+    'Core Utilization', 'Trace Health (TICK)', 'Core Time Breakdown',
     'Concurrent Core Active Distribution', 'Switch Reason Breakdown',
     'Scheduling Load Over Time', 'Kernel Switch Overhead', 'Idle Analysis',
     'Top Tasks by CPU',
@@ -38,7 +39,7 @@ export const STATS_DEFAULT_EXPANDED = [
   'Analysis Scope',
   'Analysis Findings',
   'Trace Health Check',
-  'Core Utilisation (excl. IDLE/TICK)',
+  'Core Utilization (excl. IDLE/TICK)',
   'Trace Health (TICK)',
   'Investigate Anomalies',
 ]
@@ -426,89 +427,122 @@ function fmtRef(ref, formatNs) {
  * Investigation Bookmarks and Evidence Chain section.
  * Keep in sync with btf_viewer_pkg/stats_html.py:html_investigation_section.
  */
+const EVIDENCE_KIND_LABELS_HTML = {
+  measured: 'Measured', derived: 'Derived', heuristic: 'Heuristic',
+  estimate: 'Simulation / estimate', '': 'User note',
+}
+const NB_SECTION_HEADING = {
+  question: 'Question', scope: 'Scope', hypotheses: 'Hypotheses',
+  evidence: 'Evidence', open_checks: 'Open checks', conclusion: 'Conclusion',
+}
+const NB_HTML_SECTION_ORDER = [
+  'question', 'scope', 'hypotheses', 'evidence', 'open_checks', 'conclusion',
+]
+
+function nbItemRefsHtml(refs, formatNs) {
+  if (!refs || !refs.length) return ''
+  return `<div class="finding-meta"><strong>References:</strong><ul>${refs.map(r => `<li>${fmtRef(r, formatNs)}</li>`).join('')}</ul></div>`
+}
+
+/** Investigation Notebook section for the HTML report — the same six sections,
+ *  in the same order, as the Notebook UI. Keep in sync with
+ *  btf_viewer_pkg/stats_html.py:html_investigation_section. */
 export function htmlInvestigationSection(investigation, {
   formatNs = null, brokenRefs = null, chains = null, scopeTitle = '',
 } = {}) {
   if (!investigation) return ''
-  const bookmarks = investigation.bookmarks || []
-  if (!bookmarks.length && !String(investigation.conclusion || '').trim()) return ''
+  const inv = loadInvestigation(investigation)
+  if (!(inv.bookmarks || []).length
+    && !String(inv.conclusion || '').trim()
+    && !String(inv.title || '').trim()) return ''
 
   const broken = brokenRefs || {}
-  const brokenByBm = {}
-  for (const iss of broken.issues || []) {
-    (brokenByBm[String(iss.bookmark_id)] = brokenByBm[String(iss.bookmark_id)] || []).push(iss)
-  }
+  const sections = Object.fromEntries(
+    investigationSections(inv, { broken }).map(s => [s.id, s]),
+  )
   const chainsById = {}
   for (const c of chains || []) if (c && typeof c === 'object') chainsById[String(c.conclusion_id)] = c
 
-  const bmCard = (b) => {
-    const bid = String(b.id || '')
-    const refs = b.refs || []
-    const refHtml = refs.length
-      ? `<div class="finding-meta"><strong>References:</strong><ul>${refs.map(r => `<li>${fmtRef(r, formatNs)}</li>`).join('')}</ul></div>`
-      : ''
-    const note = String(b.note || '').trim()
-    const noteHtml = note ? `<p>${esc(note)}</p>` : ''
-    const bad = brokenByBm[bid] || []
-    const badHtml = bad.length
-      ? `<div class="finding-meta sev-warning"><strong>Stale:</strong> ${bad.map(i => esc(i.reason || 'stale reference')).join('; ')}</div>`
-      : ''
-    return `<article class="finding-card"><h3>${esc(BM_TYPE_LABELS[b.type] || 'Bookmark')} · ${esc(b.title || 'Bookmark')}</h3>${noteHtml}${refHtml}${badHtml}</article>`
-  }
-  const group = (title, types) => {
-    const rows = bookmarks.filter(b => types.includes(b.type)).map(bmCard)
-    return rows.length ? `<h3 class="sub">${esc(title)}</h3><div class="finding-cards">${rows.join('')}</div>` : ''
-  }
+  const sub = (label, body) => (body ? `<h3 class="sub">${esc(label)}</h3>${body}` : '')
 
-  const facts = group('Facts', FACT_TYPES)
-  const hyps = group('Hypotheses', ['hypothesis'])
-  const contra = group('Contradicting evidence', ['contradicting'])
+  const qItems = sections.question.items
+  const questionHtml = qItems.length
+    ? `<p class="detail-note"><strong>${esc(qItems[0].text)}</strong></p>` : ''
+
+  const scopeBits = sections.scope.items.filter(it => it.text).map(it => esc(it.text))
+  const scopeHtml = scopeBits.length ? `<p class="detail-note">${scopeBits.join(' · ')}</p>` : ''
+
+  const hypRows = sections.hypotheses.items.map((it) => {
+    const status = esc(String(it.status || 'open'))
+    const note = String(it.note || '').trim()
+    return `<article class="finding-card"><h3>Hypothesis · ${esc(it.text)} `
+      + `<span class="finding-meta">[${status}]</span></h3>`
+      + (note ? `<p>${esc(note)}</p>` : '')
+      + nbItemRefsHtml(it.refs, formatNs) + '</article>'
+  })
+  const hypHtml = hypRows.length ? `<div class="finding-cards">${hypRows.join('')}</div>` : ''
+
+  const evRows = sections.evidence.items.map((it) => {
+    const card = it.card || {}
+    const kind = EVIDENCE_KIND_LABELS_HTML[String(it.kind || '')] || 'User note'
+    const source = esc(String(card.source || ''))
+    const author = String(card.author || '')
+    const authorTag = author === 'ai' ? ' · AI' : (author === 'btfviewer' ? ' · BTFViewer' : '')
+    const note = String(it.note || '').trim()
+    const staleHtml = it.stale
+      ? '<div class="finding-meta sev-warning"><strong>Stale:</strong> reference no longer resolves against the current trace.</div>'
+      : ''
+    const roleLabel = String(it.role || 'evidence')
+    return `<article class="finding-card"><h3>${esc(roleLabel[0].toUpperCase() + roleLabel.slice(1))} · `
+      + `${esc(it.text)} <span class="finding-meta">[${esc(kind)}`
+      + (source ? ` · ${source}` : '') + `${authorTag}]</span></h3>`
+      + (note ? `<p>${esc(note)}</p>` : '')
+      + nbItemRefsHtml(it.refs, formatNs) + staleHtml + '</article>'
+  })
+  const evHtml = evRows.length ? `<div class="finding-cards">${evRows.join('')}</div>` : ''
+
+  const checkLis = sections.open_checks.items.map((it) => {
+    const prefix = it.source === 'verification' ? 'Verify: ' : ''
+    return `<li>${esc(prefix + String(it.text || ''))}</li>`
+  })
+  const checksHtml = checkLis.length ? `<ul>${checkLis.join('')}</ul>` : ''
 
   const conclRows = []
-  for (const b of bookmarks) {
-    if (b.type !== 'conclusion') continue
-    const chain = chainsById[String(b.id)]
+  for (const it of sections.conclusion.items) {
+    if (it.kind === 'verification_state') {
+      conclRows.push(`<div class="finding-meta">${esc(it.text || '')}</div>`)
+      continue
+    }
+    const bid = String(it.bookmark_id || '')
+    const chain = bid ? chainsById[bid] : null
     let chainHtml = ''
     if (chain && (chain.evidence || []).length) {
       chainHtml = `<div class="finding-meta"><strong>Backed by:</strong><ul>${chain.evidence.map(e => `<li>${esc(BM_TYPE_LABELS[e.type] || 'Bookmark')}: ${esc(e.title || e.id)}</li>`).join('')}</ul></div>`
     } else if (chain != null) {
       chainHtml = '<div class="finding-meta sev-warning"><strong>Not grounded:</strong> no linked evidence.</div>'
     }
-    conclRows.push(`<article class="finding-card finding-ok"><h3>Conclusion · ${esc(b.title || 'Conclusion')}</h3>`
-      + (String(b.note || '').trim() ? `<p>${esc(b.note)}</p>` : '') + chainHtml + '</article>')
+    conclRows.push('<article class="finding-card finding-ok"><h3>Conclusion'
+      + (it.bookmark_id ? ` · ${esc(it.text)}` : '') + '</h3>'
+      + (!it.bookmark_id ? `<p>${esc(it.text)}</p>` : '')
+      + chainHtml + '</article>')
   }
-  const freeConcl = String(investigation.conclusion || '').trim()
-  if (freeConcl) {
-    conclRows.push(`<article class="finding-card finding-ok"><h3>Conclusion</h3><p>${esc(freeConcl)}</p></article>`)
-  }
-  const conclHtml = conclRows.length
-    ? `<h3 class="sub">Conclusions</h3><div class="finding-cards">${conclRows.join('')}</div>` : ''
-
-  const questions = (investigation.unresolved_questions || []).map(String).filter(q => q.trim())
-  const qHtml = questions.length
-    ? `<h3 class="sub">Unresolved questions</h3><ul>${questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul>` : ''
+  const conclHtml = conclRows.length ? `<div class="finding-cards">${conclRows.join('')}</div>` : ''
 
   const staleBanner = broken.stale_trace
     ? '<p class="detail-note sev-warning">The source trace changed since these notes were written — references may not line up.</p>'
     : ''
 
-  const ident = investigation.trace_identity || {}
-  const rng = investigation.analysis_range || {}
-  const identBits = []
-  if (ident.file) identBits.push(`Trace: ${esc(ident.file)}`)
-  if (rng && rng.start != null && typeof formatNs === 'function') {
-    try { identBits.push(`Range: ${esc(String(formatNs(Math.trunc(rng.start))))} – ${esc(String(formatNs(Math.trunc(rng.end))))}`) } catch { /* ignore */ }
+  const bodyById = {
+    question: questionHtml, scope: scopeHtml, hypotheses: hypHtml,
+    evidence: evHtml, open_checks: checksHtml, conclusion: conclHtml,
   }
-  const identHtml = identBits.length ? `<p class="detail-note">${identBits.join(' · ')}</p>` : ''
-  const title = String(investigation.title || '').trim()
+  const blocks = NB_HTML_SECTION_ORDER.map(sid => sub(NB_SECTION_HEADING[sid], bodyById[sid])).join('')
 
   return '<section class="report-card notes investigation">'
     + `<h2>Investigation${esc(scopeTitle)}</h2>`
-    + (title ? `<p class="detail-note"><strong>${esc(title)}</strong></p>` : '')
-    + '<p class="detail-note">User-authored bookmarks and the evidence chain. '
-    + 'Facts, hypotheses, contradicting evidence and conclusions are separated; notes never change measured values.</p>'
-    + staleBanner + identHtml
-    + facts + hyps + contra + conclHtml + qHtml
+    + '<p class="detail-note">The Notebook, in the same six sections as the app. '
+    + 'Evidence keeps its provenance; notes never change measured values.</p>'
+    + staleBanner + blocks
     + '</section>'
 }
 
@@ -703,8 +737,8 @@ export function htmlGlossary({ rangeNote = '' } = {}) {
     '<strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start).',
     '<strong>Off-CPU Time (Blocking Time):</strong> Gap between the end of one slice and the start of the next for the same task. It may include preemption, suspension, periodic waiting, or scheduling delay — not necessarily resource blocking. It is not end-to-end response time.',
     '<strong>CPU% (task):</strong> Share of total non-IDLE/TICK <em>active CPU time</em> in scope, not wall-clock span and not total multicore capacity.',
-    '<strong>Core utilisation:</strong> Non-IDLE/TICK active time on that core divided by the scoped wall-clock span (one-core capacity = 100%).',
-    '<strong>Load Balance Score:</strong> 100% × (1 − Gini of core utilisation). 100 = evenly distributed utilisation; 0 = highly uneven. Even overload or even idle can still score high.',
+    '<strong>Core Utilization:</strong> Non-IDLE/TICK active time on that core divided by the scoped wall-clock span (one-core capacity = 100%).',
+    '<strong>Load Balance Score:</strong> 100% × (1 − Gini of core utilization). 100 = evenly distributed utilization; 0 = highly uneven. Even overload or even idle can still score high.',
     '<strong>Preemption Chain Analysis:</strong> For each off-CPU gap of a victim task, which task ran on the same core during that gap.',
     '<strong>Priority Inheritance:</strong> Tasks boosted above base priority when <code>create pri:N</code> and <code>set_priority</code> STI events are present.',
     '<strong>Mutex / Semaphore:</strong> Paired <code>take</code>/<code>give</code> STI events by object pointer.',

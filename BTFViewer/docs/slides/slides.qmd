@@ -264,7 +264,7 @@ See which task occupied each core.
 
 | Open this Statistics section | Information you receive |
 |---|---|
-| **Summary / Core utilisation** | Duration, tasks, cores, total load, and load balance |
+| **Summary / Core Utilization** | Duration, tasks, cores, total load, and load balance |
 | **Top tasks by CPU** | Tasks that use the most CPU time |
 | **Core Time Breakdown** | Active, Idle, Tick, and Gap time for each core |
 | **Execution Time Per Slice** | Typical and worst on-CPU slice duration |

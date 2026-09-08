@@ -107,6 +107,78 @@ class NotebookDialogParityTests(unittest.TestCase):
         self.assertIn("stale ref", DLG)
         self.assertIn("stale ref", VUE)
 
+    def test_compact_context_header_present_on_both(self):
+        # §7: durable status selector + scope/counts context line, driven by the
+        # shared investigation_header() helper on both platforms.
+        self.assertIn("investigation_header(", DLG)
+        self.assertIn("investigationHeader(", VUE)
+        for token in ("Scope: ", "evidence", "open check", "updated "):
+            self.assertIn(token, DLG, f"desktop context line missing {token!r}")
+            self.assertIn(token, VUE, f"web context line missing {token!r}")
+        # Durable status is a labelled picker wired to set_status / setStatus.
+        self.assertIn("set_status(", DLG)
+        self.assertIn("setStatus(", VUE)
+        self.assertIn("NOTEBOOK_STATUSES", DLG)
+        self.assertIn("NOTEBOOK_STATUSES", VUE)
+
+    def test_empty_state_entry_points_match(self):
+        # §7: a truly empty investigation offers the same two explicit choices.
+        for src, name in ((DLG, "desktop"), (VUE, "web")):
+            self.assertIn("NB_EMPTY_FROM_FINDINGS"
+                          if name == "desktop" else "emptyFromFindings", src, name)
+            self.assertIn("NB_EMPTY_BLANK"
+                          if name == "desktop" else "emptyBlank", src, name)
+        # Both route "from findings" through the scaffold path.
+        self.assertIn("_scaffold_from_findings", DLG)
+        self.assertIn("emit('scaffold')", VUE)
+
+
+class NotebookDialogRuntimeTests(unittest.TestCase):
+    """Actually build the desktop dialog so the §7 header/empty-state wiring
+    can't silently break at runtime (the scans above only read source)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    def _dialog(self, inv):
+        from PySide6.QtWidgets import QApplication
+        import btf_viewer_pkg.mainwindow as mw
+        from btf_viewer_pkg.investigation_notebook import empty_notebook_history
+        QApplication.instance() or QApplication([])
+        return mw._InvestigationNotebookDialog(
+            investigation=inv, history=empty_notebook_history(),
+            trace=None,
+            findings=[{"rule_id": "R1", "severity": "warning", "title": "Long block"}],
+            cursor_range=None, format_ns=str,
+            on_change=lambda _x: None, on_status=lambda _m: None,
+        )
+
+    def test_empty_investigation_renders_and_status_commits(self):
+        from btf_viewer_pkg.investigation_notebook import new_investigation
+        dlg = self._dialog(new_investigation())
+        try:
+            combo = dlg._nb_status_combo
+            combo.setCurrentIndex((combo.currentIndex() + 1) % combo.count())
+            want = combo.currentData()
+            self.assertEqual(dlg._inv.get("status"), want)
+            # after the status commit the context label is populated
+            self.assertIn("Scope:", dlg._nb_context_lbl.text())
+        finally:
+            dlg.deleteLater()
+
+    def test_adding_a_bookmark_leaves_empty_state(self):
+        from btf_viewer_pkg.investigation_notebook import new_investigation
+        dlg = self._dialog(new_investigation())
+        try:
+            dlg._new_title.setText("obs 1")
+            dlg._add_bookmark()
+            self.assertEqual(len(dlg._inv.get("bookmarks", [])), 1)
+            dlg._render()  # must not raise
+        finally:
+            dlg.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()

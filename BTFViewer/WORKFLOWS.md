@@ -152,7 +152,7 @@ For the first quality check, use only these sections:
 
 | Statistics section | Question to answer | Warning |
 |---|---|---|
-| **Core Utilisation** | Which cores were busy, idle, or unbalanced? | Average balance can hide a short overloaded phase |
+| **Core Utilization** | Which cores were busy, idle, or unbalanced? | Average balance can hide a short overloaded phase |
 | **Trace Health (TICK)** | Are TICK intervals, large gaps, and tickless behavior plausible? | Tickless idle can legitimately produce uneven intervals |
 | **Task Health** | Which tasks deserve attention first? | The score is heuristic, not an AI probability |
 | **Core Time Breakdown** | Does active, IDLE, TICK, and gap time account for the Scope? | Gap time is not automatically idle time |
@@ -347,7 +347,7 @@ For `ControlTask`, first decide whether the late response contains unusually lon
 
 ```mermaid
 flowchart TD
-  load["Core Utilisation and Core Time"] --> placement["Task × Core"]
+  load["Core Utilization and Core Time"] --> placement["Task × Core"]
   placement --> migration["Core Migrations and Core Pairs"]
   migration --> allowed["Core Affinity"]
   allowed --> cost["Switch Overhead, Preemption, Response"]
@@ -358,7 +358,7 @@ Check load balance before calling migration a problem. An SMP scheduler may move
 
 | Question | Statistics |
 |---|---|
-| Is imbalance persistent or phase-specific? | Core Utilisation, Core Utilization Over Time |
+| Is imbalance persistent or phase-specific? | Core Utilization, Core Utilization Over Time |
 | Which task contributes to each core? | Task × Core |
 | How often and how quickly does the task move? | Core Migrations: Count, Rate, Dwell, Ping |
 | Which directed path dominates? | Core-Pair Migration Summary |
@@ -671,7 +671,7 @@ The following example shows the entire path without inventing numeric results.
 |---:|---|---|
 | 1 | Open trace, Fit Trace, enable Load, identify steady-state phase | The reported workload is present |
 | 2 | Select `ControlTask`, practice Find and Task/Core View | Task and surrounding cores are visible |
-| 3 | Check Core Utilisation, Trace Health, and instrumentation | Trace is usable for timing analysis |
+| 3 | Check Core Utilization, Trace Health, and instrumentation | Trace is usable for timing analysis |
 | 4 | Open Response, Execution, Blocking, and Period/Jitter | The question becomes “own execution or off-CPU delay?” |
 | 5 | Compare Count, Avg, p95, p99, Max, and distribution | One tail sample or recurring group is selected |
 | 6 | Open Analysis; use Show on timeline and review the supporting Statistics | Finding and Statistics point to the same episode |

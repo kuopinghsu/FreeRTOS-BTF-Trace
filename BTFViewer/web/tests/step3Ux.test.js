@@ -30,11 +30,31 @@ describe('step3 ux polish', () => {
     assert.equal(COMMAND_PALETTE_META.marks.shortcut, 'Ctrl+B')
   })
 
-  it('command palette offers Focus mode (needs a trace)', () => {
+  it('command palette offers Focus Mode (needs a trace)', () => {
     const focus = COMMAND_PALETTE_ACTIONS.find(([id]) => id === 'focus')
-    assert.equal(focus?.[1], 'Focus mode')
+    assert.equal(focus?.[1], 'Focus Mode')
     assert.equal(COMMAND_PALETTE_META.focus.requires, 'trace')
     assert.ok(COMMAND_PALETTE_META.focus.synonyms.includes('zen'))
+  })
+
+  it('command palette dropped the false `I` inspect-task shortcut', () => {
+    const ids = COMMAND_PALETTE_ACTIONS.map(([id]) => id)
+    assert.ok(!ids.includes('inspect-task'))
+    assert.ok(!('inspect-task' in COMMAND_PALETTE_META))
+    // No palette item advertises a bare `I`.
+    for (const meta of Object.values(COMMAND_PALETTE_META)) {
+      assert.notEqual(meta.shortcut, 'I')
+    }
+  })
+
+  it('command palette renamed workspace presets to Statistics presets', () => {
+    const byId = Object.fromEntries(COMMAND_PALETTE_ACTIONS)
+    assert.equal(byId['preset-triage'], 'Statistics preset: Triage')
+    assert.equal(byId['preset-latency'], 'Statistics preset: Latency')
+    assert.equal(byId['preset-smp'], 'Statistics preset: SMP')
+    assert.ok(!('preset-compare' in byId))
+    assert.ok(COMMAND_PALETTE_META['preset-triage'].synonyms.includes('workspace'))
+    assert.equal(byId.heatmap, 'Migration & Corridor Inspector')
   })
 
   it('Find status stays concise without Match Mode lecture', () => {

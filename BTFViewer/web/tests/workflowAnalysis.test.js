@@ -72,7 +72,7 @@ describe('buildWorkflowAnalysisFindings', () => {
     const load = findings.find(f => f.id === 'load_balance_ok')
     assert.ok(load)
     assert.equal(load.severity, 'info')
-    assert.equal(load.title, 'Core utilisation balance')
+    assert.equal(load.title, 'Core Utilization balance')
     assert.match(load.text, /Load Balance Score/)
     assert.match(load.text, /σ=/)
     assert.match(load.text, /G=/)

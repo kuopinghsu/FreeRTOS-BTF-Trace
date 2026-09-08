@@ -128,9 +128,9 @@ export function buildWorkflowAnalysisFindings({
         `${metrics}. Uneven core placement — check Core Affinity and Core Migrations.`,
         {
           id: 'load_imbalance',
-          impact: 'Uneven utilisation can hide a hot core even when average load looks fine.',
-          inspect: 'Core Utilisation (excl. IDLE/TICK)',
-          confidence: 'High — derived from measured core utilisation',
+          impact: 'Uneven utilization can hide a hot core even when average load looks fine.',
+          inspect: 'Core Utilization (excl. IDLE/TICK)',
+          confidence: 'High — derived from measured core utilization',
           evidence_text: metrics,
           comparison_basis: `Load Balance Score < ${LOAD_SCORE_WARN.toFixed(0)}% or σ > ${LOAD_SIGMA_WARN.toFixed(0)}%`,
           measured_values: lbMv,
@@ -139,24 +139,24 @@ export function buildWorkflowAnalysisFindings({
     } else if (score >= LOAD_SCORE_OK) {
       findings.push(finding(
         'info',
-        'Core utilisation balance',
-        `${metrics} — cores look reasonably balanced. A high score means even distribution, not healthy utilisation.`,
+        'Core Utilization balance',
+        `${metrics} — cores look reasonably balanced. A high score means even distribution, not healthy utilization.`,
         {
           id: 'load_balance_ok',
-          inspect: 'Core Utilisation (excl. IDLE/TICK)',
-          confidence: 'High — derived from measured core utilisation',
+          inspect: 'Core Utilization (excl. IDLE/TICK)',
+          confidence: 'High — derived from measured core utilization',
           evidence_text: metrics,
         },
       ))
     } else {
       findings.push(finding(
         'info',
-        'Core utilisation balance',
-        `${metrics} — moderate spread; review Core Utilisation if the workload is expected to be even.`,
+        'Core Utilization balance',
+        `${metrics} — moderate spread; review Core Utilization if the workload is expected to be even.`,
         {
           id: 'load_balance_moderate',
-          inspect: 'Core Utilisation (excl. IDLE/TICK)',
-          confidence: 'High — derived from measured core utilisation',
+          inspect: 'Core Utilization (excl. IDLE/TICK)',
+          confidence: 'High — derived from measured core utilization',
           evidence_text: metrics,
         },
       ))

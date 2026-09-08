@@ -198,8 +198,10 @@ AI_EMPTY_REPLY_NUDGE = (
 )
 
 # Stage-only tool names for Compact; Balanced adds neighbours + extras.
+# Clustering, simulation, optimization, memory and export are on-request
+# capabilities (see AI_CONTEXT_ON_REQUEST_TOOLS) — never baseline triage.
 AI_CONTEXT_STAGE_TOOLS: Dict[str, Tuple[str, ...]] = {
-    "triage": ("detect_anomalies", "cluster_findings", "suggest_scope"),
+    "triage": ("detect_anomalies", "suggest_scope"),
     "scope": ("set_cursors", "zoom_to_range", "highlight_task", "open_statistics_section"),
     "investigate": ("investigate", "correlate_events", "find_critical_path"),
     "verify": ("verify_claim", "detect_contradictions", "challenge_conclusion"),
@@ -214,6 +216,30 @@ AI_CONTEXT_BALANCED_EXTRA_TOOLS: Tuple[str, ...] = (
     "detect_anomalies", "investigate", "set_cursors", "zoom_to_range",
     "highlight_task", "challenge_conclusion",
 )
+# Full Evidence adds the deeper *read-only* evidence / reasoning / navigation
+# tools on top of every core-loop stage. Simulation, optimization, memory,
+# clustering and export stay stage-gated (AI_CONTEXT_ON_REQUEST_TOOLS).
+AI_CONTEXT_FULL_EXTRA_TOOLS: Tuple[str, ...] = (
+    "detect_priority_inversion", "find_related_findings", "compare_tasks",
+    "explain_finding", "interpret_query", "decompose_response_time",
+    "analyze_distribution", "analyze_periodicity", "build_task_dependency_graph",
+    "rank_root_causes", "build_causal_chain", "regression_explain",
+    "regression_localize", "assess_evidence_sufficiency", "generate_fingerprint",
+    "manage_hypotheses", "analyze_traces", "check_budget", "baseline_score",
+    "set_view_mode", "open_corridor_inspector", "add_annotation",
+    "clear_marks", "reset_view", "trigger_compare", "bookmark_finding",
+)
+# Only exposed when the active stage / request calls for them (never baseline
+# triage — that keeps simulation, optimization, memory and export out of the
+# fast path).
+AI_CONTEXT_ON_REQUEST_TOOLS: Dict[str, Tuple[str, ...]] = {
+    "experiment": ("what_if", "optimize_experiment", "recommend_experiments"),
+    "export": ("export_investigation",),
+    "memory": (
+        "investigation_memory", "find_similar_investigations",
+        "record_experiment_outcome", "close_investigation",
+    ),
+}
 _CONTEXT_TOOL_ROW_KEYS: Tuple[str, ...] = (
     "rows", "episodes", "slices", "events", "gaps", "hits", "times",
     "experiments", "anomalies", "candidates", "samples", "values",
@@ -368,14 +394,25 @@ def _stage_tool_names(stage: Any) -> Tuple[str, ...]:
     return AI_CONTEXT_STAGE_TOOLS.get(sid, AI_CONTEXT_STAGE_TOOLS["triage"])
 
 
+_AI_TOOL_MODEL_HIDDEN_NAMES: Tuple[str, ...] = (
+    "plan_investigation", "optimize", "generate_experiment_plan",
+    "cluster_incidents", "analyze_temporal_causality",
+)
+
+
 def tool_names_for_context_mode(
     mode: Any = None,
     stage: Any = "",
-) -> Optional[List[str]]:
-    """Tool names to send, or None to send the full catalog."""
+) -> List[str]:
+    """Model-visible tool names for a context mode + workflow stage.
+
+    Every mode now returns an explicit, auditable list — Full Evidence sends a
+    broad but bounded set (the core evidence / verification / reasoning loop plus
+    navigation), not the whole catalog. Simulation, optimization, memory,
+    clustering and investigation export appear only when the active stage calls
+    for them.
+    """
     key = normalize_ai_context_mode(mode)
-    if key == AI_CONTEXT_MODE_FULL:
-        return None
     names: List[str] = []
     seen = set()
 
@@ -389,6 +426,24 @@ def tool_names_for_context_mode(
     sid = str(stage or "").strip().lower()
     if sid in ("", "idle", "start"):
         sid = "triage"
+
+    if key == AI_CONTEXT_MODE_FULL:
+        # Whole core loop (triage → verify) + compare, always available in the
+        # deep-verification mode.
+        for core in ("triage", "scope", "investigate", "verify", "compare"):
+            _add(AI_CONTEXT_STAGE_TOOLS[core])
+        _add(AI_CONTEXT_ALWAYS_TOOLS)
+        _add(AI_CONTEXT_BALANCED_EXTRA_TOOLS)
+        _add(AI_CONTEXT_FULL_EXTRA_TOOLS)
+        if sid == "experiment":
+            _add(AI_CONTEXT_ON_REQUEST_TOOLS["experiment"])
+        if sid == "report":
+            _add(AI_CONTEXT_STAGE_TOOLS["report"])
+            _add(AI_CONTEXT_ON_REQUEST_TOOLS["export"])
+        if sid in ("verify", "report"):
+            _add(AI_CONTEXT_ON_REQUEST_TOOLS["memory"])
+        return [n for n in names if n not in _AI_TOOL_MODEL_HIDDEN_NAMES]
+
     _add(_stage_tool_names(sid))
     _add(AI_CONTEXT_ALWAYS_TOOLS)
     if key == AI_CONTEXT_MODE_BALANCED:
@@ -408,7 +463,7 @@ def tool_names_for_context_mode(
                 if 0 <= j < len(GUIDED_STAGES) and GUIDED_STAGES[j] == "report":
                     _add(AI_CONTEXT_STAGE_TOOLS["report"])
                     break
-    return names
+    return [n for n in names if n not in _AI_TOOL_MODEL_HIDDEN_NAMES]
 
 
 def filter_tools_for_context_mode(
@@ -1730,7 +1785,7 @@ def falsification_checks(finding: Optional[dict] = None) -> Dict[str, Any]:
             "Load Balance Score is in the green zone for this window",
             "Concurrent-active distribution is even across cores",
         ]
-        next_check = "Open Core Utilisation / Load Balance Score"
+        next_check = "Open Core Utilization / Load Balance Score"
     else:
         checks = [
             "Cited jump:TIME is outside the cursor region",
@@ -3701,7 +3756,7 @@ STATS_UX_PAGE_ALIASES: Dict[str, Tuple[str, ...]] = {
     "preemption matrix": ("preemption matrix",),
     "mutex blocking": ("mutex blocking", "mutex-blocking"),
     "core utilization over time": (
-        "core utilization over time", "core utilisation over time",
+        "core utilization over time", "core utilization over time",
     ),
     "switch reason breakdown": (
         "switch reason breakdown", "switch reason", "switch-reason",

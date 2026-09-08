@@ -1,4 +1,4 @@
-"""Core Utilisation defaults: gauges inside scroll, viewport = gauges + 2 cores."""
+"""Core Utilization defaults: gauges inside scroll, viewport = gauges + 2 cores."""
 from __future__ import annotations
 
 import os

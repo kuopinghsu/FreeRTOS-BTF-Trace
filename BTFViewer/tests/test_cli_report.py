@@ -67,7 +67,7 @@ class CliReportTests(unittest.TestCase):
         # The two previously-undefined variables land in these rows.
         self.assertIn("Trace file,mini.btf", body)
         self.assertIn("Scope,Full Trace", body)
-        self.assertIn("Core Utilisation", body)
+        self.assertIn("Core Utilization", body)
 
     def test_html_report_renders_without_gui(self) -> None:
         out = self.tmp / "r.html"
@@ -149,7 +149,7 @@ class CliReportTests(unittest.TestCase):
         self.assertIn("Contention on core 0", html)
         d = json.loads((self.tmp / "withinv.json").read_text(encoding="utf-8"))
         self.assertIn("investigation", d)
-        self.assertEqual(d["investigation"]["schema"], "btf-viewer-investigation/1")
+        self.assertEqual(d["investigation"]["schema"], "btf-viewer-investigation/2")
         self.assertTrue(d["investigation"]["chains"])
         self.assertIn("broken_references", d["investigation"])
 

@@ -723,7 +723,19 @@ def evaluate_regression(
     }
 
 
-def format_regression_report(result: Dict[str, Any], *, title: str = "") -> str:
+def format_regression_report(
+    result: Dict[str, Any], *, title: str = "", a_role: str = "candidate",
+) -> str:
+    """Text CI report for an ``evaluate_regression`` result.
+
+    ``a_role`` names which side the ``A=`` / ``B=`` columns describe:
+
+    - ``"candidate"`` (default, CLI low-level gate): ``A`` is the candidate
+      under test, ``B`` is the baseline.
+    - ``"baseline"`` (Trace Compare contract): ``A`` is Baseline A, ``B`` is
+      Candidate B, matching ``compare_performance`` payloads.
+    """
+    a_first_is_baseline = str(a_role or "candidate").strip().lower() == "baseline"
     lines = [
         "BTF AI / CI Analysis" + (f" — {title}" if title else ""),
         "",
@@ -732,9 +744,11 @@ def format_regression_report(result: Dict[str, Any], *, title: str = "") -> str:
     ]
     for c in result.get("checks") or []:
         mark = {"pass": "✓", "fail": "✗", "skip": "·"}.get(c.get("status"), "?")
+        a_val = c.get("baseline") if a_first_is_baseline else c.get("candidate")
+        b_val = c.get("candidate") if a_first_is_baseline else c.get("baseline")
         lines.append(
             f"{mark} {c.get('label')}: {c.get('detail')} "
-            f"(A={c.get('candidate')}, B={c.get('baseline')})"
+            f"(A={a_val}, B={b_val})"
         )
     lines.append("")
     lines.append(
@@ -3793,20 +3807,28 @@ def classify_regression_type(
 
 
 def compare_performance_metrics(
-    candidate: Dict[str, Any],
-    baseline: Dict[str, Any],
+    baseline_a: Dict[str, Any],
+    candidate_b: Dict[str, Any],
     *,
     label_a: str = "A",
     label_b: str = "B",
 ) -> Dict[str, Any]:
-    """Structured A vs B performance deltas using regression rules."""
-    snap_a = candidate if "metrics" in (candidate or {}) else {
-        "metrics": dict(candidate or {}),
+    """Structured Trace Compare deltas using regression rules.
+
+    Public contract: the first argument is **Baseline A** (Trace A), the second
+    is **Candidate B** (Trace B). Verdicts describe Candidate B relative to
+    Baseline A, so the low-level gate is evaluated as
+    ``evaluate_regression(candidate_b, baseline_a)``. The displayed table delta
+    stays ``A - B``.
+    """
+    snap_base = baseline_a if "metrics" in (baseline_a or {}) else {
+        "metrics": dict(baseline_a or {}),
     }
-    snap_b = baseline if "metrics" in (baseline or {}) else {
-        "metrics": dict(baseline or {}),
+    snap_cand = candidate_b if "metrics" in (candidate_b or {}) else {
+        "metrics": dict(candidate_b or {}),
     }
-    result = evaluate_regression(snap_a, snap_b)
+    # evaluate_regression keeps its low-level (candidate, baseline) contract.
+    result = evaluate_regression(snap_cand, snap_base)
     primary = next((c for c in result.get("checks") or [] if c.get("status") == "fail"), None)
     if primary is None:
         primary = next((c for c in result.get("checks") or [] if c.get("status") == "pass"), None)
@@ -3819,6 +3841,8 @@ def compare_performance_metrics(
         "message": str(result.get("summary") or "compared"),
         "label_a": label_a,
         "label_b": label_b,
+        "baseline_a": dict(snap_base.get("metrics") or {}),
+        "candidate_b": dict(snap_cand.get("metrics") or {}),
         "failed": bool(result.get("failed")),
         "checks": result.get("checks") or [],
         "primary_regression": primary,
@@ -3832,8 +3856,49 @@ def compare_performance_metrics(
             {"name": "correlate_events", "arguments": {}, "reason": "Timeline correlation"},
         ],
         "report": format_regression_report(
-            result, title=f"{label_a} vs {label_b}",
+            result, title=f"{label_a} vs {label_b}", a_role="baseline",
         ),
+    }
+
+
+def normalize_compare_payload(payload: Any) -> Dict[str, Any]:
+    """Canonicalise a compare_performance / Trace Compare payload.
+
+    Reads the current ``baseline_a`` / ``candidate_b`` fields and older shapes
+    (``baseline`` / ``candidate`` or ``a`` / ``b``), optionally nested under a
+    ``data`` envelope, and returns metric dicts in the public A/B direction:
+    ``baseline_a`` is Baseline A (Trace A), ``candidate_b`` is Candidate B
+    (Trace B).
+    """
+    d = payload if isinstance(payload, dict) else {}
+    inner = d.get("data")
+    if isinstance(inner, dict) and not (
+        d.get("checks") or d.get("baseline_a") or d.get("candidate_b")
+    ):
+        d = inner
+
+    def _metrics(v: Any) -> Dict[str, Any]:
+        if not isinstance(v, dict):
+            return {}
+        m = v.get("metrics")
+        return dict(m) if isinstance(m, dict) else {
+            k: vv for k, vv in v.items() if k != "metrics"
+        }
+
+    baseline_a = d.get("baseline_a")
+    if baseline_a is None:
+        baseline_a = d.get("baseline") if d.get("baseline") is not None else d.get("a")
+    candidate_b = d.get("candidate_b")
+    if candidate_b is None:
+        candidate_b = d.get("candidate") if d.get("candidate") is not None else d.get("b")
+    return {
+        "baseline_a": _metrics(baseline_a),
+        "candidate_b": _metrics(candidate_b),
+        "label_a": str(d.get("label_a") or "A"),
+        "label_b": str(d.get("label_b") or "B"),
+        "checks": list(d.get("checks") or []),
+        "failed": bool(d.get("failed")),
+        "primary_regression": d.get("primary_regression"),
     }
 
 
@@ -4466,7 +4531,7 @@ def build_optimization_advice(
         "ok": True,
         "message": f"{len(ideas)} optimization idea(s)",
         "recommendations": ideas,
-        "disclaimer": "Simulation / estimate — not measured behavior",
+        "disclaimer": "Simulation / estimate — not measured RTOS behavior",
     }
 
 
@@ -4755,7 +4820,7 @@ def estimate_what_if(
     return {
         "ok": True,
         "message": "What-if estimate (not measured)",
-        "disclaimer": "Simulation / estimate — not measured behavior",
+        "disclaimer": "Simulation / estimate — not measured RTOS behavior",
         "change": change,
         "task": task,
         "estimated_effect": effect,
@@ -5089,7 +5154,7 @@ def simulate_what_if(
     return {
         "ok": True,
         "message": "What-if heuristic simulation",
-        "disclaimer": "Heuristic simulator — not an RTOS kernel / not measured",
+        "disclaimer": "Simulation / estimate — not measured RTOS behavior (heuristic slice-replay, not an RTOS kernel)",
         "simulator": "slice_replay_v1",
         "change": change,
         "task": task,
@@ -5253,7 +5318,7 @@ def run_optimization_experiments(
             f"{len(results)} experiment(s); best={best['change']}" if best
             else "No runnable experiments (need task slices / metrics)"
         ),
-        "disclaimer": "Heuristic simulator — not an RTOS kernel / not measured",
+        "disclaimer": "Simulation / estimate — not measured RTOS behavior (heuristic slice-replay, not an RTOS kernel)",
         "experiments": results,
         "best": best,
         "suggested_tools": ([
@@ -5581,7 +5646,7 @@ def recommend_validation_experiments(
         "message": f"{len(experiments)} validation experiment(s) suggested",
         "experiments": experiments,
         "disclaimer": (
-            "Simulation / estimate — not measured behavior; firmware steps "
+            "Simulation / estimate — not measured RTOS behavior; firmware steps "
             "are suggestions to implement and re-trace, not applied automatically"
         ),
     }

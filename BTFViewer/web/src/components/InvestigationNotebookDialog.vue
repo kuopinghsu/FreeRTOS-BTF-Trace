@@ -18,6 +18,42 @@
             :title="`${brokenCount} bookmark reference(s) no longer resolve`"
           >⚠ {{ brokenCount }} stale ref</span>
         </div>
+
+        <!-- §7 compact header: durable status · scope · counts -->
+        <div class="nb-context">
+          <label class="nb-status">
+            <span class="nb-status-dot" :class="`s-${header.status}`" />
+            <select
+              :value="header.status"
+              class="nb-status-select"
+              title="Durable investigation status"
+              @change="changeStatus($event.target.value)"
+            >
+              <option
+                v-for="o in statusOptions"
+                :key="o.value"
+                :value="o.value"
+              >
+                {{ o.label }}
+              </option>
+            </select>
+          </label>
+          <span
+            v-if="header.trace"
+            class="nb-context-bit"
+          >{{ header.trace }}</span>
+          <span class="nb-context-bit">Scope: {{ header.scope }}</span>
+          <span class="nb-context-bit">{{ header.evidence_count }} evidence</span>
+          <span class="nb-context-bit">{{ header.open_check_count }} open check{{ header.open_check_count === 1 ? '' : 's' }}</span>
+          <span
+            v-if="header.stale_ref_count"
+            class="nb-context-bit warn"
+          >{{ header.stale_ref_count }} stale ref{{ header.stale_ref_count === 1 ? '' : 's' }}</span>
+          <span
+            v-if="header.updated_at"
+            class="nb-context-bit"
+          >updated {{ header.updated_at }}</span>
+        </div>
         <div class="nb-header-actions">
           <button
             type="button"
@@ -174,7 +210,28 @@
 
         <!-- Bookmark groups -->
         <div
-          v-if="!inv.bookmarks.length"
+          v-if="isEmpty"
+          class="nb-empty nb-empty-actions"
+        >
+          <button
+            type="button"
+            class="nb-btn primary"
+            :disabled="!findingOptions.length"
+            :title="findingOptions.length ? '' : 'No Analysis findings to seed from'"
+            @click="emit('scaffold')"
+          >
+            {{ emptyFromFindings }}
+          </button>
+          <button
+            type="button"
+            class="nb-btn"
+            @click="startBlank"
+          >
+            {{ emptyBlank }}
+          </button>
+        </div>
+        <div
+          v-else-if="!inv.bookmarks.length"
           class="nb-empty"
         >
           No bookmarks yet. Add an observation, hypothesis, supporting or
@@ -417,16 +474,22 @@ import {
   BOOKMARK_TYPES,
   BOOKMARK_TYPE_LABELS,
   LINK_RELATIONS,
+  NB_EMPTY_BLANK,
+  NB_EMPTY_FROM_FINDINGS,
+  NOTEBOOK_STATUSES,
+  NOTEBOOK_STATUS_LABELS,
   addBookmark,
   addUnresolvedQuestion,
   conclusionEvidenceChains,
   detectBrokenReferences,
   dumpInvestigation,
+  investigationHeader,
   linkBookmarks,
   loadInvestigation,
   removeBookmark,
   removeUnresolvedQuestion,
   setConclusion,
+  setStatus,
   unlinkBookmarks,
   updateBookmark,
 } from '../utils/investigationNotebook.js'
@@ -501,6 +564,27 @@ const brokenCount = computed(() => broken.value.issues.length + (broken.value.st
 const groundedChains = computed(() =>
   conclusionEvidenceChains(props.investigation).filter((c) => c.grounded),
 )
+
+// §7 — compact header + durable status + empty-state entry points.
+const header = computed(() => investigationHeader(props.investigation, { broken: broken.value }))
+const statusOptions = NOTEBOOK_STATUSES.map((s) => ({ value: s, label: NOTEBOOK_STATUS_LABELS[s] }))
+const isEmpty = computed(() =>
+  !inv.value.bookmarks.length
+  && !String(inv.value.title || '').trim()
+  && !String(inv.value.conclusion || '').trim()
+  && !(inv.value.unresolved_questions || []).length,
+)
+const emptyFromFindings = NB_EMPTY_FROM_FINDINGS
+const emptyBlank = NB_EMPTY_BLANK
+
+function changeStatus(next) {
+  commit(setStatus(props.investigation, next))
+}
+function startBlank() {
+  // Blank investigation: the editor is already shown — just focus the title.
+  const el = document.querySelector('.nb-dialog .nb-field .nb-input')
+  if (el) el.focus()
+}
 
 function fmt(ns) {
   const f = props.formatNs || ((v) => String(Math.trunc(v)))
@@ -664,6 +748,36 @@ async function onImportFile(ev) {
   color: var(--semantic-warning, #e67e22);
 }
 .nb-header-actions { display: flex; align-items: center; gap: 6px; }
+.nb-context {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.nb-status { display: inline-flex; align-items: center; gap: 5px; }
+.nb-status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--fg-dim);
+}
+.nb-status-dot.s-open { background: #7f8c8d; }
+.nb-status-dot.s-needs_evidence { background: var(--semantic-warning, #e67e22); }
+.nb-status-dot.s-ready_to_conclude { background: #2e86de; }
+.nb-status-dot.s-closed { background: #27ae60; }
+.nb-status-select {
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: inherit;
+}
+.nb-context-bit { white-space: nowrap; }
+.nb-context-bit.warn { color: var(--semantic-warning, #e67e22); font-weight: 600; }
+.nb-empty-actions { display: flex; gap: 8px; padding: 10px 0; }
 .nb-close {
   background: none;
   border: none;

@@ -2473,7 +2473,11 @@ export function evaluateRegression(candidate, baseline, { rules = DEFAULT_REGRES
   }
 }
 
-export function formatRegressionReport(result, { title = '' } = {}) {
+export function formatRegressionReport(result, { title = '', aRole = 'candidate' } = {}) {
+  // aRole names which side the A= / B= columns describe: 'candidate' (default,
+  // CLI low-level gate) or 'baseline' (Trace Compare contract: A is Baseline A,
+  // B is Candidate B), matching compare_performance payloads.
+  const aFirstIsBaseline = String(aRole || 'candidate').toLowerCase() === 'baseline'
   const lines = [
     `BTF AI / CI Analysis${title ? ` — ${title}` : ''}`,
     '',
@@ -2482,7 +2486,9 @@ export function formatRegressionReport(result, { title = '' } = {}) {
   ]
   for (const c of result.checks || []) {
     const mark = { pass: '✓', fail: '✗', skip: '·' }[c.status] || '?'
-    lines.push(`${mark} ${c.label}: ${c.detail} (A=${c.candidate}, B=${c.baseline})`)
+    const aVal = aFirstIsBaseline ? c.baseline : c.candidate
+    const bVal = aFirstIsBaseline ? c.candidate : c.baseline
+    lines.push(`${mark} ${c.label}: ${c.detail} (A=${aVal}, B=${bVal})`)
   }
   lines.push('')
   lines.push(`CI status: ${result.failed ? 'FAILED' : 'PASSED'}`)
@@ -3185,16 +3191,20 @@ export function classifyRegressionType(checks = [], primary = null) {
   return 'unknown'
 }
 
-export function comparePerformanceMetrics(candidate, baseline, {
+export function comparePerformanceMetrics(baselineA, candidateB, {
   labelA = 'A', labelB = 'B',
 } = {}) {
-  const snapA = candidate && 'metrics' in (candidate || {})
-    ? candidate
-    : { metrics: { ...(candidate || {}) } }
-  const snapB = baseline && 'metrics' in (baseline || {})
-    ? baseline
-    : { metrics: { ...(baseline || {}) } }
-  const result = evaluateRegression(snapA, snapB)
+  // Public contract: first arg is Baseline A (Trace A), second is Candidate B
+  // (Trace B). Verdicts describe Candidate B relative to Baseline A, so the
+  // low-level gate runs as evaluateRegression(candidateB, baselineA). The
+  // displayed table delta stays A - B.
+  const snapBase = baselineA && 'metrics' in (baselineA || {})
+    ? baselineA
+    : { metrics: { ...(baselineA || {}) } }
+  const snapCand = candidateB && 'metrics' in (candidateB || {})
+    ? candidateB
+    : { metrics: { ...(candidateB || {}) } }
+  const result = evaluateRegression(snapCand, snapBase)
   let primary = (result.checks || []).find(c => c.status === 'fail') || null
   if (!primary) primary = (result.checks || []).find(c => c.status === 'pass') || null
   const confidence = primary && primary.status === 'fail'
@@ -3206,6 +3216,8 @@ export function comparePerformanceMetrics(candidate, baseline, {
     message: String(result.summary || 'compared'),
     label_a: labelA,
     label_b: labelB,
+    baseline_a: { ...(snapBase.metrics || {}) },
+    candidate_b: { ...(snapCand.metrics || {}) },
     failed: !!result.failed,
     checks: result.checks || [],
     primary_regression: primary,
@@ -3216,7 +3228,44 @@ export function comparePerformanceMetrics(candidate, baseline, {
       { name: 'investigate', arguments: {}, reason: 'Drill into top finding' },
       { name: 'correlate_events', arguments: {}, reason: 'Timeline correlation' },
     ],
-    report: formatRegressionReport(result, { title: `${labelA} vs ${labelB}` }),
+    report: formatRegressionReport(result, {
+      title: `${labelA} vs ${labelB}`, aRole: 'baseline',
+    }),
+  }
+}
+
+/**
+ * Canonicalise a compare_performance / Trace Compare payload into the public
+ * A/B direction: `baseline_a` is Baseline A (Trace A), `candidate_b` is
+ * Candidate B (Trace B). Reads current `baseline_a` / `candidate_b` fields and
+ * older `baseline` / `candidate` or `a` / `b` shapes, optionally nested under a
+ * `data` envelope.
+ */
+export function normalizeComparePayload(payload) {
+  let d = payload && typeof payload === 'object' ? payload : {}
+  if (d.data && typeof d.data === 'object'
+    && !(d.checks || d.baseline_a || d.candidate_b)) {
+    d = d.data
+  }
+  const metrics = (v) => {
+    if (!v || typeof v !== 'object') return {}
+    if (v.metrics && typeof v.metrics === 'object') return { ...v.metrics }
+    const out = { ...v }
+    delete out.metrics
+    return out
+  }
+  let baselineA = d.baseline_a
+  if (baselineA == null) baselineA = d.baseline != null ? d.baseline : d.a
+  let candidateB = d.candidate_b
+  if (candidateB == null) candidateB = d.candidate != null ? d.candidate : d.b
+  return {
+    baseline_a: metrics(baselineA),
+    candidate_b: metrics(candidateB),
+    label_a: String(d.label_a || 'A'),
+    label_b: String(d.label_b || 'B'),
+    checks: Array.isArray(d.checks) ? d.checks : [],
+    failed: !!d.failed,
+    primary_regression: d.primary_regression || null,
   }
 }
 
@@ -3457,7 +3506,7 @@ export function buildOptimizationAdvice(findings, { limit = 5 } = {}) {
     ok: true,
     message: `${ideas.length} optimization idea(s)`,
     recommendations: ideas,
-    disclaimer: 'Simulation / estimate — not measured behavior',
+    disclaimer: 'Simulation / estimate — not measured RTOS behavior',
   }
 }
 
@@ -3725,7 +3774,7 @@ export function estimateWhatIf({
   return {
     ok: true,
     message: 'What-if estimate (not measured)',
-    disclaimer: 'Simulation / estimate — not measured behavior',
+    disclaimer: 'Simulation / estimate — not measured RTOS behavior',
     change: changeS,
     task: taskS,
     estimated_effect: effect,
@@ -4022,7 +4071,7 @@ export function simulateWhatIf({
   return {
     ok: true,
     message: 'What-if heuristic simulation',
-    disclaimer: 'Heuristic simulator — not an RTOS kernel / not measured',
+    disclaimer: 'Simulation / estimate — not measured RTOS behavior (heuristic slice-replay, not an RTOS kernel)',
     simulator: 'slice_replay_v1',
     change: String(change || '').trim(),
     task: taskS,
@@ -4210,7 +4259,7 @@ export function runOptimizationExperiments({
     message: best
       ? `${results.length} experiment(s); best=${best.change}`
       : 'No runnable experiments (need task slices / metrics)',
-    disclaimer: 'Heuristic simulator — not an RTOS kernel / not measured',
+    disclaimer: 'Simulation / estimate — not measured RTOS behavior (heuristic slice-replay, not an RTOS kernel)',
     experiments: results,
     best,
     suggested_tools: suggested,
@@ -4489,7 +4538,7 @@ export function recommendValidationExperiments(findings, {
     ok: true,
     message: `${finalExperiments.length} validation experiment(s) suggested`,
     experiments: finalExperiments,
-    disclaimer: 'Simulation / estimate — not measured behavior; firmware steps '
+    disclaimer: 'Simulation / estimate — not measured RTOS behavior; firmware steps '
       + 'are suggestions to implement and re-trace, not applied automatically',
   }
 }

@@ -2017,7 +2017,7 @@ export function buildCorridorAiContext({
 } = {}) {
   const scale = timeScale || scope?.unit || 'ns'
   const lines = [
-    `Analysis scope: ${scope?.label || 'Full Trace'}`,
+    `Inspector scope: ${scope?.label || 'Full Trace'}`,
     `Trace unit: ${scale}`,
     scope?.detail ? `Scope range: ${scope.detail}` : null,
     corridor ? `Selected core path: ${corridor.fromCore} → ${corridor.toCore}` : 'Selected core path: none',

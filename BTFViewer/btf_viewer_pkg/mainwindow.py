@@ -167,6 +167,7 @@ from .ai_tools import (
 from .ai_case import experiment_percents_from_compare
 from .ai_investigation import (
     format_bookmark_label,
+    normalize_compare_payload,
     snapshot_from_summary,
     update_baseline_profile,
 )
@@ -210,12 +211,17 @@ from .investigation_notebook import (
     BOOKMARK_TYPES,
     BOOKMARK_TYPE_LABELS,
     LINK_RELATIONS,
+    NB_EMPTY_BLANK,
+    NB_EMPTY_FROM_FINDINGS,
+    NOTEBOOK_STATUS_LABELS,
+    NOTEBOOK_STATUSES,
     add_bookmark,
     add_unresolved_question,
     conclusion_evidence_chains,
     detect_broken_references,
     dump_investigation,
     empty_notebook_history,
+    investigation_header,
     link_bookmarks,
     load_investigation,
     new_investigation,
@@ -226,6 +232,7 @@ from .investigation_notebook import (
     remove_bookmark,
     remove_unresolved_question,
     scaffold_investigation_from_findings,
+    set_status,
     set_conclusion,
     trace_identity,
     unlink_bookmarks,
@@ -1461,6 +1468,9 @@ class _ActivityRail(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("activity_rail")
+        # Rail also holds Snapshot / Help / Settings, so it is not "investigation
+        # tools" — mirror web App.vue .activity-rail aria-label.
+        self.setAccessibleName("Analysis and application tools")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(self.RAIL_W)
         self._lay = QVBoxLayout(self)
@@ -2410,6 +2420,23 @@ class _InvestigationNotebookDialog(QDialog):
         root.addLayout(header)
         self._sync_scaffold_tooltip()
 
+        # ---- §7 compact context row: durable status · scope · counts ----
+        ctx_row = QHBoxLayout()
+        ctx_row.setSpacing(10)
+        ctx_row.setContentsMargins(0, 0, 0, 0)
+        self._nb_status_combo = QComboBox()
+        self._nb_status_combo.setObjectName("nb_status_combo")
+        for _s in NOTEBOOK_STATUSES:
+            self._nb_status_combo.addItem(NOTEBOOK_STATUS_LABELS[_s], _s)
+        self._nb_status_combo.setToolTip("Durable investigation status")
+        self._nb_status_combo.currentIndexChanged.connect(self._on_nb_status_changed)
+        ctx_row.addWidget(self._nb_status_combo)
+        self._nb_context_lbl = QLabel("")
+        self._nb_context_lbl.setObjectName("nb_context_lbl")
+        self._nb_context_lbl.setStyleSheet("font-size:11px; color:palette(mid);")
+        ctx_row.addWidget(self._nb_context_lbl, 1)
+        root.addLayout(ctx_row)
+
         # ---- Body (scrolls) ----
         body = QWidget()
         bl = QVBoxLayout(body)
@@ -2611,6 +2638,16 @@ class _InvestigationNotebookDialog(QDialog):
             self._on_change(self._inv)
         self._render()
 
+    def _on_nb_status_changed(self, _idx: int = 0) -> None:
+        if getattr(self, "_building", False):
+            return
+        combo = getattr(self, "_nb_status_combo", None)
+        if combo is None:
+            return
+        want = combo.currentData()
+        if want and want != self._inv.get("status"):
+            self._commit(set_status(self._inv, want))
+
     def _restore_snapshot(self, history) -> None:
         self._history = history
         snap = notebook_history_state(self._history).get("current")
@@ -2649,6 +2686,30 @@ class _InvestigationNotebookDialog(QDialog):
             f"{n_flag} bookmark reference(s) no longer resolve")
         self._broken_lbl.setVisible(n_flag > 0)
 
+        # §7 compact context row.
+        hdr = investigation_header(self._inv, broken=broken)
+        combo = getattr(self, "_nb_status_combo", None)
+        if combo is not None:
+            j = combo.findData(hdr["status"])
+            combo.blockSignals(True)
+            combo.setCurrentIndex(j if j >= 0 else 0)
+            combo.blockSignals(False)
+        lbl = getattr(self, "_nb_context_lbl", None)
+        if lbl is not None:
+            bits = []
+            if hdr["trace"]:
+                bits.append(str(hdr["trace"]))
+            bits.append(f"Scope: {hdr['scope']}")
+            bits.append(f"{hdr['evidence_count']} evidence")
+            n_oc = hdr["open_check_count"]
+            bits.append(f"{n_oc} open check{'' if n_oc == 1 else 's'}")
+            if hdr["stale_ref_count"]:
+                bits.append(f"{hdr['stale_ref_count']} stale ref"
+                            f"{'' if hdr['stale_ref_count'] == 1 else 's'}")
+            if hdr["updated_at"]:
+                bits.append(f"updated {hdr['updated_at']}")
+            lbl.setText("  ·  ".join(bits))
+
         if self._title_edit.text() != (self._inv.get("title") or ""):
             self._title_edit.setText(self._inv.get("title") or "")
         if self._concl.toPlainText() != (self._inv.get("conclusion") or ""):
@@ -2678,7 +2739,30 @@ class _InvestigationNotebookDialog(QDialog):
 
         # bookmark groups
         self._clear_layout(self._groups_lay)
-        if not bms:
+        inv_is_empty = (
+            not bms
+            and not str(self._inv.get("title") or "").strip()
+            and not str(self._inv.get("conclusion") or "").strip()
+            and not self._inv.get("unresolved_questions")
+        )
+        if inv_is_empty:
+            # §7 empty-state: two explicit entry points, mirroring the web dialog.
+            has_findings = bool(self._finding_options())
+            b_from = QPushButton(NB_EMPTY_FROM_FINDINGS)
+            b_from.setEnabled(has_findings)
+            b_from.setToolTip("" if has_findings else "No Analysis findings to seed from")
+            b_from.clicked.connect(self._scaffold_from_findings)
+            b_blank = QPushButton(NB_EMPTY_BLANK)
+            b_blank.clicked.connect(lambda: self._title_edit.setFocus())
+            erow = QHBoxLayout()
+            erow.setSpacing(8)
+            erow.addWidget(b_from)
+            erow.addWidget(b_blank)
+            erow.addStretch(1)
+            wrap = QWidget()
+            wrap.setLayout(erow)
+            self._groups_lay.addWidget(wrap)
+        elif not bms:
             hint = QLabel(
                 "No bookmarks yet. Add an observation, hypothesis, supporting or "
                 "contradicting evidence, a verification step, or a conclusion above.")
@@ -3585,7 +3669,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._cpu_load_autofit_timer.setInterval(80)
         self._cpu_load_autofit_timer.timeout.connect(self._on_cpu_load_autofit_timeout)
 
-        self.setWindowTitle("RTOS BTF Viewer")
+        self.setWindowTitle("BTFViewer")
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
 
         # Apply saved theme BEFORE building the UI (affects the Qt stylesheet).
@@ -3766,6 +3850,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if key == Qt.Key.Key_Space:
                     if self._demo_nav_armed:
                         self._demo_runner.toggle_pause()
+                    return True
+            # Esc leaves Focus Mode — but only when nothing else owns the key:
+            # no guided demo (handled above), no modal dialog / popup, the main
+            # window is active, and the user is not typing in a field or editor.
+            if (event.type() == QEvent.Type.KeyPress
+                    and event.key() == Qt.Key.Key_Escape
+                    and not getattr(event, "isAutoRepeat", lambda: False)()
+                    and getattr(self, "_focus_mode", False)
+                    and self._demo_runner is None
+                    and QApplication.activeModalWidget() is None
+                    and QApplication.activePopupWidget() is None
+                    and QApplication.activeWindow() in (None, self)):
+                fw = QApplication.focusWidget()
+                typing = isinstance(fw, (
+                    QLineEdit, QComboBox, QPlainTextEdit, QTextEdit,
+                    QSpinBox, QDoubleSpinBox,
+                ))
+                other_window = fw is not None and not (
+                    fw is self or self.isAncestorOf(fw))
+                if not typing and not other_window:
+                    self._set_focus_mode(False)
                     return True
             return False
         except RuntimeError:
@@ -4579,7 +4684,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                                "true" if on else "false", flush=False)
         if on:
             self.statusBar().showMessage(
-                "Focus Mode — View ▸ Focus Mode (F) to exit", 4000)
+                "Focus Mode — Shift+F or Esc to exit", 4000)
 
     def _apply_focus_mode_from_settings(self) -> None:
         s = getattr(self, "_settings", None)
@@ -4886,7 +4991,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if trace is None:
             self._status_file.setText("  No file loaded")
             self._status_file.setToolTip("")
-            self.setWindowTitle("RTOS BTF Viewer")
+            self.setWindowTitle("BTFViewer")
             self._refresh_trace_health()
             return
         fname = _trace_display_name(self._current_file)
@@ -4905,7 +5010,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         parts.append(f"{n_sti:,} STI events")
         parts.append(f"{ts} total")
         summary = " · ".join(parts)
-        self.setWindowTitle(f"RTOS BTF Viewer – {fname}")
+        self.setWindowTitle(f"BTFViewer – {fname}")
         self._status_file.setText(f"  {fname}  |  {summary}")
         tip = self._current_file or fname
         self._status_file.setToolTip(f"{tip}\n{summary}")
@@ -6940,11 +7045,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # stack — mirror of the web App.vue .activity-rail next to .left-pane.
         self._activity_rail = _ActivityRail()
         for _k, _p, _lbl in (
-            ("heatmap", _RG_HEATMAP, "Migration heatmap"),
+            ("heatmap", _RG_HEATMAP, "Migration & Corridor Inspector"),
             ("analysis", _RG_ANALYSIS, "Analysis findings"),
             ("notebook", _RG_NOTEBOOK, "Investigation notebook"),
             ("compare", _RG_COMPARE, "Compare traces"),
-            ("snapshot", _RG_SNAPSHOT, "Snapshot editor"),
+            ("snapshot", _RG_SNAPSHOT, "Snapshot Editor"),
         ):
             self._activity_rail.add_item(_k, _p, _lbl)
         self._activity_rail.add_spring()
@@ -7642,7 +7747,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_focus_mode.setChecked(self._focus_mode)
         self._act_focus_mode.setShortcut(QKeySequence("Shift+F"))
         self._act_focus_mode.setToolTip(
-            "Hide the side panel, activity rail and trace tabs — timeline only")
+            "Hide the side panel, activity rail and trace tabs — timeline only "
+            "(Shift+F or Esc to exit)")
         vm.addSeparator()
         self._act_notebook = vm.addAction(
             "&Investigation Notebook…", self._open_investigation_notebook)
@@ -8728,7 +8834,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._demo_analysis({"close": True})
         for title_prefix in (
             "Keyboard & Mouse Shortcuts",
-            "About RTOS BTF Viewer",
+            "About BTFViewer",
             "Jump to Time",
             "Snapshot Editor",
         ):
@@ -9721,7 +9827,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         headers = getattr(panel, "_section_headers", None) or {}
         widgets = {
             # Prefer Span/Tasks summary (statistics status), not panel center
-            # (which lands in Core Utilisation).
+            # (which lands in Core Utilization).
             "stats_summary": (
                 getattr(panel, "_stats_summary", None)
                 or getattr(panel, "_scope_label", None)
@@ -10909,13 +11015,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             )
             return payload
         if name == AI_TOOL_REGRESSION_LOCALIZE:
-            cmp_ = getattr(self, "_last_ai_compare", None) or {}
+            norm = normalize_compare_payload(getattr(self, "_last_ai_compare", None))
             return regression_localize_tool(
-                cmp_.get("candidate") or cmp_.get("a") or {},
-                cmp_.get("baseline") or cmp_.get("b") or {},
+                norm.get("candidate_b") or {},
+                norm.get("baseline_a") or {},
                 findings=findings,
-                label_a=str(args.get("label_a") or "A"),
-                label_b=str(args.get("label_b") or "B"),
+                label_a=str(args.get("label_a") or norm.get("label_a") or "A"),
+                label_b=str(args.get("label_b") or norm.get("label_b") or "B"),
             )
         if name == AI_TOOL_BUILD_CAUSAL_CHAIN:
             return build_causal_chain_tool(findings)
@@ -11200,7 +11306,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         name_a: str = "A",
         name_b: str = "B",
     ) -> None:
-        """Stash Trace Compare dialog deltas for validate_experiment."""
+        """Stash Trace Compare dialog deltas for validate_experiment.
+
+        ``ta`` / ``tb`` are Trace A (Baseline A) and Trace B (Candidate B); the
+        helper takes Baseline A first, Candidate B second.
+        """
         snap_a = _trace_summary_snapshot(ta, lo_a, hi_a)
         snap_b = _trace_summary_snapshot(tb, lo_b, hi_b)
         self._last_ai_compare = compare_performance_tabs(
@@ -11611,6 +11721,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._palette_bump_usage(aid)
         if aid == "analysis":
             self._open_analysis_findings()
+        elif aid == "notebook":
+            self._open_investigation_notebook()
         elif aid == "statistics":
             self._focus_statistics_panel(force=True)
         elif aid == "find":
@@ -11623,6 +11735,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._open_trace_compare()
         elif aid == "heatmap":
             self._open_migration_heatmap()
+        elif aid == "focus":
+            self._toggle_focus_mode()
         elif aid == "settings":
             self._open_settings()
         elif aid == "limit-scope":
@@ -11634,11 +11748,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             view = getattr(self, "_view", None)
             if view is not None and hasattr(view, "zoom_fit"):
                 view.zoom_fit()
-        elif aid == "inspect-task":
-            self._refresh_task_inspector()
-            self.statusBar().showMessage(
-                self._status_inspect.text() if hasattr(self, "_status_inspect") else "Inspect task",
-                4000)
         elif str(aid).startswith("preset-"):
             self._apply_workspace_preset(aid)
         elif aid.startswith("stats-section:"):
@@ -11649,9 +11758,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 QTimer.singleShot(0, lambda s=sid: panel.scroll_to_section(s))
 
     def _apply_workspace_preset(self, preset_id: str) -> None:
-        if preset_id == "preset-compare":
-            self._open_trace_compare()
-            return
         panel = getattr(self, "_stats_panel", None)
         if panel is not None:
             panel.set_section_collapsed_map(
@@ -13819,7 +13925,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             gen.setSize(QSize(int(w), int(total_h)))
             gen.setViewBox(QRectF(0, 0, w, total_h))
             gen.setTitle("BTF Timeline")
-            gen.setDescription("Generated by RTOS BTF Viewer")
+            gen.setDescription("Generated by BTFViewer")
             with _svg_safe_app_style():
                 painter = QPainter(gen)
                 try:
@@ -13929,7 +14035,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         base = _export_base_name(self._current_file, "workspace")
         path, _ = QFileDialog.getSaveFileName(
             self, "Save workspace", base + ".btfw",
-            "BTF Viewer workspace (*.btfw);;All files (*)")
+            "BTFViewer workspace (*.btfw);;All files (*)")
         if not path:
             return
         amap = self._export_task_alias_map() if anonymize else {}
@@ -15503,7 +15609,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+W",       "Close active tab"),
                 ("Ctrl+Tab",     "Next trace tab"),
                 ("Ctrl+Shift+Tab", "Previous trace tab"),
-                ("Ctrl+S",       "Open snapshot editor"),
+                ("Ctrl+S",       "Open Snapshot Editor"),
                 ("Ctrl+Shift+S", "Save viewport as SVG"),
                 ("Ctrl+Shift+C", "Copy viewport to clipboard"),
                 ("Ctrl+Shift+E", "Export… (workspace · Perfetto · BTF slice)"),
@@ -15520,6 +15626,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),
                 ("Ctrl+K",               "Command palette"),
+                ("Shift+F",              "Toggle Focus Mode"),
+                ("Esc",                  "Exit Focus Mode (or stop guided demo)"),
                 ("G",                    "Toggle grid lines on/off"),
                 ("I",                    "Toggle STI event rows on/off"),
                 ("D",                    "Toggle dark / light theme"),

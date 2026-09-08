@@ -6,8 +6,8 @@
     <!-- Brand / About (web-only) -->
     <button
       class="app-name-btn"
-      title="About RTOS BTF Viewer"
-      aria-label="About RTOS BTF Viewer"
+      title="About BTFViewer"
+      aria-label="About BTFViewer"
       @click="emit('showAbout')"
     >
       <span

@@ -58,7 +58,7 @@
 
       <div class="ci-toolbar">
         <label class="ci-field ci-field-scope">
-          Analysis Scope
+          Inspector Scope
           <DomSelect
             v-model="analysisMode"
             :options="analysisModeOptions"
@@ -352,13 +352,15 @@
                   <button
                     type="button"
                     class="ci-jump"
+                    :title="FOCUS_WINDOW_TIP"
                     @click="showEventsFromSelection"
                   >
-                    Show events
+                    Focus this window
                   </button>
                   <button
                     type="button"
                     class="ci-jump"
+                    :title="`Filter the timeline to ${selectedPathLabel || 'the selected path'} (task / core filter) — the Inspector filter status shows what is applied`"
                     @click="filterTimelineFromSelection"
                   >
                     Filter timeline
@@ -400,9 +402,10 @@
                     <button
                       type="button"
                       class="ci-jump"
+                      :title="FOCUS_WINDOW_TIP"
                       @click="showEventsFromSelection"
                     >
-                      Show on timeline
+                      Focus this window
                     </button>
                     <button
                       v-if="evidenceCard.task"
@@ -751,6 +754,12 @@ function treeSortClass(col) {
 watch(sortBy, (key, prev) => {
   if (key !== prev) sortDesc.value = key !== 'label'
 })
+// "Focus this window" is a multi-state action — disclose every change up front.
+const FOCUS_WINDOW_TIP = 'Focus this window — places cursors C1–C2 on the '
+  + 'selected bin, zooms the timeline to it, sets Statistics scope to the cursor '
+  + 'range, opens the CPU Load pane, and opens the Core Pair Summary statistics '
+  + 'section.'
+
 const analysisMode = ref('auto')
 const analysisModeOptions = computed(() => [
   { value: 'auto', label: 'Follow zoom' },

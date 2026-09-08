@@ -89,7 +89,7 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         )
         load = next(f for f in findings if f.get("id") == "load_balance_ok")
         self.assertEqual(load["severity"], "info")
-        self.assertEqual(load["title"], "Core utilisation balance")
+        self.assertEqual(load["title"], "Core Utilization balance")
         self.assertIn("Load Balance Score", load["text"])
         self.assertIn("σ=", load["text"])
         self.assertIn("G=", load["text"])
@@ -437,7 +437,7 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         findings = [{
             "id": "load_balance_ok",
             "severity": "info",
-            "title": "Core utilisation balance",
+            "title": "Core Utilization balance",
             "text": "Load Balance Score 100% (σ=0.0%, G=0.000) — cores look reasonably balanced.",
         }]
         dlg = _AnalysisFindingsDialog(
@@ -446,7 +446,7 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         body = dlg.findChild(QLabel, "analysisFindingText")     # right-pane detail
         self.assertIsNotNone(title)
         self.assertIsNotNone(body)
-        self.assertIn("Core utilisation balance", title.text())
+        self.assertIn("Core Utilization balance", title.text())
         self.assertIn("Load Balance Score 100%", body.text())
         self.assertIn("color: #166534", body.styleSheet())
         self.assertNotIn("#c5d0dc", body.styleSheet())

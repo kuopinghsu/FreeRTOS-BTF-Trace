@@ -10,7 +10,41 @@
  * functions; user text is never merged into measured data.
  */
 
-export const INVESTIGATION_SCHEMA = 'btf-viewer-investigation/1'
+export const INVESTIGATION_SCHEMA = 'btf-viewer-investigation/2'
+
+// --- Durable investigation status (schema/2) ----------------------------
+// One durable status only. The AI workflow *stage* is transient and must never
+// be shown as a second Notebook status.
+export const NB_STATUS_OPEN = 'open'
+export const NB_STATUS_NEEDS_EVIDENCE = 'needs_evidence'
+export const NB_STATUS_READY = 'ready_to_conclude'
+export const NB_STATUS_CLOSED = 'closed'
+export const NOTEBOOK_STATUSES = [
+  NB_STATUS_OPEN, NB_STATUS_NEEDS_EVIDENCE, NB_STATUS_READY, NB_STATUS_CLOSED,
+]
+export const NOTEBOOK_STATUS_LABELS = {
+  [NB_STATUS_OPEN]: 'Open',
+  [NB_STATUS_NEEDS_EVIDENCE]: 'Needs evidence',
+  [NB_STATUS_READY]: 'Ready to conclude',
+  [NB_STATUS_CLOSED]: 'Closed',
+}
+
+// --- Six-section presentation -----------------------------------------
+export const NB_SECTION_ORDER = [
+  'question', 'scope', 'hypotheses', 'evidence', 'open_checks', 'conclusion',
+]
+export const NB_SECTION_LABELS = {
+  question: 'Question',
+  scope: 'Scope',
+  hypotheses: 'Hypotheses',
+  evidence: 'Evidence',
+  open_checks: 'Open checks',
+  conclusion: 'Conclusion',
+}
+
+// Empty-state entry points (replace the old generic hint).
+export const NB_EMPTY_FROM_FINDINGS = 'Start from current Findings'
+export const NB_EMPTY_BLANK = 'Start a blank investigation'
 
 export const BM_OBSERVATION = 'observation'
 export const BM_HYPOTHESIS = 'hypothesis'
@@ -41,6 +75,112 @@ export const REF_EVIDENCE = 'evidence'
 export const REF_KINDS = [REF_FINDING, REF_METRIC, REF_ENTITY, REF_RANGE, REF_EVIDENCE]
 
 export const LINK_RELATIONS = ['supports', 'contradicts', 'verifies', 'concludes', 'relates']
+
+// --- Structured evidence cards (schema/2, §8) -------------------------
+export const EV_SOURCE_TIMELINE = 'Timeline'
+export const EV_SOURCE_STATISTICS = 'Statistics'
+export const EV_SOURCE_FINDINGS = 'Analysis Findings'
+export const EV_SOURCE_COMPARE = 'Trace Compare'
+export const EV_SOURCE_USER = 'User note'
+export const EV_SOURCE_AI = 'AI suggestion'
+export const EVIDENCE_SOURCES = [
+  EV_SOURCE_TIMELINE, EV_SOURCE_STATISTICS, EV_SOURCE_FINDINGS,
+  EV_SOURCE_COMPARE, EV_SOURCE_USER, EV_SOURCE_AI,
+]
+export const EV_KIND_MEASURED = 'measured'
+export const EV_KIND_DERIVED = 'derived'
+export const EV_KIND_HEURISTIC = 'heuristic'
+export const EV_KIND_ESTIMATE = 'estimate'
+export const EVIDENCE_KINDS = [EV_KIND_MEASURED, EV_KIND_DERIVED, EV_KIND_HEURISTIC, EV_KIND_ESTIMATE]
+export const EVIDENCE_KIND_LABELS = {
+  [EV_KIND_MEASURED]: 'Measured',
+  [EV_KIND_DERIVED]: 'Derived',
+  [EV_KIND_HEURISTIC]: 'Heuristic',
+  [EV_KIND_ESTIMATE]: 'Simulation / estimate',
+  '': 'User note',
+}
+export const EV_AUTHOR_USER = 'user'
+export const EV_AUTHOR_BTFVIEWER = 'btfviewer'
+export const EV_AUTHOR_AI = 'ai'
+export const EVIDENCE_AUTHORS = [EV_AUTHOR_USER, EV_AUTHOR_BTFVIEWER, EV_AUTHOR_AI]
+export const EVIDENCE_PROTECTED_FIELDS = [
+  'source', 'kind', 'author', 'trace_id', 'scope', 'task', 'core', 'value', 'unit',
+]
+export const EVIDENCE_BOOKMARK_TYPES = [BM_OBSERVATION, BM_SUPPORTING, BM_CONTRADICTING]
+
+function measuredRef(refs) {
+  const kinds = new Set((refs || []).filter(r => r && typeof r === 'object').map(r => String(r.kind)))
+  if (kinds.has(REF_FINDING)) return EV_SOURCE_FINDINGS
+  if (kinds.has(REF_METRIC)) return EV_SOURCE_STATISTICS
+  if (kinds.has(REF_RANGE) || kinds.has(REF_EVIDENCE)) return EV_SOURCE_TIMELINE
+  return ''
+}
+
+/** Coerce a raw evidence card to a valid one, enforcing provenance rules.
+ *  AI prose and unreferenced claims are never Measured; source data stays
+ *  separate from the bookmark's editable `note`. */
+export function normalizeEvidenceCard(card, { refs = null } = {}) {
+  if (!card || typeof card !== 'object') return null
+  let src = String(card.source || '').trim()
+  if (!EVIDENCE_SOURCES.includes(src)) src = measuredRef(refs) || EV_SOURCE_USER
+  let author = String(card.author || '').trim().toLowerCase()
+  if (!EVIDENCE_AUTHORS.includes(author)) author = src === EV_SOURCE_AI ? EV_AUTHOR_AI : EV_AUTHOR_USER
+  if (src === EV_SOURCE_AI) author = EV_AUTHOR_AI
+  let kind = String(card.kind || '').trim().toLowerCase()
+  if (!EVIDENCE_KINDS.includes(kind)) kind = ''
+  if (kind === EV_KIND_MEASURED && (author === EV_AUTHOR_AI || !measuredRef(refs))) {
+    kind = author !== EV_AUTHOR_AI ? EV_KIND_DERIVED : ''
+  }
+  let value = null
+  if (typeof card.value === 'number' && Number.isFinite(card.value)) value = card.value
+  else if (String(card.value ?? '').trim() !== '') {
+    const n = Number(card.value)
+    value = Number.isFinite(n) ? n : null
+  }
+  let scope = null
+  const sc = card.scope
+  if (sc && typeof sc === 'object' && sc.start != null && sc.end != null) {
+    scope = { start: Math.trunc(sc.start), end: Math.trunc(sc.end) }
+  }
+  return {
+    source: src,
+    kind,
+    author,
+    trace_id: String(card.trace_id || ''),
+    task: String(card.task || ''),
+    core: String(card.core || ''),
+    unit: String(card.unit || ''),
+    hypothesis_id: String(card.hypothesis_id || ''),
+    created_at: String(card.created_at || ''),
+    updated_at: String(card.updated_at || ''),
+    value,
+    scope,
+  }
+}
+
+export function evidenceCardIsMeasured(card) {
+  return !!card && typeof card === 'object' && card.kind === EV_KIND_MEASURED
+}
+
+/** Split proposed card `changes` into { allowed, rejected } — protected fields
+ *  on a measured card (and setting kind → measured) are never mutable. */
+export function guardEvidenceChanges(card, changes) {
+  const allowed = {}
+  const rejected = []
+  const measured = evidenceCardIsMeasured(card)
+  for (const [key, val] of Object.entries(changes || {})) {
+    if (key === 'kind' && String(val).trim().toLowerCase() === EV_KIND_MEASURED && !measured) {
+      rejected.push(key)
+      continue
+    }
+    if (measured && EVIDENCE_PROTECTED_FIELDS.includes(key)) {
+      rejected.push(key)
+      continue
+    }
+    allowed[key] = val
+  }
+  return { allowed, rejected }
+}
 
 const SLUG_RE = /[^a-z0-9]+/g
 
@@ -91,6 +231,8 @@ export function newInvestigation({ title = '', traceIdentity: ident = null, anal
     links: [],
     conclusion: '',
     unresolved_questions: [],
+    status: NB_STATUS_OPEN,
+    updated_at: '',
     next_seq: 1,
   }
 }
@@ -100,7 +242,16 @@ function clone(inv) {
   return {
     ...inv,
     trace_identity: { ...(inv.trace_identity || {}) },
-    bookmarks: (inv.bookmarks || []).map(b => ({ ...b, refs: (b.refs || []).map(r => ({ ...r })) })),
+    bookmarks: (inv.bookmarks || []).map(b => {
+      const nb = { ...b, refs: (b.refs || []).map(r => ({ ...r })) }
+      if (b.evidence && typeof b.evidence === 'object') {
+        nb.evidence = { ...b.evidence }
+        if (b.evidence.scope && typeof b.evidence.scope === 'object') {
+          nb.evidence.scope = { ...b.evidence.scope }
+        }
+      }
+      return nb
+    }),
     links: (inv.links || []).map(l => ({ ...l })),
     unresolved_questions: [...(inv.unresolved_questions || [])],
   }
@@ -124,7 +275,7 @@ export function normalizeRef(ref) {
   return out
 }
 
-export function addBookmark(inv, { type, title, note = '', refs = null, bookmarkId = '' } = {}) {
+export function addBookmark(inv, { type, title, note = '', refs = null, bookmarkId = '', evidence = null } = {}) {
   const out = clone(inv)
   let btype = String(type || '').trim().toLowerCase()
   if (!BOOKMARK_TYPES.includes(btype)) btype = BM_OBSERVATION
@@ -135,15 +286,78 @@ export function addBookmark(inv, { type, title, note = '', refs = null, bookmark
   const seq = Number(out.next_seq || 1)
   out.next_seq = seq + 1
   const cleanRefs = (refs || []).map(normalizeRef).filter(Boolean)
-  out.bookmarks.push({
+  const row = {
     id: bid,
     type: btype,
     title: String(title || '').trim() || BOOKMARK_TYPE_LABELS[btype],
     note: String(note || ''),
     refs: cleanRefs,
     seq,
-  })
+  }
+  if (evidence != null && EVIDENCE_BOOKMARK_TYPES.includes(btype)) {
+    const card = normalizeEvidenceCard(evidence, { refs: cleanRefs })
+    if (card) row.evidence = card
+  }
+  out.bookmarks.push(row)
   return out
+}
+
+/** Add a structured evidence card (a bookmark with an `evidence` dict). Source
+ *  data stays separate from the editable explanation (`note`). */
+export function addEvidence(inv, {
+  title, note = '', role = BM_SUPPORTING, source = EV_SOURCE_USER, kind = '',
+  author = EV_AUTHOR_USER, refs = null, task = '', core = '', value = null,
+  unit = '', scope = null, traceId = '', hypothesisId = '', createdAt = '',
+  bookmarkId = '',
+} = {}) {
+  let r = String(role || '').trim().toLowerCase()
+  if (!EVIDENCE_BOOKMARK_TYPES.includes(r)) r = BM_SUPPORTING
+  return addBookmark(inv, {
+    type: r, title, note, refs, bookmarkId,
+    evidence: {
+      source, kind, author, task, core, value, unit, scope,
+      trace_id: traceId, hypothesis_id: hypothesisId,
+      created_at: createdAt, updated_at: createdAt,
+    },
+  })
+}
+
+/** Edit only the explanation text of an evidence card — never source data. */
+export function updateEvidenceExplanation(inv, bookmarkId, note, { updatedAt = '' } = {}) {
+  const out = clone(inv)
+  const bid = String(bookmarkId || '').trim()
+  for (const b of out.bookmarks) {
+    if (String(b.id) !== bid) continue
+    b.note = String(note || '')
+    if (b.evidence && typeof b.evidence === 'object' && updatedAt) b.evidence.updated_at = String(updatedAt)
+    break
+  }
+  return out
+}
+
+/** Merge proposed card `changes` for one evidence bookmark; returns
+ *  { inv, rejected } where `rejected` names protected fields that were dropped. */
+export function applyEvidenceEdit(inv, bookmarkId, changes, { updatedAt = '' } = {}) {
+  const out = clone(inv)
+  const bid = String(bookmarkId || '').trim()
+  let rejected = []
+  for (const b of out.bookmarks) {
+    if (String(b.id) !== bid) continue
+    const card = (b.evidence && typeof b.evidence === 'object') ? b.evidence : {}
+    const guard = guardEvidenceChanges(card, changes)
+    rejected = guard.rejected
+    const allowed = { ...guard.allowed }
+    if ('note' in allowed) {
+      b.note = String(allowed.note || '')
+      delete allowed.note
+    }
+    if (Object.keys(allowed).length) {
+      b.evidence = normalizeEvidenceCard({ ...card, ...allowed }, { refs: b.refs })
+    }
+    if (b.evidence && typeof b.evidence === 'object' && updatedAt) b.evidence.updated_at = String(updatedAt)
+    break
+  }
+  return { inv: out, rejected }
 }
 
 export function updateBookmark(inv, bookmarkId, changes = {}) {
@@ -212,6 +426,212 @@ export function removeUnresolvedQuestion(inv, text) {
   const q = String(text || '').trim()
   out.unresolved_questions = out.unresolved_questions.filter(x => x !== q)
   return out
+}
+
+// --- durable status (schema/2) ----------------------------------------
+/** Best-effort durable status for a schema/1 investigation being upgraded.
+ *  Never returns 'closed' — closing an investigation is an explicit act. */
+export function deriveStatus(inv) {
+  inv = inv && typeof inv === 'object' ? inv : {}
+  const types = (inv.bookmarks || [])
+    .filter(b => b && typeof b === 'object')
+    .map(b => String(b.type || ''))
+  const hasHypothesis = types.includes(BM_HYPOTHESIS)
+  const hasEvidence = types.some(t => t === BM_SUPPORTING || t === BM_VERIFICATION)
+  const hasConclusion = !!String(inv.conclusion || '').trim()
+    || types.includes(BM_CONCLUSION)
+  const hasOpen = (inv.unresolved_questions || []).length > 0
+  if (hasConclusion) return NB_STATUS_READY
+  if (hasHypothesis && !hasEvidence) return NB_STATUS_NEEDS_EVIDENCE
+  if (hasOpen) return NB_STATUS_NEEDS_EVIDENCE
+  return NB_STATUS_OPEN
+}
+
+export function setStatus(inv, status, { updatedAt = '' } = {}) {
+  const out = clone(inv)
+  const s = String(status || '').trim().toLowerCase()
+  out.status = NOTEBOOK_STATUSES.includes(s) ? s : NB_STATUS_OPEN
+  if (updatedAt) out.updated_at = String(updatedAt)
+  return out
+}
+
+export function touchInvestigation(inv, updatedAt) {
+  const out = clone(inv)
+  out.updated_at = String(updatedAt || '')
+  return out
+}
+
+/** Bring a normalised investigation dict up to the current schema, keeping
+ *  every bookmark / link / question / conclusion. A transient `workflow_stage`
+ *  key, if present, is left untouched — never promoted to the status. */
+export function migrateInvestigation(inv) {
+  const stored = String(inv.status || '').trim().toLowerCase()
+  inv.status = NOTEBOOK_STATUSES.includes(stored) ? stored : deriveStatus(inv)
+  inv.updated_at = String(inv.updated_at || '')
+  // Wrap legacy evidence bookmarks (schema/1) in a provenance card, keeping
+  // every id / ref / note. Provenance inferred conservatively; never AI.
+  for (const b of inv.bookmarks || []) {
+    if (!b || typeof b !== 'object') continue
+    if (!EVIDENCE_BOOKMARK_TYPES.includes(b.type) || (b.evidence && typeof b.evidence === 'object')) continue
+    const refs = b.refs || []
+    const src = measuredRef(refs) || EV_SOURCE_USER
+    b.evidence = normalizeEvidenceCard({
+      source: src,
+      kind: src !== EV_SOURCE_USER ? EV_KIND_MEASURED : '',
+      author: EV_AUTHOR_USER,
+      trace_id: String((inv.trace_identity || {}).hash || ''),
+    }, { refs })
+  }
+  inv.schema = INVESTIGATION_SCHEMA
+  return inv
+}
+
+// --- six-section presentation (pure projection) ----------------------
+function evidenceKind(bookmark) {
+  for (const r of bookmark.refs || []) {
+    if ([REF_FINDING, REF_METRIC, REF_RANGE].includes(String(r.kind))) return 'measured'
+  }
+  return 'note'
+}
+
+function staleBookmarkIds(broken) {
+  if (!broken || typeof broken !== 'object') return new Set()
+  return new Set((broken.issues || [])
+    .filter(i => i && typeof i === 'object' && i.bookmark_id)
+    .map(i => String(i.bookmark_id)))
+}
+
+function evidenceIsStale(bid, nav, staleIds, broken) {
+  if (staleIds.has(String(bid))) return true
+  if (broken && typeof broken === 'object' && broken.stale_trace) {
+    return Object.keys(nav || {}).length > 0
+  }
+  return false
+}
+
+/** Resolvable navigation targets for one evidence bookmark — no scope change. */
+export function evidenceNavTargets(bookmark) {
+  const out = {}
+  for (const r of (bookmark || {}).refs || []) {
+    if (!r || typeof r !== 'object') continue
+    if (r.time != null && !('jump' in out)) out.jump = Math.trunc(r.time)
+    if (r.range && typeof r.range === 'object' && r.range.start != null && !('range' in out)) {
+      out.range = [Math.trunc(r.range.start), Math.trunc(r.range.end)]
+    }
+    if (String(r.kind) === REF_METRIC && r.metric && !('stats_metric' in out)) out.stats_metric = String(r.metric)
+    if (String(r.kind) === REF_FINDING && r.rule_id && !('finding' in out)) out.finding = String(r.rule_id)
+  }
+  return out
+}
+
+function hypothesisStatus(inv, bid) {
+  const rels = new Set()
+  for (const l of inv.links || []) {
+    if (String(l.to) === bid || String(l.from) === bid) rels.add(String(l.relation))
+  }
+  if (rels.has('contradicts')) return 'contradicted'
+  if (rels.has('supports') || rels.has('verifies')) return 'supported'
+  return 'open'
+}
+
+function scopeSummary(inv) {
+  const rng = inv.analysis_range
+  if (rng && typeof rng === 'object' && rng.start != null) {
+    return `${Math.trunc(rng.start)}–${Math.trunc(rng.end)}`
+  }
+  return 'Full trace'
+}
+
+/** Project a stored investigation onto the six report sections, in order.
+ *  Purely derived — nothing invented or relabelled as measured. Evidence items
+ *  carry the full provenance `card`, a `stale` flag (from an optional
+ *  detectBrokenReferences result) and resolvable `nav` targets. */
+export function investigationSections(inv, { broken = null } = {}) {
+  inv = loadInvestigation(inv)
+  const bms = inv.bookmarks || []
+  const ident = inv.trace_identity || {}
+  const stale = staleBookmarkIds(broken)
+
+  const scopeItems = []
+  if (ident.file) scopeItems.push({ kind: 'trace', text: String(ident.file) })
+  scopeItems.push({ kind: 'range', text: scopeSummary(inv) })
+  if (ident.time_scale) scopeItems.push({ kind: 'unit', text: String(ident.time_scale) })
+
+  const hypItems = bms.filter(b => b.type === BM_HYPOTHESIS).map(b => ({
+    bookmark_id: b.id, text: b.title, note: b.note, refs: b.refs,
+    status: hypothesisStatus(inv, b.id),
+  }))
+  const evidenceItems = bms
+    .filter(b => EVIDENCE_BOOKMARK_TYPES.includes(b.type))
+    .map((b) => {
+      const card = (b.evidence && typeof b.evidence === 'object') ? b.evidence : null
+      const nav = evidenceNavTargets(b)
+      return {
+        bookmark_id: b.id, text: b.title, note: b.note, refs: b.refs,
+        role: b.type === BM_SUPPORTING ? 'supporting'
+          : b.type === BM_CONTRADICTING ? 'contradicting' : 'observation',
+        kind: card ? (card.kind ?? evidenceKind(b)) : evidenceKind(b),
+        card,
+        stale: evidenceIsStale(b.id, nav, stale, broken),
+        nav,
+      }
+    })
+  const openItems = [
+    ...(inv.unresolved_questions || []).map(q => ({ source: 'question', text: q })),
+    ...bms.filter(b => b.type === BM_VERIFICATION).map(b => ({
+      source: 'verification', bookmark_id: b.id, text: b.title, note: b.note, refs: b.refs,
+    })),
+  ]
+  const conclusionItems = []
+  if (String(inv.conclusion || '').trim()) {
+    conclusionItems.push({ kind: 'verdict', text: inv.conclusion })
+  }
+  for (const b of bms) {
+    if (b.type === BM_CONCLUSION) {
+      conclusionItems.push({
+        kind: 'verdict', bookmark_id: b.id, text: b.title, note: b.note, refs: b.refs,
+      })
+    }
+  }
+  const verified = bms.filter(b => b.type === BM_VERIFICATION).length
+  conclusionItems.push({
+    kind: 'verification_state',
+    text: verified
+      ? `${verified} verification step(s) recorded`
+      : 'No verification steps recorded',
+  })
+
+  const byId = {
+    question: inv.title ? [{ text: inv.title }] : [],
+    scope: scopeItems,
+    hypotheses: hypItems,
+    evidence: evidenceItems,
+    open_checks: openItems,
+    conclusion: conclusionItems,
+  }
+  return NB_SECTION_ORDER.map(sid => ({
+    id: sid, title: NB_SECTION_LABELS[sid], items: byId[sid],
+  }))
+}
+
+/** Compact header row for the Notebook — usable with AI disabled. `broken` is
+ *  an optional detectBrokenReferences() result so the count stays pure. */
+export function investigationHeader(inv, { broken = null } = {}) {
+  inv = loadInvestigation(inv)
+  const secs = Object.fromEntries(investigationSections(inv).map(s => [s.id, s]))
+  const status = String(inv.status || NB_STATUS_OPEN)
+  const ident = inv.trace_identity || {}
+  return {
+    status,
+    status_label: NOTEBOOK_STATUS_LABELS[status] || 'Open',
+    trace: String(ident.file || ''),
+    scope: scopeSummary(inv),
+    hypothesis_count: secs.hypotheses.items.length,
+    evidence_count: secs.evidence.items.length,
+    open_check_count: secs.open_checks.items.length,
+    stale_ref_count: ((broken || {}).issues || []).length,
+    updated_at: String(inv.updated_at || ''),
+  }
 }
 
 // --- undo / redo ---------------------------------------------------------
@@ -463,14 +883,20 @@ export function loadInvestigation(raw) {
     let seq = Number(b.seq || 0)
     if (!Number.isFinite(seq)) seq = 0
     maxSeq = Math.max(maxSeq, seq)
-    bookmarks.push({
+    const cleanRefs = (b.refs || []).map(normalizeRef).filter(Boolean)
+    const row = {
       id: bid,
       type: btype,
       title: String(b.title || '').trim() || BOOKMARK_TYPE_LABELS[btype],
       note: String(b.note || ''),
-      refs: (b.refs || []).map(normalizeRef).filter(Boolean),
+      refs: cleanRefs,
       seq: seq || (bookmarks.length + 1),
-    })
+    }
+    if (b.evidence && typeof b.evidence === 'object' && EVIDENCE_BOOKMARK_TYPES.includes(btype)) {
+      const card = normalizeEvidenceCard(b.evidence, { refs: cleanRefs })
+      if (card) row.evidence = card
+    }
+    bookmarks.push(row)
   }
   bookmarks.sort((a, b) => (a.seq - b.seq) || String(a.id).localeCompare(String(b.id)))
   const ids = new Set(bookmarks.map(b => b.id))
@@ -493,9 +919,13 @@ export function loadInvestigation(raw) {
   out.links = links
   out.conclusion = String(raw.conclusion || '').trim()
   out.unresolved_questions = (raw.unresolved_questions || []).map(String).map(s => s.trim()).filter(Boolean)
+  // base carries default status/updated_at; keep any stored values so
+  // migrateInvestigation can honour an explicit status.
+  out.status = raw.status || ''
+  out.updated_at = String(raw.updated_at || '')
   out.next_seq = Math.max(Number(base.next_seq), maxSeq + 1)
   out.schema = INVESTIGATION_SCHEMA
-  return out
+  return migrateInvestigation(out)
 }
 
 // --- bridge from the findings triage "case" list ----------------------

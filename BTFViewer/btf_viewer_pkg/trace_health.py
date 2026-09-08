@@ -224,7 +224,7 @@ def _check_core_overlap(
         affected_entities=sorted(cores),
         evidence_refs=ev,
         metric_limitations=[
-            "Core Utilisation", "Core Time Breakdown",
+            "Core Utilization", "Core Time Breakdown",
             "Preemption Chain Analysis", "Response Time",
         ],
     )
@@ -362,10 +362,10 @@ def _check_long_gap(
         CHECK_LONG_GAP, "info",
         f"No task was scheduled for {_fmt(format_ns, gap)} "
         f"({gap / span * 100:.0f}% of the analysed span). This may be genuine "
-        "idle time or a gap in the capture; rates and utilisation include it "
+        "idle time or a gap in the capture; rates and utilization include it "
         "in the denominator.",
         affected_range={"start": int(gap_lo), "end": int(gap_hi)},
-        metric_limitations=["Scheduling Load Over Time", "Core Utilisation"],
+        metric_limitations=["Scheduling Load Over Time", "Core Utilization"],
     )
 
 

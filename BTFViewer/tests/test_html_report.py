@@ -38,7 +38,7 @@ class HtmlReportTocTests(unittest.TestCase):
             default_expanded=(
                 "Analysis Findings",
                 "Statistics Notes",
-                "Core Utilisation (excl. IDLE/TICK)",
+                "Core Utilization (excl. IDLE/TICK)",
                 "Top Tasks by CPU (excl. IDLE/TICK)",
                 "Trace Health (TICK)",
             ),

@@ -2923,7 +2923,7 @@ class TimelineScene(QGraphicsScene):
                 lbl_item.setAcceptHoverEvents(False)
                 self._frozen_items.append((lbl_item, arrow_w + 20))
 
-                # --- Core utilisation % (IDLE excluded) ---
+                # --- Core Utilization % (IDLE excluded) ---
                 _util_pct  = _core_util_pct_for(trace, core)
                 _util_item = self.addSimpleText(f"{_util_pct:.0f}%", font_sm)
                 _util_item.setBrush(QBrush(QColor("#77BB77")))

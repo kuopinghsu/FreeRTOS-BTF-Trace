@@ -560,7 +560,7 @@ export function aiFileStamp(date = new Date()) {
  * Keep in sync with ai_assistant.py::format_ai_conversation_markdown.
  */
 export function formatAiConversationMarkdown(entries, date = new Date(), responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
-  const out = ['# BTF Viewer — AI Conversation', '', `_Saved ${conversationStamp(date)}_`, '']
+  const out = ['# BTFViewer — AI Conversation', '', `_Saved ${conversationStamp(date)}_`, '']
   for (const entry of entries || []) {
     const role = entry.role
     const text = String(entry.content || entry.text || '').trim()
@@ -580,7 +580,7 @@ export function formatAiConversationMarkdown(entries, date = new Date(), respons
 
 /** Plain-text transcript of the conversation. */
 export function formatAiConversationText(entries, date = new Date(), responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
-  const out = ['BTF Viewer — AI Conversation', `Saved ${conversationStamp(date)}`, '']
+  const out = ['BTFViewer — AI Conversation', `Saved ${conversationStamp(date)}`, '']
   for (const entry of entries || []) {
     const text = String(entry.content || entry.text || '').trim()
     out.push(`${aiRoleLabel(entry.role, responseLanguage)}:`)

@@ -1,6 +1,6 @@
 /**
  * Load Balance gauges — Score and σ side by side (parity with desktop QPainter widget).
- * Score = 100 × (1 − Gini); σ = population stddev of core utilisation %.
+ * Score = 100 × (1 − Gini); σ = population stddev of core utilization %.
  *
  * Zones (aligned with Analysis Findings):
  *   Score red   — score < 70%
@@ -30,7 +30,7 @@ export function giniCoefficient(values) {
   return Math.max(0, Math.min(1, (n + 1) / n - (2 * giniNum) / (n * total)))
 }
 
-/** Population standard deviation of core utilisation %. */
+/** Population standard deviation of core utilization %. */
 export function coreUtilStddev(values) {
   const n = (values || []).length
   if (n < 2) return 0
@@ -40,7 +40,7 @@ export function coreUtilStddev(values) {
 
 /**
  * Load Balance {score, gini, stddev} for ≥2 non-negative values with a
- * positive total (e.g. per-core utilisation %), else null.
+ * positive total (e.g. per-core utilization %), else null.
  */
 export function loadBalanceMetrics(values) {
   const n = (values || []).length

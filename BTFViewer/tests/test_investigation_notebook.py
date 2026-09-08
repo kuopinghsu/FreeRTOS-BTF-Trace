@@ -378,10 +378,17 @@ class HtmlSectionTests(unittest.TestCase):
             inv, format_ns=lambda ns: f"{ns}us",
             chains=conclusion_evidence_chains(inv), scope_title=" (C1–C2)")
         self.assertIn("<h2>Investigation (C1–C2)</h2>", html)
-        for label in ("Facts", "Hypotheses", "Conclusions", "Unresolved questions"):
-            self.assertIn(f"{label}</h3>", html)
+        # Same six sections, same order, as the Notebook UI.
+        import re
+        self.assertEqual(
+            re.findall(r'<h3 class="sub">([^<]+)</h3>', html),
+            ["Question", "Scope", "Hypotheses", "Evidence", "Open checks",
+             "Conclusion"],
+        )
         self.assertIn("Backed by:", html)
         self.assertIn("CS holds 300us", html)
+        self.assertIn("Runner stall", html)   # question
+        self.assertIn("[Measured", html)        # evidence provenance badge
         # exactly one outer <section> so the report TOC wrapper stays valid
         self.assertEqual(html.count("<section"), 1)
         self.assertEqual(html.count("</section>"), 1)
@@ -422,6 +429,25 @@ class ParityTests(unittest.TestCase):
             ("def scaffold_investigation_from_findings",
              "export function scaffoldInvestigationFromFindings"),
             ("INVESTIGATION_SCHEMA", "export const INVESTIGATION_SCHEMA"),
+            # schema/2 — versioned migration, durable status, six-section view.
+            ("def derive_status", "export function deriveStatus"),
+            ("def set_status", "export function setStatus"),
+            ("def migrate_investigation", "export function migrateInvestigation"),
+            ("def investigation_sections", "export function investigationSections"),
+            ("def investigation_header", "export function investigationHeader"),
+            ("NB_STATUS_READY", "NB_STATUS_READY"),
+            ("NB_SECTION_ORDER", "NB_SECTION_ORDER"),
+            ("NB_EMPTY_FROM_FINDINGS", "NB_EMPTY_FROM_FINDINGS"),
+            # §8 — structured evidence cards.
+            ("def normalize_evidence_card", "export function normalizeEvidenceCard"),
+            ("def guard_evidence_changes", "export function guardEvidenceChanges"),
+            ("def add_evidence", "export function addEvidence"),
+            ("def apply_evidence_edit", "export function applyEvidenceEdit"),
+            ("def update_evidence_explanation", "export function updateEvidenceExplanation"),
+            ("def evidence_nav_targets", "export function evidenceNavTargets"),
+            ("EVIDENCE_PROTECTED_FIELDS", "EVIDENCE_PROTECTED_FIELDS"),
+            ("EV_SOURCE_AI", "EV_SOURCE_AI"),
+            ("EV_KIND_MEASURED", "EV_KIND_MEASURED"),
         ):
             self.assertIn(py_name, py, py_name)
             self.assertIn(js_name, js, js_name)

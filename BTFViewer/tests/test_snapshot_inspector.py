@@ -102,12 +102,12 @@ class TestSnapshotInspector(unittest.TestCase):
         show_l = dlg._show_lbl.mapTo(dlg, dlg._show_lbl.rect().topLeft())
         self.assertGreaterEqual(
             show_l.x() - scope_r.x(), 6,
-            "Analysis Scope combo overlaps the Show label")
+            "Inspector Scope combo overlaps the Show label")
         lbl_r = dlg._scope_lbl.mapTo(dlg, dlg._scope_lbl.rect().topRight())
         combo_l = dlg._scope_combo.mapTo(dlg, dlg._scope_combo.rect().topLeft())
         self.assertLessEqual(
             lbl_r.x(), combo_l.x(),
-            "Analysis Scope label overlaps the combo")
+            "Inspector Scope label overlaps the combo")
         sizes = dlg._split.sizes()
         self.assertEqual(len(sizes), 3)
         self.assertGreater(sizes[1], sizes[0])

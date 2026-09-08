@@ -22,6 +22,7 @@ from .ai_investigation import (
     check_task_budgets,
     compare_performance_metrics,
     compare_tasks_metrics,
+    normalize_compare_payload,
     detect_anomalies,
     detect_priority_inversion,
     enrich_findings_with_ids,
@@ -261,6 +262,19 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_ANALYZE_PERIODICITY,
     AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
 )
+
+# Functional aliases of a canonical tool: kept dispatchable (stored workflows and
+# older models still emit them) but NOT sent to the model as separate schemas, so
+# no two model-visible tools do the same job. Keep in lockstep with
+# web/src/utils/aiTools.js AI_TOOL_MODEL_HIDDEN.
+AI_TOOL_CANONICAL_ALIASES: Dict[str, str] = {
+    AI_TOOL_PLAN_INVESTIGATION: AI_TOOL_INVESTIGATE,
+    AI_TOOL_OPTIMIZE: AI_TOOL_OPTIMIZE_EXPERIMENT,
+    AI_TOOL_GENERATE_EXPERIMENT_PLAN: AI_TOOL_RECOMMEND_EXPERIMENTS,
+    AI_TOOL_CLUSTER_INCIDENTS: AI_TOOL_CLUSTER_FINDINGS,
+    AI_TOOL_ANALYZE_TEMPORAL_CAUSALITY: AI_TOOL_CORRELATE_EVENTS,
+}
+_AI_TOOL_MODEL_HIDDEN: frozenset = frozenset(AI_TOOL_CANONICAL_ALIASES)
 
 # Namespace / prose junk models sometimes glue onto a tool name. ``nextstep:`` is
 # the big one: the model confuses the ``nextstep:{action}`` prose follow-up
@@ -512,7 +526,7 @@ def parse_btf_stats_href(href: Any) -> str:
     return ""
 
 # Tool-use policy (also AI_TOOL_PROMPT). Keep in sync with web aiTools.js.
-AI_TOOL_PROMPT = ("Use native tools only when evidence or an explicit viewer action requires them.\n\n1. Establish scope, subject, and comparison direction.\n2. Use the minimum sufficient evidence tool.\n3. Check missing links, contradictions, and credible alternatives.\n4. Continue only if another result could change the verdict.\n5. Verify before asserting a high-confidence root cause.\n\n- Use planning tools only for broad or ambiguous investigations.\n- Use exact metric or timeline tools when summaries lack required evidence.\n- For comparisons, A is candidate, B is baseline, and delta = A - B.\n- Use simulation or optimization only when requested.\n- Generate a report when requested. For Report mode or an explicit save/download,\n  call export_report after generate_report; otherwise export only when asked.\n- Analysis alone does not authorize viewer changes. Apply viewer changes only\n  when explicitly requested or promised by the selected workflow.\n- Stop when evidence is sufficient or tools cannot resolve the uncertainty.\n- Empty tool results mean no matching data in scope; say so and do not invent\n  values. Failed tools are failures \u2014 never claim the action or export succeeded.\n- Never claim an unconfirmed result, viewer change, or export.\n- After tools, separate retrieved evidence from applied viewer changes.\n- Use Mermaid only when it clarifies a supported relationship and the mode\n  permits it.").rstrip("\n")
+AI_TOOL_PROMPT = ("Use native tools only when evidence or an explicit viewer action requires them.\n\n1. Establish scope, subject, and comparison direction.\n2. Use the minimum sufficient evidence tool.\n3. Check missing links, contradictions, and credible alternatives.\n4. Continue only if another result could change the verdict.\n5. Verify before asserting a high-confidence root cause.\n\n- Use planning tools only for broad or ambiguous investigations.\n- Use exact metric or timeline tools when summaries lack required evidence.\n- For comparisons, A is Baseline A, B is Candidate B, table delta = A - B, and verdicts describe Candidate B versus Baseline A.\n- Use simulation or optimization only when requested.\n- Generate a report when requested. For Report mode or an explicit save/download,\n  call export_report after generate_report; otherwise export only when asked.\n- Analysis alone does not authorize viewer changes. Apply viewer changes only\n  when explicitly requested or promised by the selected workflow.\n- Stop when evidence is sufficient or tools cannot resolve the uncertainty.\n- Empty tool results mean no matching data in scope; say so and do not invent\n  values. Failed tools are failures \u2014 never claim the action or export succeeded.\n- Never claim an unconfirmed result, viewer change, or export.\n- After tools, separate retrieved evidence from applied viewer changes.\n- Use Mermaid only when it clarifies a supported relationship and the mode\n  permits it.").rstrip("\n")
 AI_TOOL_SYSTEM_ADDENDUM = AI_TOOL_PROMPT
 
 AI_MERMAID_SEQUENCE_EXAMPLE = """```mermaid
@@ -546,8 +560,12 @@ def ai_viewer_tools_for_mode(mode: Any = None, stage: Any = "") -> List[Dict[str
 
 
 def ai_viewer_tools() -> List[Dict[str, Any]]:
-    """OpenAI-compatible ``tools`` array."""
-    return annotate_tool_capabilities([
+    """OpenAI-compatible ``tools`` array (model-visible schemas only).
+
+    Functional aliases in ``AI_TOOL_CANONICAL_ALIASES`` stay dispatchable but are
+    not emitted as separate schemas.
+    """
+    catalog = annotate_tool_capabilities([
         {
             "type": "function",
             "function": {
@@ -1893,6 +1911,10 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
             },
         },
     ])
+    return [
+        t for t in catalog
+        if str((t.get("function") or {}).get("name") or "") not in _AI_TOOL_MODEL_HIDDEN
+    ]
 
 
 def parse_tool_arguments(raw: Any) -> Dict[str, Any]:
@@ -5516,15 +5538,22 @@ def generate_report_finding(
 
 
 def compare_performance_tabs(
-    candidate_summary: Dict[str, Any],
-    baseline_summary: Dict[str, Any],
+    baseline_a_summary: Dict[str, Any],
+    candidate_b_summary: Dict[str, Any],
     *,
     label_a: str = "A",
     label_b: str = "B",
 ) -> Dict[str, Any]:
-    snap_a = snapshot_from_summary(candidate_summary or {}, name=label_a)
-    snap_b = snapshot_from_summary(baseline_summary or {}, name=label_b)
-    ctx = compare_performance_metrics(snap_a, snap_b, label_a=label_a, label_b=label_b)
+    """Trace Compare deltas from two ``_trace_summary_snapshot`` dicts.
+
+    First argument is Baseline A (Trace A), second is Candidate B (Trace B);
+    verdicts describe Candidate B versus Baseline A.
+    """
+    snap_base = snapshot_from_summary(baseline_a_summary or {}, name=label_a)
+    snap_cand = snapshot_from_summary(candidate_b_summary or {}, name=label_b)
+    ctx = compare_performance_metrics(
+        snap_base, snap_cand, label_a=label_a, label_b=label_b,
+    )
     ok = bool(ctx.get("ok"))
     msg = str(ctx.get("message") or ("ok" if ok else "failed"))
     data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}

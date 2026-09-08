@@ -14,7 +14,7 @@ from .config import _APP_ICON_SVG, _APP_VERSION
 APP_VERSION = _APP_VERSION
 APP_ICON_SVG = _APP_ICON_SVG
 PRODUCT_NAME = "BTFViewer"
-PRODUCT_TAGLINE = "AI assistant for RTOS trace analysis — find evidence and explain"
+PRODUCT_TAGLINE = "Portable BTF trace analysis and evidence reports"
 
 
 def app_icon_svg_markup(size: int = 48) -> str:

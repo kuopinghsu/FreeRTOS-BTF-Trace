@@ -179,8 +179,10 @@ export const AI_EMPTY_REPLY_NUDGE = (
   + 'Answer now with a short analysis, or call a tool.'
 )
 
+// Clustering, simulation, optimization, memory and export are on-request
+// capabilities (see AI_CONTEXT_ON_REQUEST_TOOLS) — never baseline triage.
 export const AI_CONTEXT_STAGE_TOOLS = {
-  triage: ['detect_anomalies', 'cluster_findings', 'suggest_scope'],
+  triage: ['detect_anomalies', 'suggest_scope'],
   scope: ['set_cursors', 'zoom_to_range', 'highlight_task', 'open_statistics_section'],
   investigate: ['investigate', 'correlate_events', 'find_critical_path'],
   verify: ['verify_claim', 'detect_contradictions', 'challenge_conclusion'],
@@ -194,6 +196,33 @@ export const AI_CONTEXT_ALWAYS_TOOLS = [
 export const AI_CONTEXT_BALANCED_EXTRA_TOOLS = [
   'detect_anomalies', 'investigate', 'set_cursors', 'zoom_to_range',
   'highlight_task', 'challenge_conclusion',
+]
+// Full Evidence adds the deeper read-only evidence / reasoning / navigation
+// tools on top of every core-loop stage.
+export const AI_CONTEXT_FULL_EXTRA_TOOLS = [
+  'detect_priority_inversion', 'find_related_findings', 'compare_tasks',
+  'explain_finding', 'interpret_query', 'decompose_response_time',
+  'analyze_distribution', 'analyze_periodicity', 'build_task_dependency_graph',
+  'rank_root_causes', 'build_causal_chain', 'regression_explain',
+  'regression_localize', 'assess_evidence_sufficiency', 'generate_fingerprint',
+  'manage_hypotheses', 'analyze_traces', 'check_budget', 'baseline_score',
+  'set_view_mode', 'open_corridor_inspector', 'add_annotation',
+  'clear_marks', 'reset_view', 'trigger_compare', 'bookmark_finding',
+]
+// Only exposed when the active stage / request calls for them.
+export const AI_CONTEXT_ON_REQUEST_TOOLS = {
+  experiment: ['what_if', 'optimize_experiment', 'recommend_experiments'],
+  export: ['export_investigation'],
+  memory: [
+    'investigation_memory', 'find_similar_investigations',
+    'record_experiment_outcome', 'close_investigation',
+  ],
+}
+// Functional aliases of a canonical tool — dispatchable but never sent as a
+// schema. Keep in lockstep with btf_viewer_pkg/ai_tools.py.
+export const AI_TOOL_MODEL_HIDDEN = [
+  'plan_investigation', 'optimize', 'generate_experiment_plan',
+  'cluster_incidents', 'analyze_temporal_causality',
 ]
 const CONTEXT_TOOL_ROW_KEYS = new Set([
   'rows', 'episodes', 'slices', 'events', 'gaps', 'hits', 'times',
@@ -336,7 +365,6 @@ function stageToolNames(stage) {
 
 export function toolNamesForContextMode(mode = null, stage = '') {
   const key = normalizeAiContextMode(mode)
-  if (key === AI_CONTEXT_MODE_FULL) return null
   const names = []
   const seen = new Set()
   const add = (seq) => {
@@ -348,8 +376,29 @@ export function toolNamesForContextMode(mode = null, stage = '') {
       }
     }
   }
+  const hidden = new Set(AI_TOOL_MODEL_HIDDEN)
   let sid = String(stage || '').trim().toLowerCase()
   if (!sid || sid === 'idle' || sid === 'start') sid = 'triage'
+
+  if (key === AI_CONTEXT_MODE_FULL) {
+    // Whole core loop (triage → verify) + compare, always available in the
+    // deep-verification mode. Simulation / optimization / memory / export
+    // appear only when the active stage calls for them.
+    for (const core of ['triage', 'scope', 'investigate', 'verify', 'compare']) {
+      add(AI_CONTEXT_STAGE_TOOLS[core])
+    }
+    add(AI_CONTEXT_ALWAYS_TOOLS)
+    add(AI_CONTEXT_BALANCED_EXTRA_TOOLS)
+    add(AI_CONTEXT_FULL_EXTRA_TOOLS)
+    if (sid === 'experiment') add(AI_CONTEXT_ON_REQUEST_TOOLS.experiment)
+    if (sid === 'report') {
+      add(AI_CONTEXT_STAGE_TOOLS.report)
+      add(AI_CONTEXT_ON_REQUEST_TOOLS.export)
+    }
+    if (sid === 'verify' || sid === 'report') add(AI_CONTEXT_ON_REQUEST_TOOLS.memory)
+    return names.filter(n => !hidden.has(n))
+  }
+
   add(stageToolNames(sid))
   add(AI_CONTEXT_ALWAYS_TOOLS)
   if (key === AI_CONTEXT_MODE_BALANCED) {
@@ -371,7 +420,7 @@ export function toolNamesForContextMode(mode = null, stage = '') {
       }
     }
   }
-  return names
+  return names.filter(n => !hidden.has(n))
 }
 
 export function filterToolsForContextMode(tools, mode = null, stage = '') {
@@ -1444,7 +1493,7 @@ export function falsificationChecks(finding = null) {
       'Load Balance Score is in the green zone for this window',
       'Concurrent-active distribution is even across cores',
     ]
-    nextCheck = 'Open Core Utilisation / Load Balance Score'
+    nextCheck = 'Open Core Utilization / Load Balance Score'
   } else {
     checks = [
       'Cited jump:TIME is outside the cursor region',
@@ -3060,7 +3109,7 @@ export const STATS_UX_PAGE_ALIASES = {
   'preemption matrix': ['preemption matrix'],
   'mutex blocking': ['mutex blocking', 'mutex-blocking'],
   'core utilization over time': [
-    'core utilization over time', 'core utilisation over time',
+    'core utilization over time', 'core utilization over time',
   ],
   'switch reason breakdown': [
     'switch reason breakdown', 'switch reason', 'switch-reason',

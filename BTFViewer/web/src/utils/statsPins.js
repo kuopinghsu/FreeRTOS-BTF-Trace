@@ -179,7 +179,7 @@ export const STATS_PINNABLE_SECTIONS = Object.freeze([
  * Keep lockstep with btf_viewer_pkg/config.py STATS_SECTION_TITLES.
  */
 export const STATS_SECTION_TITLES = Object.freeze({
-  cores: 'Core Utilisation (excl. IDLE/TICK)',
+  cores: 'Core Utilization (excl. IDLE/TICK)',
   health: 'Trace Health (TICK)',
   task_health: 'Task Health',
   anomalies: 'Timeline Anomalies',

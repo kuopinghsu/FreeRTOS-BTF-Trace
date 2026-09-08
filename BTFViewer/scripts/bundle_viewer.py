@@ -59,6 +59,7 @@ BUNDLE_MODULES: list[str] = [
     "findings_triage",
     "investigation_findings",
     "investigation_notebook",
+    "investigation_ai",
     "ai_evidence_package",
     "anonymize_export",
     "workspace",
@@ -409,7 +410,7 @@ def _read_docstring(monolith: Path) -> str:
         doc = ast.get_docstring(mod, clean=False)
         if doc:
             return f'"""{doc}"""\n\n'
-    return '"""\nbtf_viewer.py - AI assistant for RTOS BTF trace analysis (PySide6).\n"""\n\n'
+    return '"""\nbtf_viewer.py - BTFViewer: portable BTF trace analysis (PySide6).\n"""\n\n'
 
 def _section_banner(name: str, body: str) -> str:
     marker = SECTION_MARKERS.get(name, name)

@@ -299,7 +299,7 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 |---|---|---|
 | 問題不明 | **Analysis Findings** | 分析結果所列的統計項目 |
 | Tick 抖動或 tickless 行為 | **Trace Health (TICK)** | 執行時間離群值 |
-| SMP 負載不均 | **Core Utilisation** | 同時運作的核心數，再檢查核心遷移 |
+| SMP 負載不均 | **Core Utilization** | 同時運作的核心數，再檢查核心遷移 |
 | 排程器成本過高 | **Kernel Switch Overhead** | 核心時間分布 |
 | 工作執行緩慢 | **Execution Time** | 搶佔及互斥鎖活動 |
 | 等待時間過長 | **Blocking Time** | 互斥鎖擁有者及搶佔活動 |
@@ -387,7 +387,7 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 |---|---|---|
 | 1 | **Trace A / Trace B 選擇器** | 選擇哪一份已開啟的追蹤資料作為 **Baseline (A)**、哪一個作為 **Candidate (B)**。 |
 | 2 | **範圍與 Δ 慣例** | 可選擇僅比較各分頁的游標範圍；說明文字指出 **Δ = Baseline A − Candidate B**（`—` 代表無法取得，`pp` 代表百分點）。 |
-| 3 | **區段導覽列** | 在各比較區段間切換——Summary、Top Tasks、Core Utilisation、Migrations、Execution、Blocking、Inter-Arrival、Response、Preemption、Sync、Mutex，以及跨追蹤資料的 **Trends**。 |
+| 3 | **區段導覽列** | 在各比較區段間切換——Summary、Top Tasks、Core Utilization、Migrations、Execution、Blocking、Inter-Arrival、Response、Preemption、Sync、Mutex，以及跨追蹤資料的 **Trends**。 |
 | 4 | **可比較性檢查** | 當兩份追蹤資料無法直接比較時提出警告——核心數不同，或工作集幾乎不重疊——提醒謹慎解讀各核心與負載平衡的差異。 |
 | 5 | **判定橫幅（Verdict banner）** | 整體結論（Improved / Regressed / Mixed / Unchanged），以及其背後的變差與改善數量。 |
 | 6 | **摘要卡片** | 變差數、改善數、警告數，以及單一的 **Biggest mover**（變動最大項）。 |

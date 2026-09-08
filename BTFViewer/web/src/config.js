@@ -92,7 +92,7 @@ export const STATS_HEAVY_SECTIONS = [
   'activation', 'ready_gap', 'idle', 'sync_level',
 ]
 // Factory default: every section starts collapsed. SMP-active traces expand+pin
-// Core Utilisation via defaultStatsPresentation() (Step 1.1).
+// Core Utilization via defaultStatsPresentation() (Step 1.1).
 export const STATS_DEFAULT_EXPANDED_SECTIONS = []
 export const COMMAND_PALETTE_ACTIONS = [
   ['analysis', 'Analysis Findings'],
@@ -102,16 +102,14 @@ export const COMMAND_PALETTE_ACTIONS = [
   ['marks', 'Marks'],
   ['ai', 'AI Assistant'],
   ['compare', 'Trace Compare'],
-  ['heatmap', 'Migration heatmap'],
-  ['focus', 'Focus mode'],
+  ['heatmap', 'Migration & Corridor Inspector'],
+  ['focus', 'Focus Mode'],
   ['settings', 'Settings'],
   ['limit-scope', 'Limit to C1–Cn'],
   ['fit', 'Fit Trace'],
-  ['inspect-task', 'Inspect task'],
-  ['preset-triage', 'Workspace: Triage'],
-  ['preset-latency', 'Workspace: Latency'],
-  ['preset-smp', 'Workspace: SMP'],
-  ['preset-compare', 'Workspace: Compare'],
+  ['preset-triage', 'Statistics preset: Triage'],
+  ['preset-latency', 'Statistics preset: Latency'],
+  ['preset-smp', 'Statistics preset: SMP'],
 ]
 /** Per-action palette chrome. Keep ACTIONS as [id, label] for compatibility.
  *  requires: none | trace | two_traces | cursors2 */
@@ -160,7 +158,7 @@ export const COMMAND_PALETTE_META = Object.freeze({
   },
   heatmap: {
     shortcut: '',
-    synonyms: ['migration', 'corridor'],
+    synonyms: ['migration', 'corridor', 'heatmap'],
     requires: 'trace',
     disabled: 'Open a trace first',
   },
@@ -188,12 +186,6 @@ export const COMMAND_PALETTE_META = Object.freeze({
     requires: 'trace',
     disabled: 'Open a trace first',
   },
-  'inspect-task': {
-    shortcut: 'I',
-    synonyms: ['inspector', 'task info', 'quality'],
-    requires: 'trace',
-    disabled: 'Open a trace first',
-  },
   'preset-triage': {
     shortcut: '',
     synonyms: ['workspace', 'health'],
@@ -211,12 +203,6 @@ export const COMMAND_PALETTE_META = Object.freeze({
     synonyms: ['workspace', 'multicore', 'cores'],
     requires: 'trace',
     disabled: 'Open a trace first',
-  },
-  'preset-compare': {
-    shortcut: '',
-    synonyms: ['workspace', 'diff'],
-    requires: 'two_traces',
-    disabled: 'Open at least two traces',
   },
 })
 export const COMMAND_PALETTE_RECENT_MAX = 8
@@ -236,7 +222,6 @@ export const WORKSPACE_PRESETS = {
   'preset-smp': [
     'cores', 'migrations', 'core_pairs', 'affinity', 'task_core', 'core_time',
   ],
-  'preset-compare': [],
 }
 
 export function workspacePresetCollapsed(presetId, defaults) {

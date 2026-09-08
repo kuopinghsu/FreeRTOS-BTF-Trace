@@ -3283,7 +3283,7 @@ def format_ai_conversation_markdown(
 ) -> str:
     """Markdown transcript of the conversation (assistant replies kept as-is)."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    out = ["# BTF Viewer — AI Conversation", "", f"_Saved {stamp}_", ""]
+    out = ["# BTFViewer — AI Conversation", "", f"_Saved {stamp}_", ""]
     for entry in entries:
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
@@ -3305,7 +3305,7 @@ def format_ai_conversation_text(
 ) -> str:
     """Plain-text transcript of the conversation."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    out = ["BTF Viewer — AI Conversation", f"Saved {stamp}", ""]
+    out = ["BTFViewer — AI Conversation", f"Saved {stamp}", ""]
     for entry in entries:
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()

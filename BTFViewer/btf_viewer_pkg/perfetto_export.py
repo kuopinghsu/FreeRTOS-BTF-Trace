@@ -388,7 +388,7 @@ def build_perfetto_chrome_trace(
     """Return a Chrome Trace JSON object for *trace*."""
     meta = dict(trace.meta or {})
     other = {
-        "source": "RTOS BTF Viewer",
+        "source": "BTFViewer",
         "timeScale": trace.time_scale,
         "time_min": trace.time_min,
         "time_max": trace.time_max,

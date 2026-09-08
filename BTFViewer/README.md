@@ -299,7 +299,7 @@ BTFViewer calculates all results from recorded BTF events. It does not inspect s
 |---|---|---|
 | Unknown issue | **Analysis Findings** | Statistics section named by the finding |
 | Tick jitter or tickless behavior | **Trace Health (TICK)** | Execution-time outliers |
-| Uneven SMP load | **Core Utilisation** | Concurrent active cores, then migrations |
+| Uneven SMP load | **Core Utilization** | Concurrent active cores, then migrations |
 | High scheduler cost | **Kernel Switch Overhead** | Core time breakdown |
 | Slow task execution | **Execution Time** | Preemption and mutex activity |
 | Long wait time | **Blocking Time** | Mutex owner and preemption activity |
@@ -387,7 +387,7 @@ The **Summary** tab identifies the **Baseline** (reference trace) and **Candidat
 |---|---|---|
 | 1 | **Trace A / Trace B selectors** | Choose which open trace is the **Baseline (A)** and which is the **Candidate (B)**. |
 | 2 | **Scope and Δ convention** | Optionally limit the comparison to each tab's cursor range; the note states that **Δ = Baseline A − Candidate B** (`—` means unavailable, `pp` = percentage points). |
-| 3 | **Section rail** | Jump between compared areas — Summary, Top Tasks, Core Utilisation, Migrations, Execution, Blocking, Inter-Arrival, Response, Preemption, Sync, Mutex, and cross-trace Trends. |
+| 3 | **Section rail** | Jump between compared areas — Summary, Top Tasks, Core Utilization, Migrations, Execution, Blocking, Inter-Arrival, Response, Preemption, Sync, Mutex, and cross-trace Trends. |
 | 4 | **Comparability check** | Warns when the traces are not directly comparable — different core counts, or task sets that barely overlap — so per-core and load-balance deltas are read with care. |
 | 5 | **Verdict banner** | The overall call (Improved / Regressed / Mixed / Unchanged) with the regression and improvement counts behind it. |
 | 6 | **Summary cards** | Regressions, Improvements, Warnings, and the single **Biggest mover**. |
