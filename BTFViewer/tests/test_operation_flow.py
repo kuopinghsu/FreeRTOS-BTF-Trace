@@ -185,6 +185,52 @@ class VerifyDoesNotRerunFullInvestigation(unittest.TestCase):
             self.assertIn("test contradicting evidence", src)
 
 
+class SharedAiContextPath(unittest.TestCase):
+    """Step 2.3 / 3.3 — every contextual AI action uses one context path."""
+
+    def test_web_contextual_entry_points_route_through_focus_ai_and_ask(self):
+        # Analysis Findings, Explain region, Ask-AI-event and the Corridor
+        # inspector all funnel through the single focusAiAndAsk() helper.
+        for fn in ("queryAnalysisWithAi", "queryExplainRegionWithAi",
+                   "queryAskAiEvent", "queryCorridorWithAi"):
+            body = _js_body(APP_VUE, f"async function {fn}(")
+            self.assertIn("focusAiAndAsk", body, fn)
+        focus = _js_body(APP_VUE, "async function focusAiAndAsk(")
+        self.assertIn("askTemplate", focus)
+
+    def test_shared_context_builder_carries_standard_fields(self):
+        body = _js_body(APP_VUE, "function buildAiContext(")
+        for field in ("scope:", "filters:", "cursors:", "selection:",
+                      "selectedFinding:", "findings"):
+            self.assertIn(field, body, field)
+
+    def test_normalizer_carries_selection_finding_stage_both_builds(self):
+        js_body = _js_body(AICLIENT_JS, "export function normalizeAiContext(")
+        for key in ("selection:", "selectedFinding", "workflowStage"):
+            self.assertIn(key, js_body, key)
+        py_body = _py_method(AI_ASSISTANT_PY, "normalize_ai_context")
+        for key in ('"selection"', '"selected_finding"', '"workflow_stage"'):
+            self.assertIn(key, py_body, key)
+
+    def test_compare_keeps_its_own_evidence_type_context(self):
+        # The only permitted per-panel context (CSV compare tables).
+        self.assertIn("function buildAiCompareContext(", APP_VUE)
+        self.assertIn("_ai_build_compare_context", MAINWINDOW_PY)
+
+
+class StatisticsNavigationHasNoSideState(unittest.TestCase):
+    """Step 3.3 — all routes into a Statistics section share one navigator."""
+
+    def test_web_routes_use_apply_demo_sections(self):
+        for fn in ("onOpenFindingStatistics", "onAiOpenStats"):
+            body = _js_body(APP_VUE, f"function {fn}(") \
+                if f"function {fn}(" in APP_VUE \
+                else _js_body(APP_VUE, f"async function {fn}(")
+            self.assertIn("applyDemoSections", body, fn)
+            self.assertNotIn("cursors.value =", body)
+            self.assertNotIn("scopeToCursors =", body)
+
+
 class WorkspacePresetsAreLayoutOnly(unittest.TestCase):
     """Step 2.4 — presets change layout, never Scope / Filters / stage."""
 

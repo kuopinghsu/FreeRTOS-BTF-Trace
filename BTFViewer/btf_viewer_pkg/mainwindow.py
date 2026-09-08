@@ -9121,6 +9121,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 filters.append(
                     f"Core: {len(sc._core_filter_keys)} of {len(tr.core_names)}")
         selection = sc._locked_task if sc is not None else None
+        # Step 2.3 standard shared-context field: the finding selected in the
+        # open Analysis Findings dialog travels with Scope / Filters / selection
+        # (web parity: App.vue `findingsSelectedId`).
+        selected_finding = ""
+        dlg = getattr(self, "_analysis_findings_dlg", None)
+        if dlg is not None:
+            try:
+                selected_finding = str(
+                    (dlg._selected_finding() or {}).get("id") or "")
+            except (RuntimeError, AttributeError):
+                selected_finding = ""
         return {
             "findings_text": text,
             "findings": findings,
@@ -9130,6 +9141,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "cursors": cursors,
             "filters": filters,
             "selection": selection,
+            "selected_finding": selected_finding,
             "time_scale": getattr(tr, "time_scale", "") or "",
         }
 

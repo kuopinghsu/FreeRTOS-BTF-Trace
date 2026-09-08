@@ -1317,6 +1317,7 @@
       :quality-warnings="analysisQuality"
       :triage-state="findingsTriageState"
       @update:triage-state="onFindingsTriageUpdate"
+      @update:selected-id="findingsSelectedId = $event"
       @close="analysisOpen = false"
       @query-ai="queryAnalysisWithAi"
       @apply-scope="onApplyFindingScope"
@@ -1893,6 +1894,7 @@ const inspectorMode = ref('heatmap') // 'heatmap' | 'chord'
 const inspectorFocusPair = ref(null)
 const analysisOpen = ref(false)
 const findingsTriageState = ref(defaultTriageState())
+const findingsSelectedId = ref('')
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
 const paletteIndex = ref(0)
@@ -3312,6 +3314,7 @@ watch(activeTabId, (newId, oldId) => {
     inspectorFocusPair.value = null
     analysisOpen.value = false
     findingsTriageState.value = defaultTriageState()
+    findingsSelectedId.value = ''
     const leaving = tabs.value.find(t => t.id === oldId)
     if (leaving) saveFiltersToActiveTab(leaving)
   }
@@ -4571,10 +4574,12 @@ function buildAiContext() {
     span,
     cores: tr.coreNames?.length ?? tr.cores?.length ?? 0,
     cursors: (cursors.value || []).filter(c => c != null),
-    // Reserved for Step 2 AI context (item 3/4): same Filter/Selection
-    // representation shown in the status bar and Legend.
+    // Step 2.3 standard shared-context fields — one context path for every
+    // contextual AI entry point (Analysis Findings, Statistics, Corridor,
+    // Explain region): same Filter / selected task-core / selected finding.
     filters: activeFilterChips.value.map(c => c.label),
     selection: pinnedHighlightKey.value || null,
+    selectedFinding: findingsSelectedId.value || findings[0]?.id || '',
     timeScale: tr.timeScale || '',
   }
 }

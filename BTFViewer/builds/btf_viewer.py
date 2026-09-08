@@ -44168,6 +44168,30 @@ def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         or c.get("timeScale")
         or ""
     )
+    # Standard shared-context fields (Step 2.3): every contextual AI entry point
+    # routes through this one normalizer, so the selected task/core, selected
+    # finding, and current workflow stage travel with Scope / Filters / cursors
+    # instead of being re-derived per panel.
+    selection = (
+        c.get("selection")
+        or c.get("selected_task")
+        or c.get("selectedTask")
+        or None
+    )
+    selected_finding = str(
+        c.get("selected_finding")
+        or c.get("selectedFinding")
+        or c.get("finding_id")
+        or c.get("findingId")
+        or ""
+    ).strip()
+    workflow_stage = str(
+        c.get("workflow_stage")
+        or c.get("workflowStage")
+        or c.get("guide_stage")
+        or c.get("guideStage")
+        or ""
+    ).strip()
     return {
         "findings_text": findings or "",
         "span": c.get("span", "") or "",
@@ -44178,6 +44202,9 @@ def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         "findings": list(c.get("findings") or []),
         "filters": [str(f) for f in filters if f],
         "trace_time_unit": str(unit or "").strip(),
+        "selection": str(selection) if selection else None,
+        "selected_finding": selected_finding,
+        "workflow_stage": workflow_stage,
     }
 
 
@@ -49394,6 +49421,8 @@ def create_ai_assistant_panel(
                 except Exception:
                     ctx = {}
             if not finding_id:
+                finding_id = str(ctx.get("selected_finding") or "").strip()
+            if not finding_id:
                 findings = ctx.get("findings") or []
                 if isinstance(findings, list) and findings:
                     first = findings[0]
@@ -49411,7 +49440,9 @@ def create_ai_assistant_panel(
                 except Exception:
                     cursors = 0
             if not selected:
-                selected = str(ctx.get("selected_task") or "").strip()
+                selected = str(
+                    ctx.get("selection") or ctx.get("selected_task") or ""
+                ).strip()
             stage = ""
             try:
                 stage = investigation_guide_stage(
@@ -96579,6 +96610,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 filters.append(
                     f"Core: {len(sc._core_filter_keys)} of {len(tr.core_names)}")
         selection = sc._locked_task if sc is not None else None
+        # Step 2.3 standard shared-context field: the finding selected in the
+        # open Analysis Findings dialog travels with Scope / Filters / selection
+        # (web parity: App.vue `findingsSelectedId`).
+        selected_finding = ""
+        dlg = getattr(self, "_analysis_findings_dlg", None)
+        if dlg is not None:
+            try:
+                selected_finding = str(
+                    (dlg._selected_finding() or {}).get("id") or "")
+            except (RuntimeError, AttributeError):
+                selected_finding = ""
         return {
             "findings_text": text,
             "findings": findings,
@@ -96588,6 +96630,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "cursors": cursors,
             "filters": filters,
             "selection": selection,
+            "selected_finding": selected_finding,
             "time_scale": getattr(tr, "time_scale", "") or "",
         }
 

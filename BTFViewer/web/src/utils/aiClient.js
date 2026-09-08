@@ -1141,6 +1141,17 @@ export function normalizeAiContext(ctx = {}) {
   if (filters == null) filters = []
   else if (!Array.isArray(filters)) filters = [filters]
   const unit = c.trace_time_unit ?? c.traceTimeUnit ?? c.time_scale ?? c.timeScale ?? ''
+  // Standard shared-context fields (Step 2.3): every contextual AI entry point
+  // routes through this one normalizer, so the selected task/core, selected
+  // finding, and current workflow stage travel with Scope / Filters / cursors
+  // instead of being re-derived per panel.
+  const selection = c.selection ?? c.selected_task ?? c.selectedTask ?? null
+  const selectedFinding = String(
+    c.selectedFinding ?? c.selected_finding ?? c.findingId ?? c.finding_id ?? '',
+  ).trim()
+  const workflowStage = String(
+    c.workflowStage ?? c.workflow_stage ?? c.guideStage ?? c.guide_stage ?? '',
+  ).trim()
   return {
     findingsText: String(c.findingsText ?? c.findings_text ?? ''),
     span: String(c.span ?? ''),
@@ -1151,6 +1162,9 @@ export function normalizeAiContext(ctx = {}) {
     findings: Array.isArray(c.findings) ? c.findings : [],
     filters: filters.filter(Boolean).map(String),
     traceTimeUnit: String(unit || '').trim(),
+    selection: selection ? String(selection) : null,
+    selectedFinding,
+    workflowStage,
   }
 }
 

@@ -1368,15 +1368,16 @@ const suggestedPrimaryId = computed(() => {
   } catch { /* ignore */ }
   const findingId = String(
     evidencePayload?.finding?.id
+    || ctx.selectedFinding
     || ctx.findings?.[0]?.id
     || '',
   ).trim()
   return suggestPrimaryAiTemplate({
     findingId,
     cursorCount: Array.isArray(ctx.cursors) ? ctx.cursors.length : 0,
-    selectedTask: String(gui.selected_task || ctx.selected_task || '').trim(),
+    selectedTask: String(gui.selected_task || ctx.selection || ctx.selected_task || '').trim(),
     openTraceCount: loadedTabs.value.length || 1,
-    guideStage: guideStage.value || '',
+    guideStage: guideStage.value || ctx.workflowStage || '',
   })
 })
 
@@ -1391,7 +1392,7 @@ const contextRowSummary = computed(() => {
   } catch { /* ignore */ }
   const findings = Array.isArray(ctx.findings) ? ctx.findings.length : 0
   const focus = String(
-    gui.selected_task || ctx.selected_task || pinnedFocusTask(ctx) || '',
+    gui.selected_task || ctx.selection || ctx.selected_task || pinnedFocusTask(ctx) || '',
   ).trim()
   return {
     stage: guidedStageLabel(guideStage.value) || 'Ready',

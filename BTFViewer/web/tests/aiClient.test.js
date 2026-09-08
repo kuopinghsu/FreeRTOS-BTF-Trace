@@ -922,6 +922,26 @@ describe('AI endpoint helpers', () => {
     assert.equal(normalizeAiContext({ findings_text: 'a' }).findingsText, 'a')
     assert.equal(normalizeAiContext({ findingsText: 'b' }).findingsText, 'b')
     assert.deepEqual(normalizeAiContext({ cursors: [1, 2] }).cursors, [1, 2])
+    // Step 2.3 — shared normalizer carries selected task/core, selected
+    // finding, and workflow stage (either casing).
+    const std = normalizeAiContext({
+      selection: 'CtrlTask[7]',
+      selectedFinding: 'response_time_high',
+      workflow_stage: 'verify',
+    })
+    assert.equal(std.selection, 'CtrlTask[7]')
+    assert.equal(std.selectedFinding, 'response_time_high')
+    assert.equal(std.workflowStage, 'verify')
+    const alias = normalizeAiContext({
+      selected_task: 'T1', finding_id: 'f1', guideStage: 'scope',
+    })
+    assert.equal(alias.selection, 'T1')
+    assert.equal(alias.selectedFinding, 'f1')
+    assert.equal(alias.workflowStage, 'scope')
+    const empty = normalizeAiContext({})
+    assert.equal(empty.selection, null)
+    assert.equal(empty.selectedFinding, '')
+    assert.equal(empty.workflowStage, '')
   })
 
   it('buildAiUserMessage includes cursor region window', async () => {

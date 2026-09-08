@@ -1989,6 +1989,25 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(
             with_filters["filters"], ["Task: Foo", "Migration: bar"])
         self.assertEqual(normalize_ai_context({}).get("filters"), [])
+        # Step 2.3 — the shared normalizer carries selected task/core, selected
+        # finding, and workflow stage (snake_case or camelCase).
+        std = normalize_ai_context({
+            "selection": "CtrlTask[7]",
+            "selectedFinding": "response_time_high",
+            "workflow_stage": "verify",
+        })
+        self.assertEqual(std["selection"], "CtrlTask[7]")
+        self.assertEqual(std["selected_finding"], "response_time_high")
+        self.assertEqual(std["workflow_stage"], "verify")
+        alias = normalize_ai_context({
+            "selected_task": "T1", "finding_id": "f1", "guideStage": "scope"})
+        self.assertEqual(alias["selection"], "T1")
+        self.assertEqual(alias["selected_finding"], "f1")
+        self.assertEqual(alias["workflow_stage"], "scope")
+        empty = normalize_ai_context({})
+        self.assertIsNone(empty["selection"])
+        self.assertEqual(empty["selected_finding"], "")
+        self.assertEqual(empty["workflow_stage"], "")
 
     def test_conversation_export_formats(self) -> None:
         entries = [

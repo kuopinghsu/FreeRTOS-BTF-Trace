@@ -360,7 +360,7 @@ const props = defineProps({
 const emit = defineEmits([
   'close', 'query-ai', 'apply-scope', 'open-statistics', 'show-evidence',
   'save-recipe', 'save-story', 'recalculate-context',
-  'add-to-investigation', 'update:triageState',
+  'add-to-investigation', 'update:triageState', 'update:selectedId',
 ])
 
 const showOnTimelineLabel = SHOW_ON_TIMELINE_LABEL
@@ -593,6 +593,10 @@ watch(displayFindings, (items) => {
   if (id && items.some(f => (f.id || '') === id)) return
   selectedId.value = items[0]?.id || ''
 })
+
+// Surface the selected finding so the shared AI context builder can carry it
+// (Step 2.3: one context path — selected finding travels with Scope/Filters).
+watch(selectedId, (v) => emit('update:selectedId', String(v || '')), { immediate: true })
 
 const selectedStatus = computed(() =>
   findingQueueStatus(selectedFinding.value?.id || '', triageState.value))
