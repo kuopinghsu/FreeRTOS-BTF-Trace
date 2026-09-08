@@ -11408,10 +11408,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if scope:
             self._on_explore_range(scope)
 
-    def _investigate_finding(self, finding: dict, section_id: str) -> None:
-        """Step-1 item 7: plain, non-AI Investigate — scope the finding then
-        jump straight to its Statistics section (no AI Assistant required)."""
-        self._apply_finding_scope(finding)
+    def _open_finding_statistics(self, finding: dict, section_id: str) -> None:
+        """Step 1.2 — open the finding's Statistics section only.
+
+        No AI Assistant required, and (unlike the old "Investigate" action) no
+        Scope / Filter / Limit-to-cursors change. The recommended cursor window
+        stays a suggestion the user applies explicitly via "Apply cursors".
+        """
         self._focus_statistics_panel(force=True)
         panel = getattr(self, "_stats_panel", None)
         if panel is not None and hasattr(panel, "scroll_to_section"):
@@ -11464,26 +11467,29 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 5000)
             return
         ns = int(target["ns"])
-        # Preserve Scope/Filters: do not call _apply_finding_scope / explore-range.
+        # Navigation only (Step 1.3): never change Scope / Filters / Limit.
+        # Only drop an Evidence marker in a free cursor slot when the current
+        # cursors are NOT limiting Statistics — otherwise a new cursor would
+        # silently widen/alter the measured Scope.
         view = getattr(self, "_view", None)
         if view is not None:
             scene = getattr(view, "_scene", None)
-            if scene is not None and hasattr(scene, "add_cursor"):
+            scope_limiting = (
+                panel is not None
+                and getattr(panel, "_scope_to_cursors", False)
+                and len(list(getattr(panel, "_cursor_times", None) or [])) >= 2
+            )
+            if scene is not None and hasattr(scene, "add_cursor") and not scope_limiting:
                 existing = list(scene.cursor_times()) if hasattr(scene, "cursor_times") else []
                 near = any(abs(int(t) - ns) <= 1 for t in existing)
-                if not near:
-                    # Place one Evidence marker without clearing existing Scope cursors.
-                    max_c = max(2, int(getattr(self, "_max_cursors_val", 4) or 4))
-                    if len(existing) >= max_c and hasattr(scene, "clear_cursors"):
-                        # Prefer keeping Scope cursors: drop nothing; just jump.
+                max_c = max(2, int(getattr(self, "_max_cursors_val", 4) or 4))
+                if not near and len(existing) < max_c:
+                    try:
+                        scene.add_cursor(ns)
+                        if hasattr(view, "cursors_changed"):
+                            view.cursors_changed.emit(scene.cursor_times())
+                    except Exception:
                         pass
-                    else:
-                        try:
-                            scene.add_cursor(ns)
-                            if hasattr(view, "cursors_changed"):
-                                view.cursors_changed.emit(scene.cursor_times())
-                        except Exception:
-                            pass
             self._jump_to_ns(ns)
         task = str(target.get("task") or finding.get("task") or "").strip()
         mk = str(target.get("mk") or "").strip()
@@ -11887,92 +11893,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         def _on_triage_change(state: dict) -> None:
             self._findings_triage_state = dict(state or {})
 
-        def _on_add_to_case(finding: dict) -> None:
-            panel = getattr(self, "_ai_panel", None)
-            if panel is not None and hasattr(panel, "add_finding_to_investigation_case"):
-                ok = panel.add_finding_to_investigation_case(finding)
-                if ok:
-                    self.statusBar().showMessage("Finding added to AI Case", 3000)
-                else:
-                    self.statusBar().showMessage("Could not add finding to Case", 4000)
-            else:
-                self.statusBar().showMessage("AI Assistant unavailable for Case", 4000)
-
-        def _on_undo_investigate() -> None:
-            snap = getattr(self, "_findings_investigate_undo", None)
-            if not isinstance(snap, dict):
-                return
-            times = [int(t) for t in (snap.get("cursor_times") or [])]
-            view = getattr(self, "_view", None)
-            if view is not None and hasattr(view, "_scene"):
-                view.begin_programmatic_viewport()
-                try:
-                    view._scene.clear_cursors()
-                    for t in times:
-                        view._scene.add_cursor(t)
-                    view.cursors_changed.emit(view._scene.cursor_times())
-                finally:
-                    view.end_programmatic_viewport()
-            panel = self._stats_panel
-            want_scope = bool(snap.get("scope_to_cursors")) and len(times) >= 2
-            if panel is not None:
-                panel._scope_to_cursors = want_scope
-                cb = getattr(panel, "_scope_cb", None)
-                if cb is not None:
-                    cb.blockSignals(True)
-                    cb.setChecked(want_scope)
-                    cb.blockSignals(False)
-                panel.set_cursor_times(times, refresh_stats=True)
-            vp_raw = snap.get("viewport")
-            if isinstance(vp_raw, str) and view is not None:
-                vp = viewport_from_json(vp_raw)
-                if vp is not None:
-                    sc = view._scene
-                    if vp.fit_mode:
-                        view.zoom_fit()
-                    elif vp.zoom_tpp > 0:
-                        sc._timescale_per_px = max(
-                            sc._timescale_per_px_default, float(vp.zoom_tpp))
-                        view._fit_mode = False
-                        sc.rebuild()
-                        view.zoom_changed.emit(sc.timescale_per_px)
-            self._findings_investigate_undo = None
-            self.statusBar().showMessage("Restored Scope from before Investigate", 3000)
-
-        def _wrap_investigate(finding: dict, section_id: str) -> None:
-            panel = self._stats_panel
-            view = getattr(self, "_view", None)
-            times = []
-            if view is not None and hasattr(view, "_scene"):
-                times = list(view._scene.cursor_times())
-            elif panel is not None:
-                times = list(getattr(panel, "_cursor_times", None) or [])
-            vp_json = None
-            tab = getattr(self, "_active_tab", None)
-            if tab is not None and hasattr(tab, "vm") and view is not None:
-                try:
-                    tab.vm.capture_viewport_from_view(view)
-                    vp_json = viewport_to_json(tab.vm.viewport)
-                except Exception:
-                    vp_json = None
-            self._findings_investigate_undo = {
-                "cursor_times": times,
-                "scope_to_cursors": bool(
-                    getattr(panel, "_scope_to_cursors", False) if panel else False),
-                "viewport": vp_json,
-            }
-            self._investigate_finding(finding, section_id)
-
         triage = getattr(self, "_findings_triage_state", None) or {}
-        cur_lo = cur_hi = None
-        cur_limit = False
-        panel = self._stats_panel
-        _all_cur = list(getattr(panel, "_cursor_times", None) or []) if panel is not None else []
-        if panel is not None and getattr(panel, "_scope_to_cursors", False):
-            times = list(_all_cur)
-            if len(times) >= 2:
-                cur_limit = True
-                cur_lo, cur_hi = min(times), max(times)
 
         # Context strip (web `<AnalysisContextStrip>`): trace · scope · filters.
         from .analysis_context import build_analysis_context
@@ -12014,17 +11935,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ai_enabled=self._ai_feature_enabled(),
             ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
             on_apply_scope=self._apply_finding_scope,
-            on_investigate=_wrap_investigate,
+            on_open_statistics=self._open_finding_statistics,
             on_show_evidence=self._show_finding_evidence,
             on_ai_query=_on_ai_query,
             triage_state=triage,
             on_triage_change=_on_triage_change,
-            on_add_to_case=_on_add_to_case,
             on_add_to_investigation=self._add_finding_to_investigation,
-            on_undo_investigate=_on_undo_investigate,
-            current_limit=cur_limit,
-            current_cursor_lo=cur_lo,
-            current_cursor_hi=cur_hi,
             ux_events=evs,
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,

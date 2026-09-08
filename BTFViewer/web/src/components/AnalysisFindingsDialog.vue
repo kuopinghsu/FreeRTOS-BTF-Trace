@@ -180,15 +180,11 @@
 
             <hr class="analysis-detail-rule">
             <div class="analysis-scope-text">{{ scopeHint }}</div>
-            <pre
-              v-if="investigatePending"
-              class="analysis-investigate-preview"
-            >{{ investigatePreviewText }}</pre>
             <div class="analysis-detail-actions">
               <button
                 type="button"
                 class="analysis-btn"
-                title="Place C1–C2 on the recommended window and zoom the timeline"
+                title="Suggestion only — place C1–C2 on the recommended window and zoom the timeline"
                 @click="applyScope"
               >
                 Apply cursors
@@ -202,41 +198,15 @@
                 {{ showOnTimelineLabel }}
               </button>
               <button
-                v-if="!investigatePending"
                 type="button"
                 class="analysis-btn analysis-btn-primary"
-                :disabled="!investigateSectionId"
-                :title="investigateSectionId
-                  ? 'Preview Scope and Statistics changes, then Confirm'
+                :disabled="!statisticsSectionId"
+                :title="statisticsSectionId
+                  ? 'Open the related Statistics section (does not change Scope, Filters, or Limit to cursors)'
                   : 'No specific Statistics section is associated with this finding'"
-                @click="beginInvestigate"
+                @click="openStatistics"
               >
-                Investigate…
-              </button>
-              <button
-                v-if="investigatePending"
-                type="button"
-                class="analysis-btn analysis-btn-primary"
-                @click="confirmInvestigate"
-              >
-                Confirm Investigate
-              </button>
-              <button
-                v-if="investigatePending"
-                type="button"
-                class="analysis-btn"
-                @click="cancelInvestigate"
-              >
-                Cancel
-              </button>
-              <button
-                v-if="canUndoInvestigate && !investigatePending"
-                type="button"
-                class="analysis-btn"
-                title="Restore cursors and Limit-to-cursors from before Investigate"
-                @click="emit('undo-investigate')"
-              >
-                Undo Scope
+                Open Statistics
               </button>
             </div>
 
@@ -254,12 +224,6 @@
                 :disabled="!selectedFinding?.id"
                 @click="toggleDismiss"
               >{{ isDismissed ? 'Restore' : 'Dismiss…' }}</button>
-              <button
-                type="button"
-                class="analysis-btn"
-                :disabled="!selectedFinding?.id"
-                @click="addToCase"
-              >{{ isInCase ? 'Remove from case' : 'Add to case' }}</button>
               <button
                 type="button"
                 class="analysis-btn"
@@ -333,7 +297,6 @@
             @click="explainFinding(lv.id)"
           >{{ lv.label }}</button>
         </div>
-        <button type="button" class="analysis-popup-item" role="menuitem" @click="askAi('root_cause')">Root cause…</button>
         <button type="button" class="analysis-popup-item" role="menuitem" @click="askAi({ template: 'auto_investigate', findingId: selectedId })">Auto investigate…</button>
       </div>
       <div
@@ -370,13 +333,11 @@ import {
   findingQueueStatus,
   findingFilterFacets,
   groupFindingsByIncident,
-  formatInvestigatePreview,
   SORT_SEVERITY,
   SORT_KEYS,
   SORT_LABELS,
   QUEUE_OPEN,
   QUEUE_DONE,
-  QUEUE_CASE,
   QUEUE_DISMISSED,
 } from '../utils/findingsTriage.js'
 import { SHOW_ON_TIMELINE_LABEL } from '../utils/evidenceHistory.js'
@@ -394,16 +355,12 @@ const props = defineProps({
   timeMax: { type: Number, default: 0 },
   qualityWarnings: { type: Array, default: () => [] },
   triageState: { type: Object, default: null },
-  currentLimit: { type: Boolean, default: false },
-  currentCursorLo: { type: Number, default: null },
-  currentCursorHi: { type: Number, default: null },
-  canUndoInvestigate: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
-  'close', 'query-ai', 'apply-scope', 'investigate', 'show-evidence',
-  'save-recipe', 'save-story', 'recalculate-context', 'add-to-case',
-  'add-to-investigation', 'update:triageState', 'undo-investigate',
+  'close', 'query-ai', 'apply-scope', 'open-statistics', 'show-evidence',
+  'save-recipe', 'save-story', 'recalculate-context',
+  'add-to-investigation', 'update:triageState',
 ])
 
 const showOnTimelineLabel = SHOW_ON_TIMELINE_LABEL
@@ -413,7 +370,6 @@ const filterCategory = ref('')
 const sortBy = ref(SORT_SEVERITY)
 const groupIncidents = ref(true)
 const collapsedIncidents = ref({})
-const investigatePending = ref(false)
 
 // ---- master/detail divider (persisted to localStorage) ----------------
 const SPLIT_LS_KEY = 'btfviewer.analysisFindings.splitPx'
@@ -484,7 +440,6 @@ function commitTriage(next) {
 const queueTabs = [
   { id: QUEUE_OPEN, label: 'Open' },
   { id: QUEUE_DONE, label: 'Done' },
-  { id: QUEUE_CASE, label: 'Case' },
   { id: QUEUE_DISMISSED, label: 'Dismissed' },
 ]
 
@@ -601,7 +556,6 @@ function rowMeta(f) {
   if (f?.evidence_strength_label) bits.push(String(f.evidence_strength_label))
   if (triageState.value.dismissed?.[fid]) bits.push('dismissed')
   else if ((triageState.value.reviewed || []).includes(fid)) bits.push('done')
-  else if ((triageState.value.case || []).includes(fid)) bits.push('in case')
   return bits.join(' · ')
 }
 
@@ -645,8 +599,6 @@ const selectedStatus = computed(() =>
 const isDone = computed(() =>
   (triageState.value.reviewed || []).includes(String(selectedFinding.value?.id || '')))
 const isDismissed = computed(() => selectedStatus.value === QUEUE_DISMISSED)
-const isInCase = computed(() =>
-  (triageState.value.case || []).includes(String(selectedFinding.value?.id || '')))
 
 function toggleDone() {
   const f = selectedFinding.value
@@ -667,17 +619,6 @@ function toggleDismiss() {
   commitTriage(applyTriageAction(triageState.value, f.id, 'dismiss', {
     reason: String(reason).trim() || 'Dismissed',
   }))
-}
-
-function addToCase() {
-  const f = selectedFinding.value
-  if (!f?.id) return
-  if (isInCase.value) {
-    commitTriage(applyTriageAction(triageState.value, f.id, 'uncase'))
-    return
-  }
-  commitTriage(applyTriageAction(triageState.value, f.id, 'case'))
-  emit('add-to-case', f)
 }
 
 function addToInvestigation() {
@@ -705,47 +646,22 @@ function showEvidence() {
   if (f) emit('show-evidence', f)
 }
 
-const investigateSectionId = computed(() => {
+const statisticsSectionId = computed(() => {
   const f = selectedFinding.value
   return (f && FINDING_SECTION_MAP[f.id || '']) || null
 })
 
-const investigatePreviewText = computed(() => {
+/**
+ * Step 1.2 — "Open Statistics" replaces the old "Investigate" action.
+ * It opens the related Statistics section only. It does not change Scope,
+ * Filters, or "Limit to C1–Cn"; the recommended cursor window stays a
+ * suggestion the user applies explicitly via "Apply cursors".
+ */
+function openStatistics() {
   const f = selectedFinding.value
-  if (!f) return ''
-  const scope = bestFindingScope(f, props.uxEvents, props.timeMin, props.timeMax)
-  const sid = investigateSectionId.value || ''
-  return formatInvestigatePreview(f, {
-    scope,
-    sectionId: sid,
-    sectionLabel: sid,
-    currentLimit: props.currentLimit,
-    currentLo: props.currentCursorLo,
-    currentHi: props.currentCursorHi,
-  })
-})
-
-function beginInvestigate() {
-  if (!investigateSectionId.value || !selectedFinding.value) return
-  investigatePending.value = true
-}
-
-function cancelInvestigate() {
-  investigatePending.value = false
-}
-
-function confirmInvestigate() {
-  const f = selectedFinding.value
-  const sectionId = investigateSectionId.value
+  const sectionId = statisticsSectionId.value
   if (!f || !sectionId) return
-  investigatePending.value = false
-  emit('investigate', { finding: f, sectionId })
-}
-
-watch(selectedId, () => { investigatePending.value = false })
-
-function investigate() {
-  beginInvestigate()
+  emit('open-statistics', { finding: f, sectionId })
 }
 
 function placeMenu(btn, styleRef) {
@@ -1040,18 +956,6 @@ function moreAction(kind) {
 .analysis-list li.in-incident {
   margin-left: 10px;
   border-left: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
-}
-.analysis-investigate-preview {
-  width: 100%;
-  margin: 0 0 4px;
-  padding: 8px 10px;
-  font: inherit;
-  font-size: 11px;
-  white-space: pre-wrap;
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .finding-check-next {
   font-size: 11px;

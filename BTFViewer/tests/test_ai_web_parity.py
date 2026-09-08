@@ -303,11 +303,13 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8")
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         self.assertIn("Investigate…", dlg)
-        self.assertIn("Root cause…", dlg)
         self.assertIn("Apply cursors", dlg)
         self.assertIn("Investigate…", stats)
-        self.assertIn("Root cause…", stats)
         self.assertIn("Apply cursors", stats)
+        # Step 2.2: 'Root cause…' dropped from the Analysis Findings Ask AI menu
+        # (still reachable as 'Test leading explanation' under More templates…).
+        self.assertNotIn("Root cause…", dlg)
+        self.assertNotIn("Root cause…", stats)
         self.assertIn("best_finding_scope,", stats)
         self.assertNotRegex(stats, r"(?m)^\s+from \.ux_explore import")
         # Web Ask AI menu → emit('query-ai', payload); Desktop Ask AI menu → _query_with_ai.
@@ -2149,7 +2151,7 @@ class AiWebParityTests(unittest.TestCase):
 
         findings = [
             "Query findings…", "Investigate…", "Verify…", "Explain",
-            "Root cause…", "Auto investigate…", "Save recipe…", "Story…",
+            "Auto investigate…", "Save recipe…", "Story…",
         ]
         for label in findings:
             self.assertIn(label, dlg, f"web findings: {label}")
@@ -2159,7 +2161,6 @@ class AiWebParityTests(unittest.TestCase):
             r'addAction\("Investigate…"',
             r'addAction\("Verify…"',
             r'addMenu\("Explain"\)',
-            r'addAction\("Root cause…"',
             r'addAction\("Auto investigate…"',
             r'Save recipe…',
             r'Story…',

@@ -42636,19 +42636,21 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "evidence is clear, call set_cursors, zoom_to_range, and highlight_task "
         "on the evidence window. Cite Evidence as jump:TIME bullets with "
         "task/core names and values with units. Output: Goal; Steps performed; "
-        "Root cause or leading explanation; Evidence; "
+        "Root cause or leading explanation; Alternative considered; Evidence; "
         "Confidence/quality/coverage; Next check. Viewer action: focus_evidence.",
     ),
     (
         "verify",
         "Verify finding",
-        "Verify the selected Analysis Finding. Call investigate(finding_id=ID) "
-        "first (use the finding_id given in the user message). Then collect "
-        "evidence with query_raw_metric / correlate_events / search_timeline as "
-        "needed. Call verify_claim on the finding statement and "
-        "challenge_conclusion to list alternatives. Place cursors and "
-        "zoom_to_range on the strongest evidence. Name the Statistics page "
-        "to open next. "
+        "Verify the selected Analysis Finding without rerunning a full "
+        "investigation. Start from the finding statement and the evidence "
+        "already in the investigation history; reuse existing jump:TIME "
+        "evidence and measured values first. Call investigate(finding_id=ID), "
+        "query_raw_metric, correlate_events, or search_timeline only for "
+        "evidence that is genuinely missing. Call verify_claim on the finding "
+        "statement and challenge_conclusion to test contradicting evidence. "
+        "Place cursors and zoom_to_range on the strongest evidence. Name the "
+        "Statistics page to open next. "
         "Finish with a verdict: Confirmed, Rejected, or Inconclusive; list "
         "Evidence as jump:TIME bullets; Confidence (High/Medium/Low); "
         "Alternatives considered; and one next check. Viewer action: "
@@ -42656,7 +42658,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     ),
     (
         "root_cause",
-        "Root cause",
+        "Test leading explanation",
         "Test the leading explanation for the top finding. Preferred tools: "
         "investigate; correlate_events or find_critical_path for the episode "
         "window; query_raw_metric for missing measured values; "
@@ -43138,12 +43140,15 @@ AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("What-if / Optimize", ("what_if", "optimize")),
 )
 
-# Intent landing groups for the AI empty state (includes primary chips).
+# Intent landing groups for the AI empty state (primary shortcuts).
+# ``root_cause`` ("Test leading explanation") is deliberately kept out of the
+# primary row — it lives only under More templates… (AI_TEMPLATE_MENU_GROUPS)
+# so it is not presented as an assumed outcome (Step 2.2).
 AI_TEMPLATE_INTENT_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Start", ("findings", "triage", "explain_region", "auto_investigate")),
     (
         "Investigate",
-        ("investigate", "latency", "wcet", "task_profile", "root_cause"),
+        ("investigate", "latency", "wcet", "task_profile"),
     ),
     ("SMP", ("migrations", "balance")),
     ("Verify", ("verify", "explain_finding")),
@@ -67901,17 +67906,12 @@ class _AnalysisFindingsDialog(QDialog):
                  quality_warnings: Optional[List[str]] = None,
                  analysis_context: Optional[dict] = None,
                  on_recalculate: Optional[Callable] = None,
-                 is_dark: bool = True, on_investigate=None,
+                 is_dark: bool = True, on_open_statistics=None,
                  on_show_evidence=None, on_ai_query=None,
                  triage_state: Optional[dict] = None,
-                 on_triage_change=None, on_add_to_case=None,
-                 on_add_to_investigation=None,
-                 on_undo_investigate=None,
-                 current_limit: bool = False,
-                 current_cursor_lo: Optional[float] = None,
-                 current_cursor_hi: Optional[float] = None):
+                 on_triage_change=None,
+                 on_add_to_investigation=None):
         super().__init__(parent)
-        QUEUE_CASE = globals().get("QUEUE_CASE")
         QUEUE_DISMISSED = globals().get("QUEUE_DISMISSED")
         QUEUE_DONE = globals().get("QUEUE_DONE")
         QUEUE_OPEN = globals().get("QUEUE_OPEN")
@@ -67922,14 +67922,12 @@ class _AnalysisFindingsDialog(QDialog):
         filter_by_queue = globals().get("filter_by_queue")
         filter_findings_triage = globals().get("filter_findings_triage")
         finding_filter_facets = globals().get("finding_filter_facets")
-        format_investigate_preview = globals().get("format_investigate_preview")
         group_findings_by_incident = globals().get("group_findings_by_incident")
         normalize_triage_state = globals().get("normalize_triage_state")
         queue_counts = globals().get("queue_counts")
         sort_findings_triage = globals().get("sort_findings_triage")
         self._QUEUE_OPEN = QUEUE_OPEN
         self._QUEUE_DONE = QUEUE_DONE
-        self._QUEUE_CASE = QUEUE_CASE
         self._QUEUE_DISMISSED = QUEUE_DISMISSED
         self._SORT_SEVERITY = SORT_SEVERITY
         self._SORT_KEYS = SORT_KEYS
@@ -67938,7 +67936,6 @@ class _AnalysisFindingsDialog(QDialog):
         self._filter_by_queue = filter_by_queue
         self._filter_findings_triage = filter_findings_triage
         self._finding_filter_facets = finding_filter_facets
-        self._format_investigate_preview = format_investigate_preview
         self._group_findings_by_incident = group_findings_by_incident
         self._normalize_triage_state = normalize_triage_state
         self._queue_counts = queue_counts
@@ -67947,16 +67944,11 @@ class _AnalysisFindingsDialog(QDialog):
         self._findings = findings or []
         self._scope_title = scope_title or ""
         self._on_apply_scope = on_apply_scope
-        self._on_investigate = on_investigate
+        self._on_open_statistics = on_open_statistics
         self._on_show_evidence = on_show_evidence
         self._on_ai_query = on_ai_query
         self._on_triage_change = on_triage_change
-        self._on_add_to_case = on_add_to_case
         self._on_add_to_investigation = on_add_to_investigation
-        self._on_undo_investigate = on_undo_investigate
-        self._current_limit = bool(current_limit)
-        self._current_cursor_lo = current_cursor_lo
-        self._current_cursor_hi = current_cursor_hi
         self._triage_state = normalize_triage_state(triage_state)
         self._active_queue = QUEUE_OPEN
         self._filter_severity = ""
@@ -67965,7 +67957,6 @@ class _AnalysisFindingsDialog(QDialog):
         self._sort_by = SORT_SEVERITY
         self._group_incidents = True
         self._collapsed_incidents = set()
-        self._investigate_pending = False
         self._scope_hint = scope_hint or ""
         self._ux_events = ux_events or []
         self._time_min = int(time_min or 0)
@@ -68054,7 +68045,6 @@ class _AnalysisFindingsDialog(QDialog):
         for qid, label in (
             (QUEUE_OPEN, "Open"),
             (QUEUE_DONE, "Done"),
-            (QUEUE_CASE, "Case"),
             (QUEUE_DISMISSED, "Dismissed"),
         ):
             btn = QPushButton(label)
@@ -68206,8 +68196,6 @@ class _AnalysisFindingsDialog(QDialog):
                 lambda _=False, lv=level: self._query_with_ai(
                     ai_enabled, "explain_finding", level=lv)
             )
-        ask_menu.addAction("Root cause…").triggered.connect(
-            lambda: self._query_with_ai(ai_enabled, "root_cause"))
         ask_menu.addAction("Auto investigate…").triggered.connect(
             lambda: self._query_with_ai(ai_enabled, "auto_investigate"))
         ask_btn.setMenu(ask_menu)
@@ -68240,11 +68228,10 @@ class _AnalysisFindingsDialog(QDialog):
         triage_row.setSpacing(8)
         self._done_btn = QPushButton("Done")
         self._dismiss_btn = QPushButton("Dismiss…")
-        self._case_btn = QPushButton("Add to case")
         self._investigation_btn = QPushButton("Add to investigation")
         self._investigation_btn.setToolTip(
             "Add this finding as an observation in the Investigation notebook")
-        for b in (self._done_btn, self._dismiss_btn, self._case_btn,
+        for b in (self._done_btn, self._dismiss_btn,
                   self._investigation_btn):
             b.setFont(ui_font)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -68253,7 +68240,6 @@ class _AnalysisFindingsDialog(QDialog):
         triage_row.addStretch(1)
         self._done_btn.clicked.connect(self._toggle_done)
         self._dismiss_btn.clicked.connect(self._toggle_dismiss)
-        self._case_btn.clicked.connect(self._add_to_case)
         self._investigation_btn.clicked.connect(self._add_to_investigation_notebook)
 
         # Bottom block — web `.analysis-footer`: full-width scope hint, then a
@@ -68293,66 +68279,20 @@ class _AnalysisFindingsDialog(QDialog):
         self._show_evidence_btn = show_evidence_btn
         scope_btn_row.addWidget(show_evidence_btn)
 
-        self._investigate_btn = QPushButton("Investigate…")
-        self._investigate_btn.setFont(ui_font)
-        self._investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._investigate_btn.setStyleSheet(_bbtn_primary)
-        self._investigate_btn.clicked.connect(self._begin_investigate)
-        scope_btn_row.addWidget(self._investigate_btn)
-
-        # Inline preview→confirm (web `Confirm Investigate` / `Cancel`,
-        # shown only while `investigatePending`), replacing the modal QMessageBox.
-        self._pending_investigate = None
-        self._confirm_investigate_btn = QPushButton("Confirm Investigate")
-        self._confirm_investigate_btn.setFont(ui_font)
-        self._confirm_investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._confirm_investigate_btn.setStyleSheet(_bbtn_primary)
-        self._confirm_investigate_btn.clicked.connect(self._confirm_investigate)
-        self._confirm_investigate_btn.setVisible(False)
-        scope_btn_row.addWidget(self._confirm_investigate_btn)
-        self._cancel_investigate_btn = QPushButton("Cancel")
-        self._cancel_investigate_btn.setFont(ui_font)
-        self._cancel_investigate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._cancel_investigate_btn.setStyleSheet(_bbtn)
-        self._cancel_investigate_btn.clicked.connect(self._cancel_investigate)
-        self._cancel_investigate_btn.setVisible(False)
-        scope_btn_row.addWidget(self._cancel_investigate_btn)
-
-        self._undo_scope_btn = QPushButton("Undo Scope")
-        self._undo_scope_btn.setFont(ui_font)
-        self._undo_scope_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._undo_scope_btn.setStyleSheet(_bbtn)
-        self._undo_scope_btn.clicked.connect(self._undo_investigate_scope)
-        self._undo_scope_btn.setEnabled(False)
-        self._undo_scope_btn.setVisible(callable(self._on_undo_investigate))
-        scope_btn_row.addWidget(self._undo_scope_btn)
+        # Step 1.2 — "Open Statistics" replaces the old "Investigate" action.
+        # It opens the related Statistics section only; it does not change
+        # Scope, Filters, or "Limit to C1–Cn". The recommended cursor window
+        # stays a suggestion the user applies explicitly via "Apply cursors".
+        self._open_stats_btn = QPushButton("Open Statistics")
+        self._open_stats_btn.setFont(ui_font)
+        self._open_stats_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._open_stats_btn.setStyleSheet(_bbtn_primary)
+        self._open_stats_btn.clicked.connect(self._open_statistics)
+        scope_btn_row.addWidget(self._open_stats_btn)
 
         scope_btn_row.addStretch(1)
         scope_row.addLayout(scope_btn_row)
 
-        # Boxed, word-wrapped text panel. A QLabel's sizeHint ignores its own
-        # stylesheet `padding`, so a bordered+padded QLabel clips wrapped text
-        # top & bottom — put border/background on a QFrame instead.
-        def _boxed_label(text: str = "", *, name: str = "") -> tuple:
-            box = QFrame()
-            box.setStyleSheet(
-                f"QFrame {{ border: 1px solid {border}; border-radius: 6px;"
-                " background: rgba(52, 152, 219, 0.08); padding: 12px 12px; }"
-                "QLabel { border: none; background: transparent; padding: 0; }"
-            )
-            bl = QVBoxLayout(box)
-            bl.setContentsMargins(0, 0, 0, 0)
-            lbl = QLabel(text)
-            lbl.setWordWrap(True)
-            lbl.setFont(ui_font)
-            lbl.setStyleSheet(f"QLabel {{ color: {ink}; }}")
-            if name:
-                lbl.setObjectName(name)
-            bl.addWidget(lbl)
-            return box, lbl
-
-        self._investigate_preview_box, self._investigate_preview = _boxed_label()
-        self._investigate_preview_box.setVisible(False)
         self._overview_lbl = None  # overview box removed in the master/detail redesign
 
         # ---- Right-hand detail pane (master/detail split) ------------------
@@ -68387,7 +68327,6 @@ class _AnalysisFindingsDialog(QDialog):
         _da.setSpacing(8)
         _da.addWidget(_hsep())
         _da.addLayout(scope_row)
-        _da.addWidget(self._investigate_preview_box)
         _da.addWidget(_hsep())
         _da.addLayout(triage_row)
 
@@ -68633,7 +68572,6 @@ class _AnalysisFindingsDialog(QDialog):
             label = {
                 self._QUEUE_OPEN: "Open",
                 self._QUEUE_DONE: "Done",
-                self._QUEUE_CASE: "Case",
                 self._QUEUE_DISMISSED: "Dismissed",
             }[qid]
             btn.setText(f"{label} ({counts.get(qid, 0)})")
@@ -68829,9 +68767,6 @@ class _AnalysisFindingsDialog(QDialog):
         self._rebuild_list()
 
     def _on_selection_changed(self) -> None:
-        # Web `watch(selectedId)` — switching findings drops a pending confirm.
-        if getattr(self, "_pending_investigate", None) is not None:
-            self._set_investigate_pending(False)
         if hasattr(self, "_detail_title"):
             self._rebuild_detail()
         self._refresh_scope_hint()
@@ -68856,15 +68791,12 @@ class _AnalysisFindingsDialog(QDialog):
         enabled = bool(fid)
         reviewed = fid in (self._triage_state.get("reviewed") or [])
         dismissed = fid in (self._triage_state.get("dismissed") or {})
-        in_case = fid in (self._triage_state.get("case") or [])
         self._done_btn.setEnabled(enabled)
         self._dismiss_btn.setEnabled(enabled)
-        self._case_btn.setEnabled(enabled)
         self._investigation_btn.setEnabled(
             enabled and callable(self._on_add_to_investigation))
         self._done_btn.setText("Undo" if reviewed else "Done")
         self._dismiss_btn.setText("Restore" if dismissed else "Dismiss…")
-        self._case_btn.setText("Remove from case" if in_case else "Add to case")
 
     def _toggle_done(self) -> None:
         finding = self._selected_finding()
@@ -68893,20 +68825,6 @@ class _AnalysisFindingsDialog(QDialog):
             self._triage_state, fid, "dismiss",
             reason=str(reason or "").strip() or "Dismissed"))
 
-    def _add_to_case(self) -> None:
-        finding = self._selected_finding()
-        fid = str((finding or {}).get("id") or "")
-        if not fid:
-            return
-        if fid in (self._triage_state.get("case") or []):
-            self._commit_triage(
-                self._apply_triage_action(self._triage_state, fid, "uncase"))
-            return
-        self._commit_triage(
-            self._apply_triage_action(self._triage_state, fid, "case"))
-        if callable(self._on_add_to_case):
-            self._on_add_to_case(finding)
-
     def _add_to_investigation_notebook(self) -> None:
         finding = self._selected_finding()
         if finding and callable(self._on_add_to_investigation):
@@ -68917,12 +68835,13 @@ class _AnalysisFindingsDialog(QDialog):
         if lbl is None:
             return
         finding = self._selected_finding()
-        btn = getattr(self, "_investigate_btn", None)
+        btn = getattr(self, "_open_stats_btn", None)
         if btn is not None:
             sid = FINDING_SECTION_MAP.get(str((finding or {}).get("id") or ""))
-            btn.setEnabled(self._on_investigate is not None and bool(sid))
+            btn.setEnabled(self._on_open_statistics is not None and bool(sid))
             btn.setToolTip(
-                "Scope the investigation and jump to the relevant Statistics section"
+                "Open the related Statistics section (does not change Scope, "
+                "Filters, or Limit to cursors)"
                 if sid else
                 "No specific Statistics section is associated with this finding"
             )
@@ -68961,20 +68880,13 @@ class _AnalysisFindingsDialog(QDialog):
             return
         self._on_show_evidence(finding)
 
-    def _set_investigate_pending(self, pending: bool) -> None:
-        """Toggle the inline confirm state (web `investigatePending`)."""
-        if not pending:
-            self._pending_investigate = None
-        self._investigate_preview_box.setVisible(pending)
-        self._investigate_btn.setVisible(not pending)
-        self._confirm_investigate_btn.setVisible(pending)
-        self._cancel_investigate_btn.setVisible(pending)
-        # Web: Undo Scope is `v-if="canUndoInvestigate && !investigatePending"`.
-        if callable(self._on_undo_investigate):
-            self._undo_scope_btn.setVisible(not pending)
+    def _open_statistics(self) -> None:
+        """Step 1.2 — open the finding's Statistics section only.
 
-    def _begin_investigate(self) -> None:
-        if self._on_investigate is None:
+        No Scope / Filter / Limit-to-cursors change; the recommended cursor
+        window stays a suggestion applied explicitly via "Apply cursors".
+        """
+        if self._on_open_statistics is None:
             return
         finding = self._selected_finding()
         if finding is None:
@@ -68982,49 +68894,7 @@ class _AnalysisFindingsDialog(QDialog):
         sid = FINDING_SECTION_MAP.get(str(finding.get("id") or ""))
         if not sid:
             return
-        scope = None
-        events = getattr(self, "_ux_events", None) or []
-        tmin = int(getattr(self, "_time_min", 0) or 0)
-        tmax = int(getattr(self, "_time_max", 0) or 0)
-        if events:
-            scope = best_finding_scope(finding, events, tmin, tmax)
-        preview = self._format_investigate_preview(
-            finding, scope=scope, section_id=sid, section_label=sid,
-            current_limit=self._current_limit,
-            current_lo=self._current_cursor_lo,
-            current_hi=self._current_cursor_hi,
-        )
-        self._pending_investigate = (finding, sid)
-        self._investigate_preview.setText(preview)
-        # Reserve the full wrapped-text height explicitly (the box sits in a
-        # nested QWidget whose default size policy drops heightForWidth
-        # propagation, so the layout would otherwise squeeze it to one line).
-        lbl = self._investigate_preview
-        _avail = max(320, (self._investigate_preview_box.width()
-                           or self.width() - 60) - 24)
-        lbl.setMinimumHeight(
-            max(lbl.heightForWidth(_avail), lbl.sizeHint().height()) + 6)
-        self._set_investigate_pending(True)
-
-    def _cancel_investigate(self) -> None:
-        self._set_investigate_pending(False)
-
-    def _confirm_investigate(self) -> None:
-        pend = getattr(self, "_pending_investigate", None)
-        self._set_investigate_pending(False)
-        if not pend:
-            return
-        finding, sid = pend
-        self._on_investigate(finding, sid)
-        if callable(self._on_undo_investigate):
-            self._undo_scope_btn.setEnabled(True)
-        self._mark_context_stale()
-
-    def _undo_investigate_scope(self) -> None:
-        if callable(self._on_undo_investigate):
-            self._on_undo_investigate()
-        self._undo_scope_btn.setEnabled(False)
-        self._mark_context_stale()
+        self._on_open_statistics(finding, sid)
 
     def _query_with_ai(
         self, ai_enabled: bool, template_id: str = "findings",
@@ -98999,10 +98869,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if scope:
             self._on_explore_range(scope)
 
-    def _investigate_finding(self, finding: dict, section_id: str) -> None:
-        """Step-1 item 7: plain, non-AI Investigate — scope the finding then
-        jump straight to its Statistics section (no AI Assistant required)."""
-        self._apply_finding_scope(finding)
+    def _open_finding_statistics(self, finding: dict, section_id: str) -> None:
+        """Step 1.2 — open the finding's Statistics section only.
+
+        No AI Assistant required, and (unlike the old "Investigate" action) no
+        Scope / Filter / Limit-to-cursors change. The recommended cursor window
+        stays a suggestion the user applies explicitly via "Apply cursors".
+        """
         self._focus_statistics_panel(force=True)
         panel = getattr(self, "_stats_panel", None)
         if panel is not None and hasattr(panel, "scroll_to_section"):
@@ -99055,26 +98928,29 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 5000)
             return
         ns = int(target["ns"])
-        # Preserve Scope/Filters: do not call _apply_finding_scope / explore-range.
+        # Navigation only (Step 1.3): never change Scope / Filters / Limit.
+        # Only drop an Evidence marker in a free cursor slot when the current
+        # cursors are NOT limiting Statistics — otherwise a new cursor would
+        # silently widen/alter the measured Scope.
         view = getattr(self, "_view", None)
         if view is not None:
             scene = getattr(view, "_scene", None)
-            if scene is not None and hasattr(scene, "add_cursor"):
+            scope_limiting = (
+                panel is not None
+                and getattr(panel, "_scope_to_cursors", False)
+                and len(list(getattr(panel, "_cursor_times", None) or [])) >= 2
+            )
+            if scene is not None and hasattr(scene, "add_cursor") and not scope_limiting:
                 existing = list(scene.cursor_times()) if hasattr(scene, "cursor_times") else []
                 near = any(abs(int(t) - ns) <= 1 for t in existing)
-                if not near:
-                    # Place one Evidence marker without clearing existing Scope cursors.
-                    max_c = max(2, int(getattr(self, "_max_cursors_val", 4) or 4))
-                    if len(existing) >= max_c and hasattr(scene, "clear_cursors"):
-                        # Prefer keeping Scope cursors: drop nothing; just jump.
+                max_c = max(2, int(getattr(self, "_max_cursors_val", 4) or 4))
+                if not near and len(existing) < max_c:
+                    try:
+                        scene.add_cursor(ns)
+                        if hasattr(view, "cursors_changed"):
+                            view.cursors_changed.emit(scene.cursor_times())
+                    except Exception:
                         pass
-                    else:
-                        try:
-                            scene.add_cursor(ns)
-                            if hasattr(view, "cursors_changed"):
-                                view.cursors_changed.emit(scene.cursor_times())
-                        except Exception:
-                            pass
             self._jump_to_ns(ns)
         task = str(target.get("task") or finding.get("task") or "").strip()
         mk = str(target.get("mk") or "").strip()
@@ -99478,92 +99354,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         def _on_triage_change(state: dict) -> None:
             self._findings_triage_state = dict(state or {})
 
-        def _on_add_to_case(finding: dict) -> None:
-            panel = getattr(self, "_ai_panel", None)
-            if panel is not None and hasattr(panel, "add_finding_to_investigation_case"):
-                ok = panel.add_finding_to_investigation_case(finding)
-                if ok:
-                    self.statusBar().showMessage("Finding added to AI Case", 3000)
-                else:
-                    self.statusBar().showMessage("Could not add finding to Case", 4000)
-            else:
-                self.statusBar().showMessage("AI Assistant unavailable for Case", 4000)
-
-        def _on_undo_investigate() -> None:
-            snap = getattr(self, "_findings_investigate_undo", None)
-            if not isinstance(snap, dict):
-                return
-            times = [int(t) for t in (snap.get("cursor_times") or [])]
-            view = getattr(self, "_view", None)
-            if view is not None and hasattr(view, "_scene"):
-                view.begin_programmatic_viewport()
-                try:
-                    view._scene.clear_cursors()
-                    for t in times:
-                        view._scene.add_cursor(t)
-                    view.cursors_changed.emit(view._scene.cursor_times())
-                finally:
-                    view.end_programmatic_viewport()
-            panel = self._stats_panel
-            want_scope = bool(snap.get("scope_to_cursors")) and len(times) >= 2
-            if panel is not None:
-                panel._scope_to_cursors = want_scope
-                cb = getattr(panel, "_scope_cb", None)
-                if cb is not None:
-                    cb.blockSignals(True)
-                    cb.setChecked(want_scope)
-                    cb.blockSignals(False)
-                panel.set_cursor_times(times, refresh_stats=True)
-            vp_raw = snap.get("viewport")
-            if isinstance(vp_raw, str) and view is not None:
-                vp = viewport_from_json(vp_raw)
-                if vp is not None:
-                    sc = view._scene
-                    if vp.fit_mode:
-                        view.zoom_fit()
-                    elif vp.zoom_tpp > 0:
-                        sc._timescale_per_px = max(
-                            sc._timescale_per_px_default, float(vp.zoom_tpp))
-                        view._fit_mode = False
-                        sc.rebuild()
-                        view.zoom_changed.emit(sc.timescale_per_px)
-            self._findings_investigate_undo = None
-            self.statusBar().showMessage("Restored Scope from before Investigate", 3000)
-
-        def _wrap_investigate(finding: dict, section_id: str) -> None:
-            panel = self._stats_panel
-            view = getattr(self, "_view", None)
-            times = []
-            if view is not None and hasattr(view, "_scene"):
-                times = list(view._scene.cursor_times())
-            elif panel is not None:
-                times = list(getattr(panel, "_cursor_times", None) or [])
-            vp_json = None
-            tab = getattr(self, "_active_tab", None)
-            if tab is not None and hasattr(tab, "vm") and view is not None:
-                try:
-                    tab.vm.capture_viewport_from_view(view)
-                    vp_json = viewport_to_json(tab.vm.viewport)
-                except Exception:
-                    vp_json = None
-            self._findings_investigate_undo = {
-                "cursor_times": times,
-                "scope_to_cursors": bool(
-                    getattr(panel, "_scope_to_cursors", False) if panel else False),
-                "viewport": vp_json,
-            }
-            self._investigate_finding(finding, section_id)
-
         triage = getattr(self, "_findings_triage_state", None) or {}
-        cur_lo = cur_hi = None
-        cur_limit = False
-        panel = self._stats_panel
-        _all_cur = list(getattr(panel, "_cursor_times", None) or []) if panel is not None else []
-        if panel is not None and getattr(panel, "_scope_to_cursors", False):
-            times = list(_all_cur)
-            if len(times) >= 2:
-                cur_limit = True
-                cur_lo, cur_hi = min(times), max(times)
 
         # Context strip (web `<AnalysisContextStrip>`): trace · scope · filters.
         build_analysis_context = globals().get("build_analysis_context")
@@ -99605,17 +99396,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ai_enabled=self._ai_feature_enabled(),
             ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
             on_apply_scope=self._apply_finding_scope,
-            on_investigate=_wrap_investigate,
+            on_open_statistics=self._open_finding_statistics,
             on_show_evidence=self._show_finding_evidence,
             on_ai_query=_on_ai_query,
             triage_state=triage,
             on_triage_change=_on_triage_change,
-            on_add_to_case=_on_add_to_case,
             on_add_to_investigation=self._add_finding_to_investigation,
-            on_undo_investigate=_on_undo_investigate,
-            current_limit=cur_limit,
-            current_cursor_lo=cur_lo,
-            current_cursor_hi=cur_hi,
             ux_events=evs,
             time_min=self._trace.time_min,
             time_max=self._trace.time_max,

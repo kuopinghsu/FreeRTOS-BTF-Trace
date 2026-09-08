@@ -243,7 +243,9 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertIn("Load imbalance", dlg._detail_title.text())
         self.assertTrue(dlg._detail_body.text().strip())
 
-    def test_analysis_dialog_add_to_case_is_undoable(self):
+    def test_analysis_dialog_single_investigation_record_action(self):
+        """Step 1.1 — 'Add to case' is gone; 'Add to investigation' is the
+        only investigation-record action, and there is no 'Case' queue tab."""
         from PySide6.QtWidgets import QApplication
         from btf_viewer_pkg.stats import _AnalysisFindingsDialog
 
@@ -251,22 +253,44 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
             QApplication([])
         findings = [{"id": "f1", "severity": "warning", "title": "Load imbalance",
                      "observation": "hot", "why_it_matters": "x"}]
-        dlg = _AnalysisFindingsDialog(findings, "", ai_enabled=False)
+        recorded = []
+        dlg = _AnalysisFindingsDialog(
+            findings, "", ai_enabled=False,
+            on_add_to_investigation=lambda f: recorded.append(f))
         self.addCleanup(dlg.deleteLater)
 
-        dlg._add_to_case()
-        self.assertIn("f1", dlg._triage_state.get("case") or [])
+        self.assertFalse(hasattr(dlg, "_case_btn"))
+        self.assertFalse(hasattr(dlg, "_add_to_case"))
+        self.assertNotIn("case", {q for q in dlg._queue_btns})
+        self.assertTrue(dlg._investigation_btn.isEnabled())
 
-        # In the Case queue the finding is selectable and the button offers the
-        # undo: it stays enabled and reads "Remove from case".
-        dlg._set_queue(dlg._QUEUE_CASE)
-        self.assertEqual((dlg._selected_finding() or {}).get("id"), "f1")
-        self.assertTrue(dlg._case_btn.isEnabled())
-        self.assertEqual(dlg._case_btn.text(), "Remove from case")
+        dlg._add_to_investigation_notebook()
+        self.assertEqual([f.get("id") for f in recorded], ["f1"])
 
-        # Clicking it undoes the add.
-        dlg._add_to_case()
-        self.assertNotIn("f1", dlg._triage_state.get("case") or [])
+    def test_analysis_dialog_open_statistics_does_not_touch_scope(self):
+        """Step 1.2 — the renamed primary button only opens a Statistics
+        section; it never calls a scope/apply-cursors callback."""
+        from PySide6.QtWidgets import QApplication
+        from btf_viewer_pkg.stats import _AnalysisFindingsDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        findings = [{"id": "load_imbalance", "severity": "warning",
+                     "title": "Load imbalance", "observation": "hot",
+                     "why_it_matters": "x"}]
+        opened = []
+        scoped = []
+        dlg = _AnalysisFindingsDialog(
+            findings, "", ai_enabled=False,
+            on_apply_scope=lambda f: scoped.append(f),
+            on_open_statistics=lambda f, sid: opened.append((f.get("id"), sid)))
+        self.addCleanup(dlg.deleteLater)
+
+        self.assertEqual(dlg._open_stats_btn.text(), "Open Statistics")
+        # Row 0 auto-selects.
+        dlg._open_statistics()
+        self.assertEqual(opened, [("load_imbalance", "cores")])
+        self.assertEqual(scoped, [])
 
     def test_analysis_dialog_divider_ratio_persists_to_rc(self):
         import os

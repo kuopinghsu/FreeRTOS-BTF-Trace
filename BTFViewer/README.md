@@ -277,7 +277,7 @@ For an initial review, use the following sequence:
 1. Open the trace and select **Fit Trace** to view its complete duration.
 2. Select **Load** and check whether all cores carry a reasonable share of the work.
 3. Open **Analysis** and review the highest-severity findings (Triage).
-4. Select **Investigate** on a finding to open the relevant Statistics section and apply the finding’s recommended Scope (C1–C2). Filters are preserved.
+4. Select **Open Statistics** on a finding to open the relevant Statistics section. This does not change the Scope, Filters, or **Limit to C1–Cn**; use **Apply cursors** if you want to place the finding’s recommended window (C1–C2).
 5. Select **Show on timeline** to center the timeline on the relevant event. This action does not change the Scope or Filters.
 6. Use **Back** / **Forward** in the evidence inspector to revisit prior timeline jumps without changing Scope or Filters.
 7. Select a high value or outlier to jump to the corresponding timeline event.
@@ -323,8 +323,9 @@ Each finding includes:
 - A clear **Severity** and problem-oriented title.
 - The most relevant supporting metric.
 - An **Evidence** line that separates the measured observation from its interpretation.
-- **Investigate** — apply the suggested Scope and open the relevant Statistics section without using AI.
+- **Open Statistics** — open the relevant Statistics section without using AI. The Scope, Filters, and **Limit to C1–Cn** are left unchanged.
 - **Show on timeline** — move the timeline to the supporting event without changing the Scope or Filters.
+- **Apply cursors** — optionally place the finding’s recommended cursor window; treat it as a proposal and verify it before enabling **Limit to C1–Cn**.
 - Optional AI actions when the AI Assistant is configured.
 
 Treat findings as leads, not confirmed root causes. Apply cursors when a finding recommends a useful window, then recheck Statistics inside that Scope.
@@ -337,12 +338,12 @@ Open the Findings window from the toolbar **Investigation** group or the activit
 
 | # | Region | What it does |
 |---|---|---|
-| 1 | **Context and triage state** | The active trace, current **Scope**, and sample count, plus the **Open / Done / Case / Dismissed** tabs that follow each finding through triage. |
+| 1 | **Context and triage state** | The active trace, current **Scope**, and sample count, plus the **Open / Done / Dismissed** tabs that follow each finding through triage. |
 | 2 | **Filters and sort** | Narrow by **Severity**, **Evidence** strength, or **Category**, change the **Sort**, and toggle **Group incidents** to fold repeats of one issue together. |
 | 3 | **Findings list** | Severity-ranked and grouped by the affected object; each entry shows its category and whether the evidence is `Estimated / heuristic` or measured. |
 | 4 | **Detail pane** | The selected finding in full — observation vs interpretation, evidence strength, the exact evidence, a **Check next** pointer, and the recommended Scope. |
-| 5 | **Finding actions** | **Apply cursors** / **Show on timeline** / **Investigate…** move to the evidence; **Done** / **Dismiss…** / **Add to case** record the triage outcome. |
-| 6 | **Footer** | **Ask AI** about the selected finding, plus **More** export and case options. |
+| 5 | **Finding actions** | **Apply cursors** / **Show on timeline** / **Open Statistics** move to the evidence; **Done** / **Dismiss…** record the triage outcome; **Add to investigation** saves the finding to the Investigation Notebook. |
+| 6 | **Footer** | **Ask AI** about the selected finding, plus **More** export options. |
 
 ### Reading Max, p95, and p99
 

@@ -431,19 +431,21 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "evidence is clear, call set_cursors, zoom_to_range, and highlight_task "
         "on the evidence window. Cite Evidence as jump:TIME bullets with "
         "task/core names and values with units. Output: Goal; Steps performed; "
-        "Root cause or leading explanation; Evidence; "
+        "Root cause or leading explanation; Alternative considered; Evidence; "
         "Confidence/quality/coverage; Next check. Viewer action: focus_evidence.",
     ),
     (
         "verify",
         "Verify finding",
-        "Verify the selected Analysis Finding. Call investigate(finding_id=ID) "
-        "first (use the finding_id given in the user message). Then collect "
-        "evidence with query_raw_metric / correlate_events / search_timeline as "
-        "needed. Call verify_claim on the finding statement and "
-        "challenge_conclusion to list alternatives. Place cursors and "
-        "zoom_to_range on the strongest evidence. Name the Statistics page "
-        "to open next. "
+        "Verify the selected Analysis Finding without rerunning a full "
+        "investigation. Start from the finding statement and the evidence "
+        "already in the investigation history; reuse existing jump:TIME "
+        "evidence and measured values first. Call investigate(finding_id=ID), "
+        "query_raw_metric, correlate_events, or search_timeline only for "
+        "evidence that is genuinely missing. Call verify_claim on the finding "
+        "statement and challenge_conclusion to test contradicting evidence. "
+        "Place cursors and zoom_to_range on the strongest evidence. Name the "
+        "Statistics page to open next. "
         "Finish with a verdict: Confirmed, Rejected, or Inconclusive; list "
         "Evidence as jump:TIME bullets; Confidence (High/Medium/Low); "
         "Alternatives considered; and one next check. Viewer action: "
@@ -451,7 +453,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     ),
     (
         "root_cause",
-        "Root cause",
+        "Test leading explanation",
         "Test the leading explanation for the top finding. Preferred tools: "
         "investigate; correlate_events or find_critical_path for the episode "
         "window; query_raw_metric for missing measured values; "
@@ -933,12 +935,15 @@ AI_TEMPLATE_MENU_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("What-if / Optimize", ("what_if", "optimize")),
 )
 
-# Intent landing groups for the AI empty state (includes primary chips).
+# Intent landing groups for the AI empty state (primary shortcuts).
+# ``root_cause`` ("Test leading explanation") is deliberately kept out of the
+# primary row — it lives only under More templates… (AI_TEMPLATE_MENU_GROUPS)
+# so it is not presented as an assumed outcome (Step 2.2).
 AI_TEMPLATE_INTENT_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Start", ("findings", "triage", "explain_region", "auto_investigate")),
     (
         "Investigate",
-        ("investigate", "latency", "wcet", "task_profile", "root_cause"),
+        ("investigate", "latency", "wcet", "task_profile"),
     ),
     ("SMP", ("migrations", "balance")),
     ("Verify", ("verify", "explain_finding")),

@@ -552,7 +552,7 @@ describe('AI endpoint helpers', () => {
     assert.doesNotMatch(dlg, /analysis-btn primary/)
     const findings = [
       'Query findings…', 'Investigate…', 'Verify…', 'Explain',
-      'Root cause…', 'Auto investigate…',
+      'Auto investigate…',
     ]
     let pos = 0
     for (const label of findings) {
@@ -560,12 +560,19 @@ describe('AI endpoint helpers', () => {
       assert.ok(i >= pos, label)
       pos = i
     }
+    // Step 2.2: 'Root cause…' is no longer a primary shortcut — it lives only
+    // under the AI panel's More templates… menu (as 'Test leading explanation').
+    assert.doesNotMatch(dlg, /Root cause…/)
     assert.deepEqual([...EXPLAIN_LEVELS], ['quick', 'technical', 'deep'])
     assert.match(dlg, /EXPLAIN_LEVELS/)
     assert.match(dlg, /<Teleport to="body">/)
     assert.match(dlg, /Ask AI/)
     assert.match(dlg, /toggleAskAi/)
-    assert.match(dlg, /Add to case/)
+    // Step 1.1: 'Add to case' was removed — 'Add to investigation' is the
+    // single investigation-record action.
+    assert.doesNotMatch(dlg, /Add to case/)
+    assert.match(dlg, /Add to investigation/)
+    assert.match(dlg, /Open Statistics/)
     assert.match(dlg, /analysis-queue/)
     assert.doesNotMatch(panel, /Open at least two BTF tabs to use Trace Compare/)
     assert.match(panel, /This trace has a single core — not applicable/)

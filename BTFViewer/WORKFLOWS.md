@@ -266,7 +266,7 @@ For each relevant finding:
 2. Treat severity as attention priority, not failure probability.
 3. Select **Show on timeline** to center the timeline on the cited event without changing Scope or Filters.
 4. Confirm that the Statistics value, task name, and timestamp match the finding.
-5. If you use **Investigate** as a shortcut, treat any suggested cursor range as a proposal and verify it in Step 7 before enabling **Limit to C1–Cn**.
+5. **Open Statistics** is a shortcut to the finding's Statistics section only — it does not change Scope, Filters, or **Limit to C1–Cn**. If you then use **Apply cursors**, treat the suggested cursor range as a proposal and verify it in Step 7 before enabling **Limit to C1–Cn**.
 6. Mark **Done** when reviewed, **Dismiss…** with a short reason when not applicable, or add the finding to the investigation when you want to preserve it.
 
 If no relevant finding exists, continue from the measured Statistics sample. A missing finding does not mean the task has no problem; the symptom may not match a built-in heuristic.

@@ -277,7 +277,7 @@ BTFViewer 使用一致的檢視介面、控制項目及分析流程。判讀結�
 1. 開啟追蹤資料，並選取 **Fit Trace** 查看完整時間範圍。
 2. 選取 **Load**，確認所有核心是否分擔合理的工作量。
 3. 開啟 **Analysis**，先查看嚴重程度最高的分析結果（Triage）。
-4. 在結果上選 **Investigate**，開啟對應的 **Statistics** 區段並套用建議的分析範圍（C1–C2）；原有篩選條件會保留。
+4. 在結果上選 **Open Statistics**，開啟對應的 **Statistics** 區段。此操作不會變更分析範圍、篩選條件或 **Limit to C1–Cn**；若要套用該結果建議的游標範圍（C1–C2），請另外按 **Apply cursors**。
 5. 選 **Show on timeline**，將時間軸移至相關事件。此操作不會變更分析範圍或篩選條件。
 6. 使用證據檢視器的 **Back / Forward** 回到先前的時間軸跳轉位置，不會變更分析範圍或篩選條件。
 7. 選取偏高的數值或離群值，跳至對應的時間軸事件。
@@ -323,9 +323,10 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 - 清楚的 **Severity** 與問題導向標題。
 - 最相關的支持指標。
 - **Evidence** 列，將量測到的現象與後續解讀分開顯示。
-- **Investigate** — 套用建議的 Scope，並在不使用 AI 的情況下開啟相關 Statistics 區段。
+- **Open Statistics** — 在不使用 AI 的情況下開啟相關 Statistics 區段；不會變更 Scope、Filters 或 **Limit to C1–Cn**。
 - **Show on timeline** — 將時間軸移至支持此結果的事件，不會變更 Scope 或 Filters。
-- 設定 AI Assistant 後，可透過 **Ask AI** 選單使用查詢、驗證、說明、根因與自動調查等操作。
+- **Apply cursors** — 選用：套用該結果建議的游標範圍；請視為提案，先驗證再啟用 **Limit to C1–Cn**。
+- 設定 AI Assistant 後，可透過 **Ask AI** 選單使用查詢、驗證、說明與自動調查等操作。
 
 請將分析結果視為線索，而非已確認的根因。若結果建議有用的時間窗，請套用游標後，再於該分析範圍內重新檢查 **Statistics**。
 
@@ -337,12 +338,12 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 
 | # | 區域 | 說明 |
 |---|---|---|
-| 1 | **內容與分流狀態** | 目前追蹤資料、目前的分析範圍 與樣本數，以及追蹤每項結果分流進度的 **Open / Done / Case / Dismissed** 分頁。 |
+| 1 | **內容與分流狀態** | 目前追蹤資料、目前的分析範圍 與樣本數，以及追蹤每項結果分流進度的 **Open / Done / Dismissed** 分頁。 |
 | 2 | **篩選與排序** | 依 **Severity**、**Evidence** 強度或 **Category** 過濾，變更 **Sort**，並可切換 **Group incidents** 將同一問題的重複項目摺疊在一起。 |
 | 3 | **結果清單** | 依嚴重度排序並依受影響物件分組；每筆項目會顯示分類，以及證據為 `Estimated / heuristic`（推估／啟發式）或實測。 |
 | 4 | **詳細窗格** | 所選結果的完整內容——現象與解讀、證據強度、確切證據、**Check next** 指引，以及建議的分析範圍。 |
-| 5 | **結果動作** | **Apply cursors** / **Show on timeline** / **Investigate…** 可跳至證據；**Done** / **Dismiss…** / **Add to case** 可記錄分流結果。 |
-| 6 | **底部列** | 對所選結果 **Ask AI**，以及 **More** 中的匯出與 case 選項。 |
+| 5 | **結果動作** | **Apply cursors** / **Show on timeline** / **Open Statistics** 可跳至證據；**Done** / **Dismiss…** 可記錄分流結果；**Add to investigation** 會把該結果存入 Investigation Notebook。 |
+| 6 | **底部列** | 對所選結果 **Ask AI**，以及 **More** 中的匯出選項。 |
 
 ### Max、p95 與 p99 的判讀方式
 

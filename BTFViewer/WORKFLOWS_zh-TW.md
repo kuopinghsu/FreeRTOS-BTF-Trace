@@ -264,7 +264,7 @@ flowchart TD
 2. 嚴重程度代表檢查優先順序，不代表故障機率。
 3. 選取 **Show on timeline**，在不改變分析範圍與篩選條件的情況下，將時間軸移到證據位置。
 4. 確認 Statistics 數值、工作名稱與時間點都和分析結果一致。
-5. 若使用 **Investigate** 作為捷徑，任何建議的游標範圍都只視為提案；請先在步驟 7 驗證，再啟用 **Limit to C1–Cn**。
+5. **Open Statistics** 只是開啟該結果對應 Statistics 區段的捷徑——不會改變 Scope、Filters 或 **Limit to C1–Cn**。若接著使用 **Apply cursors**，其建議的游標範圍只視為提案；請先在步驟 7 驗證，再啟用 **Limit to C1–Cn**。
 6. 已檢視可標 **Done**；不適用可 **Dismiss…** 並寫簡短原因；要保留此項證據時，使用 **Add to investigation**。
 
 如果沒有相關分析結果，仍可從已選定的 Statistics 樣本繼續。沒有 分析結果 不代表工作沒有問題；症狀可能不符合內建啟發式規則。

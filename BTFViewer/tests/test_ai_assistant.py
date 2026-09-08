@@ -98,7 +98,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(ids[3], "verify")
         self.assertEqual(AI_TEMPLATE_QUESTIONS[3][1], "Verify finding")
         self.assertEqual(ids[4], "root_cause")
-        self.assertEqual(AI_TEMPLATE_QUESTIONS[4][1], "Root cause")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[4][1], "Test leading explanation")
         self.assertEqual(ids[5], "compare")
         self.assertEqual(AI_TEMPLATE_QUESTIONS[5][1], "Trace Compare")
         self.assertIn("triage", ids)

@@ -176,8 +176,9 @@ The flow is intentionally iterative. If supporting data does not confirm the fir
 
 Toolbar **Analysis** provides a heuristic inbox for the current Scope. It stays open while the timeline remains interactive. Each finding separates the measured **Evidence** from the interpretation:
 
-- **Investigate** opens the related Statistics section without changing Scope or filters.
+- **Open Statistics** opens the related Statistics section without changing Scope, Filters, or **Limit to C1–Cn**.
 - **Show on timeline** centers the timeline on the supporting timestamp and can highlight the related task. It never changes Scope or Filters.
+- **Apply cursors** optionally places the finding's recommended cursor window; treat it as a proposal and verify it before enabling **Limit to C1–Cn**.
 - Severity ranks attention; it does not assign failure probability.
 - Each finding shows an **evidence-strength** label (Direct / Derived / Estimated / Configured) with tooltips where applicable.
 - Every finding carries a stable **rule id**, and its **measured values** (name, value, unit, sample count) and **comparison basis** are kept separate from the display text, so exported reports and the JSON snapshot stay reproducible and localizable.

@@ -1316,18 +1316,12 @@
       :time-max="trace.timeMax"
       :quality-warnings="analysisQuality"
       :triage-state="findingsTriageState"
-      :current-limit="!!(activeTab?.scopeToCursors !== false && placedCursorTimes.length >= 2)"
-      :current-cursor-lo="placedCursorTimes.length >= 2 ? Math.min(...placedCursorTimes) : null"
-      :current-cursor-hi="placedCursorTimes.length >= 2 ? Math.max(...placedCursorTimes) : null"
-      :can-undo-investigate="!!findingsInvestigateUndo"
       @update:triage-state="onFindingsTriageUpdate"
       @close="analysisOpen = false"
       @query-ai="queryAnalysisWithAi"
       @apply-scope="onApplyFindingScope"
-      @investigate="onInvestigateFinding"
-      @undo-investigate="onUndoInvestigateFinding"
+      @open-statistics="onOpenFindingStatistics"
       @show-evidence="onShowFindingEvidence"
-      @add-to-case="onAddFindingToCase"
       @add-to-investigation="onAddFindingToInvestigation"
       @recalculate-context="findingsContextSnapshot = { ...findingsAnalysisContext }"
       @save-recipe="onSaveAnalysisRecipe"
@@ -1899,7 +1893,6 @@ const inspectorMode = ref('heatmap') // 'heatmap' | 'chord'
 const inspectorFocusPair = ref(null)
 const analysisOpen = ref(false)
 const findingsTriageState = ref(defaultTriageState())
-const findingsInvestigateUndo = ref(null)
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
 const paletteIndex = ref(0)
@@ -3319,7 +3312,6 @@ watch(activeTabId, (newId, oldId) => {
     inspectorFocusPair.value = null
     analysisOpen.value = false
     findingsTriageState.value = defaultTriageState()
-    findingsInvestigateUndo.value = null
     const leaving = tabs.value.find(t => t.id === oldId)
     if (leaving) saveFiltersToActiveTab(leaving)
   }
@@ -4383,47 +4375,23 @@ function onApplyFindingScope(finding) {
   if (scope) applyExploreRange(scope)
 }
 
-/** Step-1 item 7: plain, non-AI Investigate — scope the finding then jump to its Statistics section. */
-async function onInvestigateFinding({ finding, sectionId } = {}) {
+/**
+ * Step 1.2 — "Open Statistics" from an Analysis finding.
+ * Opens the related Statistics section only. Does not change Scope, Filters,
+ * or "Limit to C1–Cn"; the recommended cursor window stays a suggestion the
+ * user applies explicitly via "Apply cursors".
+ */
+async function onOpenFindingStatistics({ finding, sectionId } = {}) {
   if (!finding || !sectionId) return
-  findingsInvestigateUndo.value = {
-    cursors: [...(cursors.value || [])],
-    scopeToCursors: activeTab.value?.scopeToCursors !== false,
-    viewport: timelinePanelRef.value?.getViewport?.() || null,
-  }
-  onApplyFindingScope(finding)
   // Keep Findings inbox open so Timeline Evidence stays visible (Step 2 #5/#16).
   rightPanelTab.value = 'stats'
   await nextTick()
   statsPanelRef.value?.applyDemoSections?.({ id: sectionId, expand: true, scroll: 'section' })
 }
 
-function onUndoInvestigateFinding() {
-  const snap = findingsInvestigateUndo.value
-  if (!snap) return
-  cursors.value = Array.isArray(snap.cursors) ? [...snap.cursors] : cursors.value
-  if (activeTab.value) activeTab.value.scopeToCursors = !!snap.scopeToCursors
-  onStatsScopeChange(!!snap.scopeToCursors)
-  if (snap.viewport) timelinePanelRef.value?.applyViewport?.(snap.viewport)
-  findingsInvestigateUndo.value = null
-  showToast('Restored Scope from before Investigate', 'info')
-  scheduleSessionSave()
-}
-
 function onFindingsTriageUpdate(state) {
   findingsTriageState.value = normalizeTriageState(state)
   scheduleSessionSave()
-}
-
-function onAddFindingToCase(finding) {
-  if (!finding) return
-  const ok = aiPanelRef.value?.addFindingToInvestigationCase?.(finding)
-  if (ok) {
-    showToast('Finding added to AI Case', 'info')
-    scheduleSessionSave()
-  } else {
-    showToast('Could not add finding to Case', 'error')
-  }
 }
 
 /** Step-2 Show Evidence — Timeline jump without changing Scope or Filters. */
@@ -4437,12 +4405,16 @@ function onShowFindingEvidence(finding) {
     return
   }
   const ns = Number(target.ns)
-  // Place an Evidence marker in a free cursor slot when possible; never
-  // clear existing Scope cursors and never force Limit-to-cursors.
+  // Navigation only (Step 1.3): never change Scope or "Limit to C1–Cn".
+  // Only drop an Evidence marker in a free cursor slot when the current
+  // cursors are NOT limiting Statistics — otherwise a new cursor would
+  // silently widen/alter the measured Scope.
+  const scopeLimiting = activeTab.value?.scopeToCursors !== false
+    && placedCursorTimes.value.length >= 2
   const max = appSettings.maxCursors || 4
   const next = Array.from({ length: max }, (_, i) => cursors.value[i] ?? null)
   const near = next.some(t => t != null && Math.abs(Number(t) - ns) <= 1)
-  if (!near) {
+  if (!near && !scopeLimiting) {
     const slot = next.findIndex(t => t == null)
     if (slot >= 0) {
       next[slot] = ns
