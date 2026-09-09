@@ -11,8 +11,10 @@ import {
   PROPOSAL_SCHEMA,
   applyProposal,
   collaborateContext,
+  collaborateDigest,
   collaborateHeader,
   nbAiActionReason,
+  parseQuestionSuggestion,
   proposalDiff,
   stripModelSecrets,
   validateProposal,
@@ -42,10 +44,10 @@ function validated() {
 }
 
 describe('§9 collaborate with AI', () => {
-  it('six focused actions', () => {
+  it('seven focused actions (six original + refine_question for the Question step)', () => {
     assert.deepEqual(NB_AI_ACTIONS.map(a => a[0]), [
       'review_investigation', 'suggest_next_check', 'draft_hypotheses',
-      'draft_conclusion', 'update_from_findings', 'compare_trace',
+      'draft_conclusion', 'update_from_findings', 'compare_trace', 'refine_question',
     ])
   })
   it('disabled when AI unavailable', () => {
@@ -66,6 +68,37 @@ describe('§9 collaborate with AI', () => {
   it('header reports stale', () => {
     const h = collaborateHeader(inv(), { broken: { issues: [{ bookmark_id: 'e1' }] } })
     assert.match(h.stale_warning, /no longer resolve/)
+  })
+  it('digest is readable Markdown, never JSON', () => {
+    const d = collaborateDigest(collaborateContext(inv(), { action: 'review_investigation' }))
+    assert.match(d, /\*\*Question\*\*/)
+    assert.match(d, /\*\*Evidence \(1\)\*\*/)
+    assert.match(d, /120 migrations/)
+    assert.match(d, /\*\*Conclusion\*\*/)
+    assert.ok(!d.includes('{'))
+    assert.ok(!d.includes('"bookmark_id"'))
+    assert.equal(typeof collaborateDigest(null), 'string')
+  })
+})
+
+describe('refine_question suggestion parsing (bypasses the proposal machinery)', () => {
+  it('extracts the suggested question, case-insensitively', () => {
+    assert.equal(
+      parseQuestionSuggestion('Suggested question: Why does ControlTask stall?'),
+      'Why does ControlTask stall?')
+    assert.equal(
+      parseQuestionSuggestion('suggested question:  Why does it stall before dispatch?  '),
+      'Why does it stall before dispatch?')
+  })
+  it('strips surrounding quotes', () => {
+    assert.equal(
+      parseQuestionSuggestion('Suggested question: "Why does it stall?"'),
+      'Why does it stall?')
+  })
+  it('returns empty for non-matching text — never invents from unstructured prose', () => {
+    assert.equal(parseQuestionSuggestion('Here is a general review of your investigation.'), '')
+    assert.equal(parseQuestionSuggestion(''), '')
+    assert.equal(parseQuestionSuggestion(null), '')
   })
 })
 

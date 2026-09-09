@@ -797,6 +797,7 @@
               <AiAssistantPanel
                 ref="aiPanelRef"
                 :analysis-context="aiAnalysisContext"
+                :notebook-collab="notebookCollab"
                 :show-clear-filters="!!activeFilterSummaryLabel"
                 :on-clear-filters="clearAllActiveFilters"
                 :ai-enabled="appSettings.aiEnabled !== false"
@@ -822,6 +823,8 @@
                 @open-stats="onAiOpenStats"
                 @status-message="onAiStatusMessage"
                 @session-change="scheduleSessionSave"
+                @clear-notebook-collab="notebookCollab = null"
+                @notebook-proposal="onNotebookProposal"
               />
             </div>
           </div>
@@ -1347,13 +1350,37 @@
       :trace-file-name="activeTab?.name || ''"
       :cursor-range="notebookCursorRange"
       :format-ns="(ns) => formatTime(ns, trace.timeScale, appSettings.timeDecimals)"
+      :ai-enabled="appSettings.aiEnabled !== false"
+      :has-second-trace="compareTabs.length > 1"
+      :ai-request-state="aiPanelRequestState"
+      :has-pending-proposal="!!notebookProposal"
+      :refine-suggestion="notebookCollab?.refineSuggestion || ''"
+      :last-ai-reply="notebookCollab ? { step: notebookCollab.sourceStep, text: notebookCollab.lastReplyText } : null"
       @close="notebookDialogOpen = false"
       @update="notebookApply"
       @undo="notebookUndoAction"
       @redo="notebookRedoAction"
+      @restore="notebookRestoreAction"
       @scaffold="onScaffoldNotebook"
       @jump-range="onNotebookJumpRange"
+      @open-statistics="onAiOpenStats"
       @export-evidence-package="onExportAiEvidencePackage"
+      @collaborate="onNotebookCollaborate"
+      @restore-evidence-scope="onRestoreEvidenceScope"
+      @undo-scope-restore="onUndoScopeRestore"
+      @query-ai="queryAnalysisWithAi"
+      @focus-ai-panel="rightPanelTab = 'ai'"
+      @cancel-ai-request="aiPanelRef?.cancelRequest?.()"
+    />
+
+    <NotebookProposalDialog
+      v-if="notebookProposal && investigation"
+      :investigation="investigation"
+      :proposal="notebookProposal"
+      :allow-other-trace="compareTabs.length > 1"
+      @close="notebookProposal = null"
+      @reject="notebookProposal = null"
+      @apply="onNotebookProposalApply"
     />
 
     <ExportDialog
@@ -1584,6 +1611,7 @@ import AiAssistantPanel from './components/AiAssistantPanel.vue'
 import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
 import TraceHealthBadge from './components/TraceHealthBadge.vue'
 import InvestigationNotebookDialog from './components/InvestigationNotebookDialog.vue'
+import NotebookProposalDialog from './components/NotebookProposalDialog.vue'
 import ExportDialog from './components/ExportDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import DomSelect from './components/DomSelect.vue'
@@ -1779,9 +1807,13 @@ import { downloadPerfetto, buildPerfettoChromeTrace } from './utils/perfettoExpo
 import { buildTraceHealthResult } from './utils/traceHealth.js'
 import {
   newInvestigation, loadInvestigation, dumpInvestigation, traceIdentity, addBookmark,
-  emptyNotebookHistory, pushNotebookState, notebookUndo, notebookRedo, notebookHistoryState,
+  emptyNotebookHistory, pushNotebookState, notebookUndo, notebookRedo, notebookGoto, notebookHistoryState,
   scaffoldInvestigationFromFindings,
 } from './utils/investigationNotebook.js'
+import {
+  collaborateContext, collaborateHeader, collaborateDigest,
+  NB_AI_ACTION_PROMPTS, applyProposal, parseQuestionSuggestion,
+} from './utils/investigationAi.js'
 import {
   exportTargets, defaultExportTarget, cursorRange as exportCursorRange,
   perfettoFilename, workspaceFilename, btfSliceFilename,
@@ -3448,6 +3480,15 @@ const traceHealthResult = computed(() => {
 
 // ---- Investigation notebook (Phase 3) ----------------------------------
 const notebookDialogOpen = ref(false)
+// §9 — compact Notebook context shown in the AI panel while collaborating.
+const notebookCollab = ref(null)
+// §10 — a pending AI proposal awaiting explicit review.
+const notebookProposal = ref(null)
+// Bridges the one shared AI request (busy/error/status live inside
+// AiAssistantPanel) into the Notebook's per-step AssistancePanel — there is
+// no per-step concurrent-request system, just this one read-only view.
+const aiPanelRequestState = computed(() =>
+  aiPanelRef.value?.requestStatus?.() ?? { busy: false, error: '', status: '' })
 
 const investigation = computed({
   get: () => activeTab.value?.investigation ?? null,
@@ -3511,6 +3552,89 @@ function notebookRedoAction() {
   scheduleSessionSave()
 }
 
+/** Notebook "History…": jump the undo cursor to an absolute snapshot. */
+function notebookRestoreAction(index) {
+  if (!activeTab.value) return
+  const hist = notebookGoto(activeTab.value.notebookHistory, index)
+  activeTab.value.notebookHistory = hist
+  const snap = notebookHistoryState(hist).current
+  if (snap) activeTab.value.investigation = loadInvestigation(snap)
+  scheduleSessionSave()
+}
+
+/** §9 — one "Collaborate with AI" entry point: open the existing AI Assistant
+ *  with a compact Notebook context header and the focused action's prompt.
+ *  No chat history and no other trace is sent; nothing writes to the Notebook
+ *  until the user accepts a structured proposal (§10). */
+async function onNotebookCollaborate({ action = '', selectedEvidenceIds = null, sourceStep = '' } = {}) {
+  if (!trace.value || appSettings.aiEnabled === false) return
+  ensureInvestigation()
+  const findings = analysisFindings.value || []
+  const ctx = collaborateContext(investigation.value, { action, findings, selectedEvidenceIds })
+  const digest = collaborateDigest(ctx)
+  notebookCollab.value = {
+    action,
+    sourceStep,
+    header: collaborateHeader(investigation.value, { selectedCount: (selectedEvidenceIds || []).length }),
+    context: ctx,
+    digest,
+    refineSuggestion: '',
+    lastReplyText: '',
+  }
+  rightPanelTab.value = 'ai'
+  await nextTick()
+  // The visible question is just the focused action; the readable investigation
+  // digest is sent to the model but shown only in the collaboration banner's
+  // "What the AI receives" disclosure — no JSON in the chat.
+  const prompt = NB_AI_ACTION_PROMPTS[action] || 'Help with this investigation.'
+  if (aiPanelRef.value?.askNotebook) {
+    await aiPanelRef.value.askNotebook(prompt, digest)
+  } else if (aiPanelRef.value?.ask) {
+    await aiPanelRef.value.ask(`${prompt}\n\n---\n${digest}`)
+  }
+  // Always capture the plain-text reply so the Notebook can show it inline
+  // on the step it was asked from (InvestigationNotebookDialog's
+  // :last-ai-reply prop) — the chat bubble itself lives in the AI Assistant
+  // panel, which sits behind this dialog's full-screen modal.
+  if (notebookCollab.value) {
+    const replyText = aiPanelRef.value?.lastAssistantText?.() || ''
+    notebookCollab.value.lastReplyText = replyText
+    // "Help refine question" isn't a structured proposal — a single scalar
+    // field (the question text) doesn't need the operations/proposal review
+    // machinery. Pull the plain-text suggestion straight out of the reply.
+    if (action === 'refine_question') {
+      notebookCollab.value.refineSuggestion = parseQuestionSuggestion(replyText)
+    }
+  }
+  // Return focus to the Notebook so the user can act on the reply.
+  notebookDialogOpen.value = true
+}
+
+/** §10 — the AI answered a collaboration with a structured proposal. Never
+ *  applied automatically: open the review dialog. */
+function onNotebookProposal(proposal) {
+  if (!investigation.value) return
+  notebookProposal.value = proposal
+}
+
+/** §10 — the user accepted part or all of a reviewed proposal. Commit as one
+ *  undoable transaction. */
+function onNotebookProposalApply({ validated, acceptIndices, confirmedIndices, acceptAll } = {}) {
+  if (!activeTab.value || !validated) { notebookProposal.value = null; return }
+  const now = new Date().toISOString()
+  const { inv, applied } = applyProposal(investigation.value, validated, {
+    acceptIndices, confirmedIndices, acceptAll, now,
+  })
+  notebookProposal.value = null
+  if (!applied.length) {
+    showToast('No proposal changes applied.', 'info')
+    return
+  }
+  notebookApply(inv)
+  showToast(`Applied ${applied.length} AI proposal change${applied.length === 1 ? '' : 's'}`, 'info')
+  notebookDialogOpen.value = true
+}
+
 function openNotebookDialog() {
   if (!trace.value) {
     showToast('Open a trace before starting an investigation.', 'info')
@@ -3523,6 +3647,31 @@ function openNotebookDialog() {
 function onNotebookJumpRange(range) {
   const start = Number(range?.start)
   if (Number.isFinite(start)) timelinePanelRef.value?.jumpToNs?.(start)
+}
+
+// §P1 — "Restore evidence scope…" is the ONE Notebook action allowed to change
+// Scope (evidence Jump / Show Evidence stay navigation-only). It is confirmed in
+// the dialog, and undoable: capture the cursor state first.
+let _scopeRestoreUndo = null
+function onRestoreEvidenceScope({ start, end } = {}) {
+  const lo = Number(start)
+  const hi = Number(end)
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return
+  _scopeRestoreUndo = {
+    cursors: [...(cursors.value || [])],
+    scopeToCursors: activeTab.value?.scopeToCursors !== false,
+  }
+  applyExploreRange({ lo, hi })
+  showToast('Evidence scope restored — Undo from the notebook to revert.', 'info')
+}
+function onUndoScopeRestore() {
+  if (!_scopeRestoreUndo) return
+  cursors.value = [...(_scopeRestoreUndo.cursors || [])]
+  onStatsScopeChange(_scopeRestoreUndo.scopeToCursors)
+  syncTimelineViewport()
+  _scopeRestoreUndo = null
+  scheduleSessionSave()
+  showToast('Scope restore undone.', 'info')
 }
 
 /** Notebook dialog → "Scaffold": seed the investigation from current findings. */

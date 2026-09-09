@@ -2543,14 +2543,14 @@ class _MetricsPlotDialog(QDialog):
         if on_open_heatmap is not None:
             btn_hm = QPushButton("Open Heatmap")
             btn_hm.setToolTip(
-                "Open the Migration Heatmap focused on this core pair")
+                "Open the Migration & Corridor Inspector focused on this core pair")
             btn_hm.clicked.connect(lambda _checked=False: on_open_heatmap())
             btn_row.addWidget(btn_hm)
             self._btn_open_heatmap = btn_hm
         if on_open_chord is not None:
             btn_ch = QPushButton("Open Chord")
             btn_ch.setToolTip(
-                "Open the Migration Chord Diagram with this pair highlighted")
+                "Open the Migration & Corridor Inspector with this pair highlighted")
             btn_ch.clicked.connect(lambda _checked=False: on_open_chord())
             btn_row.addWidget(btn_ch)
             self._btn_open_chord = btn_ch

@@ -808,7 +808,7 @@ def append_migration_burst_anomaly(
             "text": (
                 "Migration rate far above thrash heuristic: "
                 + "; ".join(bursts[:5])
-                + ". Check Migration Heatmap for a short thrash window."
+                + ". Check the Migration & Corridor Inspector for a short thrash window."
             ),
             "evidence": [],
         })

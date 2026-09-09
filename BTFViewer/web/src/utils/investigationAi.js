@@ -14,6 +14,7 @@ import {
   BM_CONCLUSION,
   BM_HYPOTHESIS,
   EVIDENCE_BOOKMARK_TYPES,
+  EVIDENCE_KIND_LABELS,
   EV_AUTHOR_AI,
   EV_KIND_MEASURED,
   LINK_RELATIONS,
@@ -57,6 +58,10 @@ export const NB_AI_ACTIONS = [
     'Compare with the other open trace. Baseline A is Trace A, Candidate B is '
     + 'Trace B; verdicts describe Candidate B versus Baseline A. Use the current '
     + 'Compare Scope.'],
+  ['refine_question', 'Help refine question',
+    'Suggest one clearer, more specific rewording of this investigation '
+    + 'question. Return only the improved question text on its own line, '
+    + 'prefixed with "Suggested question: ". No JSON, no other operations.'],
 ]
 const NB_AI_ACTION_IDS = new Set(NB_AI_ACTIONS.map(a => a[0]))
 export const NB_AI_ACTION_LABELS = Object.fromEntries(NB_AI_ACTIONS.map(a => [a[0], a[1]]))
@@ -71,6 +76,20 @@ export function nbAiActionReason(actionId, inv, { aiEnabled, hasSecondTrace = fa
     if (!secs.evidence.items.length) return 'Add evidence before drafting a conclusion'
   }
   return ''
+}
+
+/**
+ * Extract the "Suggested question: …" line from a refine_question reply, if
+ * present. Deliberately narrow — this is a single scalar-field suggestion
+ * (the question text), not a structured proposal, so it bypasses the whole
+ * PROPOSAL_OPS/validateProposal/applyProposal machinery entirely: "Use this
+ * question" just sets inv.title directly. Returns '' when the reply doesn't
+ * match (never invent a suggestion from unstructured prose).
+ */
+export function parseQuestionSuggestion(replyText) {
+  const m = /Suggested question:\s*(.+)/i.exec(String(replyText || ''))
+  if (!m) return ''
+  return m[1].trim().replace(/^["']|["']$/g, '')
 }
 
 export function collaborateHeader(inv, { broken = null, selectedCount = 0 } = {}) {
@@ -122,6 +141,53 @@ export function collaborateContext(inv, {
       }))
   }
   return ctx
+}
+
+/** Human-readable Markdown digest of a collaborateContext() payload — what the
+ *  AI actually receives, formatted for a person to skim (no JSON). Used both as
+ *  the message context sent to the model and in the AI panel's "what's sent"
+ *  disclosure. */
+export function collaborateDigest(ctx) {
+  const c = ctx && typeof ctx === 'object' ? ctx : {}
+  const inv = c.investigation || {}
+  const byId = {}
+  for (const s of inv.sections || []) byId[s.id] = s.items || []
+  const out = []
+  const first = (byId.question || [])[0]
+  out.push(`**Question** — ${first && first.text ? first.text : '_(untitled)_'}`)
+  const scope = (byId.scope || []).map(i => i.text).filter(Boolean)
+  if (scope.length) out.push(`**Scope** — ${scope.join(' · ')}`)
+
+  const hyp = byId.hypotheses || []
+  if (hyp.length) {
+    out.push('', `**Hypotheses (${hyp.length})**`)
+    for (const h of hyp) out.push(`- ${h.text}${h.status ? `  _(${h.status})_` : ''}`)
+  }
+
+  const ev = (Array.isArray(c.selected_evidence) && c.selected_evidence.length)
+    ? c.selected_evidence
+    : (byId.evidence || [])
+  if (ev.length) {
+    out.push('', `**Evidence (${ev.length})**`)
+    for (const e of ev) {
+      const label = (e.kind && e.kind !== 'note' && EVIDENCE_KIND_LABELS[e.kind])
+        || EVIDENCE_KIND_LABELS['']
+      const note = String(e.note || '').split('\n')[0].trim()
+      out.push(`- _[${label}]_ ${e.text}${note ? ` — ${note}` : ''}`
+        + `${e.stale ? '  ⚠ stale reference' : ''}`)
+    }
+  }
+
+  const checks = (byId.open_checks || []).map(i => i.text).filter(Boolean)
+  if (checks.length) {
+    out.push('', `**Open checks (${checks.length})**`)
+    for (const t of checks) out.push(`- ${t}`)
+  }
+
+  const verdict = (byId.conclusion || [])
+    .filter(i => i.kind === 'verdict').map(i => i.text).filter(Boolean)
+  out.push('', `**Conclusion** — ${verdict.length ? verdict.join(' ') : '_none yet_'}`)
+  return out.join('\n')
 }
 
 // --- §10 — proposal review ------------------------------------------

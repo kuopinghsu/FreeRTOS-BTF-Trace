@@ -13,6 +13,7 @@ import {
   detectBrokenReferences,
   dumpInvestigation,
   evidenceNavTargets,
+  evidenceScopeRestorePlan,
   guardEvidenceChanges,
   investigationSections,
   loadInvestigation,
@@ -116,6 +117,33 @@ describe('stale + nav + reload', () => {
     const once = dumpInvestigation(measuredInv())
     assert.equal(dumpInvestigation(loadInvestigation(once)), once)
     assert.equal(loadInvestigation(once).bookmarks[0].evidence.value, 120)
+  })
+})
+
+describe('§P1 restore evidence scope', () => {
+  const card = (start, end) => addEvidence(newInvestigation(), {
+    title: 'e', role: 'supporting', source: EV_SOURCE_STATISTICS, kind: 'derived',
+    scope: { start, end },
+  }).bookmarks[0].evidence
+
+  it('null without a stored scope', () => {
+    assert.equal(evidenceScopeRestorePlan({ source: 'x' }), null)
+    assert.equal(evidenceScopeRestorePlan(null), null)
+  })
+  it('null when scope already matches current', () => {
+    assert.equal(
+      evidenceScopeRestorePlan(card(100, 900), { currentScope: { start: 100, end: 900 } }),
+      null)
+  })
+  it('plan lists the three changes for the preview', () => {
+    const plan = evidenceScopeRestorePlan(card(100, 900), {
+      currentScope: { start: 0, end: 50 }, fmt: (v) => `${v}us`,
+    })
+    assert.deepEqual([plan.start, plan.end], [100, 900])
+    assert.match(plan.summary, /100us/)
+    assert.equal(plan.changes.length, 3)
+    assert.match(plan.changes[0], /^Place C1–C2/)
+    assert.match(plan.changes[2], /Limit Statistics/)
   })
 })
 

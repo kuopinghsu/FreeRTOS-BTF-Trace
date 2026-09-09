@@ -154,7 +154,7 @@ BTFViewer 使用一致的檢視介面、控制項目及分析流程。判讀結�
 
 | # | 區域 | 說明 |
 |---|---|---|
-| 1 | **活動列（Activity rail）** | 開啟與時間軸並列的工具——**Migration heatmap**、**Analysis Findings**、**Investigation notebook**、**Compare traces** 與 **Snapshot editor**——底部為 **Help** 與 **Settings**。 |
+| 1 | **活動列（Activity rail）** | 開啟與時間軸並列的工具——**Migration heatmap**、**Analysis Findings**、[**Investigation notebook**](#investigation-notebook)、**Compare traces** 與 **Snapshot editor**——底部為 **Help** 與 **Settings**。 |
 | 2 | **工具列（Toolbar）** | 分組控制項——開啟、版面方向、縮放、檢視模式、**Load**、佈景主題、示範、錄影。將滑鼠移到圖示上可看到名稱與快捷鍵；視窗過窄時會將分組收進 **More (⋯)**。詳見[主要控制項目](#主要控制項目)。 |
 | 3 | **追蹤資料分頁（Trace tabs）** | 每份開啟的追蹤資料各一個分頁，並各自保留分析範圍、篩選條件、檢視模式、縮放、游標與標記。 |
 | 4 | **圖例／工作清單（Legend / task list）** | 各列的顏色對照。將滑鼠移到項目上為 **Highlight**，點選為 **Selection**；在 Core View 中，**Cores** 核取方塊即為 Core Filter。 |
@@ -342,7 +342,7 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 | 2 | **篩選與排序** | 依 **Severity**、**Evidence** 強度或 **Category** 過濾，變更 **Sort**，並可切換 **Group incidents** 將同一問題的重複項目摺疊在一起。 |
 | 3 | **結果清單** | 依嚴重度排序並依受影響物件分組；每筆項目會顯示分類，以及證據為 `Estimated / heuristic`（推估／啟發式）或實測。 |
 | 4 | **詳細窗格** | 所選結果的完整內容——現象與解讀、證據強度、確切證據、**Check next** 指引，以及建議的分析範圍。 |
-| 5 | **結果動作** | **Apply cursors** / **Show on timeline** / **Open Statistics** 可跳至證據；**Done** / **Dismiss…** 可記錄分流結果；**Add to investigation** 會把該結果存入 Investigation Notebook。 |
+| 5 | **結果動作** | **Apply cursors** / **Show on timeline** / **Open Statistics** 可跳至證據；**Done** / **Dismiss…** 可記錄分流結果；**Add to investigation** 會把該結果存入[調查筆記本](#investigation-notebook)。 |
 | 6 | **底部列** | 對所選結果 **Ask AI**，以及 **More** 中的匯出選項。 |
 
 ### Max、p95 與 p99 的判讀方式
@@ -395,6 +395,42 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 | 8 | **底部列** | **Export HTML**、**Save baseline** / **Score vs baseline**、**Validate experiment…**，或 **Ask AI about this**。 |
 
 這是選用的比較工具，不是基本分析流程的必要步驟。使用時，應比較相同的工作負載階段與量測範圍。若要在 Baseline 與 Candidate 時間軸分頁之間切換時維持相同的相對階段視野，請啟用 **Settings → Display → Link A/B timeline zoom when switching compare tabs**（詳見[多份追蹤資料](#多份追蹤資料)）。
+
+<a id="investigation-notebook" name="investigation-notebook">&#x200B;</a>
+
+### 調查筆記本（Investigation Notebook）
+
+Notebook 是一份書面、分成四個步驟的單次調查紀錄——**Question → Evidence → Verify → Conclusion**——與追蹤資料一併保存。它可搭配或不搭配 AI 使用：每個 AI 動作都是選用的、僅作用於目前步驟，且不會自行變更 Notebook 內容（詳見下方的**與 AI 協同作業**）。這與 AI Assistant 本身的導引步驟列（**Investigation Case**，見 [AI_zh-TW.md → 調查案例](AI_zh-TW.md#investigation-case)）不同——Notebook 是用來以你自己的文字，保存你自己調查發現的地方。
+
+可從活動列的 **Investigation notebook** 按鈕開啟，或在分析結果上選取 **Add to investigation**。
+
+![Investigation Notebook — Evidence step](../images/btfviewer-web-notebook.png)
+
+| # | 區域 | 說明 |
+|---|---|---|
+| 1 | **標頭（Header）** | 標題（記錄的問題）與狀態標籤（**Open** / **Needs evidence** / **Ready to conclude** / **Closed**），以及 **⋯ More** 選單——**Add from Findings**、**History…**、**Import / Export JSON**、**Evidence package…**、**New investigation…**、**Close investigation**。在標頭空白處拖曳即可移動視窗。 |
+| 2 | **步驟導覽（Step nav）** | **Question → Evidence → Verify → Conclusion**；打勾圖示代表該步驟已完成。視窗變窄時會收合成 **Step N of 4** 選單。 |
+| 3 | **內容列（Context strip）** | 新增每個項目當下的追蹤資料、記錄的 **Scope** 與 **Filters**。**Context details** 會顯示實際會傳送給 AI 的內容。 |
+| 4 | **工作區（Working area）** | 目前步驟的內容——問題表單、證據卡片、解釋，或結論編輯器。詳見下方的**調查步驟**。 |
+| 5 | **AI 協助（AI assistance）** | 目前步驟專屬的單一 AI 動作；請求得到回覆後，內容會直接顯示在此卡片中——不需切換到 AI Assistant 面板閱讀。 |
+| 6 | **底部列（Footer）** | **Undo** / **Redo** 可還原或重做 Notebook 的任何修改，並顯示儲存狀態說明，以及可在步驟間移動的 **Back** / **Next**。 |
+
+**調查步驟**
+
+1. **Question** — 記錄你想了解的問題；此文字會成為條目標題。可選擇從目前的分析結果之一開始，或選取 **Help refine question** 讓 AI 建議更清楚的問法——在你選取 **Use this question** 前不會有任何變更。**Start investigation** 會在一個可還原的步驟中記錄該問題。
+2. **Evidence** — 建立證據集合。卡片本身的 **Add evidence → From Findings** 一次新增一項結果；標頭的 **⋯ → Add from Findings** 則會一次帶入多達 8 項依嚴重度排序的結果。每張卡片也可以從目前量測值或自由文字備註開始。每張卡片都有一個永遠可編輯的 **Explanation (your words)** 欄位——在這裡寫下你自己的解讀，或複製貼上 AI 回覆中相關的部分（詳見下方的**與 AI 協同作業**）。用核取方塊選取卡片後，可使用 **View source** / **Ask AI about this** / **Details**（唯讀來源資訊：追蹤資料、工作／核心、記錄的分析範圍、時間戳記、來源，以及新增者）。
+3. **Verify** — 草擬可能的解釋（**Add explanation**，或選取 **Suggest explanations** 讓 AI 針對這個開放性問題提出候選解釋——回覆會顯示在本步驟的 AI 協助卡片上；請將你想保留的解釋，以自己的文字寫入該卡片的 **Reasoning** 欄位），將證據連結到各項解釋作為支持或反駁，並用 **Add a check** / **Link evidence** 追蹤待辦事項。解釋的狀態（**Open** / **Supported** / **Contradicted**）只依你建立的連結而定——絕不會自動假設。
+4. **Conclusion** — 寫下證據所支持的結論；即使仍有未完成的檢查項目也能匯出。**Cited evidence**、**Unresolved checks**、**Stale references**（後續編輯已使其失效的引用）與 **Limitations** 皆由記錄的資料自動推導，絕不憑空捏造。
+
+![Investigation Notebook — Question step](../images/btfviewer-web-notebook-question.png)
+![Investigation Notebook — Verify step](../images/btfviewer-web-notebook-verify.png)
+![Investigation Notebook — Conclusion step](../images/btfviewer-web-notebook-conclusion.png)
+
+**清空調查（Clear the investigation）**：**⋯ → New investigation…** 會在單一可還原步驟中，以全新空白調查取代目前的調查，因此誤按一次只要 **Undo** 就能復原。這與 **Close investigation** 不同，後者會保留所有內容，只將案件標記為已結案。
+
+**與 AI 協同作業（Cowork with AI）**：每個步驟的 AI 協助卡片都只執行一個選用的動作——**Help refine question**、**Suggest explanations**、**Check evidence with AI**（來自 Evidence 步驟的下一步卡片），或 **Review conclusion** / **Discuss in AI Assistant**。AI 不會直接修改 Notebook：結構化建議會開啟既有的建議審核對話框，讓你逐行接受、調整或拒絕；純文字回覆（例如來自 **Suggest explanations** 或 **Check evidence with AI**）會直接顯示在提出請求的卡片上，由你自行決定要把哪些內容保留並複製進 Notebook——可以是證據卡片的 **Explanation**、解釋卡片自己的 Reasoning 欄位（**Verify**），或是 **Conclusion** 文字。
+
+調查筆記本（問題、證據、連結與結論）只要有內容，就會自動包含在 Statistics 的 **Export HTML** 報告中——詳見[匯出](#export)。
 
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 
@@ -456,7 +492,7 @@ BTFViewer 提供以下匯出功能。
 | Trace 比較報告 | 開啟 Compare，再選取 **Export HTML** |
 | 示範錄影 | 選取 **Record** 並分享目前分頁；停止錄影後會下載 WebM 檔案 |
 
-Statistics 與 Trace Compare 都使用單一的 **Export HTML** 功能。儲存後的報告會在每個表格提供 **CSV** 按鈕，依目前排序下載所有符合 **Search** 與 **Problems only** 篩選的資料列（不受分頁影響）。若要匯出完整表格，請先清除這些篩選條件。**Export HTML** 旁的 **Anonymize** 核取方塊會將整份匯出報告中的工作名稱以固定的 `Task-N` 別名取代。
+Statistics 與 Trace Compare 都使用單一的 **Export HTML** 功能。儲存後的報告會在每個表格提供 **CSV** 按鈕，依目前排序下載所有符合 **Search** 與 **Problems only** 篩選的資料列（不受分頁影響）。若要匯出完整表格，請先清除這些篩選條件。**Export HTML** 旁的 **Anonymize** 核取方塊會將整份匯出報告中的工作名稱以固定的 `Task-N` 別名取代。當[調查筆記本](#investigation-notebook)已有內容時，其問題、證據、連結與結論會自動包含在 Statistics 的 **Export HTML** 報告中，不需要另外匯出。
 
 ### 快照編輯器（Snapshot editor）
 

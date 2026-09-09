@@ -1633,5 +1633,75 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(more.minimumHeight(), 28)
 
 
+class NotebookCollabBannerThemeTests(unittest.TestCase):
+    """Live-reported bug: the "Collaborating on" banner (§9) was hardcoded
+    to dark-theme colors and stayed dark navy after switching to light
+    theme. It must now follow the same ``_ai_chrome_colors(is_dark)`` tokens
+    apply_theme() uses for the rest of the panel."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        app = _app()
+        app.setQuitOnLastWindowClosed(False)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        reap_qt_widgets()
+
+    def _panel(self):
+        panel = create_ai_assistant_panel(
+            None, get_context=lambda: {"findings_text": ""},
+            get_settings=lambda: {"enabled": "true"})
+        self.addCleanup(panel.deleteLater)
+        return panel
+
+    def _show_collab(self, panel) -> None:
+        panel.set_notebook_collab(
+            {"investigation_title": "Why does it stall?", "status_label": "Open",
+             "evidence_count": 1},
+            digest="digest text",
+        )
+
+    def test_no_hardcoded_dark_only_hex_left_in_source(self) -> None:
+        # #182130 / #0f1620 were this banner's exact dark-only background
+        # literals — unique to this bug, never legitimate elsewhere.
+        src = Path(__file__).resolve().parents[1] / "btf_viewer_pkg" / "ai_assistant.py"
+        text = src.read_text(encoding="utf-8")
+        for bad in ("#182130", "#0f1620"):
+            self.assertNotIn(bad, text, f"{bad!r} is a dark-only literal, left over from the bug")
+        # apply_theme() must restyle the banner from the shared chrome
+        # tokens (the fix), not just at construction time.
+        apply_theme_start = text.index("def apply_theme(self, is_dark: bool)")
+        i = text.index('banner = getattr(self, "_nb_collab_banner", None)')
+        j = text.index("log = getattr(self, \"_log\", None)")
+        self.assertIn("_ai_chrome_colors(self._is_dark)", text[apply_theme_start:i])
+        self.assertIn("c['hover']", text[i:j])
+        self.assertIn("set_notebook_collab(self._nb_collab", text[i:j])
+
+    def test_banner_background_changes_with_theme(self) -> None:
+        panel = self._panel()
+        self._show_collab(panel)
+        panel.apply_theme(True)
+        dark_style = panel._nb_collab_banner.styleSheet()
+        panel.apply_theme(False)
+        light_style = panel._nb_collab_banner.styleSheet()
+        self.assertNotEqual(dark_style, light_style)
+        # Dark tokens must not leak into the light-theme stylesheet.
+        self.assertNotIn("#243044", light_style)
+
+    def test_toggling_theme_while_active_refreshes_the_inline_title_color(self) -> None:
+        # The title/caption colors are baked into rich-text HTML at
+        # set_notebook_collab() time — apply_theme() must re-render them
+        # itself when a collaboration is active, since nothing else will.
+        panel = self._panel()
+        self._show_collab(panel)
+        panel.apply_theme(True)
+        dark_html = panel._nb_collab_lbl.text()
+        panel.apply_theme(False)  # caller does NOT call set_notebook_collab again
+        light_html = panel._nb_collab_lbl.text()
+        self.assertNotEqual(dark_html, light_html)
+        self.assertIn("Why does it stall?", light_html)
+
+
 if __name__ == "__main__":
     unittest.main()

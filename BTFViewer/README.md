@@ -154,7 +154,7 @@ The Desktop and Web builds share one layout.
 
 | # | Region | What it does |
 |---|---|---|
-| 1 | **Activity rail** | Opens the tools that work alongside the timeline — **Migration heatmap**, **Analysis Findings**, the **Investigation notebook**, **Compare traces**, and the **Snapshot editor** — with **Help** and **Settings** at the bottom. |
+| 1 | **Activity rail** | Opens the tools that work alongside the timeline — **Migration heatmap**, **Analysis Findings**, the [**Investigation notebook**](#investigation-notebook), **Compare traces**, and the **Snapshot editor** — with **Help** and **Settings** at the bottom. |
 | 2 | **Toolbar** | Grouped controls — Open, layout, zoom, View Mode, **Load**, theme, demo, record. Hover an icon for its name and shortcut; a narrow window folds groups into **More (⋯)**. See [Main controls](#main-controls). |
 | 3 | **Trace tabs** | One tab per open trace. Each tab keeps its own Scope, Filters, View Mode, zoom, cursors, and marks. |
 | 4 | **Legend / task list** | Colour key for the rows. Hover an entry for **Highlight**, click it for **Selection**; in Core View the **Cores** checkboxes act as the Core Filter. |
@@ -342,7 +342,7 @@ Open the Findings window from the toolbar **Investigation** group or the activit
 | 2 | **Filters and sort** | Narrow by **Severity**, **Evidence** strength, or **Category**, change the **Sort**, and toggle **Group incidents** to fold repeats of one issue together. |
 | 3 | **Findings list** | Severity-ranked and grouped by the affected object; each entry shows its category and whether the evidence is `Estimated / heuristic` or measured. |
 | 4 | **Detail pane** | The selected finding in full — observation vs interpretation, evidence strength, the exact evidence, a **Check next** pointer, and the recommended Scope. |
-| 5 | **Finding actions** | **Apply cursors** / **Show on timeline** / **Open Statistics** move to the evidence; **Done** / **Dismiss…** record the triage outcome; **Add to investigation** saves the finding to the Investigation Notebook. |
+| 5 | **Finding actions** | **Apply cursors** / **Show on timeline** / **Open Statistics** move to the evidence; **Done** / **Dismiss…** record the triage outcome; **Add to investigation** saves the finding to the [Investigation Notebook](#investigation-notebook). |
 | 6 | **Footer** | **Ask AI** about the selected finding, plus **More** export options. |
 
 ### Reading Max, p95, and p99
@@ -395,6 +395,42 @@ The **Summary** tab identifies the **Baseline** (reference trace) and **Candidat
 | 8 | **Footer** | **Export HTML**, **Save baseline** / **Score vs baseline**, **Validate experiment…**, or **Ask AI about this**. |
 
 This is an optional comparison tool. It is not required by the basic investigation workflow. When you use it, compare equivalent workload phases and measurement ranges. To keep the same relative phase in view while flipping between Baseline and Candidate timeline tabs, enable **Settings → Display → Link A/B timeline zoom when switching compare tabs** (see [Multiple traces](#multiple-traces)).
+
+<a id="investigation-notebook" name="investigation-notebook">&#x200B;</a>
+
+### Investigation Notebook
+
+The Notebook is a written, four-step record of one investigation — **Question → Evidence → Verify → Conclusion** — kept alongside the trace. It works with or without AI: every AI action is optional, scoped to the current step, and never changes the Notebook by itself (see **Cowork with AI** below). This is distinct from the AI Assistant's own guided stepper (**Investigation Case**, see [AI.md → Investigation Case](AI.md#investigation-case)) — the Notebook is where you keep your own findings, in your own words.
+
+Open it from the activity rail's **Investigation notebook** button, or select **Add to investigation** on an Analysis Finding.
+
+![Investigation Notebook — Evidence step](../images/btfviewer-web-notebook.png)
+
+| # | Region | What it does |
+|---|---|---|
+| 1 | **Header** | Title (the recorded question) and status pill (**Open** / **Needs evidence** / **Ready to conclude** / **Closed**), plus the **⋯ More** menu — **Add from Findings**, **History…**, **Import / Export JSON**, **Evidence package…**, **New investigation…**, **Close investigation**. Drag anywhere on the header to move the window. |
+| 2 | **Step nav** | **Question → Evidence → Verify → Conclusion**; a check mark shows a completed step. A narrow window collapses this to a **Step N of 4** selector. |
+| 3 | **Context strip** | The trace, recorded **Scope**, and **Filters** in effect when each item was added. **Context details** shows exactly what would be sent to the AI. |
+| 4 | **Working area** | The current step's content — question form, evidence cards, explanations, or conclusion editor. See **Investigation steps** below. |
+| 5 | **AI assistance** | One focused AI action for the current step; once a request returns, its reply is shown inline on this card — no need to switch to the AI Assistant panel to read it. |
+| 6 | **Footer** | **Undo** / **Redo** for every Notebook edit, a save-state note, and **Back** / **Next** to move between steps. |
+
+**Investigation steps**
+
+1. **Question** — record what you want to understand; it becomes the entry's title. Optionally start from one of the current Analysis Findings, or select **Help refine question** to have the AI suggest a clearer wording — nothing changes until you select **Use this question**. **Start investigation** records the question in one undoable step.
+2. **Evidence** — build the evidence set. The card's own **Add evidence → From Findings** attaches one finding at a time; the header's **⋯ → Add from Findings** seeds up to 8 severity-ranked findings at once. Each card can also start from the current measurement or a free-text note. Every card has its own always-editable **Explanation (your words)** field — write your interpretation there, or copy in the relevant part of an AI reply (see **Cowork with AI** below). Select cards with their checkbox, then **View source** / **Ask AI about this** / **Details** (read-only provenance: trace, task/core, recorded scope, timestamp, source, and who added it).
+3. **Verify** — draft possible explanations (**Add explanation**, or **Suggest explanations** to have the AI propose candidates for the open question — its reply appears on this step's AI assistance card; write the explanation you want to keep, in your own words, into a card's **Reasoning** field), link evidence to each as supporting or contradicting, and track open work with **Add a check** / **Link evidence**. An explanation's status (**Open** / **Supported** / **Contradicted**) follows only from the links you make — it is never assumed.
+4. **Conclusion** — write what the evidence supports; even an incomplete conclusion can be exported. **Cited evidence**, **Unresolved checks**, **Stale references** (a citation a later edit invalidated), and **Limitations** are all derived from the recorded data, never invented.
+
+![Investigation Notebook — Question step](../images/btfviewer-web-notebook-question.png)
+![Investigation Notebook — Verify step](../images/btfviewer-web-notebook-verify.png)
+![Investigation Notebook — Conclusion step](../images/btfviewer-web-notebook-conclusion.png)
+
+**Clear the investigation**: **⋯ → New investigation…** replaces the current investigation with a blank one in a single undo step, so a stray click is one **Undo** away. This is different from **Close investigation**, which keeps everything and only marks the case closed.
+
+**Cowork with AI**: each step's AI assistance card runs one focused, opt-in action — **Help refine question**, **Suggest explanations**, **Check evidence with AI** (from Evidence's next-action card), or **Review conclusion** / **Discuss in AI Assistant**. The AI never edits the Notebook directly: a structured suggestion opens the existing proposal-review dialog for you to accept, adjust, or reject line by line; a plain-text reply (e.g. from **Suggest explanations** or **Check evidence with AI**) is shown inline on the card that asked for it, and it is up to you to copy what you want to keep into the Notebook yourself — an evidence card's **Explanation**, an explanation's own reasoning field (**Verify**), or the **Conclusion** text.
+
+The Investigation Notebook (question, evidence, links, and conclusion) is included in the Statistics **Export HTML** report whenever it has content — see [Export](#export).
 
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 
@@ -456,7 +492,7 @@ BTFViewer provides the following export actions.
 | Trace comparison report | Open Compare and select **Export HTML** |
 | Demonstration recording | Select **Record**, share the current tab, and stop recording to download a WebM file |
 
-Statistics and Trace Compare use a single **Export HTML** action. In the saved report, every table has a **CSV** button that downloads all of its rows matching the current **Search** and **Problems only** filters, in the current sort order (pagination is ignored). Clear those filters first to export the complete table. The **Anonymize** check box next to **Export HTML** replaces task names with stable `Task-N` aliases throughout the exported report.
+Statistics and Trace Compare use a single **Export HTML** action. In the saved report, every table has a **CSV** button that downloads all of its rows matching the current **Search** and **Problems only** filters, in the current sort order (pagination is ignored). Clear those filters first to export the complete table. The **Anonymize** check box next to **Export HTML** replaces task names with stable `Task-N` aliases throughout the exported report. When the [Investigation Notebook](#investigation-notebook) has content, its question, evidence, links, and conclusion are included in the Statistics **Export HTML** report automatically — no separate export step.
 
 ### Snapshot editor
 

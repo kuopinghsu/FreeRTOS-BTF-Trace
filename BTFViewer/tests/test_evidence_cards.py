@@ -21,6 +21,7 @@ from btf_viewer_pkg.investigation_notebook import (
     detect_broken_references,
     dump_investigation,
     evidence_nav_targets,
+    evidence_scope_restore_plan,
     guard_evidence_changes,
     investigation_sections,
     link_bookmarks,
@@ -148,6 +149,36 @@ class StaleAndNavTests(unittest.TestCase):
         card = load_investigation(once)["bookmarks"][0]["evidence"]
         self.assertEqual(card["value"], 120)
         self.assertEqual(card["kind"], EV_KIND_MEASURED)
+
+
+class ScopeRestorePlanTests(unittest.TestCase):
+    """§P1 — separate, previewable Restore-evidence-scope action."""
+
+    def _card(self, start, end):
+        return add_evidence(
+            new_investigation(), title="e", role="supporting",
+            source=EV_SOURCE_STATISTICS, kind="derived",
+            scope={"start": start, "end": end},
+        )["bookmarks"][0]["evidence"]
+
+    def test_none_without_a_stored_scope(self) -> None:
+        self.assertIsNone(evidence_scope_restore_plan({"source": "x"}))
+        self.assertIsNone(evidence_scope_restore_plan(None))
+
+    def test_none_when_scope_already_matches_current(self) -> None:
+        c = self._card(100, 900)
+        self.assertIsNone(evidence_scope_restore_plan(
+            c, current_scope={"start": 100, "end": 900}))
+
+    def test_plan_lists_the_changes_for_the_preview(self) -> None:
+        c = self._card(100, 900)
+        plan = evidence_scope_restore_plan(
+            c, current_scope={"start": 0, "end": 50}, fmt=lambda v: f"{v}us")
+        self.assertEqual((plan["start"], plan["end"]), (100, 900))
+        self.assertIn("100us", plan["summary"])
+        self.assertEqual(len(plan["changes"]), 3)
+        self.assertTrue(plan["changes"][0].startswith("Place C1–C2"))
+        self.assertIn("Limit Statistics", plan["changes"][2])
 
 
 class LegacyMigrationTests(unittest.TestCase):

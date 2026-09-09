@@ -17,12 +17,15 @@ import {
   emptyNotebookHistory,
   investigationFromCase,
   scaffoldInvestigationFromFindings,
+  topFindingsForStart,
   linkBookmarks,
   loadInvestigation,
   newInvestigation,
+  notebookGoto,
   notebookHistoryState,
   notebookRedo,
   notebookUndo,
+  moveBookmark,
   pushNotebookState,
   removeBookmark,
   setConclusion,
@@ -239,6 +242,53 @@ describe('undo / redo', () => {
     h = pushNotebookState(h, loadInvestigation(dumpInvestigation(inv)))
     assert.equal(notebookHistoryState(h).count, 1)
   })
+
+  it('goto restores an absolute snapshot (clamped)', () => {
+    const inv = newInvestigation()
+    let h = pushNotebookState(emptyNotebookHistory(), inv)
+    h = pushNotebookState(h, setConclusion(inv, 'a'))
+    h = pushNotebookState(h, setConclusion(inv, 'b'))
+    h = notebookGoto(h, 0)
+    const st = notebookHistoryState(h)
+    assert.equal(st.index, 0)
+    assert.ok(st.can_redo && !st.can_undo)
+    assert.equal(notebookHistoryState(notebookGoto(h, 99)).index, 2)
+    assert.equal(notebookGoto(emptyNotebookHistory(), 3).index, -1)
+  })
+})
+
+describe('move bookmark', () => {
+  const EV = ['observation', 'supporting', 'contradicting']
+  const threeEvidence = () => {
+    let inv = newInvestigation()
+    inv = addBookmark(inv, { type: BM_HYPOTHESIS, title: 'h', bookmarkId: 'h' })
+    inv = addBookmark(inv, { type: BM_SUPPORTING, title: 'e1', bookmarkId: 'e1' })
+    inv = addBookmark(inv, { type: BM_OBSERVATION, title: 'e2', bookmarkId: 'e2' })
+    inv = addBookmark(inv, { type: BM_SUPPORTING, title: 'e3', bookmarkId: 'e3' })
+    return inv
+  }
+  const order = (inv, within) => inv.bookmarks
+    .filter(b => !within || within.includes(b.type)).map(b => b.id)
+
+  it('moves within evidence siblings only', () => {
+    const nxt = moveBookmark(threeEvidence(), 'e3', -1, { within: EV })
+    assert.deepEqual(order(nxt, EV), ['e1', 'e3', 'e2'])
+    assert.equal(nxt.bookmarks[0].id, 'h')
+  })
+
+  it('move survives a save/reload', () => {
+    const nxt = moveBookmark(threeEvidence(), 'e3', -1, { within: EV })
+    const reloaded = loadInvestigation(dumpInvestigation(nxt))
+    assert.deepEqual(order(reloaded, EV), ['e1', 'e3', 'e2'])
+  })
+
+  it('edge and unknown ids are no-ops', () => {
+    const inv = threeEvidence()
+    assert.equal(
+      dumpInvestigation(moveBookmark(inv, 'e1', -1, { within: EV })),
+      dumpInvestigation(inv))
+    assert.equal(dumpInvestigation(moveBookmark(inv, 'nope', 1)), dumpInvestigation(inv))
+  })
 })
 
 describe('serialisation', () => {
@@ -328,6 +378,50 @@ describe('scaffold from findings', () => {
       findings: FINDINGS, includeInfo: true, limit: 1,
     })
     assert.equal(inv.bookmarks.filter(b => b.type === 'observation').length, 1)
+  })
+})
+
+describe('top findings for start (Question screen "Start from a finding")', () => {
+  const FINDINGS = [
+    { id: 'a', rule_id: 'a', severity: 'info', title: 'Info finding A' },
+    { id: 'b', rule_id: 'b', severity: 'error', title: 'Error finding B' },
+    { id: 'c', rule_id: 'c', severity: 'warning', title: 'Warning finding C' },
+    { id: 'd', rule_id: 'd', severity: 'warning', title: 'Warning finding D' },
+    { id: 'none', rule_id: 'none', severity: 'info', title: 'No findings under the current rules' },
+  ]
+
+  it('orders by severity (error, warning, info) and respects limit', () => {
+    const top = topFindingsForStart(FINDINGS, 3)
+    assert.deepEqual(top.map(f => f.rule_id), ['b', 'c', 'd'])
+  })
+
+  it('defaults to a limit of 3', () => {
+    assert.equal(topFindingsForStart(FINDINGS).length, 3)
+  })
+
+  it('excludes the "no findings" info sentinel', () => {
+    const top = topFindingsForStart(FINDINGS, 10)
+    assert.ok(!top.some(f => f.rule_id === 'none'))
+  })
+
+  it('dedups by rule_id, first occurrence wins', () => {
+    const dup = [...FINDINGS, { id: 'b2', rule_id: 'b', severity: 'error', title: 'Duplicate B' }]
+    const top = topFindingsForStart(dup, 10)
+    assert.equal(top.filter(f => f.rule_id === 'b').length, 1)
+    assert.equal(top.find(f => f.rule_id === 'b').title, 'Error finding B')
+  })
+
+  it('returns the original finding objects unreshaped', () => {
+    const top = topFindingsForStart(FINDINGS, 1)
+    assert.strictEqual(top[0], FINDINGS.find(f => f.rule_id === 'b'))
+  })
+
+  it('handles empty/malformed input gracefully', () => {
+    assert.deepEqual(topFindingsForStart(null), [])
+    assert.deepEqual(topFindingsForStart([]), [])
+    assert.deepEqual(topFindingsForStart([null, 'x', 42, {}]), [])
+    assert.deepEqual(topFindingsForStart(FINDINGS, 0), [])
+    assert.deepEqual(topFindingsForStart(FINDINGS, -1), [])
   })
 })
 

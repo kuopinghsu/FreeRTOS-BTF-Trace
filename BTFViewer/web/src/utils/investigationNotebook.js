@@ -385,6 +385,44 @@ export function removeBookmark(inv, bookmarkId) {
   return out
 }
 
+function bookmarkSortKey(a, b) {
+  return (Number(a.seq || 0) - Number(b.seq || 0))
+    || String(a.id).localeCompare(String(b.id))
+}
+
+/** Reorder one bookmark by delta (±1) among its siblings. `within` restricts
+ *  the sibling group to those bookmark types (Evidence passes
+ *  EVIDENCE_BOOKMARK_TYPES). Ids / refs / evidence cards are preserved — only
+ *  `seq` (the canonical order key loadInvestigation sorts by) is swapped and
+ *  the list re-sorted, so the change survives a save/reload. */
+export function moveBookmark(inv, bookmarkId, delta, { within = null } = {}) {
+  const out = clone(inv)
+  const bid = String(bookmarkId || '').trim()
+  const bms = out.bookmarks
+  let sibs
+  if (within && within.length) {
+    const wset = new Set(within.map(String))
+    sibs = bms.filter(b => wset.has(String(b.type)))
+  } else {
+    sibs = [...bms]
+  }
+  sibs.sort(bookmarkSortKey)
+  const pos = sibs.findIndex(b => String(b.id) === bid)
+  if (pos < 0) return out
+  const step = delta > 0 ? 1 : delta < 0 ? -1 : 0
+  const npos = pos + step
+  if (step === 0 || npos < 0 || npos >= sibs.length) return out
+  const a = sibs[pos]
+  const b = sibs[npos]
+  const sa = Number(a.seq || 0)
+  let sb = Number(b.seq || 0)
+  if (sa === sb) sb = sa + step
+  a.seq = sb
+  b.seq = sa
+  bms.sort(bookmarkSortKey)
+  return out
+}
+
 export function linkBookmarks(inv, fromId, toId, relation = 'relates') {
   const out = clone(inv)
   const a = String(fromId || '').trim()
@@ -522,6 +560,34 @@ export function evidenceNavTargets(bookmark) {
     if (String(r.kind) === REF_FINDING && r.rule_id && !('finding' in out)) out.finding = String(r.rule_id)
   }
   return out
+}
+
+/** If an evidence card was measured under a scope that differs from the current
+ *  one, describe restoring it — a separate, previewable, cancelable, undoable
+ *  action (never folded into Jump to evidence / Show Evidence). Returns null
+ *  when there is no stored scope or it already matches. */
+export function evidenceScopeRestorePlan(card, { currentScope = null, fmt = null } = {}) {
+  if (!card || typeof card !== 'object') return null
+  const sc = card.scope
+  if (!(sc && typeof sc === 'object' && sc.start != null && sc.end != null)) return null
+  const lo = Math.trunc(sc.start)
+  const hi = Math.trunc(sc.end)
+  const cur = currentScope && typeof currentScope === 'object' ? currentScope : null
+  if (cur && cur.start != null && cur.end != null
+      && Math.trunc(cur.start) === lo && Math.trunc(cur.end) === hi) {
+    return null
+  }
+  const f = typeof fmt === 'function' ? fmt : (v) => String(Math.trunc(v))
+  return {
+    start: lo,
+    end: hi,
+    summary: `Evidence was measured over ${f(lo)} – ${f(hi)}.`,
+    changes: [
+      `Place C1–C2 at ${f(lo)} – ${f(hi)}`,
+      'Zoom the timeline to that window',
+      'Limit Statistics to the cursor range',
+    ],
+  }
 }
 
 function hypothesisStatus(inv, bid) {
@@ -672,6 +738,16 @@ export function notebookRedo(history) {
   return out
 }
 
+/** Jump the undo cursor to an absolute snapshot index (clamped). Powers the
+ *  Notebook "restore from history" control. */
+export function notebookGoto(history, index) {
+  const out = { ...(history || emptyNotebookHistory()) }
+  const stack = out.stack || []
+  if (!stack.length) { out.index = -1; return out }
+  out.index = Math.max(0, Math.min(stack.length - 1, Number(index)))
+  return out
+}
+
 export function notebookHistoryState(history) {
   const out = { ...(history || emptyNotebookHistory()) }
   const stack = out.stack || []
@@ -681,6 +757,7 @@ export function notebookHistoryState(history) {
     can_redo: idx >= 0 && idx < stack.length - 1,
     current: (idx >= 0 && idx < stack.length) ? { ...stack[idx] } : null,
     count: stack.length,
+    index: idx,
   }
 }
 
@@ -1031,4 +1108,33 @@ export function scaffoldInvestigationFromFindings(inv, {
     })
   }
   return out
+}
+
+/**
+ * Up to `limit` actual relevant findings for the Question screen's "Start
+ * from a finding" picker — same severity ordering as
+ * scaffoldInvestigationFromFindings, deduped by rule_id, excluding the
+ * "no findings" info sentinel. Returns the original finding objects
+ * unreshaped (callers already know how to read rule_id/title/severity/etc.
+ * off a raw finding, same as findingOptions in the Notebook dialog).
+ *
+ * @param {object[]} findings
+ * @param {number} limit
+ * @returns {object[]}
+ */
+export function topFindingsForStart(findings, limit = 3) {
+  const seen = new Set()
+  const isEmptySentinel = (f) => String(f.severity) === 'info'
+    && String(f.title || '').toLowerCase().includes('no findings')
+  const rows = (findings || [])
+    .filter((f) => f && typeof f === 'object' && !isEmptySentinel(f))
+    .filter((f) => {
+      const ruleId = String(f.rule_id || f.ruleId || f.id || '').trim()
+      if (!ruleId || seen.has(ruleId)) return false
+      seen.add(ruleId)
+      return true
+    })
+    .slice()
+    .sort((a, b) => (_SEV_RANK[String(a.severity)] ?? 3) - (_SEV_RANK[String(b.severity)] ?? 3))
+  return rows.slice(0, Math.max(0, Number(limit) || 0))
 }

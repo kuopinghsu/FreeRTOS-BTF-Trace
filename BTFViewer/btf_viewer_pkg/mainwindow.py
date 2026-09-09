@@ -5,6 +5,7 @@ import re
 
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
+from .config import _application_ui_font, _ui_font_stylesheet_size  # underscore names skip `import *`
 from .parser import *  # noqa: F403,F401
 from .timeline_util import *  # noqa: F403,F401
 from .graphics_items import *  # noqa: F403,F401
@@ -208,23 +209,28 @@ from .anonymize_export import (
     build_task_alias_map,
 )
 from .investigation_notebook import (
+    BM_HYPOTHESIS,
+    BM_VERIFICATION,
     BOOKMARK_TYPES,
     BOOKMARK_TYPE_LABELS,
-    LINK_RELATIONS,
-    NB_EMPTY_BLANK,
-    NB_EMPTY_FROM_FINDINGS,
+    EVIDENCE_BOOKMARK_TYPES,
+    EVIDENCE_KIND_LABELS,
+    NB_STATUS_CLOSED,
     NOTEBOOK_STATUS_LABELS,
-    NOTEBOOK_STATUSES,
     add_bookmark,
+    add_evidence,
     add_unresolved_question,
     conclusion_evidence_chains,
     detect_broken_references,
     dump_investigation,
     empty_notebook_history,
+    evidence_scope_restore_plan,
     investigation_header,
+    investigation_sections,
     link_bookmarks,
     load_investigation,
     new_investigation,
+    notebook_goto,
     notebook_history_state,
     notebook_redo,
     notebook_undo,
@@ -234,9 +240,23 @@ from .investigation_notebook import (
     scaffold_investigation_from_findings,
     set_status,
     set_conclusion,
+    top_findings_for_start,
     trace_identity,
     unlink_bookmarks,
     update_bookmark,
+    update_evidence_explanation,
+)
+from .investigation_ai import (
+    NB_AI_ACTIONS,
+    NB_AI_DISABLED_REASON,
+    apply_proposal,
+    collaborate_context,
+    collaborate_digest,
+    collaborate_header,
+    nb_ai_action_reason,
+    parse_question_suggestion,
+    proposal_diff,
+    validate_proposal,
 )
 from .perfetto_export import export_perfetto
 from .ux_explore import (
@@ -2230,7 +2250,7 @@ class _NotebookBookmarkRow(QWidget):
     title field + type combo + remove, a note field, and reference chips."""
 
     def __init__(self, bm: dict, *, fmt, broken_ref_idx, on_change, on_remove,
-                 on_ref_click, parent=None) -> None:
+                 on_ref_click, status_text="", parent=None) -> None:
         super().__init__(parent)
         self._bid = str(bm.get("id") or "")
         self._on_change = on_change
@@ -2261,6 +2281,10 @@ class _NotebookBookmarkRow(QWidget):
         rm.setCursor(Qt.CursorShape.PointingHandCursor)
         rm.clicked.connect(lambda: on_remove(self._bid))
         top.addWidget(self._title, 1)
+        if status_text:
+            _st = QLabel(str(status_text))
+            _st.setObjectName("nb_chip")
+            top.addWidget(_st)
         top.addWidget(self._type)
         top.addWidget(rm)
         outer.addLayout(top)
@@ -2325,20 +2349,249 @@ def _wrap_focus_out(orig, cb):
     return _handler
 
 
-class _InvestigationNotebookDialog(QDialog):
-    """Editor for the Investigation Bookmarks & Evidence Chain (TODO Phase 3).
+class _PaneHost:
+    """Thin adapter the six ``_build_<section>`` methods write into — the right
+    detail pane of the Notebook's master/detail layout (Analysis-Findings
+    style). ``add`` / ``add_layout`` append to the pane's ``QVBoxLayout``."""
 
-    Structure, button set and order mirror the web
+    def __init__(self, lay) -> None:
+        self._lay = lay
+
+    def add(self, w) -> None:
+        self._lay.addWidget(w)
+
+    def add_layout(self, lay) -> None:
+        self._lay.addLayout(lay)
+
+
+def _clear_qlayout(lay) -> None:
+    while lay.count():
+        it = lay.takeAt(0)
+        w = it.widget()
+        if w is not None:
+            # Hide immediately — deleteLater() alone leaves the widget
+            # visually in place (still parented, still at its old geometry)
+            # until the event loop gets around to destroying it, which can
+            # paint a stale frame on the very next repaint/grab.
+            w.hide()
+            w.deleteLater()
+        elif it.layout() is not None:
+            _clear_qlayout(it.layout())
+
+
+class _EvidenceCard(QFrame):
+    """§8 structured evidence card — provenance badge, source/author chips,
+    stale banner, reorder ↑/↓, remove, editable title + explanation, and
+    navigation buttons (Jump to evidence / Open source Statistics section).
+
+    Source data on a measured card is read-only; only the explanation (note)
+    and title are editable.
+    """
+
+    def __init__(self, item: dict, *, fmt, first: bool, last: bool,
+                 on_title, on_note, on_remove, on_move, on_jump, on_open_stats,
+                 restore_plan=None, on_restore_scope=None,
+                 broken: bool = False, parent=None):
+        super().__init__(parent)
+        self.setObjectName("nb_card")
+        card = item.get("card") if isinstance(item.get("card"), dict) else {}
+        kind = str(item.get("kind") or "")
+        measured = kind == "measured"
+        self.setProperty("measured", measured)
+        self.setProperty("stale", bool(item.get("stale")))
+        self.setProperty("broken", bool(broken))
+        bid = str(item.get("bookmark_id") or "")
+        self._building = True
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(9, 9, 9, 9)
+        lay.setSpacing(6)
+
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        badge = QLabel(EVIDENCE_KIND_LABELS.get(kind, EVIDENCE_KIND_LABELS[""]))
+        badge.setObjectName("nb_badge")
+        badge.setProperty("kind", kind or "note")
+        top.addWidget(badge)
+        src = card.get("source") or (
+            "Contradicting" if item.get("role") == "contradicting"
+            else "Supporting" if item.get("role") == "supporting"
+            else "Observation")
+        src_chip = QLabel(str(src))
+        src_chip.setObjectName("nb_chip")
+        top.addWidget(src_chip)
+        author = str(card.get("author") or "user")
+        author_lbl = {"ai": "AI", "btfviewer": "BTFViewer"}.get(author, "User")
+        au_chip = QLabel(author_lbl)
+        au_chip.setObjectName("nb_chip")
+        top.addWidget(au_chip)
+        if item.get("stale"):
+            st = QLabel("⚠ stale")
+            st.setObjectName("nb_stale")
+            top.addWidget(st)
+        top.addStretch(1)
+        up = QToolButton()
+        up.setText("↑")
+        up.setToolTip("Move up")
+        up.setAutoRaise(True)
+        up.setEnabled(not first)
+        up.clicked.connect(lambda: on_move(bid, -1))
+        dn = QToolButton()
+        dn.setText("↓")
+        dn.setToolTip("Move down")
+        dn.setAutoRaise(True)
+        dn.setEnabled(not last)
+        dn.clicked.connect(lambda: on_move(bid, 1))
+        rm = QToolButton()
+        rm.setText("🗑")
+        rm.setToolTip("Remove bookmark")
+        rm.setAutoRaise(True)
+        rm.setCursor(Qt.CursorShape.PointingHandCursor)
+        rm.clicked.connect(lambda: on_remove(bid))
+        for b in (up, dn, rm):
+            top.addWidget(b)
+        lay.addLayout(top)
+
+        self._title = QLineEdit(str(item.get("text") or ""))
+        self._title.editingFinished.connect(
+            lambda: (not self._building) and on_title(bid, self._title.text()))
+        lay.addWidget(self._title)
+
+        self._note = QPlainTextEdit(str(item.get("note") or ""))
+        self._note.setPlaceholderText("Explanation (your words)")
+        self._note.setFixedHeight(46)
+        self._note.focusOutEvent = _wrap_focus_out(
+            self._note.focusOutEvent,
+            lambda: (not self._building) and on_note(bid, self._note.toPlainText()))
+        lay.addWidget(self._note)
+
+        meta_bits = []
+        if card.get("task"):
+            meta_bits.append(str(card["task"]))
+        if card.get("core"):
+            meta_bits.append(str(card["core"]))
+        if card.get("value") not in (None, ""):
+            unit = f" {card['unit']}" if card.get("unit") else ""
+            meta_bits.append(f"{card['value']}{unit}")
+        if card.get("trace_id"):
+            meta_bits.append(f"trace {card['trace_id']}")
+        if meta_bits:
+            ml = QLabel(" · ".join(meta_bits))
+            ml.setObjectName("nb_card_meta")
+            lay.addWidget(ml)
+
+        nav = item.get("nav") if isinstance(item.get("nav"), dict) else {}
+        if (nav.get("jump") is not None or nav.get("range")
+                or nav.get("stats_metric") or restore_plan):
+            nrow = QHBoxLayout()
+            nrow.setSpacing(6)
+            if nav.get("jump") is not None or nav.get("range"):
+                jb = QPushButton("Jump to evidence")
+                jb.clicked.connect(lambda: on_jump(nav))
+                nrow.addWidget(jb)
+            if nav.get("stats_metric"):
+                sb = QPushButton("Open source Statistics section")
+                sb.clicked.connect(lambda: on_open_stats(str(nav["stats_metric"])))
+                nrow.addWidget(sb)
+            if restore_plan and callable(on_restore_scope):
+                rb = QPushButton("Restore evidence scope…")
+                rb.setToolTip(
+                    "This evidence was measured under a different scope")
+                rb.clicked.connect(
+                    lambda _c=False, p=restore_plan: on_restore_scope(bid, p))
+                nrow.addWidget(rb)
+            nrow.addStretch(1)
+            lay.addLayout(nrow)
+
+        if measured:
+            hint = QLabel(
+                "Measured — source values, units, scope and references are "
+                "read-only.")
+            hint.setWordWrap(True)
+            hint.setObjectName("nb_sec_hint")
+            lay.addWidget(hint)
+
+        self._building = False
+
+
+_NB_STEPS = ("question", "evidence", "verify", "conclusion")
+_NB_STEP_LABELS = {
+    "question": "Question", "evidence": "Evidence",
+    "verify": "Verify", "conclusion": "Conclusion",
+}
+
+
+class _NbStepTab(QWidget):
+    """One clickable step-nav tab — numbered circle + label, with a check
+    mark once the step has content. Mirrors the web step nav's 4-tab look
+    (``.nb-step-nav`` / ``.nb-step``) as closely as native Qt widgets allow."""
+
+    clicked = Signal()
+
+    def __init__(self, number: int, label: str, parent=None) -> None:
+        super().__init__(parent)
+        self._number = number
+        self._done = False
+        self._active = False
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 6, 10, 6)
+        lay.setSpacing(6)
+        self._badge = QLabel(str(number))
+        self._badge.setFixedSize(20, 20)
+        self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label = QLabel(label)
+        lay.addWidget(self._badge)
+        lay.addWidget(self._label)
+        lay.addStretch(1)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sync_style()
+
+    def set_state(self, *, active: bool, done: bool) -> None:
+        self._active = active
+        self._done = done
+        self._badge.setText("✓" if done and not active else str(self._number))
+        self._sync_style()
+
+    def _sync_style(self) -> None:
+        if self._active:
+            self._badge.setStyleSheet(
+                "background:#2E86DE;color:white;border-radius:10px;font-weight:700;")
+            self._label.setStyleSheet("color:#2E86DE;font-weight:700;")
+        elif self._done:
+            self._badge.setStyleSheet(
+                "background:transparent;color:#2E86DE;border:1.5px solid #2E86DE;"
+                "border-radius:10px;font-weight:700;")
+            self._label.setStyleSheet("color:palette(text);font-weight:600;")
+        else:
+            dim = _dim_text_color()
+            self._badge.setStyleSheet(
+                f"background:transparent;color:{dim};"
+                f"border:1.5px solid {dim};border-radius:10px;")
+            self._label.setStyleSheet(f"color:{dim};")
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class _InvestigationNotebookDialog(QDialog):
+    """Investigation Notebook — the 4-step guided flow **Question -> Evidence
+    -> Verify -> Conclusion**, replacing the old six-section master/detail
+    editor. Structure and vocabulary mirror the redesigned web
     ``InvestigationNotebookDialog.vue`` exactly:
 
-      header : title + stale-ref flag ... [Scaffold][Undo][Redo][Import][Export]
-               [Evidence pack][x]
-      body   : Title -> Add bookmark -> grouped bookmark rows -> Conclusion +
-               grounded chains -> Links -> Unresolved questions
-      footer : "N bookmark(s)" ... [Close]
+      header        : title + status pill · [ ... More][X]
+      step nav      : Question / Evidence / Verify / Conclusion tabs
+      context strip : trace · Scope · Filters · Context details
+      working area  : current step's content | AI assistance side card
+      footer        : save-state note · Undo/Redo · Back/Next
 
-    Holds a working investigation dict + an undo/redo history; every edit calls
-    ``on_change(new_inv)`` (the web ``@update`` flow).
+    Holds a working investigation dict + an undo/redo history; every edit
+    calls ``on_change(new_inv)`` (the web ``@update`` flow). ``on_collaborate``
+    now additionally receives the step the request was made from, so a reply
+    can be shown inline on that same step's AI assistance card rather than
+    only in the (separate, panel) AI Assistant.
     """
 
     def __init__(
@@ -2352,15 +2605,30 @@ class _InvestigationNotebookDialog(QDialog):
         format_ns=None,
         trace=None,
         trace_name="",
+        ai_enabled=False,
+        has_second_trace=False,
+        ai_panel=None,
+        ui_font_size: int = UI_FONT_SIZE,
         on_change=None,
         on_status=None,
         on_ref_jump=None,
+        on_open_stats=None,
         on_evidence_package=None,
+        on_collaborate=None,
+        on_restore_scope=None,
+        on_undo_restore_scope=None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Investigation Notebook")
         self.setModal(False)
-        self.resize(620, 720)
+        self.resize(1040, 800)
+        # Every label/text box below relies on inheriting THIS font — none
+        # of them may hardcode a font-size in their own stylesheet (Settings
+        # -> UI font size otherwise has no effect on this dialog, reported
+        # live). Widgets that need a different size use _scaled_font()
+        # instead of a literal px/pt value.
+        self._ui_font_size = max(6, min(int(ui_font_size or UI_FONT_SIZE), 24))
+        self.setFont(_application_ui_font(self._ui_font_size))
         self._inv = load_investigation(investigation or new_investigation())
         self._history = history or push_notebook_state(
             empty_notebook_history(), self._inv)
@@ -2369,223 +2637,83 @@ class _InvestigationNotebookDialog(QDialog):
         self._trace = trace
         self._fmt = format_ns or (lambda ns: str(int(ns)))
         self._trace_name = str(trace_name or "")
+        self._ai_enabled = bool(ai_enabled)
+        self._has_second_trace = bool(has_second_trace)
+        self._ai_panel = ai_panel
         self._on_change = on_change
         self._on_status = on_status
         self._on_ref_jump = on_ref_jump
+        self._on_open_stats = on_open_stats
         self._on_evidence_package = on_evidence_package
+        self._on_collaborate = on_collaborate
+        self._on_restore_scope = on_restore_scope
+        self._on_undo_restore_scope = on_undo_restore_scope
         self._building = False
 
+        # ---- transient view state (never touches durable investigation
+        # data — matches the web dialog's local ``reactive({step, ...})``) ----
+        self._step = "question"
+        self._selected_evidence_ids: set = set()
+        self._expanded_evidence_ids: set = set()
+        self._question_editing = not self._investigation_has_content()
+        self._selected_finding_id = ""
+        self._last_ai_reply: Optional[Dict[str, str]] = None
+        self._context_details_open = False
+        # One shared "Add evidence" form — matches the web dialog exactly:
+        # From Findings / Current measurement / Note are three entry points
+        # into the SAME form (openEvidenceForm(kind) just pre-seeds one
+        # field), not three different dialogs.
+        self._evidence_form_open = False
+        self._ev_draft = {
+            "type": EVIDENCE_BOOKMARK_TYPES[1], "title": "", "note": "",
+            "use_range": False, "finding_rule_id": "",
+        }
+
+        if self._ai_panel is not None:
+            try:
+                self._ai_panel.busy_changed.connect(self._on_ai_state_changed)
+                self._ai_panel.status_changed.connect(self._on_ai_state_changed)
+            except (AttributeError, RuntimeError):
+                pass
+
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(9)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # ---- Header : title + stale flag ... action bar ----
-        header = QHBoxLayout()
-        header.setSpacing(6)
-        header.addWidget(QLabel("<b>Investigation Notebook</b>"))
-        self._broken_lbl = QLabel("")
-        self._broken_lbl.setObjectName("nb_broken_flag")
-        self._broken_lbl.setVisible(False)
-        header.addWidget(self._broken_lbl)
-        header.addStretch(1)
+        root.addLayout(self._build_header())
+        root.addLayout(self._build_step_nav())
+        root.addLayout(self._build_context_strip())
+        root.addWidget(self._build_working_area(), 1)
+        root.addLayout(self._build_footer())
 
-        self._scaffold_btn = QPushButton("✦ Scaffold")
-        self._scaffold_btn.clicked.connect(self._scaffold_from_findings)
-        self._undo_btn = QPushButton("↶ Undo")
-        self._undo_btn.setToolTip("Undo (notebook)")
-        self._undo_btn.clicked.connect(self._undo)
-        self._redo_btn = QPushButton("↷ Redo")
-        self._redo_btn.setToolTip("Redo (notebook)")
-        self._redo_btn.clicked.connect(self._redo)
-        imp = QPushButton("Import…")
-        imp.setToolTip("Import a saved investigation (.json)")
-        imp.clicked.connect(self._import_json)
-        exp = QPushButton("Export…")
-        exp.setToolTip("Save this investigation as .json")
-        exp.clicked.connect(self._export_json)
-        self._evpack_btn = QPushButton("Evidence pack…")
-        self._evpack_btn.setToolTip(
-            "Build a compact AI evidence package from this investigation")
-        self._evpack_btn.clicked.connect(self._emit_evidence_package)
-        self._evpack_btn.setEnabled(callable(self._on_evidence_package))
-        close_x = QToolButton()
-        close_x.setText("✕")
-        close_x.setAutoRaise(True)
-        close_x.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_x.clicked.connect(self.close)
-        for b in (self._scaffold_btn, self._undo_btn, self._redo_btn,
-                  imp, exp, self._evpack_btn):
-            header.addWidget(b)
-        header.addWidget(close_x)
-        root.addLayout(header)
-        self._sync_scaffold_tooltip()
-
-        # ---- §7 compact context row: durable status · scope · counts ----
-        ctx_row = QHBoxLayout()
-        ctx_row.setSpacing(10)
-        ctx_row.setContentsMargins(0, 0, 0, 0)
-        self._nb_status_combo = QComboBox()
-        self._nb_status_combo.setObjectName("nb_status_combo")
-        for _s in NOTEBOOK_STATUSES:
-            self._nb_status_combo.addItem(NOTEBOOK_STATUS_LABELS[_s], _s)
-        self._nb_status_combo.setToolTip("Durable investigation status")
-        self._nb_status_combo.currentIndexChanged.connect(self._on_nb_status_changed)
-        ctx_row.addWidget(self._nb_status_combo)
-        self._nb_context_lbl = QLabel("")
-        self._nb_context_lbl.setObjectName("nb_context_lbl")
-        self._nb_context_lbl.setStyleSheet("font-size:11px; color:palette(mid);")
-        ctx_row.addWidget(self._nb_context_lbl, 1)
-        root.addLayout(ctx_row)
-
-        # ---- Body (scrolls) ----
-        body = QWidget()
-        bl = QVBoxLayout(body)
-        bl.setContentsMargins(0, 0, 6, 0)
-        bl.setSpacing(13)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(body)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        root.addWidget(scroll, 1)
-
-        # Title
-        _tf = QVBoxLayout()
-        _tf.setSpacing(4)
-        _tf.addWidget(QLabel("Title"))
-        self._title_edit = QLineEdit(self._inv.get("title") or "")
-        self._title_edit.setPlaceholderText("What is this investigation about?")
-        self._title_edit.editingFinished.connect(self._on_title_changed)
-        _tf.addWidget(self._title_edit)
-        bl.addLayout(_tf)
-
-        # Add-bookmark box
-        add_box = QFrame()
-        add_box.setObjectName("nb_add_box")
-        ab = QVBoxLayout(add_box)
-        ab.setSpacing(8)
-        row1 = QHBoxLayout()
-        row1.setSpacing(8)
-        self._type_cb = QComboBox()
-        for t in BOOKMARK_TYPES:
-            self._type_cb.addItem(BOOKMARK_TYPE_LABELS[t], t)
-        self._type_cb.setFixedWidth(150)
-        self._new_title = QLineEdit()
-        self._new_title.setPlaceholderText("Bookmark title")
-        self._new_title.returnPressed.connect(self._add_bookmark)
-        self._add_btn = QPushButton("Add")
-        self._add_btn.clicked.connect(self._add_bookmark)
-        row1.addWidget(self._type_cb)
-        row1.addWidget(self._new_title, 1)
-        row1.addWidget(self._add_btn)
-        ab.addLayout(row1)
-        self._new_note = QPlainTextEdit()
-        self._new_note.setPlaceholderText("Note (optional)")
-        self._new_note.setFixedHeight(46)
-        ab.addWidget(self._new_note)
-        row2 = QHBoxLayout()
-        row2.setSpacing(12)
-        self._attach_range_cb = QCheckBox("Attach current cursor range")
-        self._finding_cb = QComboBox()
-        self._finding_cb.addItem("— none —", "")
-        row2.addWidget(self._attach_range_cb)
-        row2.addWidget(QLabel("Link finding"))
-        row2.addWidget(self._finding_cb, 1)
-        ab.addLayout(row2)
-        bl.addWidget(add_box)
-
-        # Bookmark groups host
-        self._groups_host = QWidget()
-        self._groups_lay = QVBoxLayout(self._groups_host)
-        self._groups_lay.setContentsMargins(0, 0, 0, 0)
-        self._groups_lay.setSpacing(8)
-        bl.addWidget(self._groups_host)
-
-        # Conclusion
-        _cf = QVBoxLayout()
-        _cf.setSpacing(4)
-        _cf.addWidget(QLabel("Conclusion"))
-        self._concl = QPlainTextEdit(self._inv.get("conclusion") or "")
-        self._concl.setPlaceholderText(
-            "What does the evidence support? Leave blank until it does.")
-        self._concl.setFixedHeight(66)
-        self._concl.focusOutEvent = _wrap_focus_out(
-            self._concl.focusOutEvent, self._on_conclusion_changed)
-        _cf.addWidget(self._concl)
-        bl.addLayout(_cf)
-        self._chains_host = QWidget()
-        self._chains_lay = QVBoxLayout(self._chains_host)
-        self._chains_lay.setContentsMargins(0, 0, 0, 0)
-        self._chains_lay.setSpacing(3)
-        bl.addWidget(self._chains_host)
-
-        # Links
-        self._links_host = QWidget()
-        _lf = QVBoxLayout(self._links_host)
-        _lf.setContentsMargins(0, 0, 0, 0)
-        _lf.setSpacing(6)
-        _lf.addWidget(QLabel("Links"))
-        lrow = QHBoxLayout()
-        lrow.setSpacing(8)
-        self._link_from = QComboBox()
-        self._link_rel = QComboBox()
-        for r in LINK_RELATIONS:
-            self._link_rel.addItem(r, r)
-        self._link_rel.setFixedWidth(150)
-        self._link_to = QComboBox()
-        self._link_btn = QPushButton("Link")
-        self._link_btn.clicked.connect(self._add_link)
-        lrow.addWidget(self._link_from, 1)
-        lrow.addWidget(self._link_rel)
-        lrow.addWidget(self._link_to, 1)
-        lrow.addWidget(self._link_btn)
-        _lf.addLayout(lrow)
-        self._link_list = QListWidget()
-        self._link_list.setFixedHeight(84)
-        self._link_list.itemDoubleClicked.connect(self._remove_link_item)
-        _lf.addWidget(self._link_list)
-        bl.addWidget(self._links_host)
-
-        # Unresolved questions
-        _qf = QVBoxLayout()
-        _qf.setSpacing(6)
-        _qf.addWidget(QLabel("Unresolved questions"))
-        qrow = QHBoxLayout()
-        qrow.setSpacing(8)
-        self._q_edit = QLineEdit()
-        self._q_edit.setPlaceholderText("Add a question")
-        self._q_edit.returnPressed.connect(self._add_question)
-        self._q_add = QPushButton("Add")
-        self._q_add.clicked.connect(self._add_question)
-        qrow.addWidget(self._q_edit, 1)
-        qrow.addWidget(self._q_add)
-        _qf.addLayout(qrow)
-        self._q_list = QListWidget()
-        self._q_list.setFixedHeight(84)
-        self._q_list.itemDoubleClicked.connect(self._remove_question)
-        _qf.addWidget(self._q_list)
-        bl.addLayout(_qf)
-        bl.addStretch(1)
-
-        # ---- Footer : count ... Close ----
-        foot = QHBoxLayout()
-        self._count_lbl = QLabel("0 bookmark(s)")
-        self._count_lbl.setObjectName("nb_count")
-        foot.addWidget(self._count_lbl)
-        foot.addStretch(1)
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.close)
-        foot.addWidget(close_btn)
-        root.addLayout(foot)
-
+        # Never palette(mid) for text/borders here — QPalette::Mid is a
+        # bevel/divider shading role this app's theme setup never assigns a
+        # value to, so Qt's computed default can land almost on top of the
+        # window background (reported live: several labels nearly invisible
+        # in dark theme). _dim_text_color() is derived from the actual
+        # window-text/window-background colors, so it is always readable.
+        # No font-size anywhere in here — every rule below must inherit the
+        # dialog's own font (set above from Settings -> UI font size) rather
+        # than hardcode a literal px value that ignores it (reported live).
+        _dim = _dim_text_color()
         self.setStyleSheet(
-            "QFrame#nb_add_box{border:1px solid palette(mid);border-radius:8px;}"
-            "QLabel#nb_broken_flag{color:#E0A030;font-weight:600;}"
-            "QLabel#nb_count{color:palette(mid);}"
-            "QWidget#nb_item{border:1px solid palette(mid);border-radius:8px;}"
-            "QWidget#nb_item[broken=\"true\"]{border-color:#E0A030;}"
-            "QToolButton#nb_ref_chip{border:1px solid palette(mid);border-radius:9px;"
-            "padding:1px 7px;color:palette(mid);}"
-            "QToolButton#nb_ref_chip[brokenChip=\"true\"]{border-color:#E0A030;color:#E0A030;}"
+            f"QLabel#nb_pill{{border:1px solid {_dim};border-radius:9px;"
+            f"padding:1px 8px;color:{_dim};}}"
+            f"QLabel#nb_chip{{border:1px solid {_dim};border-radius:9px;"
+            f"padding:1px 8px;color:{_dim};}}"
+            f"QFrame#nb_card{{border:1px solid {_dim};border-radius:9px;}}"
+            "QFrame#nb_card[measured=\"true\"]{border-left:3px solid #2E86DE;}"
+            "QFrame#nb_card[stale=\"true\"]{border-color:#E0A030;}"
+            "QFrame#nb_card[broken=\"true\"]{border-color:#E0A030;}"
+            f"QFrame#nb_side{{border:1px solid {_dim};border-radius:9px;}}"
+            f"QLabel#nb_badge{{border:1px solid {_dim};border-radius:5px;"
+            f"padding:0 6px;color:{_dim};font-weight:700;}}"
+            "QLabel#nb_badge[kind=\"measured\"]{color:#2E86DE;border-color:#2E86DE;}"
+            "QLabel#nb_badge[kind=\"estimate\"]{color:#E0A030;border-color:#E0A030;}"
+            "QLabel#nb_stale{color:#E0A030;font-weight:700;}"
+            f"QLabel#nb_hint{{color:{_dim};}}"
+            f"QToolButton#nb_ref_chip{{border:1px solid {_dim};"
+            f"border-radius:9px;padding:1px 7px;color:{_dim};}}"
         )
         self._render()
 
@@ -2602,7 +2730,53 @@ class _InvestigationNotebookDialog(QDialog):
         self._cursor_range = cursor_range
         self._render()
 
+    def apply_proposal_result(self, inv: dict) -> None:
+        """§10 — the parent applied an accepted AI proposal; adopt the result
+        as one undo step and re-render."""
+        self._commit(load_investigation(inv))
+
+    def set_last_ai_reply(self, step: str, text: str) -> None:
+        """Show ``text`` inline on ``step``'s AI assistance card — the fix for
+        "I don't see any changes... do I need to close the notebook": the
+        chat bubble itself lives in the AI Assistant panel, which this
+        full-screen dialog covers."""
+        self._last_ai_reply = {"step": str(step or ""), "text": str(text or "")}
+        self._render_ai_side()
+
     # ---- helpers ----
+    def _investigation_has_content(self) -> bool:
+        inv = self._inv
+        return bool(
+            (inv.get("bookmarks") or [])
+            or str(inv.get("title") or "").strip()
+            or str(inv.get("conclusion") or "").strip()
+        )
+
+    def _scaled_font(self, delta: int = 0, *, bold: bool = False) -> "QFont":
+        """This dialog's own font, sized ``delta`` px/pt away from the base
+        Settings -> UI font size — the only correct way to give a widget a
+        different size here (a literal ``font-size:`` in a stylesheet is
+        fixed forever and ignores that setting)."""
+        f = QFont(self.font())
+        if f.pixelSize() > 0:
+            f.setPixelSize(max(6, f.pixelSize() + delta))
+        else:
+            f.setPointSize(max(6, f.pointSize() + delta))
+        f.setBold(bold)
+        return f
+
+    def _h2(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setFont(self._scaled_font(3, bold=True))
+        lbl.setStyleSheet("color:palette(text);")
+        return lbl
+
+    def _caption(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setFont(self._scaled_font(-2, bold=True))
+        lbl.setStyleSheet(f"letter-spacing:.05em;color:{_dim_text_color()};")
+        return lbl
+
     def _finding_options(self):
         seen, out = set(), []
         for f in self._findings:
@@ -2610,17 +2784,8 @@ class _InvestigationNotebookDialog(QDialog):
             if not rid or rid in seen:
                 continue
             seen.add(rid)
-            out.append((rid, f"{f.get('severity', 'info')} · {f.get('title', rid)}"))
+            out.append((rid, f, f"{f.get('severity', 'info')} · {f.get('title', rid)}"))
         return out
-
-    _SCAFFOLD_TIP = "Seed observations from the current Analysis findings, plus a hypothesis + verification stub"  # noqa: E501
-    _SCAFFOLD_TIP_OFF = "No Analysis findings to seed from"
-
-    def _sync_scaffold_tooltip(self) -> None:
-        has = bool(self._finding_options())
-        self._scaffold_btn.setEnabled(has)
-        self._scaffold_btn.setToolTip(
-            self._SCAFFOLD_TIP if has else self._SCAFFOLD_TIP_OFF)
 
     def _status(self, msg: str) -> None:
         if callable(self._on_status):
@@ -2629,7 +2794,10 @@ class _InvestigationNotebookDialog(QDialog):
     def _broken(self) -> dict:
         return detect_broken_references(
             self._inv, trace=self._trace,
-            known_rule_ids=[rid for rid, _ in self._finding_options()])
+            known_rule_ids=[rid for rid, _f, _l in self._finding_options()])
+
+    def _sections(self) -> Dict[str, dict]:
+        return {s["id"]: s for s in investigation_sections(self._inv, broken=self._broken())}
 
     def _commit(self, new_inv: dict) -> None:
         self._inv = load_investigation(new_inv)
@@ -2638,15 +2806,1206 @@ class _InvestigationNotebookDialog(QDialog):
             self._on_change(self._inv)
         self._render()
 
-    def _on_nb_status_changed(self, _idx: int = 0) -> None:
-        if getattr(self, "_building", False):
+    def _bm_label(self, bid: str) -> str:
+        for b in self._inv.get("bookmarks", []):
+            if str(b.get("id")) == bid:
+                return f"{BOOKMARK_TYPE_LABELS.get(b.get('type'), b.get('type'))}: {b.get('title')}"
+        return bid
+
+    def _cursor_range_dict(self) -> Optional[dict]:
+        if not self._cursor_range:
+            return None
+        lo, hi = self._cursor_range
+        return {"start": int(lo), "end": int(hi)}
+
+    # ---- AI request-state bridge (mirrors web aiPanelRequestState) ----
+    def _ai_status(self) -> Dict[str, Any]:
+        if self._ai_panel is not None and hasattr(self._ai_panel, "request_status"):
+            try:
+                return self._ai_panel.request_status()
+            except RuntimeError:
+                pass
+        return {"busy": False, "status": ""}
+
+    def _on_ai_state_changed(self, *_a) -> None:
+        # Only the AI-assistance side card depends on live busy/status —
+        # avoid rebuilding the whole step body on every status tick.
+        self._render_ai_side()
+
+    def _cancel_ai_request(self) -> None:
+        if self._ai_panel is not None and hasattr(self._ai_panel, "cancel_request"):
+            try:
+                self._ai_panel.cancel_request()
+            except RuntimeError:
+                pass
+
+    def _collaborate(self, action_id: str, *, selected_evidence_ids=None) -> None:
+        if not callable(self._on_collaborate):
             return
-        combo = getattr(self, "_nb_status_combo", None)
-        if combo is None:
+        reason = nb_ai_action_reason(
+            action_id, self._inv, ai_enabled=self._ai_enabled,
+            has_second_trace=self._has_second_trace)
+        if reason:
+            self._status(reason)
             return
-        want = combo.currentData()
-        if want and want != self._inv.get("status"):
-            self._commit(set_status(self._inv, want))
+        ctx = collaborate_context(
+            self._inv, action=action_id, findings=self._findings,
+            selected_evidence_ids=list(selected_evidence_ids or []))
+        self._on_collaborate(action_id, ctx, self._step)
+
+    def _ask_ai_about(self, prompt: str) -> None:
+        """A quick, targeted question about one card — bypasses the
+        collaborate/proposal machinery entirely (mirrors the web
+        ``query-ai`` -> ``queryAnalysisWithAi`` path)."""
+        if self._ai_panel is None or not self._ai_enabled:
+            self._status(NB_AI_DISABLED_REASON)
+            return
+        if hasattr(self._ai_panel, "ask"):
+            self._ai_panel.ask(prompt)
+        if callable(self._on_status):
+            self._on_status("Asked the AI Assistant.")
+
+    # ---- header ----
+    def _build_header(self) -> QHBoxLayout:
+        header = QHBoxLayout()
+        header.setContentsMargins(14, 12, 14, 10)
+        header.setSpacing(8)
+
+        left = QVBoxLayout()
+        left.setSpacing(2)
+        cap = QLabel("INVESTIGATION NOTEBOOK")
+        cap.setFont(self._scaled_font(-2, bold=True))
+        cap.setStyleSheet(f"letter-spacing:.06em;color:{_dim_text_color()};")
+        left.addWidget(cap)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        self._title_lbl = QLabel("")
+        self._title_lbl.setFont(self._scaled_font(2, bold=True))
+        self._title_lbl.setStyleSheet("color:palette(text);")
+        # Plain text always — the investigation title is free-form user text
+        # and Qt's rich-text auto-detection (triggered by a stray "<") paints
+        # in black regardless of the app palette, invisible in dark theme.
+        self._title_lbl.setTextFormat(Qt.TextFormat.PlainText)
+        self._title_lbl.setWordWrap(True)
+        title_row.addWidget(self._title_lbl, 1)
+        self._status_pill = QLabel("")
+        self._status_pill.setObjectName("nb_pill")
+        title_row.addWidget(self._status_pill)
+        left.addLayout(title_row)
+        header.addLayout(left, 1)
+
+        more_btn = QToolButton()
+        more_btn.setText("⋯")
+        more_btn.setToolTip("More")
+        more_btn.setAutoRaise(True)
+        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more_menu = QMenu(more_btn)
+        act_from_findings = more_menu.addAction("Add from Findings")
+        act_from_findings.triggered.connect(self._add_from_findings_bulk)
+        self._more_from_findings_act = act_from_findings
+        act_history = more_menu.addAction("History…")
+        act_history.triggered.connect(self._show_history_menu)
+        self._more_history_act = act_history
+        act_import = more_menu.addAction("Import investigation…")
+        act_import.triggered.connect(self._import_json)
+        act_export = more_menu.addAction("Export JSON")
+        act_export.triggered.connect(self._export_json)
+        act_evpack = more_menu.addAction("Evidence package…")
+        act_evpack.triggered.connect(self._emit_evidence_package)
+        act_evpack.setEnabled(callable(self._on_evidence_package))
+        more_menu.addSeparator()
+        act_new = more_menu.addAction("New investigation…")
+        act_new.triggered.connect(self._start_new_investigation)
+        act_close = more_menu.addAction("Close investigation")
+        act_close.triggered.connect(self._close_investigation)
+        more_btn.setMenu(more_menu)
+        header.addWidget(more_btn)
+
+        close_x = QToolButton()
+        close_x.setText("✕")
+        close_x.setToolTip("Close")
+        close_x.setAutoRaise(True)
+        close_x.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_x.clicked.connect(self.close)
+        header.addWidget(close_x)
+        return header
+
+    # ---- step nav ----
+    def _build_step_nav(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(14, 0, 14, 0)
+        row.setSpacing(4)
+        self._step_tabs: Dict[str, _NbStepTab] = {}
+        for i, sid in enumerate(_NB_STEPS):
+            tab = _NbStepTab(i + 1, _NB_STEP_LABELS[sid])
+            tab.clicked.connect(lambda s=sid: self._select_step(s))
+            self._step_tabs[sid] = tab
+            row.addWidget(tab)
+        row.addStretch(1)
+        return row
+
+    # ---- context strip ----
+    def _build_context_strip(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(14, 6, 14, 6)
+        row.setSpacing(8)
+        self._ctx_trace_chip = QLabel("")
+        self._ctx_trace_chip.setObjectName("nb_chip")
+        self._ctx_scope_chip = QLabel("")
+        self._ctx_scope_chip.setObjectName("nb_chip")
+        self._ctx_filters_chip = QLabel("")
+        self._ctx_filters_chip.setObjectName("nb_chip")
+        for w in (self._ctx_trace_chip, self._ctx_scope_chip, self._ctx_filters_chip):
+            row.addWidget(w)
+        row.addStretch(1)
+        details_btn = QPushButton("Context details")
+        details_btn.setFlat(True)
+        details_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        details_btn.clicked.connect(self._show_context_details)
+        row.addWidget(details_btn)
+        return row
+
+    def _show_context_details(self) -> None:
+        digest = collaborate_digest(
+            collaborate_context(self._inv, action="review_investigation",
+                                 findings=self._findings))
+        box = QMessageBox(self)
+        box.setWindowTitle("Context details")
+        box.setText("Exactly what would be sent to the AI:")
+        box.setInformativeText(digest)
+        box.exec()
+
+    # ---- working area ----
+    def _build_working_area(self) -> QWidget:
+        host = QWidget()
+        lay = QHBoxLayout(host)
+        lay.setContentsMargins(14, 6, 14, 6)
+        lay.setSpacing(14)
+
+        self._main_scroll = QScrollArea()
+        self._main_scroll.setWidgetResizable(True)
+        self._main_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._main_host = QWidget()
+        self._main_lay = QVBoxLayout(self._main_host)
+        self._main_lay.setSpacing(10)
+        self._main_scroll.setWidget(self._main_host)
+        lay.addWidget(self._main_scroll, 1)
+
+        self._side_scroll = QScrollArea()
+        self._side_scroll.setWidgetResizable(True)
+        self._side_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._side_scroll.setFixedWidth(300)
+        self._side_host = QFrame()
+        self._side_host.setObjectName("nb_side")
+        self._side_lay = QVBoxLayout(self._side_host)
+        self._side_lay.setContentsMargins(10, 10, 10, 10)
+        self._side_lay.setSpacing(8)
+        self._side_scroll.setWidget(self._side_host)
+        lay.addWidget(self._side_scroll)
+        return host
+
+    # ---- footer ----
+    def _build_footer(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(14, 8, 14, 12)
+        row.setSpacing(8)
+        self._save_state_lbl = QLabel("Changes kept in this session")
+        self._save_state_lbl.setStyleSheet(f"color:{_dim_text_color()};")
+        row.addWidget(self._save_state_lbl)
+        self._undo_scope_btn = QPushButton("↩ Undo scope restore")
+        self._undo_scope_btn.setFlat(True)
+        self._undo_scope_btn.setVisible(False)
+        self._undo_scope_btn.clicked.connect(self._undo_scope_restore)
+        row.addWidget(self._undo_scope_btn)
+        row.addStretch(1)
+        self._undo_btn = QPushButton("↶ Undo")
+        self._undo_btn.setToolTip("Undo (notebook)")
+        self._undo_btn.clicked.connect(self._undo)
+        self._redo_btn = QPushButton("↷ Redo")
+        self._redo_btn.setToolTip("Redo (notebook)")
+        self._redo_btn.clicked.connect(self._redo)
+        self._back_btn = QPushButton("← Back")
+        self._back_btn.clicked.connect(self._go_back_step)
+        self._next_btn = QPushButton("Next →")
+        self._next_btn.clicked.connect(self._go_next_step)
+        for b in (self._undo_btn, self._redo_btn, self._back_btn, self._next_btn):
+            row.addWidget(b)
+        return row
+
+    # ==================================================================
+    # render
+    # ==================================================================
+    def _render(self) -> None:
+        self._building = True
+        hdr = investigation_header(self._inv, broken=self._broken())
+        self._title_lbl.setText(str(self._inv.get("title") or "Untitled investigation"))
+        self._status_pill.setText(f"● {hdr['status_label']}")
+
+        bits = []
+        if hdr["trace"]:
+            self._ctx_trace_chip.setText(str(hdr["trace"]))
+            self._ctx_trace_chip.setVisible(True)
+        else:
+            self._ctx_trace_chip.setVisible(False)
+        self._ctx_scope_chip.setText(f"Scope: {hdr['scope']}")
+        self._ctx_filters_chip.setText("Filters: None")
+
+        for sid, tab in self._step_tabs.items():
+            tab.set_state(active=(sid == self._step), done=self._step_done(sid))
+
+        hs = notebook_history_state(self._history)
+        self._undo_btn.setEnabled(bool(hs.get("can_undo")))
+        self._redo_btn.setEnabled(bool(hs.get("can_redo")))
+        self._back_btn.setEnabled(_NB_STEPS.index(self._step) > 0)
+        self._next_btn.setEnabled(_NB_STEPS.index(self._step) < len(_NB_STEPS) - 1)
+
+        has_findings = bool(self._finding_options())
+        self._more_from_findings_act.setEnabled(has_findings)
+        self._more_from_findings_act.setToolTip(
+            "Seed observations from the current Analysis findings"
+            if has_findings else "No Analysis findings to seed from")
+        self._more_history_act.setEnabled(int(hs.get("count") or 0) >= 2)
+
+        self._render_step_body()
+        self._render_ai_side()
+        self._building = False
+
+    def _step_done(self, sid: str) -> bool:
+        if sid == "question":
+            return bool(str(self._inv.get("title") or "").strip())
+        if sid == "evidence":
+            return bool(self._sections()["evidence"]["items"])
+        if sid == "verify":
+            return bool(self._sections()["hypotheses"]["items"])
+        if sid == "conclusion":
+            return bool(str(self._inv.get("conclusion") or "").strip())
+        return False
+
+    def _select_step(self, sid: str) -> None:
+        if sid not in _NB_STEPS or sid == self._step:
+            return
+        self._step = sid
+        self._render()
+
+    def _go_back_step(self) -> None:
+        i = _NB_STEPS.index(self._step)
+        if i > 0:
+            self._select_step(_NB_STEPS[i - 1])
+
+    def _go_next_step(self) -> None:
+        i = _NB_STEPS.index(self._step)
+        if i < len(_NB_STEPS) - 1:
+            self._select_step(_NB_STEPS[i + 1])
+
+    def _render_step_body(self) -> None:
+        _clear_qlayout(self._main_lay)
+        getattr(self, f"_render_{self._step}_step")()
+        self._main_lay.addStretch(1)
+        self._apply_scaled_font_to_text_inputs(self._main_host)
+
+    def _apply_scaled_font_to_text_inputs(self, root) -> None:
+        # QLineEdit/QPlainTextEdit do not inherit an ancestor's font the way
+        # QLabel/QPushButton do — each one starts from QApplication's global
+        # default font regardless of self.setFont() up the parent chain.
+        # Reported live: every text box in this dialog ignored Settings ->
+        # UI font size. Set it on each one explicitly, every render.
+        font = self._scaled_font()
+        for w in root.findChildren(QLineEdit) + root.findChildren(QPlainTextEdit):
+            w.setFont(font)
+
+    def _render_ai_side(self) -> None:
+        if not hasattr(self, "_side_lay"):
+            return
+        _clear_qlayout(self._side_lay)
+        if not self._ai_enabled:
+            self._side_host.setVisible(False)
+            return
+        self._side_host.setVisible(True)
+        head = QHBoxLayout()
+        star = QLabel("✦")
+        star.setStyleSheet("color:#2E86DE;")
+        head.addWidget(star)
+        ai_title = QLabel("AI assistance")
+        ai_title.setStyleSheet("font-weight:700;color:palette(text);")
+        head.addWidget(ai_title)
+        head.addStretch(1)
+        self._side_lay.addLayout(head)
+
+        status = self._ai_status()
+        reply = self._last_ai_reply
+        reply_for_step = (
+            reply["text"] if reply and reply.get("step") == self._step and reply.get("text")
+            else "")
+
+        if status.get("busy"):
+            body = QLabel(str(status.get("status") or "Working…"))
+            body.setWordWrap(True)
+            self._side_lay.addWidget(body)
+            cancel = QPushButton("Cancel request")
+            cancel.clicked.connect(self._cancel_ai_request)
+            self._side_lay.addWidget(cancel)
+            self._side_lay.addStretch(1)
+            self._make_side_labels_selectable()
+            return
+
+        getattr(self, f"_render_{self._step}_ai_side")(reply_for_step)
+        self._side_lay.addStretch(1)
+        self._make_side_labels_selectable()
+
+    def _make_side_labels_selectable(self) -> None:
+        # QLabel defaults to NoTextInteraction — every label in this panel
+        # (status text, AI replies, suggestions) must be mouse-selectable so
+        # the text can be copied, e.g. to paste into an evidence Explanation
+        # or an explanation's Reasoning field. Applied panel-wide, once, so
+        # no future label here needs to remember this individually.
+        flags = (Qt.TextInteractionFlag.TextSelectableByMouse
+                 | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        for lbl in self._side_host.findChildren(QLabel):
+            lbl.setTextInteractionFlags(flags)
+            lbl.setCursor(Qt.CursorShape.IBeamCursor)
+
+    # ==================================================================
+    # Question step
+    # ==================================================================
+    def _render_question_step(self) -> None:
+        if self._investigation_has_content() and not self._question_editing:
+            self._main_lay.addWidget(self._h2("What do you want to understand?"))
+            card = QFrame()
+            card.setObjectName("nb_card")
+            cl = QVBoxLayout(card)
+            qlbl = QLabel(str(self._inv.get("title") or ""))
+            qlbl.setTextFormat(Qt.TextFormat.PlainText)
+            qlbl.setWordWrap(True)
+            qlbl.setStyleSheet("font-weight:700;color:palette(text);")
+            cl.addWidget(qlbl)
+            brow = QHBoxLayout()
+            edit_btn = QPushButton("Edit question")
+            edit_btn.clicked.connect(self._edit_question)
+            cont_btn = QPushButton("Continue investigation")
+            cont_btn.setDefault(True)
+            cont_btn.clicked.connect(lambda: self._select_step("evidence"))
+            brow.addWidget(edit_btn)
+            brow.addWidget(cont_btn)
+            brow.addStretch(1)
+            cl.addLayout(brow)
+            self._main_lay.addWidget(card)
+            return
+
+        self._main_lay.addWidget(self._h2("What do you want to understand?"))
+        hint = QLabel("Start with a question about this trace.")
+        hint.setObjectName("nb_hint")
+        self._main_lay.addWidget(hint)
+
+        self._question_edit = QPlainTextEdit(str(self._inv.get("title") or ""))
+        self._question_edit.setPlaceholderText(
+            "What do you want to understand about this trace?")
+        self._question_edit.setFixedHeight(70)
+        self._main_lay.addWidget(self._question_edit)
+
+        scope_card = QFrame()
+        scope_card.setObjectName("nb_card")
+        sl = QVBoxLayout(scope_card)
+        sl.addWidget(self._caption("RECORDED SCOPE"))
+        srow = QHBoxLayout()
+        srow.addWidget(QLabel(self._trace_name or "—"))
+        srow.addWidget(QLabel(f"Range: {investigation_header(self._inv)['scope']}"))
+        srow.addStretch(1)
+        sl.addLayout(srow)
+        self._main_lay.addWidget(scope_card)
+
+        top_findings = top_findings_for_start(self._findings, limit=3)
+        if top_findings:
+            find_card = QFrame()
+            find_card.setObjectName("nb_card")
+            fl = QVBoxLayout(find_card)
+            fl.addWidget(self._caption("START FROM A FINDING"))
+            self._finding_group = QButtonGroup(find_card)
+            for f in top_findings:
+                rid = str(f.get("rule_id") or f.get("id") or "")
+                rb = QRadioButton(f"{f.get('severity', 'info')} · {f.get('title', rid)}")
+                rb.setChecked(rid == self._selected_finding_id)
+                rb.toggled.connect(
+                    lambda checked, r=rid: checked and setattr(
+                        self, "_selected_finding_id", r))
+                self._finding_group.addButton(rb)
+                fl.addWidget(rb)
+            self._main_lay.addWidget(find_card)
+
+        next_card = QFrame()
+        next_card.setObjectName("nb_card")
+        nl = QHBoxLayout(next_card)
+        nl.addWidget(QLabel(
+            "Start investigation" if not self._investigation_has_content()
+            else "Save question"))
+        nl.addStretch(1)
+        start_btn = QPushButton(
+            "Start investigation" if not self._investigation_has_content()
+            else "Save question")
+        start_btn.setDefault(True)
+        start_btn.clicked.connect(self._start_or_save_question)
+        nl.addWidget(start_btn)
+        self._main_lay.addWidget(next_card)
+
+    def _render_question_ai_side(self, reply_text: str) -> None:
+        body = QLabel(
+            "AI can help you word a clearer, more specific question. "
+            "This step never requires AI.")
+        body.setWordWrap(True)
+        self._side_lay.addWidget(body)
+        btn = QPushButton("Help refine question")
+        btn.clicked.connect(lambda: self._collaborate("refine_question"))
+        self._side_lay.addWidget(btn)
+        if reply_text:
+            suggestion = parse_question_suggestion(reply_text)
+            if suggestion:
+                sug = QFrame()
+                sug.setObjectName("nb_card")
+                sl = QVBoxLayout(sug)
+                sl.addWidget(self._caption("REVISE QUESTION"))
+                stext = QLabel(suggestion)
+                stext.setTextFormat(Qt.TextFormat.PlainText)
+                stext.setWordWrap(True)
+                sl.addWidget(stext)
+                use = QPushButton("Use this question")
+                use.clicked.connect(lambda: self._use_refined_question(suggestion))
+                sl.addWidget(use)
+                self._side_lay.addWidget(sug)
+            else:
+                out = QLabel(reply_text)
+                out.setTextFormat(Qt.TextFormat.PlainText)
+                out.setWordWrap(True)
+                out.setObjectName("nb_hint")
+                self._side_lay.addWidget(out)
+
+    def _edit_question(self) -> None:
+        self._question_editing = True
+        self._render()
+
+    def _start_or_save_question(self) -> None:
+        text = self._question_edit.toPlainText().strip()
+        if not text:
+            return
+        was_empty = not self._investigation_has_content()
+        if was_empty:
+            next_inv = load_investigation({**self._inv, "title": text})
+            rid = str(self._selected_finding_id or "")
+            if rid:
+                match = next((f for r, f, _l in self._finding_options() if r == rid), None)
+                if match:
+                    next_inv = scaffold_investigation_from_findings(
+                        next_inv, findings=[match], cursor_range=self._cursor_range_dict(),
+                        limit=1, include_info=True)
+            self._question_editing = False
+            self._commit(next_inv)
+            self._select_step("evidence")
+        else:
+            self._question_editing = False
+            self._commit(load_investigation({**self._inv, "title": text}))
+
+    def _use_refined_question(self, suggestion: str) -> None:
+        self._commit(load_investigation({**self._inv, "title": suggestion}))
+
+    # ==================================================================
+    # Evidence step
+    # ==================================================================
+    def _render_evidence_step(self) -> None:
+        self._main_lay.addWidget(self._h2("Review the evidence"))
+        hint = QLabel("Check what the trace shows before choosing an explanation.")
+        hint.setObjectName("nb_hint")
+        head_row = QHBoxLayout()
+        head_row.addWidget(hint, 1)
+        add_btn = QToolButton()
+        add_btn.setText("Add evidence ▾")
+        add_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        add_menu = QMenu(add_btn)
+        act_ff = add_menu.addAction("From Findings")
+        act_ff.setEnabled(bool(self._finding_options()))
+        act_ff.triggered.connect(lambda: self._open_evidence_form("finding"))
+        act_cm = add_menu.addAction("Current measurement")
+        act_cm.setEnabled(bool(self._cursor_range))
+        act_cm.setToolTip(
+            "" if self._cursor_range
+            else "Place at least two cursors to record a current measurement")
+        act_cm.triggered.connect(lambda: self._open_evidence_form("measurement"))
+        act_note = add_menu.addAction("Note")
+        act_note.triggered.connect(lambda: self._open_evidence_form("note"))
+        add_btn.setMenu(add_menu)
+        head_row.addWidget(add_btn)
+        self._main_lay.addLayout(head_row)
+
+        if self._evidence_form_open:
+            self._main_lay.addWidget(self._build_evidence_form())
+
+        items = self._sections()["evidence"]["items"]
+        for i, it in enumerate(items):
+            self._main_lay.addWidget(self._build_evidence_card(it, i + 1))
+
+        self._main_lay.addLayout(self._build_next_action_row(
+            self._evidence_next_action(), self._on_evidence_next_action))
+
+    def _build_evidence_card(self, item: dict, index: int) -> QFrame:
+        bid = str(item.get("bookmark_id") or "")
+        card = QFrame()
+        card.setObjectName("nb_card")
+        kind = str(item.get("kind") or "")
+        card.setProperty("measured", kind == "measured")
+        card.setProperty("stale", bool(item.get("stale")))
+        lay = QVBoxLayout(card)
+        lay.setSpacing(6)
+
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        cb = QCheckBox()
+        cb.setChecked(bid in self._selected_evidence_ids)
+        cb.toggled.connect(lambda checked, b=bid: self._toggle_evidence_selected(b, checked))
+        top.addWidget(cb)
+        top.addSpacing(4)  # QCheckBox's own hit-box crowds the very next widget
+        badge = QLabel(f"E{index}")
+        badge.setObjectName("nb_badge")
+        badge.setProperty("kind", kind or "note")
+        top.addWidget(badge)
+        # Plain text + font-weight, never <b>...</b> — QLabel's rich-text mode
+        # (triggered by any HTML tag) does not inherit the QPalette text
+        # color and renders black regardless of theme, invisible on dark
+        # backgrounds. Plain text correctly follows palette(text).
+        title = QLabel(str(item.get("text") or ""))
+        title.setTextFormat(Qt.TextFormat.PlainText)
+        title.setStyleSheet("font-weight:700;color:palette(text);")
+        title.setWordWrap(True)
+        top.addWidget(title, 1)
+        if item.get("stale"):
+            st = QLabel("⚠ stale")
+            st.setObjectName("nb_stale")
+            top.addWidget(st)
+        lay.addLayout(top)
+
+        card_data = item.get("card") if isinstance(item.get("card"), dict) else {}
+        src = card_data.get("source") or (
+            "Contradicting" if item.get("role") == "contradicting"
+            else "Supporting" if item.get("role") == "supporting" else "Observation")
+        meta = QLabel(
+            f"{EVIDENCE_KIND_LABELS.get(kind, EVIDENCE_KIND_LABELS[''])} · {src}")
+        meta.setTextFormat(Qt.TextFormat.PlainText)
+        meta.setObjectName("nb_hint")
+        lay.addWidget(meta)
+
+        # Always visible and editable — this IS "add evidence to the note":
+        # type or paste into it directly (e.g. from an AI reply on the right)
+        # and it commits on focus-out. Matches the web card's <textarea
+        # class="nb-ev-note"> exactly; it must never be gated behind Details,
+        # which holds read-only metadata only (below).
+        note = QPlainTextEdit(str(item.get("note") or ""))
+        note.setPlaceholderText("Explanation (your words)")
+        note.setFixedHeight(50)
+        note.focusOutEvent = _wrap_focus_out(
+            note.focusOutEvent, lambda b=bid, w=note: self._ev_note(b, w.toPlainText()))
+        lay.addWidget(note)
+
+        expanded = bid in self._expanded_evidence_ids
+        actions = QHBoxLayout()
+        nav = item.get("nav") if isinstance(item.get("nav"), dict) else {}
+        if nav.get("jump") is not None or nav.get("range"):
+            src_btn = QPushButton("View source")
+            src_btn.setFlat(True)
+            src_btn.clicked.connect(lambda: self._ev_jump(nav))
+            actions.addWidget(src_btn)
+        ask_btn = QPushButton("Ask AI about this")
+        ask_btn.setFlat(True)
+        ask_btn.setEnabled(self._ai_enabled)
+        ask_btn.clicked.connect(
+            lambda: self._ask_ai_about(
+                f"About this evidence: {item.get('text')}\n{item.get('note') or ''}"))
+        actions.addWidget(ask_btn)
+        details_btn = QPushButton("Details ▾")
+        details_btn.setFlat(True)
+        details_btn.clicked.connect(lambda: self._toggle_evidence_details(bid))
+        actions.addWidget(details_btn)
+        actions.addStretch(1)
+        rm_btn = QToolButton()
+        rm_btn.setText("\U0001F5D1")
+        rm_btn.setToolTip("Remove")
+        rm_btn.setAutoRaise(True)
+        rm_btn.clicked.connect(lambda: self._commit(remove_bookmark(self._inv, bid)))
+        actions.addWidget(rm_btn)
+        lay.addLayout(actions)
+
+        if expanded:
+            # Read-only provenance metadata — never the note (that's always
+            # visible and editable above). Matches the web card's expanded
+            # "Details" block field-for-field.
+            hdr = investigation_header(self._inv)
+            author = str(card_data.get("author") or "user")
+            author_label = {"ai": "AI", "btfviewer": "BTFViewer"}.get(author, "User")
+            detail_rows = [("Trace", hdr.get("trace") or "")]
+            task, core = card_data.get("task"), card_data.get("core")
+            if task:
+                detail_rows.append(("Task / core", f"{task} · {core}" if core else str(task)))
+            detail_rows.append(("Recorded scope", hdr.get("scope") or ""))
+            if card_data.get("created_at"):
+                detail_rows.append(("Timestamp", str(card_data["created_at"])))
+            detail_rows.append(("Source", src))
+            detail_rows.append(("Added", author_label))
+            for k, v in detail_rows:
+                if not v:
+                    continue
+                row = QLabel(f"{k}: {v}")
+                row.setTextFormat(Qt.TextFormat.PlainText)
+                row.setObjectName("nb_hint")
+                lay.addWidget(row)
+            plan = evidence_scope_restore_plan(
+                card_data, current_scope=self._cursor_range_dict(), fmt=self._fmt)
+            if plan and callable(self._on_restore_scope):
+                rb = QPushButton("Restore evidence scope…")
+                rb.clicked.connect(lambda: self._ev_restore_scope(bid, plan))
+                lay.addWidget(rb)
+            if nav.get("stats_metric"):
+                sb = QPushButton("Open source Statistics section")
+                sb.clicked.connect(lambda: self._ev_open_stats(str(nav["stats_metric"])))
+                lay.addWidget(sb)
+        return card
+
+    def _toggle_evidence_details(self, bid: str) -> None:
+        if bid in self._expanded_evidence_ids:
+            self._expanded_evidence_ids.discard(bid)
+        else:
+            self._expanded_evidence_ids.add(bid)
+        self._render_step_body()
+
+    def _toggle_evidence_selected(self, bid: str, checked: bool) -> None:
+        if checked:
+            self._selected_evidence_ids.add(bid)
+        else:
+            self._selected_evidence_ids.discard(bid)
+        # Rebuild the step body so the next-action row's label/enabled state
+        # (e.g. "Select evidence…" -> "Check evidence with AI") picks up the
+        # new selection — it was previously left stuck disabled. Safe to
+        # rebuild from inside this checkbox's own toggled handler: the old
+        # checkbox is only scheduled for deleteLater(), and the new one is
+        # recreated with the correct (already-updated) checked state.
+        self._render_step_body()
+        self._render_ai_side()
+
+    def _render_evidence_ai_side(self, reply_text: str) -> None:
+        n = len(self._sections()["evidence"]["items"])
+        sel = len(self._selected_evidence_ids)
+        body = QLabel(f"{n} evidence item(s), {sel} selected.")
+        body.setWordWrap(True)
+        self._side_lay.addWidget(body)
+        if reply_text:
+            out = QLabel(reply_text)
+            out.setTextFormat(Qt.TextFormat.PlainText)
+            out.setWordWrap(True)
+            out.setObjectName("nb_hint")
+            self._side_lay.addWidget(out)
+
+    def _evidence_next_action(self) -> dict:
+        n = len(self._sections()["evidence"]["items"])
+        sel = len(self._selected_evidence_ids)
+        if n == 0:
+            return {"id": "none", "label": "Add evidence to continue", "disabled": True}
+        if sel == 0:
+            return {"id": "select", "label": "Select evidence to check with AI", "disabled": True}
+        return {"id": "check", "label": "Check evidence with AI"}
+
+    def _on_evidence_next_action(self, action_id: str) -> None:
+        if action_id == "check":
+            self._collaborate(
+                "review_investigation", selected_evidence_ids=self._selected_evidence_ids)
+
+    def _open_evidence_form(self, kind: str) -> None:
+        """From Findings / Current measurement / Note are three entry
+        points into ONE shared form — matches the web dialog's
+        ``openEvidenceForm(kind)`` exactly: pre-seed one field, then show
+        the same type + title + note + refs form regardless of which menu
+        item was clicked."""
+        self._evidence_form_open = True
+        if kind == "measurement":
+            self._ev_draft["use_range"] = True
+        elif kind == "finding":
+            self._ev_draft["type"] = EVIDENCE_BOOKMARK_TYPES[1]  # supporting
+        self._render_step_body()
+
+    def _build_evidence_form(self) -> QFrame:
+        box = QFrame()
+        box.setObjectName("nb_card")
+        lay = QVBoxLayout(box)
+        lay.setSpacing(6)
+
+        row1 = QHBoxLayout()
+        type_cb = QComboBox()
+        for t in EVIDENCE_BOOKMARK_TYPES:
+            type_cb.addItem(BOOKMARK_TYPE_LABELS[t], t)
+        idx = type_cb.findData(self._ev_draft["type"])
+        type_cb.setCurrentIndex(idx if idx >= 0 else 0)
+        type_cb.currentIndexChanged.connect(
+            lambda: self._ev_draft.__setitem__("type", type_cb.currentData()))
+        row1.addWidget(type_cb)
+        title_edit = QLineEdit(self._ev_draft["title"])
+        title_edit.setPlaceholderText("Evidence title")
+        title_edit.textChanged.connect(
+            lambda t: self._ev_draft.__setitem__("title", t))
+        row1.addWidget(title_edit, 1)
+        add_btn = QPushButton("Add")
+        add_btn.setEnabled(bool(self._ev_draft["title"].strip()))
+        title_edit.textChanged.connect(
+            lambda t: add_btn.setEnabled(bool(t.strip())))
+        title_edit.returnPressed.connect(self._add_evidence_draft)
+        add_btn.clicked.connect(self._add_evidence_draft)
+        row1.addWidget(add_btn)
+        lay.addLayout(row1)
+
+        note_edit = QPlainTextEdit(self._ev_draft["note"])
+        note_edit.setPlaceholderText("Note (optional)")
+        note_edit.setFixedHeight(46)
+        note_edit.textChanged.connect(
+            lambda: self._ev_draft.__setitem__("note", note_edit.toPlainText()))
+        lay.addWidget(note_edit)
+
+        if self._cursor_range:
+            lo, hi = self._cursor_range
+            range_cb = QCheckBox(
+                f"Attach current cursor range ({self._fmt(lo)} – {self._fmt(hi)})")
+            range_cb.setChecked(bool(self._ev_draft["use_range"]))
+            range_cb.toggled.connect(
+                lambda checked: self._ev_draft.__setitem__("use_range", checked))
+            lay.addWidget(range_cb)
+
+        opts = self._finding_options()
+        if opts:
+            frow = QHBoxLayout()
+            frow.addWidget(QLabel("Link finding"))
+            finding_cb = QComboBox()
+            finding_cb.addItem("— none —", "")
+            for rid, _f, lbl in opts:
+                finding_cb.addItem(lbl, rid)
+            fidx = finding_cb.findData(self._ev_draft["finding_rule_id"])
+            finding_cb.setCurrentIndex(fidx if fidx >= 0 else 0)
+            finding_cb.currentIndexChanged.connect(
+                lambda: self._ev_draft.__setitem__(
+                    "finding_rule_id", finding_cb.currentData()))
+            frow.addWidget(finding_cb, 1)
+            lay.addLayout(frow)
+        return box
+
+    def _add_evidence_draft(self) -> None:
+        d = self._ev_draft
+        title = str(d["title"]).strip()
+        if not title:
+            return
+        refs = []
+        cur = self._cursor_range_dict()
+        if d["use_range"] and cur:
+            refs.append({"kind": "range", "range": cur})
+        if d["finding_rule_id"]:
+            refs.append({"kind": "finding", "rule_id": d["finding_rule_id"]})
+        self._commit(add_bookmark(
+            self._inv, type=d["type"], title=title, note=str(d["note"]), refs=refs))
+        self._ev_draft = {
+            "type": EVIDENCE_BOOKMARK_TYPES[1], "title": "", "note": "",
+            "use_range": False, "finding_rule_id": "",
+        }
+        self._evidence_form_open = False
+
+    def _add_from_findings_bulk(self) -> None:
+        rng = self._cursor_range_dict()
+        before = len(self._inv.get("bookmarks") or [])
+        nxt = scaffold_investigation_from_findings(
+            self._inv, findings=self._findings, cursor_range=rng)
+        added = len(nxt.get("bookmarks") or []) - before
+        if added <= 0:
+            self._status("Nothing new to add — every finding is already in the notebook.")
+            return
+        self._commit(nxt)
+        self._status(f"Added {added} bookmark{'' if added == 1 else 's'} from findings")
+
+    def _ev_note(self, bid: str, note: str) -> None:
+        b = next((x for x in self._inv.get("bookmarks", []) if str(x["id"]) == bid), None)
+        if b is not None and str(b.get("note") or "") != str(note or ""):
+            self._commit(update_evidence_explanation(self._inv, bid, note))
+
+    def _ev_jump(self, nav: dict) -> None:
+        if not callable(self._on_ref_jump):
+            return
+        rng = nav.get("range")
+        if isinstance(rng, (list, tuple)) and len(rng) == 2:
+            self._on_ref_jump(int(rng[0]), int(rng[1]))
+        elif nav.get("jump") is not None:
+            self._on_ref_jump(int(nav["jump"]), int(nav["jump"]))
+
+    def _ev_open_stats(self, metric: str) -> None:
+        if callable(self._on_open_stats):
+            self._on_open_stats(str(metric))
+
+    def _ev_restore_scope(self, _bid: str, plan: dict) -> None:
+        if not callable(self._on_restore_scope) or not isinstance(plan, dict):
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("Restore evidence scope")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(str(plan.get("summary") or "") + "\n\nRestoring will:")
+        box.setInformativeText("\n".join(f"•  {c}" for c in plan.get("changes") or []))
+        restore = box.addButton("Restore scope", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is restore:
+            self._on_restore_scope(int(plan["start"]), int(plan["end"]))
+            self._undo_scope_btn.setVisible(callable(self._on_undo_restore_scope))
+            self._status("Evidence scope restored — use “Undo scope restore”.")
+
+    def _undo_scope_restore(self) -> None:
+        if callable(self._on_undo_restore_scope):
+            self._on_undo_restore_scope()
+        self._undo_scope_btn.setVisible(False)
+        self._status("Scope restore undone.")
+
+    # ==================================================================
+    # Verify step
+    # ==================================================================
+    def _links_to(self, bid: str, relations) -> list:
+        rels = set(relations)
+        out = []
+        for link in self._inv.get("links", []):
+            if link.get("relation") not in rels:
+                continue
+            if str(link.get("to")) == bid:
+                out.append(str(link.get("from")))
+            elif str(link.get("from")) == bid:
+                out.append(str(link.get("to")))
+        return out
+
+    def _checks_for(self, explanation_id: str) -> list:
+        ids = set(self._links_to(explanation_id, {"verifies"}))
+        return [b for b in self._inv.get("bookmarks", [])
+                if str(b.get("id")) in ids and b.get("type") == BM_VERIFICATION]
+
+    def _unassigned_checks(self) -> list:
+        assigned = set()
+        for link in self._inv.get("links", []):
+            if link.get("relation") == "verifies":
+                assigned.add(str(link.get("from")))
+        return [b for b in self._inv.get("bookmarks", [])
+                if b.get("type") == BM_VERIFICATION and str(b.get("id")) not in assigned]
+
+    def _render_verify_step(self) -> None:
+        self._main_lay.addWidget(self._h2("Test possible explanations"))
+        hint = QLabel("Use evidence to support, contradict, or leave each explanation unresolved.")
+        hint.setObjectName("nb_hint")
+        self._main_lay.addWidget(hint)
+
+        top_row = QHBoxLayout()
+        add_btn = QPushButton("Add explanation")
+        add_btn.clicked.connect(self._add_explanation)
+        top_row.addWidget(add_btn)
+        sugg_btn = QPushButton("Suggest explanations")
+        sugg_btn.setEnabled(not bool(nb_ai_action_reason(
+            "draft_hypotheses", self._inv, ai_enabled=self._ai_enabled,
+            has_second_trace=self._has_second_trace)))
+        sugg_btn.clicked.connect(lambda: self._collaborate("draft_hypotheses"))
+        top_row.addWidget(sugg_btn)
+        top_row.addStretch(1)
+        self._main_lay.addLayout(top_row)
+
+        items = self._sections()["hypotheses"]["items"]
+        for it in items:
+            self._main_lay.addWidget(self._build_explanation_card(it))
+
+        unassigned = self._unassigned_checks()
+        if unassigned:
+            box = QFrame()
+            box.setObjectName("nb_card")
+            bl = QVBoxLayout(box)
+            bl.addWidget(self._caption("OTHER CHECKS"))
+            for chk in unassigned:
+                row = QLabel(f"Action: {chk.get('title') or ''}")
+                row.setTextFormat(Qt.TextFormat.PlainText)
+                bl.addWidget(row)
+            self._main_lay.addWidget(box)
+
+        self._main_lay.addLayout(self._build_next_action_row(
+            self._verify_next_action(), self._on_verify_next_action))
+
+    def _build_explanation_card(self, it: dict) -> QFrame:
+        bid = str(it.get("bookmark_id") or "")
+        card = QFrame()
+        card.setObjectName("nb_card")
+        lay = QVBoxLayout(card)
+        top = QHBoxLayout()
+        title = QLineEdit(str(it.get("text") or ""))
+        title.editingFinished.connect(
+            lambda: self._commit(update_bookmark(self._inv, bid, title=title.text())))
+        top.addWidget(title, 1)
+        status = QLabel(str(it.get("status") or "open").upper())
+        status.setObjectName("nb_pill")
+        top.addWidget(status)
+        lay.addLayout(top)
+
+        reason = QPlainTextEdit(str(it.get("note") or ""))
+        reason.setPlaceholderText("Reasoning")
+        reason.setFixedHeight(50)
+        reason.focusOutEvent = _wrap_focus_out(
+            reason.focusOutEvent,
+            lambda: self._commit(update_evidence_explanation(self._inv, bid, reason.toPlainText())))
+        lay.addWidget(reason)
+
+        supp_ids = self._links_to(bid, {"supports"})
+        contra_ids = self._links_to(bid, {"contradicts"})
+        lay.addWidget(self._caption("SUPPORTING EVIDENCE"))
+        lay.addWidget(_evidence_ref_list(supp_ids, self._bm_label))
+        lay.addWidget(self._caption("CONTRADICTING EVIDENCE"))
+        lay.addWidget(_evidence_ref_list(contra_ids, self._bm_label))
+
+        checks = self._checks_for(bid)
+        lay.addWidget(self._caption(f"CHECKS TO COMPLETE ({len(checks)})"))
+        for chk in checks:
+            chk_lbl = QLabel(f"Action: {chk.get('title') or ''}")
+            chk_lbl.setTextFormat(Qt.TextFormat.PlainText)
+            lay.addWidget(chk_lbl)
+
+        crow = QHBoxLayout()
+        add_check = QPushButton("Add a check")
+        add_check.clicked.connect(lambda: self._add_check_for(bid))
+        crow.addWidget(add_check)
+        link_ev = QPushButton("Link evidence")
+        link_ev.clicked.connect(lambda: self._link_evidence_to(bid))
+        crow.addWidget(link_ev)
+        crow.addStretch(1)
+        lay.addLayout(crow)
+        return card
+
+    def _render_verify_ai_side(self, reply_text: str) -> None:
+        checks = sum(len(self._checks_for(str(it.get("bookmark_id"))))
+                     for it in self._sections()["hypotheses"]["items"])
+        n_hyp = len(self._sections()["hypotheses"]["items"])
+        body = QLabel(f"{checks} open check(s) across {n_hyp} explanation(s).")
+        body.setWordWrap(True)
+        self._side_lay.addWidget(body)
+        btn = QPushButton("Suggest explanations")
+        btn.setEnabled(not bool(nb_ai_action_reason(
+            "draft_hypotheses", self._inv, ai_enabled=self._ai_enabled,
+            has_second_trace=self._has_second_trace)))
+        btn.clicked.connect(lambda: self._collaborate("draft_hypotheses"))
+        self._side_lay.addWidget(btn)
+        if reply_text:
+            out = QLabel(reply_text)
+            out.setTextFormat(Qt.TextFormat.PlainText)
+            out.setWordWrap(True)
+            out.setObjectName("nb_hint")
+            self._side_lay.addWidget(out)
+
+    def _verify_next_action(self) -> dict:
+        if not self._sections()["hypotheses"]["items"]:
+            return {"id": "none", "label": "Add an explanation to continue", "disabled": True}
+        return {"id": "conclude", "label": "Go to Conclusion"}
+
+    def _on_verify_next_action(self, action_id: str) -> None:
+        if action_id == "conclude":
+            self._select_step("conclusion")
+
+    def _add_explanation(self) -> None:
+        self._commit(add_bookmark(
+            self._inv, type=BM_HYPOTHESIS, title="Likely cause — edit this",
+            note="What single explanation best fits the observations above? "
+                 "Link the observations that support it."))
+
+    def _add_check_for(self, explanation_id: str) -> None:
+        title, ok = QInputDialog.getText(self, "New check", "What will you do?")
+        if not ok or not str(title).strip():
+            return
+        nxt = add_bookmark(self._inv, type=BM_VERIFICATION, title=str(title).strip())
+        new_id = nxt["bookmarks"][-1]["id"]
+        nxt = link_bookmarks(nxt, new_id, explanation_id, "verifies")
+        self._commit(nxt)
+
+    def _link_evidence_to(self, explanation_id: str) -> None:
+        evidence = self._sections()["evidence"]["items"]
+        if not evidence:
+            self._status("Add evidence before linking it.")
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Link evidence")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Evidence:"))
+        boxes = []
+        for it in evidence:
+            cb = QCheckBox(str(it.get("text") or ""))
+            cb.setProperty("bid", str(it.get("bookmark_id") or ""))
+            boxes.append(cb)
+            lay.addWidget(cb)
+        lay.addWidget(QLabel("Relation:"))
+        rel_row = QHBoxLayout()
+        supports_rb = QRadioButton("Supports")
+        supports_rb.setChecked(True)
+        contradicts_rb = QRadioButton("Contradicts")
+        rel_row.addWidget(supports_rb)
+        rel_row.addWidget(contradicts_rb)
+        lay.addLayout(rel_row)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        relation = "contradicts" if contradicts_rb.isChecked() else "supports"
+        nxt = self._inv
+        for cb in boxes:
+            if cb.isChecked():
+                nxt = link_bookmarks(nxt, cb.property("bid"), explanation_id, relation)
+        self._commit(nxt)
+
+    # ==================================================================
+    # Conclusion step
+    # ==================================================================
+    def _render_conclusion_step(self) -> None:
+        self._main_lay.addWidget(self._h2("Summarize what the evidence supports"))
+        hint = QLabel("Write a conclusion you can export, even if some checks are still open.")
+        hint.setObjectName("nb_hint")
+        self._main_lay.addWidget(hint)
+
+        self._conclusion_edit = QPlainTextEdit(str(self._inv.get("conclusion") or ""))
+        self._conclusion_edit.setPlaceholderText(
+            "What does the evidence support? Leave blank until it does.")
+        self._conclusion_edit.setFixedHeight(90)
+        self._conclusion_edit.focusOutEvent = _wrap_focus_out(
+            self._conclusion_edit.focusOutEvent, self._commit_conclusion_draft)
+        self._main_lay.addWidget(self._conclusion_edit)
+
+        arow = QHBoxLayout()
+        draft_btn = QPushButton("Draft conclusion")
+        draft_btn.setEnabled(not bool(nb_ai_action_reason(
+            "draft_conclusion", self._inv, ai_enabled=self._ai_enabled,
+            has_second_trace=self._has_second_trace)))
+        draft_btn.clicked.connect(lambda: self._collaborate("draft_conclusion"))
+        review_btn = QPushButton("Review conclusion")
+        review_btn.clicked.connect(lambda: self._collaborate("review_investigation"))
+        arow.addWidget(draft_btn)
+        arow.addWidget(review_btn)
+        arow.addStretch(1)
+        self._main_lay.addLayout(arow)
+
+        cited = QFrame()
+        cited.setObjectName("nb_card")
+        cl = QVBoxLayout(cited)
+        cl.addWidget(self._caption("CITED EVIDENCE"))
+        crow = QHBoxLayout()
+        for i, _it in enumerate(self._sections()["evidence"]["items"]):
+            chip = QLabel(f"E{i + 1}")
+            chip.setObjectName("nb_chip")
+            crow.addWidget(chip)
+        crow.addStretch(1)
+        cl.addLayout(crow)
+        self._main_lay.addWidget(cited)
+
+        open_checks = [it for it in self._sections()["open_checks"]["items"]
+                       if it.get("source") == "verification"]
+        if open_checks:
+            box = QFrame()
+            box.setObjectName("nb_card")
+            bl = QVBoxLayout(box)
+            bl.addWidget(self._caption(f"UNRESOLVED CHECKS ({len(open_checks)})"))
+            for it in open_checks:
+                row = QHBoxLayout()
+                pill = QLabel("NOT CHECKED")
+                pill.setObjectName("nb_pill")
+                row.addWidget(pill)
+                chk_text = QLabel(str(it.get("text") or ""))
+                chk_text.setTextFormat(Qt.TextFormat.PlainText)
+                row.addWidget(chk_text)
+                row.addStretch(1)
+                bl.addLayout(row)
+            self._main_lay.addWidget(box)
+
+        broken = self._broken()
+        stale_box = QFrame()
+        stale_box.setObjectName("nb_card")
+        sbl = QVBoxLayout(stale_box)
+        sbl.addWidget(self._caption("STALE REFERENCES"))
+        n_issues = len(broken.get("issues") or [])
+        sbl.addWidget(QLabel(
+            "None — every citation still resolves to current evidence."
+            if not n_issues else f"{n_issues} reference(s) no longer resolve."))
+        self._main_lay.addWidget(stale_box)
+
+        lim_box = QFrame()
+        lim_box.setObjectName("nb_card")
+        ll = QVBoxLayout(lim_box)
+        ll.addWidget(self._caption("LIMITATIONS"))
+        if open_checks:
+            lim = QLabel(f"⚠ {len(open_checks)} unresolved check(s) — the export will label them explicitly.")
+            lim.setStyleSheet("color:#E0A030;")
+        else:
+            lim = QLabel("None recorded.")
+        lim.setWordWrap(True)
+        ll.addWidget(lim)
+        self._main_lay.addWidget(lim_box)
+
+    def _render_conclusion_ai_side(self, reply_text: str) -> None:
+        body = QLabel(reply_text or "Ask for a review to see gaps and contradictions here.")
+        body.setWordWrap(True)
+        self._side_lay.addWidget(body)
+        btn = QPushButton("Discuss in AI Assistant")
+        btn.clicked.connect(lambda: self._collaborate("review_investigation"))
+        self._side_lay.addWidget(btn)
+
+    def _commit_conclusion_draft(self) -> None:
+        if self._building:
+            return
+        txt = self._conclusion_edit.toPlainText().strip()
+        if txt != (self._inv.get("conclusion") or ""):
+            self._commit(set_conclusion(self._inv, txt))
+
+    # ==================================================================
+    # shared: next-action row, More menu actions, undo/redo/history
+    # ==================================================================
+    def _build_next_action_row(self, action: dict, on_click) -> QHBoxLayout:
+        row = QHBoxLayout()
+        lbl = QLabel(action.get("label", ""))
+        row.addWidget(lbl)
+        row.addStretch(1)
+        btn = QPushButton(action.get("label", ""))
+        btn.setDefault(True)
+        btn.setEnabled(not action.get("disabled"))
+        btn.clicked.connect(lambda: on_click(action.get("id")))
+        row.addWidget(btn)
+        return row
+
+    def _start_new_investigation(self) -> None:
+        if self._investigation_has_content():
+            resp = QMessageBox.question(
+                self, "New investigation",
+                "Start a new investigation? The current one will be replaced "
+                "(Undo restores it).")
+            if resp != QMessageBox.StandardButton.Yes:
+                return
+        self._commit(new_investigation(
+            title="", trace_identity=self._inv.get("trace_identity"),
+            analysis_range=self._inv.get("analysis_range")))
+        self._step = "question"
+        self._selected_evidence_ids = set()
+        self._expanded_evidence_ids = set()
+        self._question_editing = True
+        self._selected_finding_id = ""
+        self._render()
+
+    def _close_investigation(self) -> None:
+        resp = QMessageBox.question(
+            self, "Close investigation",
+            "Close this investigation? You can reopen it later from the workspace.")
+        if resp == QMessageBox.StandardButton.Yes:
+            self._commit(set_status(self._inv, NB_STATUS_CLOSED))
+
+    def _show_history_menu(self) -> None:
+        st = notebook_history_state(self._history)
+        n = int(st.get("count") or 0)
+        if n < 2:
+            return
+        cur = int(st.get("index", -1))
+        menu = QMenu(self)
+        for i in range(n):
+            act = menu.addAction(f"{'● ' if i == cur else '   '}Snapshot {i + 1} of {n}")
+            act.triggered.connect(lambda _c=False, k=i: self._restore_snapshot(
+                notebook_goto(self._history, k)))
+        menu.exec(self.mapToGlobal(self.rect().center()))
 
     def _restore_snapshot(self, history) -> None:
         self._history = history
@@ -2657,277 +4016,11 @@ class _InvestigationNotebookDialog(QDialog):
                 self._on_change(self._inv)
         self._render()
 
-    def _bm_label(self, bid: str) -> str:
-        for b in self._inv.get("bookmarks", []):
-            if str(b.get("id")) == bid:
-                return f"{BOOKMARK_TYPE_LABELS.get(b.get('type'), b.get('type'))}: {b.get('title')}"
-        return bid
-
-    # ---- render ----
-    def _clear_layout(self, lay) -> None:
-        while lay.count():
-            it = lay.takeAt(0)
-            w = it.widget()
-            if w is not None:
-                w.deleteLater()
-            elif it.layout() is not None:
-                self._clear_layout(it.layout())
-
-    def _render(self) -> None:
-        self._building = True
-        bms = self._inv.get("bookmarks", [])
-        broken = self._broken()
-        broken_by_bm: dict = {}
-        for iss in broken.get("issues", []):
-            broken_by_bm.setdefault(str(iss["bookmark_id"]), set()).add(iss["ref_index"])
-        n_flag = len(broken.get("issues", [])) + (1 if broken.get("stale_trace") else 0)
-        self._broken_lbl.setText(f"⚠ {n_flag} stale ref")
-        self._broken_lbl.setToolTip(
-            f"{n_flag} bookmark reference(s) no longer resolve")
-        self._broken_lbl.setVisible(n_flag > 0)
-
-        # §7 compact context row.
-        hdr = investigation_header(self._inv, broken=broken)
-        combo = getattr(self, "_nb_status_combo", None)
-        if combo is not None:
-            j = combo.findData(hdr["status"])
-            combo.blockSignals(True)
-            combo.setCurrentIndex(j if j >= 0 else 0)
-            combo.blockSignals(False)
-        lbl = getattr(self, "_nb_context_lbl", None)
-        if lbl is not None:
-            bits = []
-            if hdr["trace"]:
-                bits.append(str(hdr["trace"]))
-            bits.append(f"Scope: {hdr['scope']}")
-            bits.append(f"{hdr['evidence_count']} evidence")
-            n_oc = hdr["open_check_count"]
-            bits.append(f"{n_oc} open check{'' if n_oc == 1 else 's'}")
-            if hdr["stale_ref_count"]:
-                bits.append(f"{hdr['stale_ref_count']} stale ref"
-                            f"{'' if hdr['stale_ref_count'] == 1 else 's'}")
-            if hdr["updated_at"]:
-                bits.append(f"updated {hdr['updated_at']}")
-            lbl.setText("  ·  ".join(bits))
-
-        if self._title_edit.text() != (self._inv.get("title") or ""):
-            self._title_edit.setText(self._inv.get("title") or "")
-        if self._concl.toPlainText() != (self._inv.get("conclusion") or ""):
-            self._concl.setPlainText(self._inv.get("conclusion") or "")
-
-        # add-box context widgets
-        opts = self._finding_options()
-        cur_fid = self._finding_cb.currentData()
-        self._finding_cb.blockSignals(True)
-        self._finding_cb.clear()
-        self._finding_cb.addItem("— none —", "")
-        for rid, lbl in opts:
-            self._finding_cb.addItem(lbl, rid)
-        j = self._finding_cb.findData(cur_fid)
-        self._finding_cb.setCurrentIndex(j if j >= 0 else 0)
-        self._finding_cb.blockSignals(False)
-        self._finding_cb.parentWidget().setVisible(bool(opts))
-        if self._cursor_range:
-            lo, hi = self._cursor_range
-            self._attach_range_cb.setText(
-                f"Attach current cursor range ({self._fmt(lo)} – {self._fmt(hi)})")
-            self._attach_range_cb.setVisible(True)
-        else:
-            self._attach_range_cb.setVisible(False)
-            self._attach_range_cb.setChecked(False)
-        self._sync_scaffold_tooltip()
-
-        # bookmark groups
-        self._clear_layout(self._groups_lay)
-        inv_is_empty = (
-            not bms
-            and not str(self._inv.get("title") or "").strip()
-            and not str(self._inv.get("conclusion") or "").strip()
-            and not self._inv.get("unresolved_questions")
-        )
-        if inv_is_empty:
-            # §7 empty-state: two explicit entry points, mirroring the web dialog.
-            has_findings = bool(self._finding_options())
-            b_from = QPushButton(NB_EMPTY_FROM_FINDINGS)
-            b_from.setEnabled(has_findings)
-            b_from.setToolTip("" if has_findings else "No Analysis findings to seed from")
-            b_from.clicked.connect(self._scaffold_from_findings)
-            b_blank = QPushButton(NB_EMPTY_BLANK)
-            b_blank.clicked.connect(lambda: self._title_edit.setFocus())
-            erow = QHBoxLayout()
-            erow.setSpacing(8)
-            erow.addWidget(b_from)
-            erow.addWidget(b_blank)
-            erow.addStretch(1)
-            wrap = QWidget()
-            wrap.setLayout(erow)
-            self._groups_lay.addWidget(wrap)
-        elif not bms:
-            hint = QLabel(
-                "No bookmarks yet. Add an observation, hypothesis, supporting or "
-                "contradicting evidence, a verification step, or a conclusion above.")
-            hint.setWordWrap(True)
-            hint.setStyleSheet("color:palette(mid);")
-            self._groups_lay.addWidget(hint)
-        else:
-            for t in BOOKMARK_TYPES:
-                items = [b for b in bms if b.get("type") == t]
-                if not items:
-                    continue
-                head = QLabel(f"{BOOKMARK_TYPE_LABELS[t]} ({len(items)})")
-                head.setStyleSheet("color:palette(mid);font-weight:600;")
-                self._groups_lay.addWidget(head)
-                for b in items:
-                    row = _NotebookBookmarkRow(
-                        b, fmt=self._fmt,
-                        broken_ref_idx=broken_by_bm.get(str(b.get("id"))),
-                        on_change=self._row_change,
-                        on_remove=self._row_remove,
-                        on_ref_click=self._row_ref_click)
-                    self._groups_lay.addWidget(row)
-
-        # grounded chains
-        self._clear_layout(self._chains_lay)
-        for ch in conclusion_evidence_chains(self._inv):
-            if not ch.get("grounded"):
-                continue
-            parts = " · ".join(
-                f"{BOOKMARK_TYPE_LABELS.get(e['type'], e['type'])}: {e['title']}"
-                for e in ch.get("evidence", []))
-            lab = QLabel(f"<b>{ch['title']}</b> ← {parts}")
-            lab.setWordWrap(True)
-            lab.setStyleSheet("color:palette(mid);font-size:11px;")
-            self._chains_lay.addWidget(lab)
-
-        # links
-        self._links_host.setVisible(len(bms) >= 2)
-        for cb in (self._link_from, self._link_to):
-            cb.blockSignals(True)
-            cb.clear()
-            cb.addItem("from…" if cb is self._link_from else "to…", "")
-            for b in bms:
-                cb.addItem(
-                    f"{BOOKMARK_TYPE_LABELS.get(b.get('type'), b.get('type'))}: {b.get('title')}",
-                    b.get("id"))
-            cb.blockSignals(False)
-        self._link_list.clear()
-        for link in self._inv.get("links", []):
-            it = QListWidgetItem(
-                f"{self._bm_label(str(link['from']))}  —{link['relation']}→  "
-                f"{self._bm_label(str(link['to']))}")
-            it.setData(Qt.ItemDataRole.UserRole, (link["from"], link["to"]))
-            it.setToolTip("Double-click to remove link")
-            self._link_list.addItem(it)
-
-        # questions
-        self._q_list.clear()
-        for q in self._inv.get("unresolved_questions", []):
-            it = QListWidgetItem(q)
-            it.setToolTip("Double-click to remove question")
-            self._q_list.addItem(it)
-
-        hs = notebook_history_state(self._history)
-        self._undo_btn.setEnabled(bool(hs.get("can_undo")))
-        self._redo_btn.setEnabled(bool(hs.get("can_redo")))
-        self._count_lbl.setText(f"{len(bms)} bookmark(s)")
-        self._building = False
-
-    # ---- edit actions ----
-    def _on_title_changed(self) -> None:
-        if self._building:
-            return
-        txt = self._title_edit.text().strip()
-        if txt != (self._inv.get("title") or ""):
-            self._commit(load_investigation({**self._inv, "title": txt}))
-
-    def _on_conclusion_changed(self) -> None:
-        if self._building:
-            return
-        txt = self._concl.toPlainText().strip()
-        if txt != (self._inv.get("conclusion") or ""):
-            self._commit(set_conclusion(self._inv, txt))
-
-    def _add_bookmark(self) -> None:
-        title = self._new_title.text().strip()
-        if not title:
-            return
-        refs = []
-        if self._attach_range_cb.isChecked() and self._cursor_range:
-            lo, hi = self._cursor_range
-            refs.append({"kind": "range", "range": {"start": int(lo), "end": int(hi)}})
-        rid = self._finding_cb.currentData()
-        if rid:
-            refs.append({"kind": "finding", "rule_id": str(rid)})
-        self._commit(add_bookmark(
-            self._inv, type=self._type_cb.currentData(), title=title,
-            note=self._new_note.toPlainText(), refs=refs))
-        self._new_title.clear()
-        self._new_note.setPlainText("")
-        self._attach_range_cb.setChecked(False)
-        self._finding_cb.setCurrentIndex(0)
-
-    def _row_change(self, bid: str, changes: dict) -> None:
-        if self._building:
-            return
-        b = next((x for x in self._inv.get("bookmarks", []) if str(x["id"]) == bid), None)
-        if b is None:
-            return
-        if all(str(b.get(k) or "") == str(v or "") for k, v in changes.items()):
-            return
-        self._commit(update_bookmark(self._inv, bid, **changes))
-
-    def _row_remove(self, bid: str) -> None:
-        self._commit(remove_bookmark(self._inv, bid))
-
-    def _row_ref_click(self, ref: dict) -> None:
-        rng = ref.get("range")
-        if isinstance(rng, dict) and callable(self._on_ref_jump):
-            self._on_ref_jump(int(rng["start"]), int(rng["end"]))
-
-    def _add_link(self) -> None:
-        a = self._link_from.currentData()
-        b = self._link_to.currentData()
-        if not a or not b or a == b:
-            return
-        self._commit(link_bookmarks(self._inv, a, b, self._link_rel.currentData()))
-
-    def _remove_link_item(self, item: QListWidgetItem) -> None:
-        pair = item.data(Qt.ItemDataRole.UserRole)
-        if pair:
-            self._commit(unlink_bookmarks(self._inv, pair[0], pair[1]))
-
-    def _add_question(self) -> None:
-        q = self._q_edit.text().strip()
-        if q:
-            self._commit(add_unresolved_question(self._inv, q))
-            self._q_edit.clear()
-
-    def _remove_question(self, item: QListWidgetItem) -> None:
-        if item is not None:
-            self._commit(remove_unresolved_question(self._inv, item.text()))
-
     def _undo(self) -> None:
         self._restore_snapshot(notebook_undo(self._history))
 
     def _redo(self) -> None:
         self._restore_snapshot(notebook_redo(self._history))
-
-    def _scaffold_from_findings(self) -> None:
-        rng = None
-        if self._cursor_range:
-            lo, hi = self._cursor_range
-            rng = {"start": int(lo), "end": int(hi)}
-        before = len(self._inv.get("bookmarks") or [])
-        nxt = scaffold_investigation_from_findings(
-            self._inv, findings=self._findings, cursor_range=rng)
-        added = len(nxt.get("bookmarks") or []) - before
-        if added <= 0:
-            self._status(
-                "Nothing new to scaffold — every finding is already in the notebook.")
-            return
-        self._commit(nxt)
-        self._status(
-            f"Scaffolded {added} bookmark{'' if added == 1 else 's'} from findings")
 
     def _emit_evidence_package(self) -> None:
         if not callable(self._on_evidence_package):
@@ -2940,7 +4033,7 @@ class _InvestigationNotebookDialog(QDialog):
             self._on_evidence_package(str(q).strip())
 
     def _import_json(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        path, _f = QFileDialog.getOpenFileName(
             self, "Import investigation", "", "JSON (*.json);;All files (*)")
         if not path:
             return
@@ -2952,7 +4045,7 @@ class _InvestigationNotebookDialog(QDialog):
 
     def _export_json(self) -> None:
         base = (self._trace_name or "investigation").rsplit(".btf", 1)[0] or "investigation"
-        path, _ = QFileDialog.getSaveFileName(
+        path, _f = QFileDialog.getSaveFileName(
             self, "Export investigation", f"{base}-investigation.json",
             "JSON (*.json);;All files (*)")
         if not path:
@@ -2962,6 +4055,235 @@ class _InvestigationNotebookDialog(QDialog):
                 fh.write(dump_investigation(self._inv))
         except OSError as exc:
             QMessageBox.warning(self, "Export investigation", f"Could not export:\n{exc}")
+
+
+def _dim_text_color() -> str:
+    """A muted/secondary text color, blended halfway between the app's
+    current window-text and window-background colors.
+
+    Not ``palette(mid)`` — ``QPalette::Mid`` is a bevel/divider shading role
+    the app's theme setup (``MainWindow._apply_theme``) never assigns a
+    value to, so it falls back to a Qt-computed default that can land very
+    close to the window background (near-invisible "dim" text, reported
+    live in dark theme). This blend is always readable against the actual
+    background because it is derived from it, in either theme.
+    """
+    app = QApplication.instance()
+    pal = app.palette() if app is not None else QPalette()
+    fg = pal.color(QPalette.ColorRole.WindowText)
+    bg = pal.color(QPalette.ColorRole.Window)
+    r = (fg.red() + bg.red()) // 2
+    g = (fg.green() + bg.green()) // 2
+    b = (fg.blue() + bg.blue()) // 2
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _evidence_ref_list(ids, label_fn) -> QLabel:
+    if not ids:
+        lbl = QLabel("None linked yet")
+        lbl.setObjectName("nb_hint")
+        return lbl
+    lbl = QLabel(" · ".join(label_fn(i) for i in ids))
+    lbl.setTextFormat(Qt.TextFormat.PlainText)
+    lbl.setWordWrap(True)
+    return lbl
+
+
+class _NotebookProposalDialog(QDialog):
+    """§10 — review an AI proposal before it changes the Notebook.
+
+    Mirror of the web ``NotebookProposalDialog.vue``: a compact diff grouped by
+    Notebook section, per-op accept checkboxes, an extra confirm checkbox for
+    ``needs_confirmation`` ops (remove evidence / replace a conclusion / close
+    the investigation), and ``Accept selected`` / ``Accept all`` / ``Reject``.
+    Nothing is applied here — ``on_apply(inv, applied_count)`` gets the result of
+    :func:`apply_proposal` for the caller to commit as one undo step.
+    """
+
+    def __init__(self, parent=None, *, investigation, proposal,
+                 allow_other_trace=False, on_apply=None):
+        super().__init__(parent)
+        self.setWindowTitle("AI proposal — review")
+        self.setModal(True)
+        self.resize(560, 620)
+        self._inv = load_investigation(investigation)
+        self._on_apply = on_apply
+        self._validated = validate_proposal(
+            self._inv, proposal, allow_other_trace=bool(allow_other_trace))
+        self._diff = proposal_diff(self._inv, self._validated)
+        self._accept: dict = {}
+        self._confirm: dict = {}
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 12, 14, 12)
+        root.setSpacing(10)
+        root.addWidget(QLabel(
+            "<b>AI proposal — review before it changes the Notebook</b>"))
+
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 6, 0)
+        bl.setSpacing(12)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(body)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        root.addWidget(scroll, 1)
+
+        if not self._validated.get("ok"):
+            bl.addWidget(QLabel(
+                "Nothing in this proposal is applicable to the current "
+                "investigation."))
+
+        groups = [
+            ("hypotheses", "Hypotheses"), ("evidence", "Evidence"),
+            ("conclusion", "Conclusion"), ("status", "Status"),
+            ("links", "Links"),
+        ]
+        by_sec = self._diff.get("by_section", {})
+        for gid, glabel in groups:
+            ops = by_sec.get(gid) or []
+            if not ops:
+                continue
+            head = QLabel(f"<b>{glabel}</b>")
+            bl.addWidget(head)
+            for op in ops:
+                bl.addWidget(self._op_row(op))
+
+        rejected = self._diff.get("rejected") or []
+        if rejected:
+            bl.addWidget(QLabel(
+                f"<b style='color:#E0A030'>Rejected ({len(rejected)}) — not "
+                f"shown as actionable</b>"))
+            for op in rejected:
+                r = QLabel(f"{self._op_summary(op)} — {op.get('reason') or ''}")
+                r.setWordWrap(True)
+                r.setStyleSheet("color:palette(mid);font-size:11px;")
+                bl.addWidget(r)
+
+        model = self._validated.get("model") or {}
+        if model.get("model") or model.get("provider"):
+            m = QLabel(
+                f"Proposed by {model.get('provider') or 'AI'}"
+                + (f" · {model['model']}" if model.get("model") else "")
+                + ". Accepted AI cards are stored with this provenance; API "
+                "keys and prompts are never stored.")
+            m.setWordWrap(True)
+            m.setStyleSheet("color:palette(mid);font-size:10px;")
+            bl.addWidget(m)
+        bl.addStretch(1)
+
+        foot = QHBoxLayout()
+        rej = QPushButton("Reject")
+        rej.clicked.connect(self.reject)
+        foot.addWidget(rej)
+        foot.addStretch(1)
+        self._accept_sel_btn = QPushButton("Accept selected")
+        self._accept_sel_btn.clicked.connect(lambda: self._apply(all_ops=False))
+        self._accept_all_btn = QPushButton("Accept all")
+        self._accept_all_btn.setDefault(True)
+        self._accept_all_btn.setEnabled(bool(self._validated.get("ok")))
+        self._accept_all_btn.clicked.connect(lambda: self._apply(all_ops=True))
+        foot.addWidget(self._accept_sel_btn)
+        foot.addWidget(self._accept_all_btn)
+        root.addLayout(foot)
+        self._sync_accept_sel()
+
+    def _op_row(self, op: dict) -> QWidget:
+        i = int(op.get("index", -1))
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(8)
+        cb = QCheckBox()
+        needs = op.get("status") == "needs_confirmation"
+        cb.setChecked(op.get("status") == "ok")
+        self._accept[i] = cb.isChecked()
+        cb.stateChanged.connect(
+            lambda _s, k=i, c=cb: (self._accept.__setitem__(k, c.isChecked()),
+                                   self._sync_accept_sel()))
+        lay.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        line = QLabel(self._op_summary(op))
+        line.setWordWrap(True)
+        col.addWidget(line)
+        if needs:
+            conf = QCheckBox(f"Confirm: {op.get('reason') or ''}")
+            conf.setStyleSheet("color:#E0A030;font-size:11px;")
+            self._confirm[i] = False
+            conf.stateChanged.connect(
+                lambda _s, k=i, c=conf, ac=cb: (
+                    self._confirm.__setitem__(k, c.isChecked()),
+                    c.isChecked() and (ac.setChecked(True)),
+                    self._sync_accept_sel()))
+            col.addWidget(conf)
+        elif op.get("reason"):
+            n = QLabel(str(op.get("reason")))
+            n.setStyleSheet("color:palette(mid);font-size:11px;")
+            col.addWidget(n)
+        lay.addLayout(col, 1)
+        return w
+
+    def _bm_title(self, bid) -> str:
+        for b in self._inv.get("bookmarks", []):
+            if str(b.get("id")) == str(bid):
+                return str(b.get("title") or bid)
+        return str(bid)
+
+    def _op_summary(self, op: dict) -> str:
+        kind = op.get("op")
+        role = str(op.get("role") or op.get("type") or "")
+        if kind == "add":
+            return (f"Add {BOOKMARK_TYPE_LABELS.get(role, role or 'evidence')}: "
+                    f"\"{op.get('title') or '(untitled)'}\"")
+        if kind == "update":
+            if "conclusion" in (op.get("changes") or {}):
+                return "Replace the conclusion text"
+            return f"Edit explanation of \"{self._bm_title(op.get('bookmark_id'))}\""
+        if kind == "link":
+            return (f"Link \"{self._bm_title(op.get('from'))}\" —"
+                    f"{op.get('relation') or 'relates'}→ "
+                    f"\"{self._bm_title(op.get('to'))}\"")
+        if kind == "change_status":
+            s = op.get("status_value") or op.get("status")
+            return f"Set status to {NOTEBOOK_STATUS_LABELS.get(s, s)}"
+        if kind == "remove":
+            return f"Remove \"{self._bm_title(op.get('bookmark_id'))}\""
+        return str(kind or "operation")
+
+    def _applicable_selected(self) -> list:
+        out = []
+        for op in self._validated.get("operations") or []:
+            i = int(op.get("index", -1))
+            if not self._accept.get(i):
+                continue
+            if op.get("status") == "ok":
+                out.append(i)
+            elif op.get("status") == "needs_confirmation" and self._confirm.get(i):
+                out.append(i)
+        return out
+
+    def _sync_accept_sel(self) -> None:
+        n = len(self._applicable_selected())
+        self._accept_sel_btn.setText(f"Accept selected ({n})")
+        self._accept_sel_btn.setEnabled(n > 0)
+
+    def _apply(self, *, all_ops: bool) -> None:
+        confirmed = [
+            int(op.get("index", -1))
+            for op in (self._validated.get("operations") or [])
+            if op.get("status") == "needs_confirmation" and (
+                all_ops or self._confirm.get(int(op.get("index", -1))))
+        ]
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        inv, applied, _skipped = apply_proposal(
+            self._inv, self._validated,
+            accept_indices=None if all_ops else self._applicable_selected(),
+            accept_all=all_ops, confirmed_indices=confirmed, now=now)
+        if callable(self._on_apply):
+            self._on_apply(inv, list(applied))
+        self.accept()
 
 
 # Target labels + hints — byte-for-byte parity with the web dialog
@@ -6237,6 +7559,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          border:1px solid {c['sep']}; border-radius:8px; padding:5px; }}
             QMenu::item {{ padding:5px 12px; border-radius:5px; }}
             QMenu::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
+            /* QMenu's own `color:{{c['text']}}` above is a flat override that
+               otherwise wins over Qt's normal palette-driven disabled-state
+               dimming, so a disabled action (e.g. "Current measurement" with
+               no cursor range) renders in the same color as an enabled one —
+               it can't be clicked but nothing shows that. Needs its own rule. */
+            QMenu::item:disabled {{ color:{c['tb_disabled']}; }}
             QMenu::separator {{ height:1px; background:{c['sep']}; margin:5px 8px; }}
             QToolBar  {{ background:{c['mid']}; color:{c['text']}; border:none; spacing:4px;
                          font-size:{_ui_fs}; }}
@@ -11852,6 +13180,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             except RuntimeError:
                 self._notebook_dlg = None
         findings = self._stats_panel.build_analysis_findings()[0]
+        _n_traces = sum(1 for t in self._tabs if getattr(t, "trace", None))
         dlg = _InvestigationNotebookDialog(
             self,
             investigation=tab._investigation,
@@ -11862,10 +13191,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 int(ns), self._trace.time_scale, decimals=self._time_decimals_val),
             trace=self._trace,
             trace_name=os.path.basename(tab.path or ""),
+            ai_enabled=self._ai_feature_enabled(),
+            has_second_trace=_n_traces > 1,
+            ai_panel=getattr(self, "_ai_panel", None),
+            ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE),
             on_change=self._on_investigation_changed,
             on_status=lambda msg: self.statusBar().showMessage(msg, 3000),
             on_ref_jump=self._notebook_jump_to_range,
+            on_open_stats=self._ai_open_stats_section,
             on_evidence_package=self._notebook_evidence_package,
+            on_collaborate=self._notebook_collaborate,
+            on_restore_scope=self._notebook_restore_evidence_scope,
+            on_undo_restore_scope=self._notebook_undo_scope_restore,
         )
         self._notebook_dlg = dlg
 
@@ -11887,6 +13224,126 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view = getattr(self, "_view", None)
         if view is not None and hasattr(view, "scroll_to_ns"):
             view.scroll_to_ns(int(lo))
+
+    def _notebook_restore_evidence_scope(self, lo: int, hi: int) -> None:
+        """§P1 — the ONE Notebook action that changes Scope (confirmed in the
+        dialog first). Captures the prior cursor/scope state so it is undoable."""
+        view = getattr(self, "_view", None)
+        panel = getattr(self, "_stats_panel", None)
+        if view is None:
+            return
+        self._scope_restore_undo = {
+            "cursors": list(view._scene.cursor_times()),
+            "scope_to_cursors": bool(getattr(panel, "_scope_to_cursors", False)),
+        }
+        self._on_explore_range({"lo": int(lo), "hi": int(hi)})
+
+    def _notebook_undo_scope_restore(self) -> None:
+        prev = getattr(self, "_scope_restore_undo", None)
+        if not prev:
+            return
+        view = getattr(self, "_view", None)
+        panel = getattr(self, "_stats_panel", None)
+        if view is None:
+            return
+        view.begin_programmatic_viewport()
+        try:
+            view._scene.clear_cursors()
+            for t in prev.get("cursors") or []:
+                view._scene.add_cursor(int(t))
+            view.cursors_changed.emit(view._scene.cursor_times())
+        finally:
+            view.end_programmatic_viewport()
+        if panel is not None:
+            panel._scope_to_cursors = bool(prev.get("scope_to_cursors"))
+            if getattr(panel, "_scope_cb", None) is not None:
+                panel._scope_cb.setChecked(bool(prev.get("scope_to_cursors")))
+            panel.set_cursor_times(view._scene.cursor_times(), refresh_stats=True)
+        self._scope_restore_undo = None
+
+    def _notebook_collaborate(
+        self, action_id: str, context: dict, source_step: str = "",
+    ) -> None:
+        """§9 — one Collaborate-with-AI entry point: open the AI Assistant with
+        a compact Notebook context banner and the focused action's prompt. No
+        chat history / other trace is sent; nothing writes to the Notebook
+        until the user accepts a reviewed proposal (§10). ``source_step`` (new)
+        is the Notebook step that asked — the plain-text reply is routed back
+        to that step's AI assistance card via ``set_last_ai_reply`` so it is
+        visible without switching to this (separate) panel."""
+        panel = getattr(self, "_ai_panel", None)
+        if panel is None or not self._ai_feature_enabled():
+            return
+        self._focus_ai_panel()
+        header = (context or {}).get("header") or collaborate_header(
+            self._active_tab._investigation)
+        digest = collaborate_digest(context or {})
+        if hasattr(panel, "set_notebook_collab"):
+            panel.set_notebook_collab(header, digest=digest)
+        if hasattr(panel, "set_notebook_proposal_sink"):
+            panel.set_notebook_proposal_sink(self._notebook_open_proposal)
+        if hasattr(panel, "set_notebook_reply_sink"):
+            panel.set_notebook_reply_sink(
+                lambda text, s=source_step: self._notebook_reply(s, text))
+        # The visible question is just the focused action; the readable
+        # investigation digest is appended for the model (no JSON).
+        action_prompt = (context or {}).get("prompt") or "Help with this investigation."
+        prompt = (f"{action_prompt}\n\n---\nInvestigation context "
+                  f"(this is exactly what is shared):\n\n{digest}")
+        if hasattr(panel, "ask"):
+            QTimer.singleShot(0, lambda p=prompt: panel.ask(p))
+        # Return focus to the Notebook so the user can act on the reply.
+        dlg = getattr(self, "_notebook_dlg", None)
+        if dlg is not None:
+            try:
+                dlg.raise_()
+                dlg.activateWindow()
+            except RuntimeError:
+                pass
+
+    def _notebook_reply(self, source_step: str, text: str) -> None:
+        """§9 fix — show the plain-text collaborate reply inline on the
+        Notebook step that asked for it, not only in the AI Assistant panel
+        this full-screen dialog covers."""
+        dlg = getattr(self, "_notebook_dlg", None)
+        if dlg is not None and hasattr(dlg, "set_last_ai_reply"):
+            try:
+                dlg.set_last_ai_reply(source_step, text)
+            except RuntimeError:
+                pass
+
+    def _notebook_open_proposal(self, proposal: dict) -> None:
+        """§10 — the AI answered a Notebook collaboration with a structured
+        proposal. Never applied automatically: open the review dialog."""
+        tab = self._active_tab
+        if tab is None or getattr(tab, "_investigation", None) is None:
+            return
+        _n_traces = sum(1 for t in self._tabs if getattr(t, "trace", None))
+
+        def _apply(inv: dict, applied: list) -> None:
+            if not applied:
+                self.statusBar().showMessage("No proposal changes applied.", 3000)
+                return
+            dlg = getattr(self, "_notebook_dlg", None)
+            if dlg is not None:
+                try:
+                    # One undo step (pushes history + fires _on_investigation_changed).
+                    dlg.apply_proposal_result(inv)
+                    tab._notebook_history = dlg.history()
+                except RuntimeError:
+                    dlg = None
+            if dlg is None:
+                self._on_investigation_changed(load_investigation(inv))
+                tab._notebook_history = push_notebook_state(
+                    tab._notebook_history, tab._investigation)
+            self.statusBar().showMessage(
+                f"Applied {len(applied)} AI proposal change"
+                f"{'' if len(applied) == 1 else 's'}", 4000)
+
+        rev = _NotebookProposalDialog(
+            self, investigation=tab._investigation, proposal=proposal,
+            allow_other_trace=_n_traces > 1, on_apply=_apply)
+        rev.exec()
 
     def _notebook_evidence_package(self, question: str) -> None:
         """Notebook 'Evidence pack…' → build + save a compact AI evidence

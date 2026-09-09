@@ -508,6 +508,58 @@ def remove_bookmark(inv: Optional[Dict[str, Any]], bookmark_id: str) -> Dict[str
     return out
 
 
+def _bookmark_sort_key(b: Dict[str, Any]):
+    try:
+        seq = int(b.get("seq") or 0)
+    except (TypeError, ValueError):
+        seq = 0
+    return (seq, str(b.get("id")))
+
+
+def move_bookmark(
+    inv: Optional[Dict[str, Any]],
+    bookmark_id: str,
+    delta: int,
+    *,
+    within: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Reorder one bookmark by ``delta`` (±1) among its siblings.
+
+    ``within`` restricts the sibling group to those bookmark types (the Evidence
+    section passes :data:`EVIDENCE_BOOKMARK_TYPES` so ↑/↓ steps over evidence
+    cards only, never other bookmark kinds). Ids, refs and evidence cards are
+    preserved verbatim — only ``seq`` (the canonical order key that
+    :func:`load_investigation` sorts by) is swapped, and the list is re-sorted
+    to match so the change survives a save/reload. A no-op returns an equal dict.
+    """
+    out = _clone(inv)
+    bid = str(bookmark_id or "").strip()
+    bms = out["bookmarks"]
+    if within:
+        wset = {str(t) for t in within}
+        sibs = [b for b in bms if str(b.get("type")) in wset]
+    else:
+        sibs = list(bms)
+    sibs.sort(key=_bookmark_sort_key)
+    pos = next((k for k, b in enumerate(sibs) if str(b.get("id")) == bid), None)
+    if pos is None:
+        return out
+    step = 1 if int(delta) > 0 else -1 if int(delta) < 0 else 0
+    npos = pos + step
+    if step == 0 or npos < 0 or npos >= len(sibs):
+        return out
+    a, b = sibs[pos], sibs[npos]
+    try:
+        sa, sb = int(a.get("seq") or 0), int(b.get("seq") or 0)
+    except (TypeError, ValueError):
+        sa, sb = 0, 0
+    if sa == sb:
+        sb = sa + step
+    a["seq"], b["seq"] = sb, sa
+    bms.sort(key=_bookmark_sort_key)
+    return out
+
+
 def link_bookmarks(
     inv: Optional[Dict[str, Any]],
     from_id: str,
@@ -720,6 +772,46 @@ def evidence_nav_targets(bookmark: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+def evidence_scope_restore_plan(
+    card: Optional[Dict[str, Any]],
+    *,
+    current_scope: Optional[Dict[str, int]] = None,
+    fmt: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
+    """If an evidence card was measured under a scope that differs from the
+    current one, describe restoring it — a *separate*, previewable, cancelable,
+    undoable action (never folded into Jump to evidence / Show Evidence, which
+    stay navigation-only).
+
+    Returns ``None`` when the card has no stored scope or it already matches the
+    current scope; otherwise ``{start, end, summary, changes:[str, …]}`` where
+    ``changes`` is the exact list of things the action will do, for the confirm
+    preview.
+    """
+    if not isinstance(card, dict):
+        return None
+    sc = card.get("scope")
+    if not (isinstance(sc, dict)
+            and sc.get("start") is not None and sc.get("end") is not None):
+        return None
+    lo, hi = int(sc["start"]), int(sc["end"])
+    cur = current_scope if isinstance(current_scope, dict) else None
+    if cur and cur.get("start") is not None and cur.get("end") is not None:
+        if int(cur["start"]) == lo and int(cur["end"]) == hi:
+            return None
+    _f = fmt if callable(fmt) else (lambda v: str(int(v)))
+    return {
+        "start": lo,
+        "end": hi,
+        "summary": f"Evidence was measured over {_f(lo)} – {_f(hi)}.",
+        "changes": [
+            f"Place C1–C2 at {_f(lo)} – {_f(hi)}",
+            "Zoom the timeline to that window",
+            "Limit Statistics to the cursor range",
+        ],
+    }
+
+
 def investigation_sections(
     inv: Optional[Dict[str, Any]],
     *,
@@ -886,6 +978,22 @@ def notebook_redo(history: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+def notebook_goto(history: Optional[Dict[str, Any]], index: int) -> Dict[str, Any]:
+    """Jump the undo cursor to an absolute snapshot ``index`` (clamped).
+
+    Powers the Notebook's "restore from history" control — the user picks a
+    prior snapshot instead of pressing Undo repeatedly. Never truncates the
+    stack, so a later edit still branches from wherever the cursor lands.
+    """
+    out = dict(history or empty_notebook_history())
+    stack = out.get("stack") or []
+    if not stack:
+        out["index"] = -1
+        return out
+    out["index"] = max(0, min(len(stack) - 1, int(index)))
+    return out
+
+
 def notebook_history_state(history: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out = dict(history or empty_notebook_history())
     stack = list(out.get("stack") or [])
@@ -895,6 +1003,7 @@ def notebook_history_state(history: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "can_redo": 0 <= idx < len(stack) - 1,
         "current": dict(stack[idx]) if 0 <= idx < len(stack) else None,
         "count": len(stack),
+        "index": idx,
     }
 
 
@@ -1223,6 +1332,34 @@ def investigation_from_case(
 
 
 _SEV_RANK = {"error": 0, "warning": 1, "info": 2}
+
+
+def top_findings_for_start(
+    findings: Optional[Sequence[Dict[str, Any]]],
+    limit: int = 3,
+) -> List[Dict[str, Any]]:
+    """Top *limit* findings for the Question step's "Start from a finding"
+    picker — dedup by rule_id, severity-ranked, excludes the "no findings"
+    info sentinel, returns original finding objects unreshaped. Lockstep with
+    ``web/src/utils/investigationNotebook.js``'s ``topFindingsForStart``.
+    """
+    seen = set()
+
+    def _is_empty_sentinel(f: Dict[str, Any]) -> bool:
+        return (str(f.get("severity")) == "info"
+                and "no findings" in str(f.get("title") or "").lower())
+
+    rows = []
+    for f in findings or []:
+        if not isinstance(f, dict) or _is_empty_sentinel(f):
+            continue
+        rule_id = str(f.get("rule_id") or f.get("ruleId") or f.get("id") or "").strip()
+        if not rule_id or rule_id in seen:
+            continue
+        seen.add(rule_id)
+        rows.append(f)
+    rows.sort(key=lambda f: _SEV_RANK.get(str(f.get("severity")), 3))
+    return rows[:max(0, int(limit or 0))]
 
 
 def scaffold_investigation_from_findings(

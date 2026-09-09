@@ -2528,7 +2528,7 @@ export function appendMigrationBurstAnomaly(findings, burstRows, { rateThreshold
       id: 'migration_burst_anomaly',
       severity: 'warning',
       title: 'Anomaly: migration burst',
-      text: `Migration rate far above thrash heuristic: ${bursts.slice(0, 5).join('; ')}. Check Migration Heatmap for a short thrash window.`,
+      text: `Migration rate far above thrash heuristic: ${bursts.slice(0, 5).join('; ')}. Check the Migration & Corridor Inspector for a short thrash window.`,
       evidence: [],
     })
   }

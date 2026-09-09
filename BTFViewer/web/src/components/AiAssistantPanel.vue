@@ -57,6 +57,57 @@
     </div>
 
     <div
+      v-if="notebookCollab && notebookCollab.header"
+      class="ai-nb-collab"
+      data-testid="ai-notebook-collab"
+    >
+      <div class="ai-nb-collab-row">
+        <span class="ai-nb-collab-kicker">Collaborating on</span>
+        <span class="ai-nb-collab-title">{{ notebookCollab.header.investigation_title }}</span>
+        <button
+          type="button"
+          class="ai-nb-collab-x"
+          title="Stop sending Notebook context with new questions"
+          aria-label="Stop collaborating"
+          @click="emit('clear-notebook-collab')"
+        >
+          ✕
+        </button>
+      </div>
+      <div class="ai-nb-collab-chips">
+        <span class="ai-nb-chip">{{ notebookCollab.header.status_label }}</span>
+        <span
+          v-if="notebookCollab.header.trace"
+          class="ai-nb-chip"
+        >{{ notebookCollab.header.trace }}</span>
+        <span class="ai-nb-chip">Scope: {{ notebookCollab.header.scope }}</span>
+        <span class="ai-nb-chip">
+          {{ notebookCollab.header.evidence_count }} evidence<template
+            v-if="notebookCollab.header.selected_count"
+          > · {{ notebookCollab.header.selected_count }} selected</template>
+        </span>
+        <span
+          v-if="notebookCollab.header.stale_warning"
+          class="ai-nb-chip warn"
+        >⚠ {{ notebookCollab.header.stale_warning }}</span>
+      </div>
+      <button
+        v-if="notebookCollab.digest"
+        type="button"
+        class="ai-nb-collab-disclose"
+        :aria-expanded="collabContextOpen"
+        @click="collabContextOpen = !collabContextOpen"
+      >
+        {{ collabContextOpen ? '▾' : '▸' }} What the AI receives
+      </button>
+      <div
+        v-if="collabContextOpen && notebookCollab.digest"
+        class="ai-nb-collab-digest ai-md"
+        v-html="collabDigestHtml"
+      />
+    </div>
+
+    <div
       v-if="langOpen"
       class="ai-lang-backdrop"
       @click.self="langOpen = false"
@@ -838,6 +889,7 @@ import {
   formatAiConversationMarkdown,
   formatAiConversationText,
   formatAiMessageHtml,
+  markdownToSafeHtml,
   askAiSelectionCanAsk,
   askAiSelectionMenuLabel,
 } from '../utils/aiMarkdown.js'
@@ -857,6 +909,8 @@ import { templateRefEl } from '../utils/templateRefEl.js'
 
 const props = defineProps({
   analysisContext: { type: Object, default: null },
+  /** §9 — compact Notebook context shown while collaborating; null otherwise. */
+  notebookCollab: { type: Object, default: null },
   showClearFilters: { type: Boolean, default: false },
   onClearFilters: { type: Function, default: null },
   aiEnabled: { type: Boolean, default: true },
@@ -884,7 +938,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   'openSettings', 'jump', 'range', 'highlight', 'open-stats', 'update:responseLanguage', 'statusMessage',
-  'sessionChange',
+  'sessionChange', 'clear-notebook-collab', 'notebook-proposal',
 ])
 
 const templates = AI_TEMPLATE_QUESTIONS
@@ -954,6 +1008,16 @@ const error = ref('')
 const status = ref('')
 const logRef = ref(null)
 const langOpen = ref(false)
+const collabContextOpen = ref(false)
+const collabDigestHtml = computed(() => {
+  const md = props.notebookCollab?.digest
+  if (!md) return ''
+  try {
+    return markdownToSafeHtml(md, { inlineSvg: false, zoomable: false, dark: props.darkMode })
+  } catch {
+    return ''
+  }
+})
 const moreOpen = ref(false)
 const moreBtnEl = ref(null)
 const moreMenuEl = ref(null)
@@ -2251,6 +2315,17 @@ async function ask(prompt) {
   await send()
 }
 
+// §9 — ask with a Notebook context that is sent to the model but NOT shown as
+// part of the visible user bubble (a person reads the tidy digest in the
+// collaboration banner instead of a wall of context).
+let pendingNotebookContext = ''
+async function askNotebook(prompt, contextText = '') {
+  pendingNotebookContext = String(contextText || '')
+  skipInterpretOnce = true
+  draft.value = String(prompt || '')
+  await send()
+}
+
 async function askTemplate(templateId, promptOverride = '') {
   const t = templates.find(x => x.id === templateId)
   const prompt = promptOverride || t?.prompt || ''
@@ -2426,6 +2501,30 @@ function completeFinalAssistantReply(text) {
   attachResponseValidation(source)
   pinEvidenceLogEntry()
   doneStatusForText(source)
+  maybeEmitNotebookProposal(source)
+}
+
+/** §10 — if the model answered a Notebook collaboration with a structured
+ *  proposal (`schema: "btf-viewer-nb-proposal/1"`), hand it to App for the
+ *  review dialog. Nothing is applied here. */
+function maybeEmitNotebookProposal(text) {
+  if (!props.notebookCollab) return
+  const raw = String(text || '')
+  const blocks = []
+  const fence = /```(?:json)?\s*([\s\S]*?)```/gi
+  let m
+  while ((m = fence.exec(raw))) blocks.push(m[1])
+  if (!blocks.length) blocks.push(raw)
+  for (const b of blocks) {
+    let obj
+    try { obj = JSON.parse(b.trim()) } catch { continue }
+    if (obj && typeof obj === 'object'
+        && String(obj.schema || '').startsWith('btf-viewer-nb-proposal/')
+        && Array.isArray(obj.operations)) {
+      emit('notebook-proposal', obj)
+      return
+    }
+  }
 }
 
 function snsFallbackReply() {
@@ -2697,13 +2796,19 @@ async function send(overrideQuery = null, overrideCtx = null) {
       template: activeTemplateId || '',
       summary: invSummary || '',
     }
+    // §9 — fold the Notebook context into the sent message only (never the bubble).
+    const nbContext = pendingNotebookContext
+    pendingNotebookContext = ''
+    const sentQuery = nbContext
+      ? `${sendQuery}\n\n---\nInvestigation context (this is exactly what is shared):\n\n${nbContext}`
+      : sendQuery
     const prior = chatMessages
     chatMessages = compactChatHistory([
       { role: 'system', content: buildAiSystemPrompt(props.responseLanguage, mode) },
       ...prior.filter(m => String(m.role || '') !== 'system'),
       {
         role: 'user',
-        content: buildAiUserMessage(sendQuery, {
+        content: buildAiUserMessage(sentQuery, {
           findingsText: compactFindingsText(
             ctx.findingsText || '', mode, ctx.findings || null, {
               excludeTitles: focusTitlesFromSummary(invSummary),
@@ -2802,6 +2907,7 @@ defineExpose({
   refreshLoadedTabs,
   refreshCoreAvailability,
   ask,
+  askNotebook,
   askTemplate,
   askCompare,
   askValidateExperiment,
@@ -2812,6 +2918,19 @@ defineExpose({
   restoreInvestigation,
   addFindingToInvestigationCase,
   getEvidencePayload: () => evidencePayload,
+  // Read-only bridge for the Notebook's per-step AssistancePanel (Idle/
+  // Preparing/Ready/Failed/Canceled) — there is exactly one shared AI
+  // request in flight app-wide (this component's own busy/error/status),
+  // not a per-step concurrent-request system.
+  requestStatus: () => ({ busy: busy.value, error: error.value, status: status.value }),
+  cancelRequest: () => stop(),
+  lastAssistantText: () => {
+    for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+      const m = messages.value[i]
+      if (m && m.role === 'assistant') return String(m.content || '')
+    }
+    return ''
+  },
 })
 </script>
 
@@ -2861,6 +2980,98 @@ defineExpose({
   flex-wrap: wrap;
   flex-shrink: 0;
 }
+.ai-nb-collab {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 11px;
+  margin: 0 0 6px;
+  border: 1px solid var(--app-border-soft, var(--border));
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-bg));
+}
+.ai-nb-collab-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.ai-nb-collab-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+.ai-nb-collab-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.ai-nb-collab-x {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.ai-nb-collab-x:hover { color: var(--fg); }
+.ai-nb-collab-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.ai-nb-chip {
+  font-size: 10.5px;
+  line-height: 1.6;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--app-border-soft, var(--border));
+  background: var(--panel-bg);
+  color: var(--fg-dim);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ai-nb-chip.warn {
+  color: var(--semantic-warning, #e67e22);
+  border-color: color-mix(in srgb, var(--semantic-warning, #e67e22) 45%, var(--border));
+  font-weight: 600;
+}
+.ai-nb-collab-disclose {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ai-nb-collab-digest {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--fg);
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--app-border-soft, var(--border));
+}
+.ai-nb-collab-digest :where(p, ul) { margin: 0 0 6px; }
+.ai-nb-collab-digest ul { padding-left: 18px; }
+.ai-nb-collab-digest li { margin: 1px 0; }
 .ai-lang-backdrop {
   position: fixed;
   inset: 0;

@@ -21,8 +21,10 @@ from btf_viewer_pkg.investigation_ai import (
     PROPOSAL_SCHEMA,
     apply_proposal,
     collaborate_context,
+    collaborate_digest,
     collaborate_header,
     nb_ai_action_reason,
+    parse_question_suggestion,
     proposal_diff,
     strip_model_secrets,
     validate_proposal,
@@ -41,12 +43,32 @@ def _inv():
 
 
 class CollaborateEntryPointTests(unittest.TestCase):
-    def test_six_focused_actions(self) -> None:
+    def test_seven_focused_actions(self) -> None:
+        # Six original + refine_question for the Question step. Lockstep with
+        # web/tests/investigationAi.test.js's "seven focused actions" test.
         self.assertEqual(
             [a[0] for a in NB_AI_ACTIONS],
             ["review_investigation", "suggest_next_check", "draft_hypotheses",
-             "draft_conclusion", "update_from_findings", "compare_trace"],
+             "draft_conclusion", "update_from_findings", "compare_trace",
+             "refine_question"],
         )
+
+    def test_refine_question_suggestion_parsing(self) -> None:
+        # Bypasses the proposal machinery entirely. Lockstep with web/tests/
+        # investigationAi.test.js's "refine_question suggestion parsing" block.
+        self.assertEqual(
+            parse_question_suggestion("Suggested question: Why does ControlTask stall?"),
+            "Why does ControlTask stall?")
+        self.assertEqual(
+            parse_question_suggestion("suggested question:  Why does it stall before dispatch?  "),
+            "Why does it stall before dispatch?")
+        self.assertEqual(
+            parse_question_suggestion('Suggested question: "Why does it stall?"'),
+            "Why does it stall?")
+        self.assertEqual(
+            parse_question_suggestion("Here is a general review of your investigation."), "")
+        self.assertEqual(parse_question_suggestion(""), "")
+        self.assertEqual(parse_question_suggestion(None), "")
 
     def test_disabled_when_ai_unavailable(self) -> None:
         self.assertEqual(
@@ -86,6 +108,19 @@ class CollaborateEntryPointTests(unittest.TestCase):
             _inv(), broken={"issues": [{"bookmark_id": "e1"}]},
         )
         self.assertIn("no longer resolve", hdr["stale_warning"])
+
+    def test_digest_is_readable_markdown_not_json(self) -> None:
+        ctx = collaborate_context(_inv(), action="review_investigation")
+        d = collaborate_digest(ctx)
+        # readable section headers, the evidence line, and no JSON punctuation soup
+        self.assertIn("**Question**", d)
+        self.assertIn("**Evidence (1)**", d)
+        self.assertIn("120 migrations", d)
+        self.assertIn("**Conclusion**", d)
+        self.assertNotIn("{", d)
+        self.assertNotIn('"bookmark_id"', d)
+        # empty / bad input is a harmless empty-ish string, never a throw
+        self.assertIsInstance(collaborate_digest(None), str)
 
 
 class ProposalValidationTests(unittest.TestCase):
@@ -231,6 +266,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for py_name, js_name in (
             ("def collaborate_context", "export function collaborateContext"),
             ("def collaborate_header", "export function collaborateHeader"),
+            ("def collaborate_digest", "export function collaborateDigest"),
             ("def nb_ai_action_reason", "export function nbAiActionReason"),
             ("def validate_proposal", "export function validateProposal"),
             ("def proposal_diff", "export function proposalDiff"),

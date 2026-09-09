@@ -31,12 +31,15 @@ from btf_viewer_pkg.investigation_notebook import (  # noqa: E402
     link_bookmarks,
     load_investigation,
     new_investigation,
+    notebook_goto,
     notebook_history_state,
     notebook_redo,
     notebook_undo,
+    move_bookmark,
     push_notebook_state,
     remove_bookmark,
     set_conclusion,
+    top_findings_for_start,
     trace_identity,
     update_bookmark,
 )
@@ -250,6 +253,57 @@ class UndoRedoTests(unittest.TestCase):
         h = push_notebook_state(h, load_investigation(dump_investigation(inv)))
         self.assertEqual(notebook_history_state(h)["count"], 1)
 
+    def test_goto_restores_an_absolute_snapshot(self):
+        inv = new_investigation()
+        h = push_notebook_state(empty_notebook_history(), inv)
+        h = push_notebook_state(h, set_conclusion(inv, "a"))
+        h = push_notebook_state(h, set_conclusion(inv, "b"))
+        h = notebook_goto(h, 0)
+        st = notebook_history_state(h)
+        self.assertEqual(st["index"], 0)
+        self.assertTrue(st["can_redo"])
+        self.assertFalse(st["can_undo"])
+        # out-of-range clamps, empty history is a no-op
+        self.assertEqual(notebook_history_state(notebook_goto(h, 99))["index"], 2)
+        self.assertEqual(notebook_goto(empty_notebook_history(), 3)["index"], -1)
+
+
+class MoveBookmarkTests(unittest.TestCase):
+    def _three_evidence(self):
+        inv = new_investigation()
+        inv = add_bookmark(inv, type=BM_HYPOTHESIS, title="h", bookmark_id="h")
+        inv = add_bookmark(inv, type=BM_SUPPORTING, title="e1", bookmark_id="e1")
+        inv = add_bookmark(inv, type=BM_OBSERVATION, title="e2", bookmark_id="e2")
+        inv = add_bookmark(inv, type=BM_SUPPORTING, title="e3", bookmark_id="e3")
+        return inv
+
+    def _order(self, inv, within=None):
+        want = set(within or [])
+        return [b["id"] for b in inv["bookmarks"] if not want or b["type"] in want]
+
+    _EV = ("observation", "supporting", "contradicting")
+
+    def test_moves_within_evidence_siblings_only(self):
+        inv = self._three_evidence()
+        nxt = move_bookmark(inv, "e3", -1, within=self._EV)
+        self.assertEqual(self._order(nxt, self._EV), ["e1", "e3", "e2"])
+        # the hypothesis never moves
+        self.assertEqual(nxt["bookmarks"][0]["id"], "h")
+
+    def test_move_survives_a_save_reload(self):
+        inv = move_bookmark(self._three_evidence(), "e3", -1, within=self._EV)
+        reloaded = load_investigation(dump_investigation(inv))
+        self.assertEqual(self._order(reloaded, self._EV), ["e1", "e3", "e2"])
+
+    def test_edge_and_unknown_are_noops(self):
+        inv = self._three_evidence()
+        # e1 is already first among evidence siblings → up is a no-op
+        self.assertEqual(
+            dump_investigation(move_bookmark(inv, "e1", -1, within=self._EV)),
+            dump_investigation(inv))
+        self.assertEqual(dump_investigation(move_bookmark(inv, "nope", 1)),
+                         dump_investigation(inv))
+
 
 class SerialisationTests(unittest.TestCase):
     def _rich(self):
@@ -357,6 +411,26 @@ class ScaffoldTests(unittest.TestCase):
         self.assertEqual(len(obs), 1)
 
 
+class TopFindingsForStartTests(unittest.TestCase):
+    # Lockstep with web/tests/investigationNotebook.test.js's topFindingsForStart tests.
+    _FINDINGS = ScaffoldTests._FINDINGS + [
+        {"id": "top_cpu_dup", "rule_id": "top_cpu", "severity": "error",
+         "title": "duplicate rule_id, should be skipped"},
+    ]
+
+    def test_dedups_sorts_by_severity_excludes_sentinel_respects_limit(self):
+        rows = top_findings_for_start(self._FINDINGS, limit=3)
+        self.assertEqual([r["rule_id"] for r in rows], ["wcet", "top_cpu"])
+
+    def test_limit(self):
+        rows = top_findings_for_start(self._FINDINGS, limit=1)
+        self.assertEqual(len(rows), 1)
+
+    def test_malformed_input(self):
+        self.assertEqual(top_findings_for_start(None), [])
+        self.assertEqual(top_findings_for_start([None, "not a dict", {}]), [])
+
+
 class HtmlSectionTests(unittest.TestCase):
     def _inv(self):
         inv = new_investigation(title="Runner stall", analysis_range={"start": 0, "end": 1000})
@@ -445,9 +519,14 @@ class ParityTests(unittest.TestCase):
             ("def apply_evidence_edit", "export function applyEvidenceEdit"),
             ("def update_evidence_explanation", "export function updateEvidenceExplanation"),
             ("def evidence_nav_targets", "export function evidenceNavTargets"),
+            ("def evidence_scope_restore_plan",
+             "export function evidenceScopeRestorePlan"),
             ("EVIDENCE_PROTECTED_FIELDS", "EVIDENCE_PROTECTED_FIELDS"),
             ("EV_SOURCE_AI", "EV_SOURCE_AI"),
             ("EV_KIND_MEASURED", "EV_KIND_MEASURED"),
+            # §7/§8 dialog — evidence reorder + restore-from-history.
+            ("def move_bookmark", "export function moveBookmark"),
+            ("def notebook_goto", "export function notebookGoto"),
         ):
             self.assertIn(py_name, py, py_name)
             self.assertIn(js_name, js, js_name)

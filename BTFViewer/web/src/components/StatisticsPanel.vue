@@ -4965,7 +4965,7 @@
           <button
             type="button"
             class="action-btn"
-            title="Open the Migration Heatmap focused on this core pair"
+            title="Open the Migration & Corridor Inspector focused on this core pair"
             @click="openPairHeatmap"
           >
             Open Heatmap
@@ -4973,7 +4973,7 @@
           <button
             type="button"
             class="action-btn"
-            title="Open the Migration Chord Diagram with this pair highlighted"
+            title="Open the Migration & Corridor Inspector with this pair highlighted"
             @click="openPairChord"
           >
             Open Chord

@@ -11,12 +11,14 @@ Lockstep with ``web/src/utils/investigationAi.js``.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .investigation_notebook import (
     BM_CONCLUSION,
     BM_HYPOTHESIS,
     EVIDENCE_BOOKMARK_TYPES,
+    EVIDENCE_KIND_LABELS,
     EV_AUTHOR_AI,
     EV_KIND_MEASURED,
     LINK_RELATIONS,
@@ -62,6 +64,10 @@ NB_AI_ACTIONS: Tuple[Tuple[str, str, str], ...] = (
      "Compare with the other open trace. Baseline A is Trace A, Candidate B is "
      "Trace B; verdicts describe Candidate B versus Baseline A. Use the current "
      "Compare Scope."),
+    ("refine_question", "Help refine question",
+     "Suggest one clearer, more specific rewording of this investigation "
+     "question. Return only the improved question text on its own line, "
+     'prefixed with "Suggested question: ". No JSON, no other operations.'),
 )
 _NB_AI_ACTION_IDS = frozenset(a[0] for a in NB_AI_ACTIONS)
 NB_AI_ACTION_LABELS = {a[0]: a[1] for a in NB_AI_ACTIONS}
@@ -86,6 +92,24 @@ def nb_ai_action_reason(
         if not secs["evidence"]["items"]:
             return "Add evidence before drafting a conclusion"
     return ""
+
+
+_SUGGESTED_QUESTION_RE = re.compile(r"Suggested question:\s*(.+)", re.IGNORECASE)
+
+
+def parse_question_suggestion(reply_text: Optional[str]) -> str:
+    """Extract the AI's suggested question from a ``refine_question`` reply.
+
+    Bypasses the proposal machinery entirely — a single scalar field (the
+    question text) doesn't need the operations/proposal review pipeline.
+    Returns ``''`` on any non-matching text; never invents from unstructured
+    prose. Lockstep with ``web/src/utils/investigationAi.js``'s
+    ``parseQuestionSuggestion``.
+    """
+    m = _SUGGESTED_QUESTION_RE.search(str(reply_text or ""))
+    if not m:
+        return ""
+    return m.group(1).strip().strip("\"'")
 
 
 def collaborate_header(
@@ -159,6 +183,54 @@ def collaborate_context(
             for f in (findings or []) if isinstance(f, dict)
         ][:20]
     return ctx
+
+
+def collaborate_digest(ctx: Optional[Dict[str, Any]]) -> str:
+    """Human-readable Markdown digest of a :func:`collaborate_context` payload —
+    what the AI actually receives, formatted for a person to skim (no JSON).
+    Used as the message context sent to the model and in the AI panel's
+    "what's sent" disclosure. Lockstep with ``collaborateDigest`` (web).
+    """
+    c = ctx if isinstance(ctx, dict) else {}
+    inv = c.get("investigation") or {}
+    by_id: Dict[str, List[Dict[str, Any]]] = {}
+    for s in inv.get("sections") or []:
+        by_id[s.get("id")] = s.get("items") or []
+    out: List[str] = []
+    first = (by_id.get("question") or [{}])[0] if by_id.get("question") else {}
+    out.append(f"**Question** — {first.get('text') or '_(untitled)_'}")
+    scope = [i.get("text") for i in (by_id.get("scope") or []) if i.get("text")]
+    if scope:
+        out.append("**Scope** — " + " · ".join(scope))
+
+    hyp = by_id.get("hypotheses") or []
+    if hyp:
+        out += ["", f"**Hypotheses ({len(hyp)})**"]
+        for h in hyp:
+            st = f"  _({h.get('status')})_" if h.get("status") else ""
+            out.append(f"- {h.get('text')}{st}")
+
+    ev = c.get("selected_evidence") or by_id.get("evidence") or []
+    if ev:
+        out += ["", f"**Evidence ({len(ev)})**"]
+        for e in ev:
+            kind = e.get("kind")
+            label = (EVIDENCE_KIND_LABELS.get(kind)
+                     if kind and kind != "note" else None) or EVIDENCE_KIND_LABELS[""]
+            note = str(e.get("note") or "").split("\n")[0].strip()
+            stale = "  ⚠ stale reference" if e.get("stale") else ""
+            out.append(f"- _[{label}]_ {e.get('text')}"
+                       + (f" — {note}" if note else "") + stale)
+
+    checks = [i.get("text") for i in (by_id.get("open_checks") or []) if i.get("text")]
+    if checks:
+        out += ["", f"**Open checks ({len(checks)})**"]
+        out += [f"- {t}" for t in checks]
+
+    verdict = [i.get("text") for i in (by_id.get("conclusion") or [])
+               if i.get("kind") == "verdict" and i.get("text")]
+    out += ["", "**Conclusion** — " + (" ".join(verdict) if verdict else "_none yet_")]
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------------------
