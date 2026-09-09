@@ -68570,13 +68570,15 @@ class _AnalysisFindingsDialog(QDialog):
             btn.setFont(ui_font)
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            # Segmented control, no accent fill — the old blue-tinted pills read
+            # as three unrelated toggles (web `.analysis-queue`).
             btn.setStyleSheet(
-                f"QPushButton {{ padding: 4px 10px; border-radius: 12px;"
+                f"QPushButton {{ padding: 4px 10px; border-radius: 8px;"
                 f" border: 1px solid {border}; color: {muted};"
                 f" background: transparent; font-size: {ui_fs}; }}"
                 "QPushButton:checked {"
-                f"  border: 1px solid #3498db; color: {ink};"
-                "  background: rgba(52, 152, 219, 0.18);"
+                f"  border: 1px solid {ink}; color: {ink};"
+                "  background: rgba(127, 127, 127, 0.16);"
                 "}"
                 f"QPushButton:hover:!checked {{ color: {ink}; }}"
             )
@@ -68657,10 +68659,10 @@ class _AnalysisFindingsDialog(QDialog):
             f" font-size: {ui_fs}; color: {ink}; }}"
             "QListWidget::item { padding: 2px 6px; border-radius: 5px; }"
             "QListWidget::item:hover:!selected {"
-            "  background: rgba(52, 152, 219, 0.12);"
+            "  background: rgba(127, 127, 127, 0.10);"
             "}"
             "QListWidget::item:selected {"
-            "  background: rgba(52, 152, 219, 0.28);"
+            "  background: rgba(52, 152, 219, 0.16);"
             "}"
         )
         self._list_w = list_w
@@ -69111,7 +69113,6 @@ class _AnalysisFindingsDialog(QDialog):
             self._list_w.addItem(empty)
             self._on_selection_changed()
             return
-        _acc = "52, 152, 219"   # desktop accent (matches list selection tint)
         select_row = -1         # row of the previously-selected finding, if any
         first_finding_row = -1  # row of the first real finding (web: items[0])
         for row in rows:
@@ -69119,13 +69120,14 @@ class _AnalysisFindingsDialog(QDialog):
                 cid = str(row.get("incident_id") or "")
                 collapsed = cid in self._collapsed_incidents
                 mark = "▸" if collapsed else "▾"
-                # Web `.analysis-incident-header`: accent-tinted rounded chip.
+                # Web `.analysis-incident-header`: neutral sunk row (no accent
+                # tint — the coloured slab outweighed the findings inside it).
                 hdr_w = QFrame()
                 hdr_w.setObjectName("analysisIncidentHeader")
                 hdr_w.setStyleSheet(
                     "QFrame#analysisIncidentHeader {"
-                    f" background: rgba({_acc}, 0.12);"
-                    f" border: 1px solid rgba({_acc}, 0.35);"
+                    " background: rgba(127, 127, 127, 0.10);"
+                    " border: 1px solid rgba(127, 127, 127, 0.28);"
                     " border-radius: 6px; }"
                     "QLabel { background: transparent; border: none; }")
                 hl = QHBoxLayout(hdr_w)
@@ -69160,33 +69162,50 @@ class _AnalysisFindingsDialog(QDialog):
             cid = self._id_cluster.get(fid) or self._title_cluster.get(title, "")
             prefix = f"[{cid}] " if cid else ""
             if sev == "error":
-                badge, color = SEMANTIC_GLYPHS["error"], err
+                badge, stripe = SEMANTIC_GLYPHS["error"], err
             elif sev == "warning":
-                badge, color = SEMANTIC_GLYPHS["warning"], warn
+                badge, stripe = SEMANTIC_GLYPHS["warning"], warn
             elif fid == "load_balance_ok":
-                badge, color = SEMANTIC_GLYPHS["improved"], ok_ink
+                badge, stripe = SEMANTIC_GLYPHS["improved"], ok_ink
             else:
-                badge, color = "○", ink
+                badge, stripe = "○", "transparent"
+            # Title stays in the normal ink; severity rides a 2px left edge
+            # stripe (web `.analysis-row::before`) instead of colouring the text.
+            # The "all clear" row keeps a calm green as positive reinforcement.
+            title_color = ok_ink if fid == "load_balance_ok" else ink
             # Compact index row: icon + [Ix] title on one elided line, faint
             # single-line meta below. Detail/evidence live in the right pane.
-            # Web `.analysis-list li.in-incident`: accent left bar + indent.
             in_incident = bool(row.get("incident_id"))
             row_w = QFrame()
-            if in_incident:
-                row_w.setObjectName("analysisInIncident")
-                row_w.setStyleSheet(
-                    "QFrame#analysisInIncident {"
-                    f" border-left: 3px solid rgba({_acc}, 0.6); }}"
-                    "QLabel { border: none; }")
-            vbox = QVBoxLayout(row_w)
-            vbox.setContentsMargins(18 if in_incident else 4, 4, 4, 4)
+            row_w.setObjectName("analysisRow")
+            row_w.setStyleSheet(
+                "QFrame#analysisRow { background: transparent; }"
+                "QLabel { border: none; background: transparent; }")
+            # Grouped rows indent under their incident header; no extra bar.
+            hrow = QHBoxLayout(row_w)
+            hrow.setContentsMargins(20 if in_incident else 6, 3, 4, 3)
+            hrow.setSpacing(7)
+            # Leading severity line — a real 2px strip (QSS `border-left` alone is
+            # unreliable on a plain QFrame). Transparent when info, so every
+            # title still aligns. Web `.analysis-row::before`.
+            sev_strip = QFrame()
+            sev_strip.setFixedWidth(2)
+            sev_strip.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+            sev_strip.setStyleSheet(
+                f"background: {stripe}; border: none; border-radius: 1px;")
+            hrow.addWidget(sev_strip)
+            _col = QWidget()
+            vbox = QVBoxLayout(_col)
+            vbox.setContentsMargins(0, 1, 0, 1)
             vbox.setSpacing(2)
+            hrow.addWidget(_col, 1)
             title_l = QLabel(f"{badge}  {prefix}{title}")
             title_l.setObjectName("analysisFindingTitle")
             title_l.setFont(ui_font)
             title_l.setTextFormat(Qt.TextFormat.PlainText)
             title_l.setStyleSheet(
-                f"color: {color}; font-weight: 600; font-size: {ui_fs};")
+                f"color: {title_color}; font-weight: 600; font-size: {ui_fs};")
             vbox.addWidget(title_l)
             n_lines = 1
             meta_bits = []
@@ -69229,8 +69248,6 @@ class _AnalysisFindingsDialog(QDialog):
     def _rebuild_detail(self) -> None:
         """Populate the right-hand pane for the selected finding (master/detail)."""
         muted = self._palette["muted"]
-        err = self._palette["err"]
-        warn = self._palette["warn"]
         ok_ink = self._palette["ok_ink"]
         ink = self._palette["ink"]
         f = self._selected_finding()
@@ -69246,10 +69263,10 @@ class _AnalysisFindingsDialog(QDialog):
             return
         self._detail_empty.setVisible(False)
         self._detail_actions.setVisible(True)
-        sev = f.get("severity", "info")
         fid = str(f.get("id") or "")
-        color = (err if sev == "error" else warn if sev == "warning"
-                 else ok_ink if fid == "load_balance_ok" else ink)
+        # Neutral ink for warning / critical (severity is the list-row stripe);
+        # the "all clear" finding keeps a calm green.
+        color = ok_ink if fid == "load_balance_ok" else ink
         title = str(f.get("observation") or f.get("title", "Finding")).strip() or "Finding"
         cid = self._id_cluster.get(fid) or self._title_cluster.get(title, "")
         self._detail_title.setText(f"{('[' + cid + ']  ') if cid else ''}{title}")

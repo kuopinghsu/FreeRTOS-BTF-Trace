@@ -841,33 +841,40 @@ function moreAction(kind) {
   font-weight: 700;
 }
 
+/* Segmented control on a sunk track — no accent fill (matches the app's
+   other pill groups; the old accent-tinted pills read as 3 separate toggles). */
 .analysis-queue {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 12px 0;
+  display: inline-flex;
+  gap: 2px;
+  margin: 8px 12px 0;
+  padding: 2px;
   flex: 0 0 auto;
+  align-self: flex-start;
+  background: var(--app-surface-2, var(--bg));
+  border: 1px solid var(--app-border-soft, var(--border));
+  border-radius: 9px;
 }
 
 .analysis-queue-btn {
-  border: 1px solid var(--border);
+  border: none;
   background: transparent;
   color: var(--fg-dim);
-  border-radius: 12px;
-  padding: 4px 10px;
+  border-radius: 7px;
+  padding: 4px 12px;
   font-size: 11px;
   cursor: pointer;
+  font-variant-numeric: tabular-nums;
 }
 
 .analysis-queue-btn.active {
   color: var(--fg);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: var(--panel-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
 .analysis-queue-btn:hover:not(.active) {
   color: var(--fg);
-  background: var(--tb-btn-hover);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 
 .analysis-filters {
@@ -937,8 +944,8 @@ function moreAction(kind) {
   margin: 8px 0 4px;
   padding: 6px 10px;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--app-surface-2, color-mix(in srgb, var(--fg) 5%, transparent));
+  border: 1px solid var(--app-border-soft, var(--border));
   color: var(--fg);
   font-weight: 600;
   font-size: 12px;
@@ -959,7 +966,7 @@ function moreAction(kind) {
 }
 .analysis-list li.in-incident {
   margin-left: 10px;
-  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-left: 2px solid var(--app-border-soft, var(--border));
 }
 .finding-check-next {
   font-size: 11px;
@@ -1026,13 +1033,35 @@ function moreAction(kind) {
   padding: 5px 8px;
 }
 
+/* Severity rides a 2px edge stripe, not the title colour — keeps list scanning
+   calm while still flagging critical / warning / ok rows. */
+.analysis-list li.analysis-row {
+  position: relative;
+  padding-left: 12px;
+}
+
+.analysis-list li.analysis-row::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+}
+
+.analysis-list li.analysis-row.sev-warning::before { background: var(--analysis-warn); }
+.analysis-list li.analysis-row.sev-error::before { background: var(--analysis-err); }
+.analysis-list li.analysis-row.sev-ok::before { background: var(--analysis-ok); }
+
 .analysis-list li.analysis-row:hover:not(.selected) {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
 
 .analysis-list li.selected {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--app-sel-bg, color-mix(in srgb, var(--accent) 12%, transparent));
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .analysis-list li.analysis-row .finding-title {
@@ -1050,9 +1079,8 @@ function moreAction(kind) {
   text-overflow: ellipsis;
 }
 
-.analysis-list .sev-warning .finding-title { color: var(--analysis-warn); }
-.analysis-list .sev-error .finding-title { color: var(--analysis-err); }
-.analysis-list .sev-ok .finding-title { color: var(--analysis-ok); }
+/* Row titles stay in the normal text colour; severity is the edge stripe above. */
+.analysis-list li.analysis-row .finding-title { color: var(--fg); }
 
 .analysis-empty {
   font-size: 13px;
@@ -1082,10 +1110,17 @@ function moreAction(kind) {
   font-weight: 700;
   font-size: 14px;
   color: var(--fg);
+  padding-left: 9px;
+  border-left: 2px solid var(--app-border-soft, var(--border));
 }
-.analysis-detail-title.sev-warning { color: var(--analysis-warn); }
-.analysis-detail-title.sev-error { color: var(--analysis-err); }
-.analysis-detail-title.sev-ok { color: var(--analysis-ok); }
+/* Warning / critical titles read in the normal colour — the edge stripe carries
+   severity. The "all clear" state keeps a calm green as positive reinforcement. */
+.analysis-detail-title.sev-warning { border-left-color: var(--analysis-warn); }
+.analysis-detail-title.sev-error { border-left-color: var(--analysis-err); }
+.analysis-detail-title.sev-ok {
+  border-left-color: var(--analysis-ok);
+  color: var(--analysis-ok);
+}
 
 .analysis-detail-body {
   line-height: 1.5;
@@ -1104,7 +1139,9 @@ function moreAction(kind) {
 .analysis-detail-checknext {
   font-size: 12px;
   line-height: 1.4;
-  color: color-mix(in srgb, var(--accent) 80%, var(--fg));
+  color: var(--fg);
+  padding-left: 10px;
+  border-left: 2px solid var(--app-border-soft, var(--border));
 }
 
 .analysis-detail-rule {
