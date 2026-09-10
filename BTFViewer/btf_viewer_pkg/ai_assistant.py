@@ -105,6 +105,7 @@ from .ai_investigation import (
     parse_btf_scope_href,
     linkify_next_check_lines,
 )
+from .investigation_ai import summarize_notebook_proposal_for_chat
 from .ai_case import (
     INVESTIGATION_MODE_LABELS,
     INVESTIGATION_MODES,
@@ -2854,6 +2855,9 @@ def _ai_message_body_html(
     """Message body without the role prefix; assistant replies render as Markdown."""
     body_text = (text or "").strip()
     if role in ("assistant", "evidence"):
+        # A Notebook proposal reply is machine JSON — show a readable summary,
+        # not a raw ```json block + btfnext link soup.
+        body_text = summarize_notebook_proposal_for_chat(body_text)
         return markdown_to_safe_html(
             body_text,
             as_img=as_img,
@@ -2959,25 +2963,37 @@ def _short_focus_label(name: Any) -> str:
     return f"{s[:26]}…" if len(s) > 28 else s
 
 
-def _tools_batch_collapsible(
-    tools: Sequence[Dict[str, Any]],
-    batch_id: str = "",
-) -> bool:
-    """Collapse finished read-only query/export/nav batches; keep Apply/fail visible."""
-    tools_list = [t for t in tools if isinstance(t, dict)]
-    if len(tools_list) < 2:
-        return False
-    if batch_id and any(
-        str(t.get("status") or "pending") == "pending" for t in tools_list
-    ):
-        return False
-    if any(str(t.get("status") or "") == "failed" for t in tools_list):
-        return False
-    if not tool_batch_auto_runs(tools_list):
-        return False
-    return all(
-        str(t.get("status") or "") in ("applied", "skipped", "done")
-        for t in tools_list
+def _tool_batch_summary(tools: Sequence[Dict[str, Any]], batch_id: str = "") -> str:
+    """One-line ``<summary>`` for a tool batch — how many tools + batch state.
+    Lockstep with web AiAssistantPanel.vue's ``toolBatchSummary``."""
+    tl = [t for t in tools if isinstance(t, dict)]
+    n = len(tl)
+    noun = f"{n} tool" if n == 1 else f"{n} tools"
+    if batch_id and any(str(t.get("status") or "pending") == "pending" for t in tl):
+        return f"{noun} — review, then Apply"
+    failed = sum(1 for t in tl if str(t.get("status") or "") == "failed")
+    if failed:
+        return f"{noun} · {failed} failed"
+    if any(str(t.get("status") or "") == "skipped" for t in tl):
+        return f"{noun} · skipped"
+    return f"{noun} · done"
+
+
+def _tool_params_text(args: Any) -> str:
+    """A tool call's arguments as a compact ``key=value, …`` line — lockstep
+    with web AiAssistantPanel.vue's ``toolParamsText``."""
+    a = args if isinstance(args, dict) else {}
+
+    def _fmt(v: Any) -> str:
+        if isinstance(v, (list, tuple)):
+            return "[" + ", ".join(_fmt(x) for x in v) + "]"
+        if isinstance(v, dict):
+            return json.dumps(v, separators=(",", ":"))
+        return str(v)
+
+    return ", ".join(
+        f"{k}={_fmt(v)}" for k, v in a.items()
+        if v is not None and v != ""
     )
 
 
@@ -2997,60 +3013,83 @@ def _tool_cards_html(
             status = str(t.get("status") or status)
             break
     st_color = "#6b7280" if light else "#8b98a8"
-    completed_n = 0
-    for t in tools:
-        if not isinstance(t, dict):
-            continue
+    tool_list = [t for t in tools if isinstance(t, dict)]
+    for t in tool_list:
         name = str(t.get("name") or "")
         args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
         label = html.escape(format_tool_action_label(name, args))
         st_raw = str(t.get("status") or status)
         st = html.escape(st_raw)
-        if st_raw in ("applied", "skipped", "done"):
-            completed_n += 1
         rows.append(
             f"<p>⚡ {label} <span style=\"color:{st_color}\">({st})</span></p>"
         )
-        detail = ""
+        params = _tool_params_text(args)
+        if params:
+            rows.append(
+                f"<p style=\"margin:2px 0 4px 1.4em;color:{st_color};"
+                f"font-size:x-small;\">{html.escape(params)}</p>"
+            )
         if st_raw == "failed":
             detail = str(t.get("result") or t.get("error") or "").strip()
-        if detail:
-            rows.append(
-                f"<p style=\"margin:2px 0 6px 1.2em;color:{st_color};"
-                f"font-size:x-small;\">{html.escape(detail)}</p>"
-            )
+            if detail:
+                rows.append(
+                    f"<p style=\"margin:2px 0 6px 1.2em;color:{st_color};"
+                    f"font-size:x-small;\">{html.escape(detail)}</p>"
+                )
+
+    # One batch-level action (Apply the whole batch once — not per tool),
+    # rendered OUTSIDE the fold so it is visible while the details stay
+    # collapsed. Mirrors the web panel.
     actions = ""
     if status == "pending" and batch_id:
+        n = len(tool_list)
         actions = (
-            f'<p><a href="btfaction:apply/{html.escape(batch_id)}">Apply</a>'
+            f'<p><a href="btfaction:apply/{html.escape(batch_id)}">'
+            f"Apply {n} action{'' if n == 1 else 's'}</a>"
             f' · <a href="btfaction:skip/{html.escape(batch_id)}">Skip</a></p>'
         )
     elif status == "applied" and batch_id:
         actions = (
             f'<p><a href="btfaction:undo/{html.escape(batch_id)}">Undo</a></p>'
         )
-    body = "".join(rows) + actions
-    if _tools_batch_collapsible(tools, batch_id):
-        summary = f"Evidence queries · {completed_n} completed"
-        fold_id = _ev_fold_id(summary, batch_id or summary)
-        opened = open_folds if isinstance(open_folds, set) else set()
+
+    # For 2+ tools the per-tool details (labels + parameters) collapse into a
+    # fold that is closed by default; the summary is just the tool count +
+    # batch state. A lone tool renders inline.
+    if len(tool_list) < 2:
+        body = "".join(rows) + actions
         if light:
-            body = (
-                f'<details class="ai-tool-fold">'
-                f"<summary>{html.escape(summary)}</summary>"
-                f"{''.join(rows)}</details>"
+            return (
+                '<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;'
+                'border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">'
+                f"{body}</div>"
             )
-        elif fold_id in opened:
-            body = (
-                _ai_fold_toggle_html(
-                    html.escape(summary), fold_id,
-                    expanded=True, is_dark=not light)
-                + "".join(rows)
-            )
-        else:
-            body = _ai_fold_toggle_html(
-                html.escape(summary), fold_id,
-                expanded=False, is_dark=not light)
+        return (
+            '<table width="100%" cellspacing="0" cellpadding="0">'
+            '<tr><td bgcolor="#2a2418" class="ai-tool-card" '
+            'style="border-left:3px solid #c9a227;padding:8px 10px;">'
+            f"{body}</td></tr></table>"
+        )
+
+    summary = _tool_batch_summary(tools, batch_id)
+    fold_id = _ev_fold_id(summary, batch_id or summary)
+    opened = open_folds if isinstance(open_folds, set) else set()
+    if light:
+        fold = (
+            f'<details class="ai-tool-fold">'
+            f"<summary>{html.escape(summary)}</summary>"
+            f"{''.join(rows)}</details>"
+        )
+    elif fold_id in opened:
+        fold = (
+            _ai_fold_toggle_html(
+                html.escape(summary), fold_id, expanded=True, is_dark=not light)
+            + "".join(rows)
+        )
+    else:
+        fold = _ai_fold_toggle_html(
+            html.escape(summary), fold_id, expanded=False, is_dark=not light)
+    body = fold + actions
     if light:
         return (
             '<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;'

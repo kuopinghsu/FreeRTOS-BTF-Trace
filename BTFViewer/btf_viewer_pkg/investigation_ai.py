@@ -11,6 +11,7 @@ Lockstep with ``web/src/utils/investigationAi.js``.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -24,6 +25,7 @@ from .investigation_notebook import (
     LINK_RELATIONS,
     NB_STATUS_CLOSED,
     NOTEBOOK_STATUSES,
+    add_bookmark,
     add_evidence,
     guard_evidence_changes,
     investigation_header,
@@ -42,28 +44,60 @@ from .investigation_notebook import (
 # ---------------------------------------------------------------------------
 NB_AI_DISABLED_REASON = "Enable AI Assistant in Settings → AI"
 
-NB_AI_ACTIONS: Tuple[Tuple[str, str, str], ...] = (
+# The one reply contract every collaborate action (except refine_question) must
+# follow, so the Notebook can render the answer as a select-and-add proposal
+# card instead of a wall of prose. Lockstep with investigationAi.js's
+# NB_PROPOSAL_REPLY_FORMAT.
+NB_PROPOSAL_REPLY_FORMAT = "\n".join((
+    "Reply with ONE ```json fenced block and NOTHING before or after it — no",
+    'commentary, no "next steps", no links, and do NOT put it inside a markdown',
+    "list or numbered step. The block is exactly:",
+    '{"schema":"btf-viewer-nb-proposal/1","summary":"<1-2 plain sentences>",',
+    ' "notes":["<short point>", ...],"operations":[<op>, ...]}',
+    "Each op is exactly one of:",
+    ' {"op":"add","role":"observation|supporting|contradicting|hypothesis","title":"...","note":"<your words>","evidence_ids":["E1"]}',
+    ' {"op":"update","bookmark_id":"E1","changes":{"note":"..."}}  or  {"op":"update","changes":{"conclusion":"..."}}',
+    ' {"op":"link","from":"E1","to":"H1","relation":"supports|contradicts|verifies|relates"}',
+    ' {"op":"change_status","status":"open|closed"}',
+    'Use "operations":[] when you are only reviewing. Cite only evidence ids shown in the',
+    'context; never use kind "measured" or a "supported" status; every hypothesis stays "open".',
+))
+
+_NB_AI_TASKS: Tuple[Tuple[str, str, str], ...] = (
     ("review_investigation", "Review investigation",
-     "Review this investigation. List unsupported claims, contradictions and "
-     "missing evidence. Do not change anything — return findings only."),
+     "Review this investigation for unsupported claims, contradictions and weak or "
+     'missing evidence; put each finding in "notes". Where the evidence is too thin '
+     'to support a conclusion, ALSO return "add" operations naming the specific next '
+     "evidence to collect — which BTFViewer Statistics section or tool would produce "
+     "it and what it would show — so the investigation can reach at least "
+     'Derived-strength evidence. Otherwise "operations":[].'),
+    ("gather_evidence", "Gather evidence",
+     "Collect evidence for the open question by CALLING BTFViewer tools. Call tools "
+     "as many times as needed — one round per gap — until every claim you would make "
+     'is backed by measured tool output. Then return "add" operations (role '
+     '"supporting" or "observation") whose "note" cites the exact tool and the '
+     'numbers it returned; list anything you still could not substantiate in "notes".'),
     ("suggest_next_check", "Suggest next check",
-     "Recommend exactly one evidence-producing action available in BTFViewer "
-     "(a tool call or a Statistics/Timeline step) that would most advance this "
-     "investigation. One action, with the reason."),
+     "Recommend exactly one evidence-producing next action (a BTFViewer tool call or a "
+     'Statistics/Timeline step). Put it and the reason in "summary"; "operations":[].'),
     ("draft_hypotheses", "Draft hypotheses",
-     "Propose up to three hypotheses for the open question. Mark each 'open' — "
-     "never 'supported'. Cite the evidence id(s) each rests on."),
+     'Propose up to three hypotheses for the open question as "add" operations with '
+     'role "hypothesis", each citing in evidence_ids the id(s) it rests on.'),
     ("draft_conclusion", "Draft conclusion",
-     "Draft a conclusion using only the accepted Notebook evidence. State "
-     "limitations and the verification state. Cite the evidence ids used."),
+     'Draft a conclusion from the accepted Notebook evidence as one "update" operation '
+     "with changes.conclusion. State the limitations and verification state in it."),
     ("update_from_findings", "Update from Findings",
-     "Propose evidence cards from the current deterministic Analysis Findings. "
-     "Each card must reference the finding's rule_id; never label a card "
-     "Measured unless it references measured BTFViewer output."),
+     'Propose evidence cards from the listed Analysis Findings as "add" operations '
+     '(role "supporting" or "observation"); each "note" must reference the finding.'),
     ("compare_trace", "Compare with another trace",
-     "Compare with the other open trace. Baseline A is Trace A, Candidate B is "
-     "Trace B; verdicts describe Candidate B versus Baseline A. Use the current "
-     "Compare Scope."),
+     "Compare with the other open trace (Baseline A vs Candidate B, current Compare "
+     'Scope) and propose "add" operations for the notable differences.'),
+)
+
+NB_AI_ACTIONS: Tuple[Tuple[str, str, str], ...] = tuple(
+    (aid, label, f"{task}\n\n{NB_PROPOSAL_REPLY_FORMAT}")
+    for aid, label, task in _NB_AI_TASKS
+) + (
     ("refine_question", "Help refine question",
      "Suggest one clearer, more specific rewording of this investigation "
      "question. Return only the improved question text on its own line, "
@@ -110,6 +144,146 @@ def parse_question_suggestion(reply_text: Optional[str]) -> str:
     if not m:
         return ""
     return m.group(1).strip().strip("\"'")
+
+
+_RB_HEADING_HASH_RE = re.compile(r"^#{1,6}\s+")
+_RB_HEADING_BOLD_RE = re.compile(r"^\*\*[^*]+\*\*:?\s*$")
+_RB_BULLET_RE = re.compile(r"^([-*•]|\d+[.)])\s+")
+
+
+def _rb_clean(s: str) -> str:
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", str(s))
+    s = re.sub(r"`([^`]+)`", r"\1", s)
+    s = re.sub(r"^#{1,6}\s*", "", s)
+    return s.strip()
+
+
+def parse_reply_blocks(reply_text: Optional[str]) -> List[Dict[str, Any]]:
+    """Turn a prose AI reply into ``[{title, items:[]}]`` for the Notebook's
+    right panel. Markdown headings (``#``..``######``, or a lone ``**Bold:**``
+    line) start a section; bullet / numbered / plain lines become items; inline
+    ``**`` / `` ` `` and a leading ``#`` are stripped. Falls back to one
+    untitled section. Lockstep with ``investigationAi.js``'s
+    ``parseReplyBlocks`` — used only for a reply that is not a structured
+    proposal.
+    """
+    raw = str(reply_text or "")
+    if not raw:
+        return []
+    blocks: List[Dict[str, Any]] = []
+    cur: Optional[Dict[str, Any]] = None
+    for raw_line in raw.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _RB_HEADING_HASH_RE.match(line) or _RB_HEADING_BOLD_RE.match(line):
+            cur = {"title": re.sub(r":$", "", _rb_clean(line)), "items": []}
+            blocks.append(cur)
+            continue
+        if cur is None:
+            cur = {"title": "", "items": []}
+            blocks.append(cur)
+        cur["items"].append(_rb_clean(_RB_BULLET_RE.sub("", line)))
+    return [b for b in blocks if b["title"] or b["items"]]
+
+
+_NB_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+_NB_LIST_MARKER_RE = re.compile(r"^\s*(?:[*+\-]|\d+[.)])\s+")
+
+
+def _strip_list_markers(s: str) -> str:
+    return "\n".join(
+        _NB_LIST_MARKER_RE.sub("", ln) for ln in str(s).split("\n")
+    ).strip()
+
+
+def extract_notebook_proposal(text: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Pull a ``btf-viewer-nb-proposal/…`` object out of a model reply even when
+    the model wrapped it in a ```json fence, a markdown list, or surrounded it
+    with prose / "next step" links. Returns the object (``operations`` defaulted
+    to ``[]``) or ``None``. Lockstep with ``investigationAi.js``'s
+    ``extractNotebookProposal``.
+    """
+    raw = str(text or "")
+    candidates: List[str] = list(_NB_FENCE_RE.findall(raw))
+    candidates.append(raw)
+    s_idx = raw.find("btf-viewer-nb-proposal/")
+    if s_idx >= 0:
+        open_i = raw.rfind("{", 0, s_idx)
+        if open_i >= 0:
+            depth = 0
+            for i in range(open_i, len(raw)):
+                if raw[i] == "{":
+                    depth += 1
+                elif raw[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append(raw[open_i:i + 1])
+                        break
+    for c in candidates:
+        try:
+            obj = json.loads(_strip_list_markers(c))
+        except (ValueError, TypeError):
+            continue
+        if (
+            isinstance(obj, dict)
+            and str(obj.get("schema") or "").startswith("btf-viewer-nb-proposal/")
+            and (isinstance(obj.get("operations"), list)
+                 or obj.get("summary") or isinstance(obj.get("notes"), list))
+        ):
+            if not isinstance(obj.get("operations"), list):
+                obj["operations"] = []
+            return obj
+    return None
+
+
+_NB_FENCE_ANY_RE = re.compile(r"```(?:json)?\s*[\s\S]*?```", re.IGNORECASE)
+_NB_LINK_LINE_RE = re.compile(r"\]\((?:btfnext|btfstats):", re.IGNORECASE)
+_NB_SCHEMA_LINE_RE = re.compile(r'"schema"\s*:\s*"btf-viewer-nb-proposal')
+
+
+def summarize_notebook_proposal_for_chat(text: Optional[str]) -> str:
+    """Rewrite an assistant reply that carries a ``btf-viewer-nb-proposal/…``
+    object so the AI panel (and the Notebook) show a readable summary instead
+    of a raw JSON code block + "next step" link soup. No-op when the text has
+    no proposal. Lockstep with investigationAi.js's
+    ``summarizeNotebookProposalForChat``.
+    """
+    raw = str(text or "")
+    obj = extract_notebook_proposal(raw)
+    if not obj:
+        return raw
+
+    rest_lines: List[str] = []
+    for ln in _NB_FENCE_ANY_RE.sub("", raw).split("\n"):
+        s = _NB_LIST_MARKER_RE.sub("", ln.strip())
+        if not s or s in ("`", "```"):
+            continue
+        if _NB_SCHEMA_LINE_RE.search(s) or _NB_LINK_LINE_RE.search(s):
+            continue
+        rest_lines.append(s)
+    rest = "\n".join(rest_lines).strip()
+
+    ops = obj.get("operations") if isinstance(obj.get("operations"), list) else []
+    n_ops = len(ops)
+    out: List[str] = ["**AI proposal for the Investigation Notebook**"]
+    summary = str(obj.get("summary") or "").strip()
+    if summary:
+        out += ["", summary]
+    notes = [str(n or "").strip() for n in (obj.get("notes") or [])]
+    notes = [n for n in notes if n]
+    if notes:
+        out.append("")
+        out += [f"- {n}" for n in notes]
+    out += ["", (
+        f"_{n_ops} change{'' if n_ops == 1 else 's'} proposed — open the "
+        "Investigation Notebook to review and add._"
+        if n_ops else
+        "_Review only — open the Investigation Notebook for details._"
+    )]
+    if rest:
+        out += ["", rest]
+    return "\n".join(out)
 
 
 def collaborate_header(
@@ -283,8 +457,20 @@ def _annotate_op(
 
     if kind == "add":
         role = str(op.get("role") or op.get("type") or "").strip().lower()
-        if role not in EVIDENCE_BOOKMARK_TYPES:
-            out["status"], out["reason"] = OP_REJECTED, "add needs an evidence role"
+        if role not in (*EVIDENCE_BOOKMARK_TYPES, BM_HYPOTHESIS):
+            out["status"], out["reason"] = (
+                OP_REJECTED, "add needs an evidence or hypothesis role")
+            return out
+        # Normalise so proposal_diff routing and apply() agree regardless of
+        # how the model cased the role.
+        out["role"] = role
+        # A hypothesis has no evidence card — it is an interpretation the user
+        # still has to verify. Accept it, but flag one missing its evidence
+        # citation; it can never be applied as anything but 'open'.
+        if role == BM_HYPOTHESIS:
+            out["status"] = OP_OK
+            if not (op.get("evidence_ids") or str(op.get("rationale") or "").strip()):
+                out["reason"] = "hypothesis cites no evidence id"
             return out
         card = normalize_evidence_card(
             {
@@ -371,8 +557,9 @@ def validate_proposal(
 ) -> Dict[str, Any]:
     """Validate every proposed op against references and protected fields.
 
-    Returns ``{schema, ok, operations:[…annotated…], model}``; ``ok`` is True
-    when at least one op is applicable (``ok`` or ``needs_confirmation``).
+    Returns ``{schema, ok, summary, notes, operations:[…annotated…], model}``;
+    ``ok`` is True when at least one op is applicable (``ok`` or
+    ``needs_confirmation``). ``summary`` / ``notes`` carry a review-only reply.
     """
     inv = load_investigation(inv)
     trace_hash = str((inv.get("trace_identity") or {}).get("hash") or "")
@@ -388,9 +575,14 @@ def validate_proposal(
     for i, op in enumerate(annotated):
         op["index"] = i
     applicable = any(o["status"] in (OP_OK, OP_CONFIRM) for o in annotated)
+    raw_notes = raw.get("notes") if isinstance(raw.get("notes"), list) else []
+    notes = [str(n if n is not None else "").strip() for n in raw_notes]
+    notes = [n for n in notes if n]
     return {
         "schema": PROPOSAL_SCHEMA,
         "ok": bool(applicable),
+        "summary": str(raw.get("summary") or "").strip(),
+        "notes": notes,
         "operations": annotated,
         "model": strip_model_secrets(raw.get("model")),
     }
@@ -490,6 +682,25 @@ def _apply_one(
 ) -> Dict[str, Any]:
     kind = op.get("op")
     if kind == "add":
+        role = str(op.get("role") or op.get("type") or "supporting").strip().lower()
+        if role == BM_HYPOTHESIS:
+            # Add the hypothesis bookmark, then wire each cited evidence id that
+            # resolves to a real bookmark as a 'supports' link (the demo's
+            # "Add hypothesis" outcome). Missing / self ids are skipped.
+            out = add_bookmark(
+                inv,
+                type=BM_HYPOTHESIS,
+                title=str(op.get("title") or "AI hypothesis"),
+                note=str(op.get("note") or op.get("rationale") or ""),
+                refs=op.get("refs"),
+            )
+            bms = out.get("bookmarks") or []
+            new_id = str(bms[-1].get("id")) if bms else ""
+            known = {str(b.get("id")) for b in bms}
+            for ev_id in (str(x) for x in (op.get("evidence_ids") or [])):
+                if ev_id and ev_id != new_id and ev_id in known:
+                    out = link_bookmarks(out, ev_id, new_id, "supports")
+            return out
         card = op.get("card") or {}
         out = add_evidence(
             inv,

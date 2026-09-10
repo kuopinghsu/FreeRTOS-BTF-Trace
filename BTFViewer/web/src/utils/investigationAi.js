@@ -20,6 +20,7 @@ import {
   LINK_RELATIONS,
   NB_STATUS_CLOSED,
   NOTEBOOK_STATUSES,
+  addBookmark,
   addEvidence,
   guardEvidenceChanges,
   investigationHeader,
@@ -36,28 +37,60 @@ import {
 // --- §9 — one "Collaborate with AI" entry point ---------------------
 export const NB_AI_DISABLED_REASON = 'Enable AI Assistant in Settings → AI'
 
-export const NB_AI_ACTIONS = [
+/**
+ * The one reply contract every collaborate action (except refine_question) must
+ * follow, so the Notebook can render the answer as a select-and-add proposal
+ * card instead of a wall of prose. Appended to each task prompt below and kept
+ * in lockstep with investigation_ai.py's NB_PROPOSAL_REPLY_FORMAT.
+ */
+export const NB_PROPOSAL_REPLY_FORMAT = [
+  'Reply with ONE ```json fenced block and NOTHING before or after it — no',
+  'commentary, no "next steps", no links, and do NOT put it inside a markdown',
+  'list or numbered step. The block is exactly:',
+  '{"schema":"btf-viewer-nb-proposal/1","summary":"<1-2 plain sentences>",',
+  ' "notes":["<short point>", ...],"operations":[<op>, ...]}',
+  'Each op is exactly one of:',
+  ' {"op":"add","role":"observation|supporting|contradicting|hypothesis","title":"...","note":"<your words>","evidence_ids":["E1"]}',
+  ' {"op":"update","bookmark_id":"E1","changes":{"note":"..."}}  or  {"op":"update","changes":{"conclusion":"..."}}',
+  ' {"op":"link","from":"E1","to":"H1","relation":"supports|contradicts|verifies|relates"}',
+  ' {"op":"change_status","status":"open|closed"}',
+  'Use "operations":[] when you are only reviewing. Cite only evidence ids shown in the',
+  'context; never use kind "measured" or a "supported" status; every hypothesis stays "open".',
+].join('\n')
+
+const NB_AI_TASKS = [
   ['review_investigation', 'Review investigation',
-    'Review this investigation. List unsupported claims, contradictions and '
-    + 'missing evidence. Do not change anything — return findings only.'],
+    'Review this investigation for unsupported claims, contradictions and weak or '
+    + 'missing evidence; put each finding in "notes". Where the evidence is too thin '
+    + 'to support a conclusion, ALSO return "add" operations naming the specific next '
+    + 'evidence to collect — which BTFViewer Statistics section or tool would produce '
+    + 'it and what it would show — so the investigation can reach at least '
+    + 'Derived-strength evidence. Otherwise "operations":[].'],
+  ['gather_evidence', 'Gather evidence',
+    'Collect evidence for the open question by CALLING BTFViewer tools. Call tools '
+    + 'as many times as needed — one round per gap — until every claim you would make '
+    + 'is backed by measured tool output. Then return "add" operations (role '
+    + '"supporting" or "observation") whose "note" cites the exact tool and the '
+    + 'numbers it returned; list anything you still could not substantiate in "notes".'],
   ['suggest_next_check', 'Suggest next check',
-    'Recommend exactly one evidence-producing action available in BTFViewer '
-    + '(a tool call or a Statistics/Timeline step) that would most advance this '
-    + 'investigation. One action, with the reason.'],
+    'Recommend exactly one evidence-producing next action (a BTFViewer tool call or a '
+    + 'Statistics/Timeline step). Put it and the reason in "summary"; "operations":[].'],
   ['draft_hypotheses', 'Draft hypotheses',
-    "Propose up to three hypotheses for the open question. Mark each 'open' — "
-    + "never 'supported'. Cite the evidence id(s) each rests on."],
+    'Propose up to three hypotheses for the open question as "add" operations with '
+    + 'role "hypothesis", each citing in evidence_ids the id(s) it rests on.'],
   ['draft_conclusion', 'Draft conclusion',
-    'Draft a conclusion using only the accepted Notebook evidence. State '
-    + 'limitations and the verification state. Cite the evidence ids used.'],
+    'Draft a conclusion from the accepted Notebook evidence as one "update" operation '
+    + 'with changes.conclusion. State the limitations and verification state in it.'],
   ['update_from_findings', 'Update from Findings',
-    'Propose evidence cards from the current deterministic Analysis Findings. '
-    + "Each card must reference the finding's rule_id; never label a card "
-    + 'Measured unless it references measured BTFViewer output.'],
+    'Propose evidence cards from the listed Analysis Findings as "add" operations '
+    + '(role "supporting" or "observation"); each "note" must reference the finding.'],
   ['compare_trace', 'Compare with another trace',
-    'Compare with the other open trace. Baseline A is Trace A, Candidate B is '
-    + 'Trace B; verdicts describe Candidate B versus Baseline A. Use the current '
-    + 'Compare Scope.'],
+    'Compare with the other open trace (Baseline A vs Candidate B, current Compare '
+    + 'Scope) and propose "add" operations for the notable differences.'],
+]
+
+export const NB_AI_ACTIONS = [
+  ...NB_AI_TASKS.map(([id, label, task]) => [id, label, `${task}\n\n${NB_PROPOSAL_REPLY_FORMAT}`]),
   ['refine_question', 'Help refine question',
     'Suggest one clearer, more specific rewording of this investigation '
     + 'question. Return only the improved question text on its own line, '
@@ -90,6 +123,126 @@ export function parseQuestionSuggestion(replyText) {
   const m = /Suggested question:\s*(.+)/i.exec(String(replyText || ''))
   if (!m) return ''
   return m[1].trim().replace(/^["']|["']$/g, '')
+}
+
+/**
+ * Turn a prose AI reply into `[{ title, items: [] }]` for the Notebook's
+ * right panel — markdown headings (`#`..`######`, or a lone `**Bold:**` line)
+ * start a section; `-`/`*`/`•`/`1.`/`1)` lines and any other non-empty line
+ * become items. Inline `**` / `` ` `` and leading `#` are stripped. Falls back
+ * to one untitled section. Used only for a reply that is NOT a structured
+ * proposal; kept in lockstep with investigation_ai.py's parse_reply_blocks.
+ */
+export function parseReplyBlocks(replyText) {
+  const raw = String(replyText || '')
+  if (!raw) return []
+  const clean = (s) => String(s)
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s*/, '')
+    .trim()
+  const blocks = []
+  let cur = null
+  for (const rawLine of raw.split('\n')) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const isHeading = /^#{1,6}\s+/.test(line) || /^\*\*[^*]+\*\*:?\s*$/.test(line)
+    if (isHeading) {
+      cur = { title: clean(line).replace(/:$/, ''), items: [] }
+      blocks.push(cur)
+      continue
+    }
+    if (!cur) { cur = { title: '', items: [] }; blocks.push(cur) }
+    cur.items.push(clean(line.replace(/^([-*•]|\d+[.)])\s+/, '')))
+  }
+  return blocks.filter((b) => b.title || b.items.length)
+}
+
+/**
+ * Pull a `btf-viewer-nb-proposal/…` object out of a model reply even when the
+ * model wrapped it in a ```json fence, a markdown list (`* `/`- `/`1. ` on each
+ * line), or surrounded it with prose and "next step" links. Returns the object
+ * (with `operations` defaulted to `[]`) or null. Lockstep with
+ * investigation_ai.py's extract_notebook_proposal.
+ */
+export function extractNotebookProposal(text) {
+  const raw = String(text || '')
+  const stripListMarkers = (s) => String(s)
+    .split('\n')
+    .map((ln) => ln.replace(/^\s*(?:[*+-]|\d+[.)])\s+/, ''))
+    .join('\n')
+    .trim()
+
+  const candidates = []
+  const fence = /```(?:json)?\s*([\s\S]*?)```/gi
+  let m
+  while ((m = fence.exec(raw))) candidates.push(m[1])
+  candidates.push(raw)
+  // brace-balanced object around the schema marker (handles a bare, unfenced
+  // object buried in prose)
+  const sIdx = raw.indexOf('btf-viewer-nb-proposal/')
+  if (sIdx >= 0) {
+    const open = raw.lastIndexOf('{', sIdx)
+    if (open >= 0) {
+      let depth = 0
+      for (let i = open; i < raw.length; i += 1) {
+        if (raw[i] === '{') depth += 1
+        else if (raw[i] === '}') {
+          depth -= 1
+          if (depth === 0) { candidates.push(raw.slice(open, i + 1)); break }
+        }
+      }
+    }
+  }
+
+  for (const c of candidates) {
+    let obj
+    try { obj = JSON.parse(stripListMarkers(c)) } catch { continue }
+    if (obj && typeof obj === 'object'
+      && String(obj.schema || '').startsWith('btf-viewer-nb-proposal/')
+      && (Array.isArray(obj.operations) || obj.summary || Array.isArray(obj.notes))) {
+      if (!Array.isArray(obj.operations)) obj.operations = []
+      return obj
+    }
+  }
+  return null
+}
+
+/**
+ * Rewrite an assistant reply that carries a `btf-viewer-nb-proposal/…` object
+ * so the AI panel (and the Notebook) show a readable summary instead of a raw
+ * JSON code block + "next step" link soup. No-op when the text has no proposal.
+ * Lockstep with investigation_ai.py's summarize_notebook_proposal_for_chat.
+ */
+export function summarizeNotebookProposalForChat(text) {
+  const raw = String(text || '')
+  const obj = extractNotebookProposal(raw)
+  if (!obj) return raw
+
+  const rest = raw
+    .replace(/```(?:json)?\s*[\s\S]*?```/gi, '')
+    .split('\n')
+    .filter((ln) => {
+      const s = ln.trim().replace(/^(?:[*+-]|\d+[.)])\s+/, '')
+      if (!s || s === '`' || s === '```') return false
+      if (/"schema"\s*:\s*"btf-viewer-nb-proposal/.test(s)) return false
+      if (/\]\((?:btfnext|btfstats):/i.test(s)) return false
+      return true
+    })
+    .join('\n')
+    .trim()
+
+  const nOps = Array.isArray(obj.operations) ? obj.operations.length : 0
+  const out = ['**AI proposal for the Investigation Notebook**']
+  const summary = String(obj.summary || '').trim()
+  if (summary) { out.push('', summary) }
+  const notes = Array.isArray(obj.notes) ? obj.notes.map(n => String(n || '').trim()).filter(Boolean) : []
+  if (notes.length) { out.push(''); for (const n of notes) out.push(`- ${n}`) }
+  out.push('', nOps
+    ? `_${nOps} change${nOps === 1 ? '' : 's'} proposed — open the Investigation Notebook to review and add._`
+    : '_Review only — open the Investigation Notebook for details._')
+  if (rest) out.push('', rest)
+  return out.join('\n')
 }
 
 export function collaborateHeader(inv, { broken = null, selectedCount = 0 } = {}) {
@@ -230,9 +383,23 @@ function annotateOp(inv, op, { traceHash, allowOtherTrace }) {
 
   if (kind === 'add') {
     const role = String(op.role || op.type || '').trim().toLowerCase()
-    if (!EVIDENCE_BOOKMARK_TYPES.includes(role)) {
+    if (![...EVIDENCE_BOOKMARK_TYPES, BM_HYPOTHESIS].includes(role)) {
       out.status = OP_REJECTED
-      out.reason = 'add needs an evidence role'
+      out.reason = 'add needs an evidence or hypothesis role'
+      return out
+    }
+    // Normalise the role so proposalDiff routing and apply() agree regardless
+    // of how the model cased it ("Hypothesis" / "SUPPORTING" / …).
+    out.role = role
+    // A hypothesis has no evidence card — it is an interpretation the user
+    // still has to verify. Accept it, but flag one missing its evidence
+    // citation; it can never be applied as anything but 'open'.
+    if (role === BM_HYPOTHESIS) {
+      out.status = OP_OK
+      if (!(Array.isArray(op.evidence_ids) && op.evidence_ids.length)
+        && !String(op.rationale || '').trim()) {
+        out.reason = 'hypothesis cites no evidence id'
+      }
       return out
     }
     const card = normalizeEvidenceCard({
@@ -333,9 +500,14 @@ export function validateProposal(inv, proposal, { findings = null, allowOtherTra
     index: i,
   }))
   const applicable = annotated.some(o => o.status === OP_OK || o.status === OP_CONFIRM)
+  const notes = Array.isArray(raw.notes)
+    ? raw.notes.map(n => String(n == null ? '' : n).trim()).filter(Boolean)
+    : []
   return {
     schema: PROPOSAL_SCHEMA,
     ok: !!applicable,
+    summary: String(raw.summary || '').trim(),
+    notes,
     operations: annotated,
     model: stripModelSecrets(raw.model),
   }
@@ -416,6 +588,27 @@ function tagAiProv(inv, prov, now) {
 function applyOne(inv, op, { model, now }) {
   const kind = op.op
   if (kind === 'add') {
+    const role = String(op.role || op.type || 'supporting').trim().toLowerCase()
+    if (role === BM_HYPOTHESIS) {
+      // Add the hypothesis bookmark, then wire each cited evidence id that
+      // resolves to a real bookmark as a 'supports' link (the demo's
+      // "Add hypothesis" outcome). Missing/self ids are skipped, not errors.
+      let out = addBookmark(inv, {
+        type: BM_HYPOTHESIS,
+        title: String(op.title || 'AI hypothesis'),
+        note: String(op.note || op.rationale || ''),
+        refs: op.refs,
+      })
+      const bms = out.bookmarks || []
+      const newId = String(bms[bms.length - 1]?.id || '')
+      const known = new Set(bms.map((b) => String(b.id)))
+      for (const evId of (op.evidence_ids || []).map(String)) {
+        if (evId && evId !== newId && known.has(evId)) {
+          out = linkBookmarks(out, evId, newId, 'supports')
+        }
+      }
+      return out
+    }
     const card = op.card || {}
     const out = addEvidence(inv, {
       title: String(op.title || 'AI evidence'),

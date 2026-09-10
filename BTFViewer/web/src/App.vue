@@ -1354,6 +1354,8 @@
       :has-second-trace="compareTabs.length > 1"
       :ai-request-state="aiPanelRequestState"
       :has-pending-proposal="!!notebookProposal"
+      :ai-proposal="notebookProposal"
+      :allow-other-trace="compareTabs.length > 1"
       :refine-suggestion="notebookCollab?.refineSuggestion || ''"
       :last-ai-reply="notebookCollab ? { step: notebookCollab.sourceStep, text: notebookCollab.lastReplyText } : null"
       @close="notebookDialogOpen = false"
@@ -1371,16 +1373,8 @@
       @query-ai="queryAnalysisWithAi"
       @focus-ai-panel="rightPanelTab = 'ai'"
       @cancel-ai-request="aiPanelRef?.cancelRequest?.()"
-    />
-
-    <NotebookProposalDialog
-      v-if="notebookProposal && investigation"
-      :investigation="investigation"
-      :proposal="notebookProposal"
-      :allow-other-trace="compareTabs.length > 1"
-      @close="notebookProposal = null"
-      @reject="notebookProposal = null"
-      @apply="onNotebookProposalApply"
+      @apply-proposal="onNotebookProposalApply"
+      @dismiss-proposal="notebookProposal = null; notebookCollab = null"
     />
 
     <ExportDialog
@@ -1611,7 +1605,6 @@ import AiAssistantPanel from './components/AiAssistantPanel.vue'
 import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
 import TraceHealthBadge from './components/TraceHealthBadge.vue'
 import InvestigationNotebookDialog from './components/InvestigationNotebookDialog.vue'
-import NotebookProposalDialog from './components/NotebookProposalDialog.vue'
 import ExportDialog from './components/ExportDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import DomSelect from './components/DomSelect.vue'
@@ -3611,10 +3604,12 @@ async function onNotebookCollaborate({ action = '', selectedEvidenceIds = null, 
 }
 
 /** §10 — the AI answered a collaboration with a structured proposal. Never
- *  applied automatically: open the review dialog. */
+ *  applied automatically: it is reviewed inline in the Notebook's right panel
+ *  (open it if the user closed it mid-request). */
 function onNotebookProposal(proposal) {
   if (!investigation.value) return
   notebookProposal.value = proposal
+  notebookDialogOpen.value = true
 }
 
 /** §10 — the user accepted part or all of a reviewed proposal. Commit as one

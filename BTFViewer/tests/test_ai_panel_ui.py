@@ -237,33 +237,37 @@ class AiPanelUiTests(unittest.TestCase):
             src.index('header_row.addWidget(self._mode_chip)'))
         self.assertNotIn("self._scope_chip", src)
 
-    def test_tool_cards_collapse_completed_auto_batch(self) -> None:
+    def test_tool_cards_merge_into_one_collapsed_batch_with_params(self) -> None:
         from btf_viewer_pkg.ai_assistant import _ev_fold_id, _tool_cards_html
         from btf_viewer_pkg.ai_tools import AI_TOOL_SEARCH_TIMELINE
 
         done = [
-            {"name": AI_TOOL_SEARCH_TIMELINE, "arguments": {}, "status": "done"},
+            {"name": AI_TOOL_SEARCH_TIMELINE, "arguments": {"query": "mutex"}, "status": "done"},
             {"name": AI_TOOL_SEARCH_TIMELINE, "arguments": {}, "status": "done"},
         ]
         html_out = _tool_cards_html(done, "b1")
-        self.assertIn("Evidence queries · 2 completed", html_out)
+        # one collapsed row: just the tool count + state
+        self.assertIn("2 tools · done", html_out)
         self.assertIn("btffold:open/", html_out)
-        self.assertIn('class="ai-fold-toggle ai-fold-toggle-l1"', html_out)
-        self.assertIn("▸ Evidence queries · 2 completed", html_out)
-        self.assertNotIn(">Show</a>", html_out)
-        self.assertNotIn("Search timeline", html_out)
-        fold_id = _ev_fold_id("Evidence queries · 2 completed", "b1")
+        self.assertIn("▸ 2 tools · done", html_out)
+        self.assertNotIn("Search timeline", html_out)   # details collapsed
+        # expand -> per-tool labels AND their parameters
+        fold_id = _ev_fold_id("2 tools · done", "b1")
         opened = _tool_cards_html(done, "b1", open_folds={fold_id})
         self.assertIn("btffold:close/", opened)
-        self.assertIn("▾ Evidence queries · 2 completed", opened)
+        self.assertIn("▾ 2 tools · done", opened)
         self.assertIn("Search timeline", opened)
+        self.assertIn("query=mutex", opened)           # parameters shown
+
+        # pending batch: collapsed, ONE batch-level Apply (not per tool)
         pending = [
-            {"name": "set_cursors", "arguments": {}, "status": "pending"},
+            {"name": "set_cursors", "arguments": {"timestamps": [10, 20]}, "status": "pending"},
             {"name": "set_cursors", "arguments": {}, "status": "pending"},
         ]
         pending_html = _tool_cards_html(pending, "b2")
-        self.assertNotIn("Evidence queries", pending_html)
-        self.assertIn("Apply", pending_html)
+        self.assertIn("2 tools — review, then Apply", pending_html)
+        self.assertIn("Apply 2 actions", pending_html)
+        self.assertEqual(pending_html.count("btfaction:apply/"), 1)
 
     def test_restore_without_chat_keeps_start_investigation(self) -> None:
         from btf_viewer_pkg.ai_case import dump_investigation_session

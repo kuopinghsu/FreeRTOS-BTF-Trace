@@ -4,8 +4,6 @@ import { readFileSync } from 'node:fs'
 
 const dlg = readFileSync(
   new URL('../src/components/InvestigationNotebookDialog.vue', import.meta.url), 'utf8')
-const proposal = readFileSync(
-  new URL('../src/components/NotebookProposalDialog.vue', import.meta.url), 'utf8')
 const aiPanel = readFileSync(
   new URL('../src/components/AiAssistantPanel.vue', import.meta.url), 'utf8')
 const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
@@ -127,6 +125,29 @@ describe('Evidence step', () => {
     assert.match(dlg, /emit\('open-statistics'/)
   })
 
+  it('the two source buttons have distinct labels and close the modal so the nav is visible', () => {
+    // was: two buttons both labelled "View source" that jumped the timeline /
+    // opened Statistics *behind* the full-screen Notebook — nothing happened.
+    const actions = dlg.slice(dlg.indexOf('class="nb-ev-actions"'), dlg.indexOf('class="nb-ev-details"'))
+    assert.match(actions, /View source/)
+    assert.match(actions, /Open Statistics/)
+    assert.ok(!/View source[\s\S]{0,300}View source/.test(actions), 'duplicate "View source" label still present')
+    assert.match(actions, /@click="emit\('close'\); onEvidenceJump\(it\.nav\)"/)
+    assert.match(actions, /@click="emit\('close'\); emit\('open-statistics', it\.nav\.stats_metric\)"/)
+  })
+
+  it('each evidence card has a direct delete icon (no more "…" menu)', () => {
+    const actions = dlg.slice(dlg.indexOf('class="nb-ev-actions"'), dlg.indexOf('class="nb-ev-details"'))
+    assert.match(actions, /class="nb-ev-action muted nb-ev-delete"/)
+    assert.match(actions, /aria-label="Delete evidence"/)
+    assert.match(actions, /@click="removeEvidenceWithConfirm\(it\.bookmark_id\)"/)
+    assert.match(dlg, /function removeEvidenceWithConfirm\(id\) \{/)
+    assert.match(dlg, /commit\(removeBookmark\(props\.investigation, id\)\)/)
+    // the single-item "…" popup menu is gone
+    assert.ok(!dlg.includes('evidenceMoreFor'), 'evidenceMoreFor state still present')
+    assert.ok(!dlg.includes('nb-ev-more-wrap'), 'old nb-ev-more-wrap still present')
+  })
+
   it('implements the §5 next-action table in priority order', () => {
     const body = dlg.slice(
       dlg.indexOf('function resolveEvidenceNextAction'),
@@ -138,6 +159,18 @@ describe('Evidence step', () => {
       assert.ok(idx > lastIndex, `resolver checks out of order at ${token}`)
       lastIndex = idx
     }
+  })
+
+  it('the zero-selected next action actually ticks every evidence item (was a dead no-op)', () => {
+    const body = dlg.slice(dlg.indexOf('function onEvidenceNextAction'),
+      dlg.indexOf('const verifyNextAction'))
+    const sel = body.slice(body.indexOf("a.id === 'select'"))
+    assert.match(sel, /view\.selectedEvidenceIds = sections\.value\.evidence\.items\.map/)
+    assert.match(dlg, /label: 'Select all evidence'/)
+  })
+
+  it('"Ask AI about this" closes the modal so the AI panel reply is visible', () => {
+    assert.match(dlg, /@click="emit\('close'\); emit\('query-ai', \{ prompt: buildAskAboutEvidencePrompt\(it\) \}\)"/)
   })
 })
 
@@ -335,13 +368,15 @@ describe('§9 AI panel notebook-collab banner (unchanged)', () => {
   })
 })
 
-describe('§10 proposal review (unchanged)', () => {
-  it('groups the diff and offers Accept selected / Accept all / Reject', () => {
-    assert.match(proposal, /validateProposal\(/)
-    assert.match(proposal, /proposalDiff\(/)
-    for (const t of ['Accept selected', 'Accept all', 'Reject', 'needs_confirmation']) {
-      assert.ok(proposal.includes(t), `proposal dialog missing ${t}`)
+describe('§10 proposal review — inline in the right panel, no separate modal', () => {
+  it('the inline card groups the diff and offers select / add-all / dismiss', () => {
+    assert.match(dlg, /validateProposal\(/)
+    assert.match(dlg, /proposalDiff\(/)
+    for (const t of ['Add selected (', 'Add all', 'Dismiss', 'needs_confirmation']) {
+      assert.ok(dlg.includes(t), `inline proposal card missing ${t}`)
     }
+    // the standalone modal component is gone
+    assert.ok(!app.includes('NotebookProposalDialog'), 'NotebookProposalDialog still referenced in App.vue')
   })
 
   it('App applies an accepted proposal as one undo step, nothing automatic', () => {
@@ -349,5 +384,101 @@ describe('§10 proposal review (unchanged)', () => {
     assert.match(app, /onNotebookProposalApply/)
     assert.match(app, /applyProposal\(/)
     assert.match(app, /pushNotebookState\(/)
+  })
+})
+
+describe('§10 proposal review is shown inline in the Notebook right panel', () => {
+  it('the dialog validates + diffs the proposal itself and renders a select-and-add card', () => {
+    assert.match(dlg, /aiProposal:\s*\{/)
+    assert.match(dlg, /\bvalidateProposal\b/)
+    assert.match(dlg, /\bproposalDiff\b/)
+    assert.match(dlg, /nb-proposal-card/)
+    assert.match(dlg, /nb-prop-op/)
+    for (const t of ['AI proposal', 'Add selected (', 'Add all', 'Not applicable (']) {
+      assert.ok(dlg.includes(t), `inline proposal card missing ${t}`)
+    }
+  })
+
+  it('per-op checkbox + needs_confirmation sub-checkbox, then emits apply-proposal', () => {
+    assert.match(dlg, /toggleProposalOp\(/)
+    assert.match(dlg, /toggleProposalConfirm\(/)
+    assert.match(dlg, /op\.status === 'needs_confirmation'/)
+    assert.match(dlg, /emit\('apply-proposal', \{/)
+    assert.match(dlg, /emit\('dismiss-proposal'\)/)
+  })
+
+  it('App threads notebookProposal into the dialog and wires apply/dismiss back', () => {
+    assert.match(app, /:ai-proposal="notebookProposal"/)
+    assert.match(app, /@apply-proposal="onNotebookProposalApply"/)
+    // dismiss clears both the proposal and the collab context (stale reply too)
+    assert.match(app, /@dismiss-proposal="notebookProposal = null; notebookCollab = null"/)
+    // no separate modal — onNotebookProposal just opens the Notebook to review inline
+    assert.ok(!app.includes('NotebookProposalDialog'))
+    const fn = app.slice(app.indexOf('function onNotebookProposal('), app.indexOf('function onNotebookProposalApply'))
+    assert.match(fn, /notebookProposal\.value = proposal/)
+    assert.match(fn, /notebookDialogOpen\.value = true/)
+  })
+
+  it('replacing / restoring / closing the investigation drops a pending AI proposal', () => {
+    for (const fn of ['function startNewInvestigation', 'function closeInvestigation',
+      'function restoreSnapshot', 'async function onImportFile']) {
+      const body = dlg.slice(dlg.indexOf(fn), dlg.indexOf(fn) + 600)
+      assert.match(body, /emit\('dismiss-proposal'\)/, `${fn} must drop the pending proposal`)
+    }
+  })
+
+  it('a prose reply renders as demo-style titled sections + bullets, not a raw pre-wrap dump', () => {
+    assert.match(dlg, /stepAiReplyBlocks\b/)
+    assert.match(dlg, /nb-assist-note-list/)
+    assert.match(dlg, /v-for="\(blk, bi\) in stepAiReplyBlocks"/)
+    // the old raw text block is gone
+    assert.ok(!dlg.includes('class="nb-assist-reply"'))
+    assert.ok(!/white-space:\s*pre-wrap/.test(dlg.slice(dlg.indexOf('.nb-assist-note'))))
+  })
+
+  it('a review-only proposal (summary + notes, no ops) renders a lean card — no dead links', () => {
+    assert.match(dlg, /proposalReview\.summary/)
+    assert.match(dlg, /proposalReview\.notes/)
+    assert.match(dlg, /nb-proposal-summary/)
+    assert.match(dlg, /nb-proposal-notes/)
+    // no non-functional links / filler on the proposal card
+    assert.ok(!dlg.includes('Open in AI Assistant'))
+    assert.ok(!dlg.includes('Review only — no changes to add'))
+    // add buttons are gated on .ok; Dismiss is always there
+    const actions = dlg.slice(dlg.indexOf('class="nb-prop-actions"'))
+    assert.match(actions, /Dismiss/)
+    assert.match(actions.slice(0, actions.indexOf('</div>') + 6), /v-if="proposalReview\.ok"/)
+  })
+
+  it('AiAssistantPanel parses the proposal via the shared tolerant extractor, on every turn', () => {
+    assert.match(aiPanel, /import \{ extractNotebookProposal \} from '\.\.\/utils\/investigationAi\.js'/)
+    assert.match(aiPanel, /const obj = extractNotebookProposal\(text\)/)
+    // §10: also scanned from ingestTurn, so an agentic gather_evidence loop
+    // that emits the proposal in a tool-call turn is not missed
+    const ingest = aiPanel.slice(aiPanel.indexOf('function ingestTurn'), aiPanel.indexOf('function findBatch'))
+    assert.match(ingest, /if \(text\) maybeEmitNotebookProposal\(text\)/)
+    // the messy-reply handling lives in the util, not re-implemented here
+    assert.match(ai, /export function extractNotebookProposal/)
+    assert.match(ai, /stripListMarkers/)
+  })
+
+  it('a leaked structured proposal is never shown as prose in the Notebook', () => {
+    const body = dlg.slice(dlg.indexOf('const stepAiReplyBlocks = computed'),
+      dlg.indexOf('const stepAiReplyBlocks = computed') + 500)
+    assert.match(body, /replace\(\/```\(\?:json\)\?/)
+    assert.match(body, /btfnext\|btfstats/)
+  })
+
+  it('the AI panel chat log also summarises a proposal reply (aiMarkdown, both platforms)', () => {
+    const md = readFileSync(new URL('../src/utils/aiMarkdown.js', import.meta.url), 'utf8')
+    assert.match(md, /import \{ summarizeNotebookProposalForChat \} from '\.\/investigationAi\.js'/)
+    assert.match(md, /body = summarizeNotebookProposalForChat\(body\)/)
+    assert.match(ai, /export function summarizeNotebookProposalForChat/)
+  })
+
+  it('the collaborate prompts declare the proposal schema (structured, parseable replies)', () => {
+    assert.match(ai, /NB_PROPOSAL_REPLY_FORMAT/)
+    assert.match(ai, /btf-viewer-nb-proposal\/1/)
+    assert.match(ai, /NB_AI_TASKS/)
   })
 })

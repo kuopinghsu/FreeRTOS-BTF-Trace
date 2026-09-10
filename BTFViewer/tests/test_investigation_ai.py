@@ -43,14 +43,14 @@ def _inv():
 
 
 class CollaborateEntryPointTests(unittest.TestCase):
-    def test_seven_focused_actions(self) -> None:
-        # Six original + refine_question for the Question step. Lockstep with
-        # web/tests/investigationAi.test.js's "seven focused actions" test.
+    def test_eight_focused_actions(self) -> None:
+        # + gather_evidence (agentic tool loop) after review. Lockstep with
+        # web/tests/investigationAi.test.js's "eight focused actions" test.
         self.assertEqual(
             [a[0] for a in NB_AI_ACTIONS],
-            ["review_investigation", "suggest_next_check", "draft_hypotheses",
-             "draft_conclusion", "update_from_findings", "compare_trace",
-             "refine_question"],
+            ["review_investigation", "gather_evidence", "suggest_next_check",
+             "draft_hypotheses", "draft_conclusion", "update_from_findings",
+             "compare_trace", "refine_question"],
         )
 
     def test_refine_question_suggestion_parsing(self) -> None:
@@ -170,6 +170,71 @@ class ProposalValidationTests(unittest.TestCase):
         self.assertEqual([o["status"] for o in v["operations"]],
                          [OP_REJECTED, OP_REJECTED, OP_REJECTED])
 
+    def test_ai_can_add_a_hypothesis(self) -> None:
+        # Demo parity: the aside's "Add hypothesis" action. A hypothesis add
+        # is accepted (no evidence card), routes to the Hypotheses group, and
+        # links each cited evidence id as "supports" on apply.
+        v = validate_proposal(_inv(), {"operations": [
+            {"op": "add", "role": "Hypothesis",
+             "title": "Affinity thrash on core 1", "evidence_ids": ["e1"]},
+        ]})
+        self.assertEqual(v["operations"][0]["status"], OP_OK)
+        self.assertNotIn("reason", v["operations"][0])
+        d = proposal_diff(_inv(), v)
+        self.assertEqual(len(d["by_section"]["hypotheses"]), 1)
+        self.assertEqual(len(d["by_section"]["evidence"]), 0)
+
+        v2 = validate_proposal(_inv(), {"operations": [
+            {"op": "add", "role": "hypothesis", "title": "no citation"},
+        ]})
+        self.assertEqual(v2["operations"][0]["status"], OP_OK)
+        self.assertIn("cites no evidence id", v2["operations"][0]["reason"])
+
+        v3 = validate_proposal(_inv(), {"operations": [
+            {"op": "add", "role": "hypothesis", "title": "Affinity thrash",
+             "note": "from E1", "evidence_ids": ["e1", "missing"]},
+        ]})
+        out, applied, _ = apply_proposal(_inv(), v3, accept_all=True)
+        self.assertEqual(applied, [0])
+        hyp = next(b for b in out["bookmarks"]
+                   if b["type"] == "hypothesis" and b["title"] == "Affinity thrash")
+        self.assertNotIn("evidence", hyp)
+        self.assertTrue(any(
+            str(link["from"]) == "e1" and str(link["to"]) == str(hyp["id"])
+            and link["relation"] == "supports"
+            for link in out.get("links") or []))
+        self.assertFalse(any(str(link["from"]) == "missing"
+                             for link in out.get("links") or []))
+
+    def test_malformed_add_role_still_rejected(self) -> None:
+        v = validate_proposal(_inv(), {"operations": [
+            {"op": "add", "role": "not_a_role", "title": "x"},
+        ]})
+        self.assertEqual(v["operations"][0]["status"], OP_REJECTED)
+        self.assertIn("evidence or hypothesis role", v["operations"][0]["reason"])
+
+    def test_structured_reply_carries_summary_and_notes(self) -> None:
+        v = validate_proposal(_inv(), {
+            "schema": "btf-viewer-nb-proposal/1",
+            "summary": "  Two claims are unsupported.  ",
+            "notes": ["Max slice is treated as WCET", "",
+                      "  Migration count has no latency link  ", None],
+            "operations": [],
+        })
+        self.assertFalse(v["ok"])
+        self.assertEqual(v["summary"], "Two claims are unsupported.")
+        self.assertEqual(
+            v["notes"],
+            ["Max slice is treated as WCET", "Migration count has no latency link"])
+
+    def test_every_non_refine_prompt_demands_the_json_envelope(self) -> None:
+        prompts = {a[0]: a[2] for a in NB_AI_ACTIONS}
+        for aid in ("review_investigation", "gather_evidence", "suggest_next_check", "draft_hypotheses",
+                    "draft_conclusion", "update_from_findings", "compare_trace"):
+            self.assertIn("btf-viewer-nb-proposal/1", prompts[aid], aid)
+            self.assertIn('"operations"', prompts[aid], aid)
+        self.assertNotIn("btf-viewer-nb-proposal", prompts["refine_question"])
+
     def test_model_secrets_stripped(self) -> None:
         v = validate_proposal(_inv(), {
             "model": {"model": "gpt-x", "provider": "openai", "api_key": "sk-SECRET",
@@ -272,17 +337,144 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ("def proposal_diff", "export function proposalDiff"),
             ("def apply_proposal", "export function applyProposal"),
             ("def strip_model_secrets", "export function stripModelSecrets"),
+            ("def parse_question_suggestion", "export function parseQuestionSuggestion"),
+            ("def parse_reply_blocks", "export function parseReplyBlocks"),
+            ("def extract_notebook_proposal", "export function extractNotebookProposal"),
+            ("def summarize_notebook_proposal_for_chat",
+             "export function summarizeNotebookProposalForChat"),
             ("PROPOSAL_SCHEMA", "export const PROPOSAL_SCHEMA"),
             ("NB_AI_ACTIONS", "export const NB_AI_ACTIONS"),
+            ("NB_PROPOSAL_REPLY_FORMAT", "export const NB_PROPOSAL_REPLY_FORMAT"),
             ("NB_AI_DISABLED_REASON", "export const NB_AI_DISABLED_REASON"),
         ):
             self.assertIn(py_name, py, py_name)
             self.assertIn(js_name, js, js_name)
-        # the six action ids match
-        for aid in ("review_investigation", "suggest_next_check", "draft_hypotheses",
+        # the eight action ids match
+        for aid in ("review_investigation", "gather_evidence", "suggest_next_check", "draft_hypotheses",
                     "draft_conclusion", "update_from_findings", "compare_trace"):
             self.assertIn(f'"{aid}"', py, aid)
             self.assertIn(f"'{aid}'", js, aid)
+        # …and the prompt *text* stays in lockstep (name-only checks let the
+        # NB_PROPOSAL_REPLY_FORMAT wording drift once — this catches it). Each
+        # phrase sits inside a single JS string literal / single .py line.
+        for phrase in (
+            "NOTHING before or after it",              # NB_PROPOSAL_REPLY_FORMAT
+            "do NOT put it inside a markdown",         # NB_PROPOSAL_REPLY_FORMAT
+            'Use "operations":[] when you are only reviewing',
+            "CALLING BTFViewer tools",                 # gather_evidence
+            "one round per gap",                       # gather_evidence
+            "Derived-strength evidence",               # review_investigation
+        ):
+            self.assertIn(phrase, js, f"web NB prompt missing: {phrase!r}")
+            self.assertIn(phrase, py, f"desktop NB prompt missing: {phrase!r}")
+
+
+class ReplyBlocksTests(unittest.TestCase):
+    """parse_reply_blocks — prose AI reply → titled sections + bullets.
+    Parity with web/tests/investigationAi.test.js's parseReplyBlocks block."""
+
+    def test_headings_become_titled_sections(self) -> None:
+        from btf_viewer_pkg.investigation_ai import parse_reply_blocks
+        blocks = parse_reply_blocks(
+            "### 結論\nTwo claims are unsupported.\n\n"
+            "### Unsupported Claims\n1. **Max slice** is treated as WCET\n"
+            "- Migration count has no latency link")
+        self.assertEqual([b["title"] for b in blocks],
+                         ["結論", "Unsupported Claims"])
+        self.assertEqual(blocks[0]["items"], ["Two claims are unsupported."])
+        self.assertEqual(
+            blocks[1]["items"],
+            ["Max slice is treated as WCET", "Migration count has no latency link"])
+
+    def test_bold_line_heading_plain_prose_and_empty(self) -> None:
+        from btf_viewer_pkg.investigation_ai import parse_reply_blocks
+        self.assertEqual(parse_reply_blocks("**Findings:**\nfoo\nbar"),
+                         [{"title": "Findings", "items": ["foo", "bar"]}])
+        self.assertEqual(parse_reply_blocks("just one line"),
+                         [{"title": "", "items": ["just one line"]}])
+        self.assertEqual(parse_reply_blocks(""), [])
+        self.assertEqual(parse_reply_blocks(None), [])
+
+
+class ExtractNotebookProposalTests(unittest.TestCase):
+    """extract_notebook_proposal — tolerant of how the model wraps the JSON.
+    Parity with web/tests/investigationAi.test.js's extractNotebookProposal."""
+
+    OBJ = ('{"schema":"btf-viewer-nb-proposal/1","summary":"only one measured item",'
+           '"notes":["no hypotheses"],"operations":[{"op":"add","role":"observation",'
+           '"title":"Check Mutex Blocking","note":"open the section","evidence_ids":["E1"]}]}')
+
+    def test_plain_fenced_block(self) -> None:
+        from btf_viewer_pkg.investigation_ai import extract_notebook_proposal
+        p = extract_notebook_proposal("```json\n" + self.OBJ + "\n```")
+        self.assertEqual(p["summary"], "only one measured item")
+        self.assertEqual(len(p["operations"]), 1)
+
+    def test_object_inside_a_markdown_list_with_trailing_prose(self) -> None:
+        from btf_viewer_pkg.investigation_ai import extract_notebook_proposal
+        reply = "\n".join((
+            "AI reply", "", "* ```json", "* " + self.OBJ, "* ```",
+            "* Investigate the current finding. [Run](btfnext:text/0)",
+            "* Investigate remaining finding [Open Statistics](btfstats:section/block)",
+        ))
+        p = extract_notebook_proposal(reply)
+        self.assertIsNotNone(p)
+        self.assertEqual(p["operations"][0]["title"], "Check Mutex Blocking")
+        self.assertEqual(p["notes"], ["no hypotheses"])
+
+    def test_bare_unfenced_object_in_prose_and_review_only_and_none(self) -> None:
+        from btf_viewer_pkg.investigation_ai import extract_notebook_proposal
+        p = extract_notebook_proposal("Here is my analysis: " + self.OBJ + " — done.")
+        self.assertEqual(p["summary"], "only one measured item")
+        review = extract_notebook_proposal(
+            '```json\n{"schema":"btf-viewer-nb-proposal/1","summary":"s","notes":["a"]}\n```')
+        self.assertEqual(review["operations"], [])
+        self.assertIsNone(extract_notebook_proposal("just a normal chat answer"))
+        self.assertIsNone(extract_notebook_proposal(""))
+        self.assertIsNone(extract_notebook_proposal(None))
+
+
+class SummarizeNotebookProposalTests(unittest.TestCase):
+    """summarize_notebook_proposal_for_chat — readable summary in the AI panel.
+    Parity with web/tests/investigationAi.test.js."""
+
+    OBJ = ('{"schema":"btf-viewer-nb-proposal/1","summary":"Only one measured item.",'
+           '"notes":["No hypotheses yet","Conclusion is empty"],"operations":['
+           '{"op":"add","role":"observation","title":"Check Mutex Blocking","note":"x","evidence_ids":["E2"]},'
+           '{"op":"add","role":"observation","title":"Exec Time Max","note":"y","evidence_ids":["E6"]}]}')
+
+    def test_list_wrapped_proposal_and_link_soup_become_a_summary(self) -> None:
+        from btf_viewer_pkg.investigation_ai import summarize_notebook_proposal_for_chat
+        reply = "\n".join((
+            "* ```json", "* " + self.OBJ, "* ```",
+            "* Investigate the current finding [Run](btfnext:text/0)",
+            "* Investigate remaining finding [Open Statistics](btfstats:section/block)",
+        ))
+        s = summarize_notebook_proposal_for_chat(reply)
+        self.assertNotIn("btf-viewer-nb-proposal", s)
+        self.assertNotIn("btfnext:", s)
+        self.assertNotIn("```", s)
+        self.assertIn("**AI proposal for the Investigation Notebook**", s)
+        self.assertIn("Only one measured item.", s)
+        self.assertIn("- No hypotheses yet", s)
+        self.assertIn("2 changes proposed", s)
+
+    def test_review_only_and_passthrough(self) -> None:
+        from btf_viewer_pkg.investigation_ai import summarize_notebook_proposal_for_chat
+        s = summarize_notebook_proposal_for_chat(
+            '```json\n{"schema":"btf-viewer-nb-proposal/1","summary":"s","notes":["a"]}\n```')
+        self.assertIn("Review only", s)
+        self.assertNotIn('"schema"', s)
+        self.assertEqual(summarize_notebook_proposal_for_chat("plain answer"), "plain answer")
+        self.assertEqual(summarize_notebook_proposal_for_chat(""), "")
+
+    def test_ai_assistant_message_body_uses_the_summarizer(self) -> None:
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[1]
+               / "btf_viewer_pkg" / "ai_assistant.py").read_text(encoding="utf-8")
+        self.assertIn("from .investigation_ai import summarize_notebook_proposal_for_chat", src)
+        body = src[src.index("def _ai_message_body_html"):src.index("def _ai_message_body_html") + 900]
+        self.assertIn("summarize_notebook_proposal_for_chat(body_text)", body)
 
 
 if __name__ == "__main__":

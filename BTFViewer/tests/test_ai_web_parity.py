@@ -1800,6 +1800,14 @@ class AiWebParityTests(unittest.TestCase):
             panel.find('class="ai-msg-body"'),
             panel.find('class="ai-tool-card"'),
         )
+        # One merged, collapsed-by-default tool batch per request (count +
+        # parameters), applied once — mirrored on both.
+        self.assertIn("def _tool_batch_summary", assist)
+        self.assertIn("function toolBatchSummary", panel)
+        self.assertIn("def _tool_params_text", assist)
+        self.assertIn("function toolParamsText", panel)
+        self.assertNotIn("Evidence queries", assist)
+        self.assertNotIn("Evidence queries", panel)
         self.assertIn("getEvidencePayload", panel)
         self.assertNotIn("recordTemplateUse", panel[
             panel.find("function runGeneratedNextStep"):

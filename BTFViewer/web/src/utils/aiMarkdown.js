@@ -9,6 +9,7 @@ import { btfHtmlReportDocument } from './htmlReport.js'
 
 import { evidencePanelLabels, evidencePanelSummaryLine, evidencePanelToggleLabel } from './aiInvestigation.js'
 import { DEFAULT_AI_RESPONSE_LANGUAGE } from './aiClient.js'
+import { summarizeNotebookProposalForChat } from './investigationAi.js'
 
 /** Visible role labels (panel + Save As). Keep in sync with ai_assistant.py. */
 export const AI_ROLE_LABEL_USER = 'Your prompt'
@@ -693,8 +694,11 @@ export function formatAiConversationHtml(entries, date = new Date(), responseLan
 
 /** Format a chat message; assistant = Markdown preview, user = plain. */
 export function formatAiMessageHtml(role, text, { inlineSvg = true, zoomable = true, dark = true } = {}) {
-  const body = String(text || '').trim()
+  let body = String(text || '').trim()
   if (role === 'assistant' || role === 'evidence') {
+    // A Notebook proposal reply is machine JSON — render it as a readable
+    // summary instead of a raw ```json block + btfnext link soup.
+    body = summarizeNotebookProposalForChat(body)
     return markdownToSafeHtml(body, { inlineSvg, zoomable, dark }) || '<p></p>'
   }
   return escapeHtml(body)

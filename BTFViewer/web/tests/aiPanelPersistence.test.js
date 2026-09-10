@@ -41,6 +41,22 @@ describe('AI conversation turn layout', () => {
     assert.match(aiPanel, /toolBarFallback/)
   })
 
+  it('renders one tool batch per request: 2+ tools collapse (count + params), one Apply', () => {
+    assert.match(aiPanel, /toolBatchSummary\(m\)/)
+    assert.match(aiPanel, /toolParamsText\(t\)/)
+    assert.match(aiPanel, /function toolBatchSummary\(m\)/)
+    assert.match(aiPanel, /function toolParamsText\(t\)/)
+    // 2+ tools -> a single <details> gated on the count (not on completed/auto)
+    assert.match(aiPanel, /<details v-if="m\.tools\.length > 1" class="ai-tool-fold" ?>/)
+    // one batch-level Apply, not one per tool
+    assert.match(aiPanel, /Apply \{\{ m\.tools\.length \}\} action/)
+    assert.match(aiPanel, /@click="applyBatch\(m\.batchId\)"/)
+    // the old auto/completed-only collapse heuristic is gone
+    assert.doesNotMatch(aiPanel, /toolsCollapsible/)
+    assert.doesNotMatch(aiPanel, /completedToolCount/)
+    assert.doesNotMatch(aiPanel, /Evidence queries/)
+  })
+
   it('is chat-first: log stretches; dynamic templates wrap like desktop', () => {
     const logAt = aiPanel.indexOf('class="ai-log"')
     const tplAt = aiPanel.indexOf('class="ai-templates"')

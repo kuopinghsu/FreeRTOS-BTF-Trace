@@ -45258,6 +45258,9 @@ def _ai_message_body_html(
     """Message body without the role prefix; assistant replies render as Markdown."""
     body_text = (text or "").strip()
     if role in ("assistant", "evidence"):
+        # A Notebook proposal reply is machine JSON — show a readable summary,
+        # not a raw ```json block + btfnext link soup.
+        body_text = summarize_notebook_proposal_for_chat(body_text)
         return markdown_to_safe_html(
             body_text,
             as_img=as_img,
@@ -45363,25 +45366,37 @@ def _short_focus_label(name: Any) -> str:
     return f"{s[:26]}…" if len(s) > 28 else s
 
 
-def _tools_batch_collapsible(
-    tools: Sequence[Dict[str, Any]],
-    batch_id: str = "",
-) -> bool:
-    """Collapse finished read-only query/export/nav batches; keep Apply/fail visible."""
-    tools_list = [t for t in tools if isinstance(t, dict)]
-    if len(tools_list) < 2:
-        return False
-    if batch_id and any(
-        str(t.get("status") or "pending") == "pending" for t in tools_list
-    ):
-        return False
-    if any(str(t.get("status") or "") == "failed" for t in tools_list):
-        return False
-    if not tool_batch_auto_runs(tools_list):
-        return False
-    return all(
-        str(t.get("status") or "") in ("applied", "skipped", "done")
-        for t in tools_list
+def _tool_batch_summary(tools: Sequence[Dict[str, Any]], batch_id: str = "") -> str:
+    """One-line ``<summary>`` for a tool batch — how many tools + batch state.
+    Lockstep with web AiAssistantPanel.vue's ``toolBatchSummary``."""
+    tl = [t for t in tools if isinstance(t, dict)]
+    n = len(tl)
+    noun = f"{n} tool" if n == 1 else f"{n} tools"
+    if batch_id and any(str(t.get("status") or "pending") == "pending" for t in tl):
+        return f"{noun} — review, then Apply"
+    failed = sum(1 for t in tl if str(t.get("status") or "") == "failed")
+    if failed:
+        return f"{noun} · {failed} failed"
+    if any(str(t.get("status") or "") == "skipped" for t in tl):
+        return f"{noun} · skipped"
+    return f"{noun} · done"
+
+
+def _tool_params_text(args: Any) -> str:
+    """A tool call's arguments as a compact ``key=value, …`` line — lockstep
+    with web AiAssistantPanel.vue's ``toolParamsText``."""
+    a = args if isinstance(args, dict) else {}
+
+    def _fmt(v: Any) -> str:
+        if isinstance(v, (list, tuple)):
+            return "[" + ", ".join(_fmt(x) for x in v) + "]"
+        if isinstance(v, dict):
+            return json.dumps(v, separators=(",", ":"))
+        return str(v)
+
+    return ", ".join(
+        f"{k}={_fmt(v)}" for k, v in a.items()
+        if v is not None and v != ""
     )
 
 
@@ -45401,60 +45416,83 @@ def _tool_cards_html(
             status = str(t.get("status") or status)
             break
     st_color = "#6b7280" if light else "#8b98a8"
-    completed_n = 0
-    for t in tools:
-        if not isinstance(t, dict):
-            continue
+    tool_list = [t for t in tools if isinstance(t, dict)]
+    for t in tool_list:
         name = str(t.get("name") or "")
         args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
         label = html.escape(format_tool_action_label(name, args))
         st_raw = str(t.get("status") or status)
         st = html.escape(st_raw)
-        if st_raw in ("applied", "skipped", "done"):
-            completed_n += 1
         rows.append(
             f"<p>⚡ {label} <span style=\"color:{st_color}\">({st})</span></p>"
         )
-        detail = ""
+        params = _tool_params_text(args)
+        if params:
+            rows.append(
+                f"<p style=\"margin:2px 0 4px 1.4em;color:{st_color};"
+                f"font-size:x-small;\">{html.escape(params)}</p>"
+            )
         if st_raw == "failed":
             detail = str(t.get("result") or t.get("error") or "").strip()
-        if detail:
-            rows.append(
-                f"<p style=\"margin:2px 0 6px 1.2em;color:{st_color};"
-                f"font-size:x-small;\">{html.escape(detail)}</p>"
-            )
+            if detail:
+                rows.append(
+                    f"<p style=\"margin:2px 0 6px 1.2em;color:{st_color};"
+                    f"font-size:x-small;\">{html.escape(detail)}</p>"
+                )
+
+    # One batch-level action (Apply the whole batch once — not per tool),
+    # rendered OUTSIDE the fold so it is visible while the details stay
+    # collapsed. Mirrors the web panel.
     actions = ""
     if status == "pending" and batch_id:
+        n = len(tool_list)
         actions = (
-            f'<p><a href="btfaction:apply/{html.escape(batch_id)}">Apply</a>'
+            f'<p><a href="btfaction:apply/{html.escape(batch_id)}">'
+            f"Apply {n} action{'' if n == 1 else 's'}</a>"
             f' · <a href="btfaction:skip/{html.escape(batch_id)}">Skip</a></p>'
         )
     elif status == "applied" and batch_id:
         actions = (
             f'<p><a href="btfaction:undo/{html.escape(batch_id)}">Undo</a></p>'
         )
-    body = "".join(rows) + actions
-    if _tools_batch_collapsible(tools, batch_id):
-        summary = f"Evidence queries · {completed_n} completed"
-        fold_id = _ev_fold_id(summary, batch_id or summary)
-        opened = open_folds if isinstance(open_folds, set) else set()
+
+    # For 2+ tools the per-tool details (labels + parameters) collapse into a
+    # fold that is closed by default; the summary is just the tool count +
+    # batch state. A lone tool renders inline.
+    if len(tool_list) < 2:
+        body = "".join(rows) + actions
         if light:
-            body = (
-                f'<details class="ai-tool-fold">'
-                f"<summary>{html.escape(summary)}</summary>"
-                f"{''.join(rows)}</details>"
+            return (
+                '<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;'
+                'border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">'
+                f"{body}</div>"
             )
-        elif fold_id in opened:
-            body = (
-                _ai_fold_toggle_html(
-                    html.escape(summary), fold_id,
-                    expanded=True, is_dark=not light)
-                + "".join(rows)
-            )
-        else:
-            body = _ai_fold_toggle_html(
-                html.escape(summary), fold_id,
-                expanded=False, is_dark=not light)
+        return (
+            '<table width="100%" cellspacing="0" cellpadding="0">'
+            '<tr><td bgcolor="#2a2418" class="ai-tool-card" '
+            'style="border-left:3px solid #c9a227;padding:8px 10px;">'
+            f"{body}</td></tr></table>"
+        )
+
+    summary = _tool_batch_summary(tools, batch_id)
+    fold_id = _ev_fold_id(summary, batch_id or summary)
+    opened = open_folds if isinstance(open_folds, set) else set()
+    if light:
+        fold = (
+            f'<details class="ai-tool-fold">'
+            f"<summary>{html.escape(summary)}</summary>"
+            f"{''.join(rows)}</details>"
+        )
+    elif fold_id in opened:
+        fold = (
+            _ai_fold_toggle_html(
+                html.escape(summary), fold_id, expanded=True, is_dark=not light)
+            + "".join(rows)
+        )
+    else:
+        fold = _ai_fold_toggle_html(
+            html.escape(summary), fold_id, expanded=False, is_dark=not light)
+    body = fold + actions
     if light:
         return (
             '<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;'
@@ -58463,28 +58501,60 @@ def scaffold_investigation_from_findings(
 # ---------------------------------------------------------------------------
 NB_AI_DISABLED_REASON = "Enable AI Assistant in Settings → AI"
 
-NB_AI_ACTIONS: Tuple[Tuple[str, str, str], ...] = (
+# The one reply contract every collaborate action (except refine_question) must
+# follow, so the Notebook can render the answer as a select-and-add proposal
+# card instead of a wall of prose. Lockstep with investigationAi.js's
+# NB_PROPOSAL_REPLY_FORMAT.
+NB_PROPOSAL_REPLY_FORMAT = "\n".join((
+    "Reply with ONE ```json fenced block and NOTHING before or after it — no",
+    'commentary, no "next steps", no links, and do NOT put it inside a markdown',
+    "list or numbered step. The block is exactly:",
+    '{"schema":"btf-viewer-nb-proposal/1","summary":"<1-2 plain sentences>",',
+    ' "notes":["<short point>", ...],"operations":[<op>, ...]}',
+    "Each op is exactly one of:",
+    ' {"op":"add","role":"observation|supporting|contradicting|hypothesis","title":"...","note":"<your words>","evidence_ids":["E1"]}',
+    ' {"op":"update","bookmark_id":"E1","changes":{"note":"..."}}  or  {"op":"update","changes":{"conclusion":"..."}}',
+    ' {"op":"link","from":"E1","to":"H1","relation":"supports|contradicts|verifies|relates"}',
+    ' {"op":"change_status","status":"open|closed"}',
+    'Use "operations":[] when you are only reviewing. Cite only evidence ids shown in the',
+    'context; never use kind "measured" or a "supported" status; every hypothesis stays "open".',
+))
+
+_NB_AI_TASKS: Tuple[Tuple[str, str, str], ...] = (
     ("review_investigation", "Review investigation",
-     "Review this investigation. List unsupported claims, contradictions and "
-     "missing evidence. Do not change anything — return findings only."),
+     "Review this investigation for unsupported claims, contradictions and weak or "
+     'missing evidence; put each finding in "notes". Where the evidence is too thin '
+     'to support a conclusion, ALSO return "add" operations naming the specific next '
+     "evidence to collect — which BTFViewer Statistics section or tool would produce "
+     "it and what it would show — so the investigation can reach at least "
+     'Derived-strength evidence. Otherwise "operations":[].'),
+    ("gather_evidence", "Gather evidence",
+     "Collect evidence for the open question by CALLING BTFViewer tools. Call tools "
+     "as many times as needed — one round per gap — until every claim you would make "
+     'is backed by measured tool output. Then return "add" operations (role '
+     '"supporting" or "observation") whose "note" cites the exact tool and the '
+     'numbers it returned; list anything you still could not substantiate in "notes".'),
     ("suggest_next_check", "Suggest next check",
-     "Recommend exactly one evidence-producing action available in BTFViewer "
-     "(a tool call or a Statistics/Timeline step) that would most advance this "
-     "investigation. One action, with the reason."),
+     "Recommend exactly one evidence-producing next action (a BTFViewer tool call or a "
+     'Statistics/Timeline step). Put it and the reason in "summary"; "operations":[].'),
     ("draft_hypotheses", "Draft hypotheses",
-     "Propose up to three hypotheses for the open question. Mark each 'open' — "
-     "never 'supported'. Cite the evidence id(s) each rests on."),
+     'Propose up to three hypotheses for the open question as "add" operations with '
+     'role "hypothesis", each citing in evidence_ids the id(s) it rests on.'),
     ("draft_conclusion", "Draft conclusion",
-     "Draft a conclusion using only the accepted Notebook evidence. State "
-     "limitations and the verification state. Cite the evidence ids used."),
+     'Draft a conclusion from the accepted Notebook evidence as one "update" operation '
+     "with changes.conclusion. State the limitations and verification state in it."),
     ("update_from_findings", "Update from Findings",
-     "Propose evidence cards from the current deterministic Analysis Findings. "
-     "Each card must reference the finding's rule_id; never label a card "
-     "Measured unless it references measured BTFViewer output."),
+     'Propose evidence cards from the listed Analysis Findings as "add" operations '
+     '(role "supporting" or "observation"); each "note" must reference the finding.'),
     ("compare_trace", "Compare with another trace",
-     "Compare with the other open trace. Baseline A is Trace A, Candidate B is "
-     "Trace B; verdicts describe Candidate B versus Baseline A. Use the current "
-     "Compare Scope."),
+     "Compare with the other open trace (Baseline A vs Candidate B, current Compare "
+     'Scope) and propose "add" operations for the notable differences.'),
+)
+
+NB_AI_ACTIONS: Tuple[Tuple[str, str, str], ...] = tuple(
+    (aid, label, f"{task}\n\n{NB_PROPOSAL_REPLY_FORMAT}")
+    for aid, label, task in _NB_AI_TASKS
+) + (
     ("refine_question", "Help refine question",
      "Suggest one clearer, more specific rewording of this investigation "
      "question. Return only the improved question text on its own line, "
@@ -58531,6 +58601,146 @@ def parse_question_suggestion(reply_text: Optional[str]) -> str:
     if not m:
         return ""
     return m.group(1).strip().strip("\"'")
+
+
+_RB_HEADING_HASH_RE = re.compile(r"^#{1,6}\s+")
+_RB_HEADING_BOLD_RE = re.compile(r"^\*\*[^*]+\*\*:?\s*$")
+_RB_BULLET_RE = re.compile(r"^([-*•]|\d+[.)])\s+")
+
+
+def _rb_clean(s: str) -> str:
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", str(s))
+    s = re.sub(r"`([^`]+)`", r"\1", s)
+    s = re.sub(r"^#{1,6}\s*", "", s)
+    return s.strip()
+
+
+def parse_reply_blocks(reply_text: Optional[str]) -> List[Dict[str, Any]]:
+    """Turn a prose AI reply into ``[{title, items:[]}]`` for the Notebook's
+    right panel. Markdown headings (``#``..``######``, or a lone ``**Bold:**``
+    line) start a section; bullet / numbered / plain lines become items; inline
+    ``**`` / `` ` `` and a leading ``#`` are stripped. Falls back to one
+    untitled section. Lockstep with ``investigationAi.js``'s
+    ``parseReplyBlocks`` — used only for a reply that is not a structured
+    proposal.
+    """
+    raw = str(reply_text or "")
+    if not raw:
+        return []
+    blocks: List[Dict[str, Any]] = []
+    cur: Optional[Dict[str, Any]] = None
+    for raw_line in raw.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _RB_HEADING_HASH_RE.match(line) or _RB_HEADING_BOLD_RE.match(line):
+            cur = {"title": re.sub(r":$", "", _rb_clean(line)), "items": []}
+            blocks.append(cur)
+            continue
+        if cur is None:
+            cur = {"title": "", "items": []}
+            blocks.append(cur)
+        cur["items"].append(_rb_clean(_RB_BULLET_RE.sub("", line)))
+    return [b for b in blocks if b["title"] or b["items"]]
+
+
+_NB_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+_NB_LIST_MARKER_RE = re.compile(r"^\s*(?:[*+\-]|\d+[.)])\s+")
+
+
+def _strip_list_markers(s: str) -> str:
+    return "\n".join(
+        _NB_LIST_MARKER_RE.sub("", ln) for ln in str(s).split("\n")
+    ).strip()
+
+
+def extract_notebook_proposal(text: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Pull a ``btf-viewer-nb-proposal/…`` object out of a model reply even when
+    the model wrapped it in a ```json fence, a markdown list, or surrounded it
+    with prose / "next step" links. Returns the object (``operations`` defaulted
+    to ``[]``) or ``None``. Lockstep with ``investigationAi.js``'s
+    ``extractNotebookProposal``.
+    """
+    raw = str(text or "")
+    candidates: List[str] = list(_NB_FENCE_RE.findall(raw))
+    candidates.append(raw)
+    s_idx = raw.find("btf-viewer-nb-proposal/")
+    if s_idx >= 0:
+        open_i = raw.rfind("{", 0, s_idx)
+        if open_i >= 0:
+            depth = 0
+            for i in range(open_i, len(raw)):
+                if raw[i] == "{":
+                    depth += 1
+                elif raw[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append(raw[open_i:i + 1])
+                        break
+    for c in candidates:
+        try:
+            obj = json.loads(_strip_list_markers(c))
+        except (ValueError, TypeError):
+            continue
+        if (
+            isinstance(obj, dict)
+            and str(obj.get("schema") or "").startswith("btf-viewer-nb-proposal/")
+            and (isinstance(obj.get("operations"), list)
+                 or obj.get("summary") or isinstance(obj.get("notes"), list))
+        ):
+            if not isinstance(obj.get("operations"), list):
+                obj["operations"] = []
+            return obj
+    return None
+
+
+_NB_FENCE_ANY_RE = re.compile(r"```(?:json)?\s*[\s\S]*?```", re.IGNORECASE)
+_NB_LINK_LINE_RE = re.compile(r"\]\((?:btfnext|btfstats):", re.IGNORECASE)
+_NB_SCHEMA_LINE_RE = re.compile(r'"schema"\s*:\s*"btf-viewer-nb-proposal')
+
+
+def summarize_notebook_proposal_for_chat(text: Optional[str]) -> str:
+    """Rewrite an assistant reply that carries a ``btf-viewer-nb-proposal/…``
+    object so the AI panel (and the Notebook) show a readable summary instead
+    of a raw JSON code block + "next step" link soup. No-op when the text has
+    no proposal. Lockstep with investigationAi.js's
+    ``summarizeNotebookProposalForChat``.
+    """
+    raw = str(text or "")
+    obj = extract_notebook_proposal(raw)
+    if not obj:
+        return raw
+
+    rest_lines: List[str] = []
+    for ln in _NB_FENCE_ANY_RE.sub("", raw).split("\n"):
+        s = _NB_LIST_MARKER_RE.sub("", ln.strip())
+        if not s or s in ("`", "```"):
+            continue
+        if _NB_SCHEMA_LINE_RE.search(s) or _NB_LINK_LINE_RE.search(s):
+            continue
+        rest_lines.append(s)
+    rest = "\n".join(rest_lines).strip()
+
+    ops = obj.get("operations") if isinstance(obj.get("operations"), list) else []
+    n_ops = len(ops)
+    out: List[str] = ["**AI proposal for the Investigation Notebook**"]
+    summary = str(obj.get("summary") or "").strip()
+    if summary:
+        out += ["", summary]
+    notes = [str(n or "").strip() for n in (obj.get("notes") or [])]
+    notes = [n for n in notes if n]
+    if notes:
+        out.append("")
+        out += [f"- {n}" for n in notes]
+    out += ["", (
+        f"_{n_ops} change{'' if n_ops == 1 else 's'} proposed — open the "
+        "Investigation Notebook to review and add._"
+        if n_ops else
+        "_Review only — open the Investigation Notebook for details._"
+    )]
+    if rest:
+        out += ["", rest]
+    return "\n".join(out)
 
 
 def collaborate_header(
@@ -58704,8 +58914,20 @@ def _annotate_op(
 
     if kind == "add":
         role = str(op.get("role") or op.get("type") or "").strip().lower()
-        if role not in EVIDENCE_BOOKMARK_TYPES:
-            out["status"], out["reason"] = OP_REJECTED, "add needs an evidence role"
+        if role not in (*EVIDENCE_BOOKMARK_TYPES, BM_HYPOTHESIS):
+            out["status"], out["reason"] = (
+                OP_REJECTED, "add needs an evidence or hypothesis role")
+            return out
+        # Normalise so proposal_diff routing and apply() agree regardless of
+        # how the model cased the role.
+        out["role"] = role
+        # A hypothesis has no evidence card — it is an interpretation the user
+        # still has to verify. Accept it, but flag one missing its evidence
+        # citation; it can never be applied as anything but 'open'.
+        if role == BM_HYPOTHESIS:
+            out["status"] = OP_OK
+            if not (op.get("evidence_ids") or str(op.get("rationale") or "").strip()):
+                out["reason"] = "hypothesis cites no evidence id"
             return out
         card = normalize_evidence_card(
             {
@@ -58792,8 +59014,9 @@ def validate_proposal(
 ) -> Dict[str, Any]:
     """Validate every proposed op against references and protected fields.
 
-    Returns ``{schema, ok, operations:[…annotated…], model}``; ``ok`` is True
-    when at least one op is applicable (``ok`` or ``needs_confirmation``).
+    Returns ``{schema, ok, summary, notes, operations:[…annotated…], model}``;
+    ``ok`` is True when at least one op is applicable (``ok`` or
+    ``needs_confirmation``). ``summary`` / ``notes`` carry a review-only reply.
     """
     inv = load_investigation(inv)
     trace_hash = str((inv.get("trace_identity") or {}).get("hash") or "")
@@ -58809,9 +59032,14 @@ def validate_proposal(
     for i, op in enumerate(annotated):
         op["index"] = i
     applicable = any(o["status"] in (OP_OK, OP_CONFIRM) for o in annotated)
+    raw_notes = raw.get("notes") if isinstance(raw.get("notes"), list) else []
+    notes = [str(n if n is not None else "").strip() for n in raw_notes]
+    notes = [n for n in notes if n]
     return {
         "schema": PROPOSAL_SCHEMA,
         "ok": bool(applicable),
+        "summary": str(raw.get("summary") or "").strip(),
+        "notes": notes,
         "operations": annotated,
         "model": strip_model_secrets(raw.get("model")),
     }
@@ -58911,6 +59139,25 @@ def _apply_one(
 ) -> Dict[str, Any]:
     kind = op.get("op")
     if kind == "add":
+        role = str(op.get("role") or op.get("type") or "supporting").strip().lower()
+        if role == BM_HYPOTHESIS:
+            # Add the hypothesis bookmark, then wire each cited evidence id that
+            # resolves to a real bookmark as a 'supports' link (the demo's
+            # "Add hypothesis" outcome). Missing / self ids are skipped.
+            out = add_bookmark(
+                inv,
+                type=BM_HYPOTHESIS,
+                title=str(op.get("title") or "AI hypothesis"),
+                note=str(op.get("note") or op.get("rationale") or ""),
+                refs=op.get("refs"),
+            )
+            bms = out.get("bookmarks") or []
+            new_id = str(bms[-1].get("id")) if bms else ""
+            known = {str(b.get("id")) for b in bms}
+            for ev_id in (str(x) for x in (op.get("evidence_ids") or [])):
+                if ev_id and ev_id != new_id and ev_id in known:
+                    out = link_bookmarks(out, ev_id, new_id, "supports")
+            return out
         card = op.get("card") or {}
         out = add_evidence(
             inv,
@@ -90629,6 +90876,10 @@ class _InvestigationNotebookDialog(QDialog):
         self._selected_finding_id = ""
         self._last_ai_reply: Optional[Dict[str, str]] = None
         self._context_details_open = False
+        # §10 — AI proposal reviewed inline in the right panel (no modal).
+        self._ai_proposal: Optional[dict] = None
+        self._ai_proposal_selected: set = set()
+        self._ai_proposal_confirmed: set = set()
         # One shared "Add evidence" form — matches the web dialog exactly:
         # From Findings / Current measurement / Note are three entry points
         # into the SAME form (openEvidenceForm(kind) just pre-seeds one
@@ -90830,6 +91081,7 @@ class _InvestigationNotebookDialog(QDialog):
         if self._ai_panel is None or not self._ai_enabled:
             self._status(NB_AI_DISABLED_REASON)
             return
+        self.reject()  # close: the AI Assistant panel is behind this window
         if hasattr(self._ai_panel, "ask"):
             self._ai_panel.ask(prompt)
         if callable(self._on_status):
@@ -91118,9 +91370,259 @@ class _InvestigationNotebookDialog(QDialog):
             self._make_side_labels_selectable()
             return
 
+        if self._ai_proposal is not None:
+            self._render_ai_proposal_card()
+            reply_for_step = ""  # the proposal card replaces the prose reply
+
         getattr(self, f"_render_{self._step}_ai_side")(reply_for_step)
         self._side_lay.addStretch(1)
         self._make_side_labels_selectable()
+
+    # ==================================================================
+    # §10 — inline AI proposal review + prose-reply rendering
+    # ==================================================================
+    def set_ai_proposal(self, proposal: Optional[dict]) -> None:
+        """The parent got a structured proposal from the AI — review it inline
+        in the right panel (mirrors the web dialog; there is no modal)."""
+        self._ai_proposal = proposal if isinstance(proposal, dict) else None
+        self._ai_proposal_selected = set()
+        self._ai_proposal_confirmed = set()
+        if self._ai_proposal is not None:
+            v = validate_proposal(
+                self._inv, self._ai_proposal,
+                allow_other_trace=bool(self._has_second_trace))
+            for op in v.get("operations") or []:
+                if op.get("status") == "ok":
+                    self._ai_proposal_selected.add(int(op.get("index", -1)))
+        self._render_ai_side()
+
+    def _dismiss_ai_proposal(self) -> None:
+        self._ai_proposal = None
+        self._ai_proposal_selected = set()
+        self._ai_proposal_confirmed = set()
+        self._render_ai_side()
+
+    def _render_ai_reply_blocks(self, reply_text: str) -> None:
+        """Prose AI reply -> demo-style titled sections + bullets (mirrors the
+        web dialog's ``stepAiReplyBlocks``). A leaked ```json proposal and the
+        ``btfnext:`` / ``btfstats:`` "next step" links are stripped so machine
+        noise never renders as prose."""
+        raw = str(reply_text or "")
+        if not raw:
+            return
+        cleaned = re.sub(r"```(?:json)?\s*[\s\S]*?```", "", raw, flags=re.IGNORECASE)
+        cleaned = "\n".join(
+            ln for ln in cleaned.split("\n")
+            if not re.search(r"\]\((?:btfnext|btfstats):", ln, re.IGNORECASE))
+        blocks = parse_reply_blocks(cleaned)
+        if not blocks:
+            return
+        card = QFrame()
+        card.setObjectName("nb_card")
+        cl = QVBoxLayout(card)
+        cl.setSpacing(4)
+        cl.addWidget(self._caption("AI REPLY"))
+        for blk in blocks:
+            if blk.get("title"):
+                t = QLabel(str(blk["title"]))
+                t.setTextFormat(Qt.TextFormat.PlainText)
+                t.setWordWrap(True)
+                t.setStyleSheet("font-weight:700;color:palette(text);")
+                cl.addWidget(t)
+            for it in blk.get("items") or []:
+                b = QLabel(f"•  {it}")
+                b.setTextFormat(Qt.TextFormat.PlainText)
+                b.setWordWrap(True)
+                cl.addWidget(b)
+        self._side_lay.addWidget(card)
+
+    def _proposal_op_summary(self, op: dict) -> str:
+        kind = op.get("op")
+        role = str(op.get("role") or op.get("type") or "")
+        if kind == "add":
+            return (f"Add {BOOKMARK_TYPE_LABELS.get(role, role or 'evidence')}: "
+                    f"“{op.get('title') or '(untitled)'}”")
+        if kind == "update":
+            if "conclusion" in (op.get("changes") or {}):
+                return "Replace the conclusion text"
+            return f"Edit explanation of “{self._bm_label(str(op.get('bookmark_id') or ''))}”"
+        if kind == "link":
+            return (f"Link “{self._bm_label(str(op.get('from') or ''))}” —"
+                    f"{op.get('relation') or 'relates'}→ "
+                    f"“{self._bm_label(str(op.get('to') or ''))}”")
+        if kind == "change_status":
+            s = op.get("status_value") or op.get("status")
+            return f"Set status to {NOTEBOOK_STATUS_LABELS.get(s, s)}"
+        if kind == "remove":
+            return f"Remove “{self._bm_label(str(op.get('bookmark_id') or ''))}”"
+        return str(kind or "operation")
+
+    def _proposal_applicable_count(self, v: dict) -> int:
+        n = 0
+        for op in v.get("operations") or []:
+            i = int(op.get("index", -1))
+            if i not in self._ai_proposal_selected:
+                continue
+            if op.get("status") == "ok":
+                n += 1
+            elif (op.get("status") == "needs_confirmation"
+                  and i in self._ai_proposal_confirmed):
+                n += 1
+        return n
+
+    def _proposal_op_row(self, op: dict) -> QWidget:
+        i = int(op.get("index", -1))
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(4, 3, 4, 3)
+        lay.setSpacing(0)
+        cb = QCheckBox()
+        cb.setChecked(i in self._ai_proposal_selected)
+
+        def _toggle(checked, k=i):
+            (self._ai_proposal_selected.add if checked
+             else self._ai_proposal_selected.discard)(k)
+            self._render_ai_side()
+        cb.toggled.connect(_toggle)
+        lay.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addSpacing(8)  # QCheckBox's own hit-box crowds the next widget
+        col = QVBoxLayout()
+        col.setSpacing(3)
+        line = QLabel(self._proposal_op_summary(op))
+        line.setWordWrap(True)
+        line.setTextFormat(Qt.TextFormat.PlainText)
+        col.addWidget(line)
+        if op.get("status") == "needs_confirmation":
+            conf = QCheckBox(f"Confirm — {op.get('reason') or ''}")
+            conf.setStyleSheet("color:#E0A030;font-size:11px;")
+            conf.setChecked(i in self._ai_proposal_confirmed)
+
+            def _toggle_conf(checked, k=i):
+                if checked:
+                    self._ai_proposal_confirmed.add(k)
+                    self._ai_proposal_selected.add(k)
+                else:
+                    self._ai_proposal_confirmed.discard(k)
+                self._render_ai_side()
+            conf.toggled.connect(_toggle_conf)
+            col.addWidget(conf)
+        elif op.get("reason"):
+            n = QLabel(str(op.get("reason")))
+            n.setWordWrap(True)
+            n.setStyleSheet(f"font-size:11px;color:{_dim_text_color()};")
+            col.addWidget(n)
+        lay.addLayout(col, 1)
+        return w
+
+    def _render_ai_proposal_card(self) -> None:
+        v = validate_proposal(
+            self._inv, self._ai_proposal,
+            allow_other_trace=bool(self._has_second_trace))
+        d = proposal_diff(self._inv, v)
+        card = QFrame()
+        card.setObjectName("nb_card")
+        cl = QVBoxLayout(card)
+        cl.setSpacing(8)
+        cl.addWidget(self._caption("AI PROPOSAL"))
+        summary = str(v.get("summary") or "").strip()
+        if summary:
+            s = QLabel(summary)
+            s.setWordWrap(True)
+            s.setTextFormat(Qt.TextFormat.PlainText)
+            cl.addWidget(s)
+        notes = [str(x).strip() for x in (v.get("notes") or []) if str(x).strip()]
+        for note in notes:
+            nb = QLabel(f"• {note}")
+            nb.setWordWrap(True)
+            nb.setTextFormat(Qt.TextFormat.PlainText)
+            nb.setContentsMargins(6, 0, 0, 0)
+            cl.addWidget(nb)
+        ok = bool(v.get("ok"))
+        if not ok and not summary and not notes:
+            cl.addWidget(QLabel(
+                "Nothing in this suggestion applies to the current investigation."))
+        if ok:
+            by_sec = d.get("by_section", {})
+            for gid, glabel in (
+                ("hypotheses", "Hypotheses"), ("evidence", "Evidence"),
+                ("conclusion", "Conclusion"), ("status", "Status"),
+                ("links", "Links"),
+            ):
+                ops = by_sec.get(gid) or []
+                if not ops:
+                    continue
+                cl.addSpacing(2)
+                cap = QLabel(glabel)
+                cap.setStyleSheet(
+                    f"font-weight:700;font-size:10px;letter-spacing:.05em;"
+                    f"color:{_dim_text_color()};")
+                cl.addWidget(cap)
+                for op in ops:
+                    cl.addWidget(self._proposal_op_row(op))
+        rej = d.get("rejected") or []
+        if rej:
+            rc = QLabel(f"Not applicable ({len(rej)})")
+            rc.setStyleSheet(
+                f"font-weight:700;font-size:10px;color:{_dim_text_color()};")
+            cl.addWidget(rc)
+            for op in rej:
+                r = QLabel(f"{self._proposal_op_summary(op)} — {op.get('reason') or ''}")
+                r.setWordWrap(True)
+                r.setTextFormat(Qt.TextFormat.PlainText)
+                r.setStyleSheet(f"font-size:11px;color:{_dim_text_color()};")
+                cl.addWidget(r)
+        model = v.get("model") or {}
+        if ok and (model.get("model") or model.get("provider")):
+            m = QLabel(
+                f"Proposed by {model.get('provider') or 'AI'}"
+                + (f" · {model['model']}" if model.get("model") else "")
+                + ". Added cards keep this provenance.")
+            m.setWordWrap(True)
+            m.setTextFormat(Qt.TextFormat.PlainText)
+            m.setStyleSheet(f"font-size:10px;color:{_dim_text_color()};")
+            cl.addWidget(m)
+        frow = QHBoxLayout()
+        dis = QPushButton("Dismiss")
+        dis.clicked.connect(self._dismiss_ai_proposal)
+        frow.addWidget(dis)
+        frow.addStretch(1)
+        if ok:
+            n_sel = self._proposal_applicable_count(v)
+            add_sel = QPushButton(f"Add selected ({n_sel})")
+            add_sel.setEnabled(n_sel > 0)
+            add_sel.clicked.connect(lambda: self._apply_ai_proposal(v, all_ops=False))
+            frow.addWidget(add_sel)
+            add_all = QPushButton("Add all")
+            add_all.setDefault(True)
+            add_all.clicked.connect(lambda: self._apply_ai_proposal(v, all_ops=True))
+            frow.addWidget(add_all)
+        cl.addLayout(frow)
+        self._side_lay.addWidget(card)
+
+    def _apply_ai_proposal(self, v: dict, *, all_ops: bool) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        if all_ops:
+            confirmed = [
+                int(op.get("index", -1)) for op in (v.get("operations") or [])
+                if op.get("status") == "needs_confirmation"]
+            inv, applied, _ = apply_proposal(
+                self._inv, v, accept_all=True, confirmed_indices=confirmed, now=now)
+        else:
+            inv, applied, _ = apply_proposal(
+                self._inv, v,
+                accept_indices=sorted(self._ai_proposal_selected),
+                confirmed_indices=sorted(self._ai_proposal_confirmed), now=now)
+        self._ai_proposal = None
+        self._ai_proposal_selected = set()
+        self._ai_proposal_confirmed = set()
+        if not applied:
+            self._status("No proposal changes applied.")
+            self._render_ai_side()
+            return
+        self._commit(load_investigation(inv))
+        self._status(
+            f"Applied {len(applied)} AI proposal change"
+            f"{'' if len(applied) == 1 else 's'}")
 
     def _make_side_labels_selectable(self) -> None:
         # QLabel defaults to NoTextInteraction — every label in this panel
@@ -91241,11 +91743,7 @@ class _InvestigationNotebookDialog(QDialog):
                 sl.addWidget(use)
                 self._side_lay.addWidget(sug)
             else:
-                out = QLabel(reply_text)
-                out.setTextFormat(Qt.TextFormat.PlainText)
-                out.setWordWrap(True)
-                out.setObjectName("nb_hint")
-                self._side_lay.addWidget(out)
+                self._render_ai_reply_blocks(reply_text)
 
     def _edit_question(self) -> None:
         self._question_editing = True
@@ -91374,11 +91872,20 @@ class _InvestigationNotebookDialog(QDialog):
         expanded = bid in self._expanded_evidence_ids
         actions = QHBoxLayout()
         nav = item.get("nav") if isinstance(item.get("nav"), dict) else {}
+        # The Notebook is a full-screen window over the timeline / Statistics,
+        # so a "view source" navigation closes it first (state is kept in the
+        # tab history and restored when it is reopened) — mirrors the web card.
         if nav.get("jump") is not None or nav.get("range"):
             src_btn = QPushButton("View source")
             src_btn.setFlat(True)
             src_btn.clicked.connect(lambda: self._ev_jump(nav))
             actions.addWidget(src_btn)
+        if nav.get("stats_metric"):
+            stats_btn = QPushButton("Open Statistics")
+            stats_btn.setFlat(True)
+            stats_btn.clicked.connect(
+                lambda: self._ev_open_stats(str(nav["stats_metric"])))
+            actions.addWidget(stats_btn)
         ask_btn = QPushButton("Ask AI about this")
         ask_btn.setFlat(True)
         ask_btn.setEnabled(self._ai_enabled)
@@ -91393,9 +91900,9 @@ class _InvestigationNotebookDialog(QDialog):
         actions.addStretch(1)
         rm_btn = QToolButton()
         rm_btn.setText("\U0001F5D1")
-        rm_btn.setToolTip("Remove")
+        rm_btn.setToolTip(f"Delete evidence E{index}")
         rm_btn.setAutoRaise(True)
-        rm_btn.clicked.connect(lambda: self._commit(remove_bookmark(self._inv, bid)))
+        rm_btn.clicked.connect(lambda: self._delete_evidence(bid))
         actions.addWidget(rm_btn)
         lay.addLayout(actions)
 
@@ -91428,11 +91935,16 @@ class _InvestigationNotebookDialog(QDialog):
                 rb = QPushButton("Restore evidence scope…")
                 rb.clicked.connect(lambda: self._ev_restore_scope(bid, plan))
                 lay.addWidget(rb)
-            if nav.get("stats_metric"):
-                sb = QPushButton("Open source Statistics section")
-                sb.clicked.connect(lambda: self._ev_open_stats(str(nav["stats_metric"])))
-                lay.addWidget(sb)
         return card
+
+    def _delete_evidence(self, bid: str) -> None:
+        if QMessageBox.question(
+                self, "Delete evidence",
+                "Delete this evidence item? (Undo restores it.)") \
+                != QMessageBox.StandardButton.Yes:
+            return
+        self._selected_evidence_ids.discard(bid)
+        self._commit(remove_bookmark(self._inv, bid))
 
     def _toggle_evidence_details(self, bid: str) -> None:
         if bid in self._expanded_evidence_ids:
@@ -91461,12 +91973,17 @@ class _InvestigationNotebookDialog(QDialog):
         body = QLabel(f"{n} evidence item(s), {sel} selected.")
         body.setWordWrap(True)
         self._side_lay.addWidget(body)
-        if reply_text:
-            out = QLabel(reply_text)
-            out.setTextFormat(Qt.TextFormat.PlainText)
-            out.setWordWrap(True)
-            out.setObjectName("nb_hint")
-            self._side_lay.addWidget(out)
+        gather = QPushButton("Gather evidence with AI")
+        gather.setEnabled(self._ai_enabled and not self._ai_status().get("busy"))
+        gather.clicked.connect(lambda: self._collaborate("gather_evidence"))
+        self._side_lay.addWidget(gather)
+        hint = QLabel(
+            "Calls trace tools across several rounds, then proposes measured "
+            "evidence cards for you to review and add.")
+        hint.setObjectName("nb_hint")
+        hint.setWordWrap(True)
+        self._side_lay.addWidget(hint)
+        self._render_ai_reply_blocks(reply_text)
 
     def _evidence_next_action(self) -> dict:
         n = len(self._sections()["evidence"]["items"])
@@ -91474,13 +91991,22 @@ class _InvestigationNotebookDialog(QDialog):
         if n == 0:
             return {"id": "none", "label": "Add evidence to continue", "disabled": True}
         if sel == 0:
-            return {"id": "select", "label": "Select evidence to check with AI", "disabled": True}
+            return {"id": "select", "label": "Select all evidence"}
         return {"id": "check", "label": "Check evidence with AI"}
 
     def _on_evidence_next_action(self, action_id: str) -> None:
         if action_id == "check":
             self._collaborate(
                 "review_investigation", selected_evidence_ids=self._selected_evidence_ids)
+        elif action_id == "select":
+            # One click ticks every evidence item; the resolver then flips to
+            # "Check evidence with AI". Untick individually to narrow it.
+            self._selected_evidence_ids = {
+                str(it.get("bookmark_id") or "")
+                for it in self._sections()["evidence"]["items"]}
+            self._selected_evidence_ids.discard("")
+            self._render_step_body()
+            self._render_ai_side()
 
     def _open_evidence_form(self, kind: str) -> None:
         """From Findings / Current measurement / Note are three entry
@@ -91596,6 +92122,7 @@ class _InvestigationNotebookDialog(QDialog):
     def _ev_jump(self, nav: dict) -> None:
         if not callable(self._on_ref_jump):
             return
+        self.reject()  # close: this window covers the timeline
         rng = nav.get("range")
         if isinstance(rng, (list, tuple)) and len(rng) == 2:
             self._on_ref_jump(int(rng[0]), int(rng[1]))
@@ -91604,6 +92131,7 @@ class _InvestigationNotebookDialog(QDialog):
 
     def _ev_open_stats(self, metric: str) -> None:
         if callable(self._on_open_stats):
+            self.reject()  # close: this window covers the Statistics panel
             self._on_open_stats(str(metric))
 
     def _ev_restore_scope(self, _bid: str, plan: dict) -> None:
@@ -91755,12 +92283,7 @@ class _InvestigationNotebookDialog(QDialog):
             has_second_trace=self._has_second_trace)))
         btn.clicked.connect(lambda: self._collaborate("draft_hypotheses"))
         self._side_lay.addWidget(btn)
-        if reply_text:
-            out = QLabel(reply_text)
-            out.setTextFormat(Qt.TextFormat.PlainText)
-            out.setWordWrap(True)
-            out.setObjectName("nb_hint")
-            self._side_lay.addWidget(out)
+        self._render_ai_reply_blocks(reply_text)
 
     def _verify_next_action(self) -> dict:
         if not self._sections()["hypotheses"]["items"]:
@@ -91909,13 +92432,42 @@ class _InvestigationNotebookDialog(QDialog):
         ll.addWidget(lim)
         self._main_lay.addWidget(lim_box)
 
+        # Export report — mirrors the web dialog's Export report card.
+        export_card = QFrame()
+        export_card.setObjectName("nb_card")
+        xl = QVBoxLayout(export_card)
+        xl.addWidget(self._caption("EXPORT REPORT"))
+        desc1 = QLabel(
+            "Exports this investigation as a JSON data file (Question, Scope, "
+            "Hypotheses, Evidence, Open checks, Conclusion) — re-importable from "
+            "the ⋯ menu.")
+        desc1.setWordWrap(True)
+        desc1.setObjectName("nb_hint")
+        xl.addWidget(desc1)
+        desc2 = QLabel(
+            "For a formatted HTML report you can open in a browser or share, use "
+            "the Statistics panel's “Export HTML” — it bundles the "
+            "statistics tables and the Analysis Findings for the current scope.")
+        desc2.setWordWrap(True)
+        desc2.setObjectName("nb_hint")
+        xl.addWidget(desc2)
+        xrow = QHBoxLayout()
+        xrow.addStretch(1)
+        export_btn = QPushButton("Export report")
+        export_btn.clicked.connect(self._export_json)
+        xrow.addWidget(export_btn)
+        xl.addLayout(xrow)
+        self._main_lay.addWidget(export_card)
+
     def _render_conclusion_ai_side(self, reply_text: str) -> None:
-        body = QLabel(reply_text or "Ask for a review to see gaps and contradictions here.")
-        body.setWordWrap(True)
-        self._side_lay.addWidget(body)
-        btn = QPushButton("Discuss in AI Assistant")
+        hint = QLabel("Ask for a review to see gaps and contradictions here.")
+        hint.setObjectName("nb_hint")
+        hint.setWordWrap(True)
+        self._side_lay.addWidget(hint)
+        btn = QPushButton("Review investigation")
         btn.clicked.connect(lambda: self._collaborate("review_investigation"))
         self._side_lay.addWidget(btn)
+        self._render_ai_reply_blocks(reply_text)
 
     def _commit_conclusion_draft(self) -> None:
         if self._building:
@@ -91947,6 +92499,7 @@ class _InvestigationNotebookDialog(QDialog):
                 "(Undo restores it).")
             if resp != QMessageBox.StandardButton.Yes:
                 return
+        self._clear_ai_proposal()
         self._commit(new_investigation(
             title="", trace_identity=self._inv.get("trace_identity"),
             analysis_range=self._inv.get("analysis_range")))
@@ -91962,6 +92515,7 @@ class _InvestigationNotebookDialog(QDialog):
             self, "Close investigation",
             "Close this investigation? You can reopen it later from the workspace.")
         if resp == QMessageBox.StandardButton.Yes:
+            self._clear_ai_proposal()
             self._commit(set_status(self._inv, NB_STATUS_CLOSED))
 
     def _show_history_menu(self) -> None:
@@ -91977,7 +92531,15 @@ class _InvestigationNotebookDialog(QDialog):
                 notebook_goto(self._history, k)))
         menu.exec(self.mapToGlobal(self.rect().center()))
 
+    def _clear_ai_proposal(self) -> None:
+        """Drop a pending AI proposal — it was validated against the
+        investigation being replaced / restored / closed."""
+        self._ai_proposal = None
+        self._ai_proposal_selected = set()
+        self._ai_proposal_confirmed = set()
+
     def _restore_snapshot(self, history) -> None:
+        self._clear_ai_proposal()
         self._history = history
         snap = notebook_history_state(self._history).get("current")
         if snap:
@@ -92009,7 +92571,9 @@ class _InvestigationNotebookDialog(QDialog):
             return
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                self._commit(load_investigation(fh.read()))
+                data = fh.read()
+            self._clear_ai_proposal()
+            self._commit(load_investigation(data))
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Import investigation", f"Could not import:\n{exc}")
 
@@ -92057,203 +92621,6 @@ def _evidence_ref_list(ids, label_fn) -> QLabel:
     lbl.setTextFormat(Qt.TextFormat.PlainText)
     lbl.setWordWrap(True)
     return lbl
-
-
-class _NotebookProposalDialog(QDialog):
-    """§10 — review an AI proposal before it changes the Notebook.
-
-    Mirror of the web ``NotebookProposalDialog.vue``: a compact diff grouped by
-    Notebook section, per-op accept checkboxes, an extra confirm checkbox for
-    ``needs_confirmation`` ops (remove evidence / replace a conclusion / close
-    the investigation), and ``Accept selected`` / ``Accept all`` / ``Reject``.
-    Nothing is applied here — ``on_apply(inv, applied_count)`` gets the result of
-    :func:`apply_proposal` for the caller to commit as one undo step.
-    """
-
-    def __init__(self, parent=None, *, investigation, proposal,
-                 allow_other_trace=False, on_apply=None):
-        super().__init__(parent)
-        self.setWindowTitle("AI proposal — review")
-        self.setModal(True)
-        self.resize(560, 620)
-        self._inv = load_investigation(investigation)
-        self._on_apply = on_apply
-        self._validated = validate_proposal(
-            self._inv, proposal, allow_other_trace=bool(allow_other_trace))
-        self._diff = proposal_diff(self._inv, self._validated)
-        self._accept: dict = {}
-        self._confirm: dict = {}
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(14, 12, 14, 12)
-        root.setSpacing(10)
-        root.addWidget(QLabel(
-            "<b>AI proposal — review before it changes the Notebook</b>"))
-
-        body = QWidget()
-        bl = QVBoxLayout(body)
-        bl.setContentsMargins(0, 0, 6, 0)
-        bl.setSpacing(12)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(body)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        root.addWidget(scroll, 1)
-
-        if not self._validated.get("ok"):
-            bl.addWidget(QLabel(
-                "Nothing in this proposal is applicable to the current "
-                "investigation."))
-
-        groups = [
-            ("hypotheses", "Hypotheses"), ("evidence", "Evidence"),
-            ("conclusion", "Conclusion"), ("status", "Status"),
-            ("links", "Links"),
-        ]
-        by_sec = self._diff.get("by_section", {})
-        for gid, glabel in groups:
-            ops = by_sec.get(gid) or []
-            if not ops:
-                continue
-            head = QLabel(f"<b>{glabel}</b>")
-            bl.addWidget(head)
-            for op in ops:
-                bl.addWidget(self._op_row(op))
-
-        rejected = self._diff.get("rejected") or []
-        if rejected:
-            bl.addWidget(QLabel(
-                f"<b style='color:#E0A030'>Rejected ({len(rejected)}) — not "
-                f"shown as actionable</b>"))
-            for op in rejected:
-                r = QLabel(f"{self._op_summary(op)} — {op.get('reason') or ''}")
-                r.setWordWrap(True)
-                r.setStyleSheet("color:palette(mid);font-size:11px;")
-                bl.addWidget(r)
-
-        model = self._validated.get("model") or {}
-        if model.get("model") or model.get("provider"):
-            m = QLabel(
-                f"Proposed by {model.get('provider') or 'AI'}"
-                + (f" · {model['model']}" if model.get("model") else "")
-                + ". Accepted AI cards are stored with this provenance; API "
-                "keys and prompts are never stored.")
-            m.setWordWrap(True)
-            m.setStyleSheet("color:palette(mid);font-size:10px;")
-            bl.addWidget(m)
-        bl.addStretch(1)
-
-        foot = QHBoxLayout()
-        rej = QPushButton("Reject")
-        rej.clicked.connect(self.reject)
-        foot.addWidget(rej)
-        foot.addStretch(1)
-        self._accept_sel_btn = QPushButton("Accept selected")
-        self._accept_sel_btn.clicked.connect(lambda: self._apply(all_ops=False))
-        self._accept_all_btn = QPushButton("Accept all")
-        self._accept_all_btn.setDefault(True)
-        self._accept_all_btn.setEnabled(bool(self._validated.get("ok")))
-        self._accept_all_btn.clicked.connect(lambda: self._apply(all_ops=True))
-        foot.addWidget(self._accept_sel_btn)
-        foot.addWidget(self._accept_all_btn)
-        root.addLayout(foot)
-        self._sync_accept_sel()
-
-    def _op_row(self, op: dict) -> QWidget:
-        i = int(op.get("index", -1))
-        w = QWidget()
-        lay = QHBoxLayout(w)
-        lay.setContentsMargins(6, 4, 6, 4)
-        lay.setSpacing(8)
-        cb = QCheckBox()
-        needs = op.get("status") == "needs_confirmation"
-        cb.setChecked(op.get("status") == "ok")
-        self._accept[i] = cb.isChecked()
-        cb.stateChanged.connect(
-            lambda _s, k=i, c=cb: (self._accept.__setitem__(k, c.isChecked()),
-                                   self._sync_accept_sel()))
-        lay.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
-        col = QVBoxLayout()
-        col.setSpacing(2)
-        line = QLabel(self._op_summary(op))
-        line.setWordWrap(True)
-        col.addWidget(line)
-        if needs:
-            conf = QCheckBox(f"Confirm: {op.get('reason') or ''}")
-            conf.setStyleSheet("color:#E0A030;font-size:11px;")
-            self._confirm[i] = False
-            conf.stateChanged.connect(
-                lambda _s, k=i, c=conf, ac=cb: (
-                    self._confirm.__setitem__(k, c.isChecked()),
-                    c.isChecked() and (ac.setChecked(True)),
-                    self._sync_accept_sel()))
-            col.addWidget(conf)
-        elif op.get("reason"):
-            n = QLabel(str(op.get("reason")))
-            n.setStyleSheet("color:palette(mid);font-size:11px;")
-            col.addWidget(n)
-        lay.addLayout(col, 1)
-        return w
-
-    def _bm_title(self, bid) -> str:
-        for b in self._inv.get("bookmarks", []):
-            if str(b.get("id")) == str(bid):
-                return str(b.get("title") or bid)
-        return str(bid)
-
-    def _op_summary(self, op: dict) -> str:
-        kind = op.get("op")
-        role = str(op.get("role") or op.get("type") or "")
-        if kind == "add":
-            return (f"Add {BOOKMARK_TYPE_LABELS.get(role, role or 'evidence')}: "
-                    f"\"{op.get('title') or '(untitled)'}\"")
-        if kind == "update":
-            if "conclusion" in (op.get("changes") or {}):
-                return "Replace the conclusion text"
-            return f"Edit explanation of \"{self._bm_title(op.get('bookmark_id'))}\""
-        if kind == "link":
-            return (f"Link \"{self._bm_title(op.get('from'))}\" —"
-                    f"{op.get('relation') or 'relates'}→ "
-                    f"\"{self._bm_title(op.get('to'))}\"")
-        if kind == "change_status":
-            s = op.get("status_value") or op.get("status")
-            return f"Set status to {NOTEBOOK_STATUS_LABELS.get(s, s)}"
-        if kind == "remove":
-            return f"Remove \"{self._bm_title(op.get('bookmark_id'))}\""
-        return str(kind or "operation")
-
-    def _applicable_selected(self) -> list:
-        out = []
-        for op in self._validated.get("operations") or []:
-            i = int(op.get("index", -1))
-            if not self._accept.get(i):
-                continue
-            if op.get("status") == "ok":
-                out.append(i)
-            elif op.get("status") == "needs_confirmation" and self._confirm.get(i):
-                out.append(i)
-        return out
-
-    def _sync_accept_sel(self) -> None:
-        n = len(self._applicable_selected())
-        self._accept_sel_btn.setText(f"Accept selected ({n})")
-        self._accept_sel_btn.setEnabled(n > 0)
-
-    def _apply(self, *, all_ops: bool) -> None:
-        confirmed = [
-            int(op.get("index", -1))
-            for op in (self._validated.get("operations") or [])
-            if op.get("status") == "needs_confirmation" and (
-                all_ops or self._confirm.get(int(op.get("index", -1))))
-        ]
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        inv, applied, _skipped = apply_proposal(
-            self._inv, self._validated,
-            accept_indices=None if all_ops else self._applicable_selected(),
-            accept_all=all_ops, confirmed_indices=confirmed, now=now)
-        if callable(self._on_apply):
-            self._on_apply(inv, list(applied))
-        self.accept()
 
 
 # Target labels + hints — byte-for-byte parity with the web dialog
@@ -101285,36 +101652,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _notebook_open_proposal(self, proposal: dict) -> None:
         """§10 — the AI answered a Notebook collaboration with a structured
-        proposal. Never applied automatically: open the review dialog."""
+        proposal. Never applied automatically: it is reviewed inline in the
+        Notebook's right panel (mirrors the web dialog — there is no modal)."""
         tab = self._active_tab
         if tab is None or getattr(tab, "_investigation", None) is None:
             return
-        _n_traces = sum(1 for t in self._tabs if getattr(t, "trace", None))
-
-        def _apply(inv: dict, applied: list) -> None:
-            if not applied:
-                self.statusBar().showMessage("No proposal changes applied.", 3000)
-                return
+        dlg = getattr(self, "_notebook_dlg", None)
+        if dlg is None:
+            self._open_investigation_notebook()
             dlg = getattr(self, "_notebook_dlg", None)
-            if dlg is not None:
-                try:
-                    # One undo step (pushes history + fires _on_investigation_changed).
-                    dlg.apply_proposal_result(inv)
-                    tab._notebook_history = dlg.history()
-                except RuntimeError:
-                    dlg = None
-            if dlg is None:
-                self._on_investigation_changed(load_investigation(inv))
-                tab._notebook_history = push_notebook_state(
-                    tab._notebook_history, tab._investigation)
-            self.statusBar().showMessage(
-                f"Applied {len(applied)} AI proposal change"
-                f"{'' if len(applied) == 1 else 's'}", 4000)
-
-        rev = _NotebookProposalDialog(
-            self, investigation=tab._investigation, proposal=proposal,
-            allow_other_trace=_n_traces > 1, on_apply=_apply)
-        rev.exec()
+        if dlg is not None and hasattr(dlg, "set_ai_proposal"):
+            try:
+                dlg.set_ai_proposal(proposal)
+                dlg.raise_()
+                dlg.activateWindow()
+            except RuntimeError:
+                pass
 
     def _notebook_evidence_package(self, question: str) -> None:
         """Notebook 'Evidence pack…' → build + save a compact AI evidence

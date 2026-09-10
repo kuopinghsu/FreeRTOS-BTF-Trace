@@ -600,11 +600,15 @@
                   @change="commit(editExplanation(it.bookmark_id, $event.target.value))"
                 />
                 <div class="nb-ev-actions">
+                  <!-- The Notebook is a full-screen modal over the timeline /
+                       Statistics, so a "view source" navigation has to close it
+                       first (its state is kept in the tab history and restored
+                       when it is reopened). -->
                   <button
                     v-if="it.nav.jump != null || it.nav.range"
                     type="button"
                     class="nb-ev-action"
-                    @click="onEvidenceJump(it.nav)"
+                    @click="emit('close'); onEvidenceJump(it.nav)"
                   >
                     View source
                   </button>
@@ -612,56 +616,35 @@
                     v-if="it.nav.stats_metric"
                     type="button"
                     class="nb-ev-action"
-                    @click="emit('open-statistics', it.nav.stats_metric)"
+                    @click="emit('close'); emit('open-statistics', it.nav.stats_metric)"
                   >
-                    View source
+                    Open Statistics
                   </button>
                   <button
                     type="button"
                     class="nb-ev-action"
-                    @click="emit('query-ai', { prompt: buildAskAboutEvidencePrompt(it) })"
+                    @click="emit('close'); emit('query-ai', { prompt: buildAskAboutEvidencePrompt(it) })"
                   >
                     Ask AI about this
                   </button>
-                  <div class="nb-ev-more-wrap">
-                    <button
-                      type="button"
-                      class="nb-ev-action muted"
-                      title="More"
-                      @click="evidenceMoreFor = evidenceMoreFor === it.bookmark_id ? '' : it.bookmark_id"
-                    >
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="currentColor"
-                      ><circle
-                        cx="5"
-                        cy="12"
-                        r="1.5"
-                      /><circle
-                        cx="12"
-                        cy="12"
-                        r="1.5"
-                      /><circle
-                        cx="19"
-                        cy="12"
-                        r="1.5"
-                      /></svg>
-                    </button>
-                    <div
-                      v-if="evidenceMoreFor === it.bookmark_id"
-                      class="nb-menu"
-                    >
-                      <button
-                        type="button"
-                        class="nb-menu-item danger"
-                        @click="removeEvidenceWithConfirm(it.bookmark_id)"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
+                  <button
+                    type="button"
+                    class="nb-ev-action muted nb-ev-delete"
+                    :title="`Delete evidence E${evidenceIndexById[it.bookmark_id]}`"
+                    aria-label="Delete evidence"
+                    @click="removeEvidenceWithConfirm(it.bookmark_id)"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    ><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" /></svg>
+                  </button>
                   <button
                     type="button"
                     class="nb-ev-action muted"
@@ -1202,7 +1185,14 @@
                   Export report
                 </div>
                 <div class="nb-next-reason">
-                  Exports the investigation as JSON (Question, Scope, Hypotheses, Evidence, Open checks, Conclusion).
+                  Exports this investigation as a JSON data file (Question, Scope, Hypotheses,
+                  Evidence, Open checks, Conclusion) — re-importable from the ⋯ menu.
+                  Use <strong>Preview report</strong> to read it here first.
+                </div>
+                <div class="nb-next-reason nb-next-reason-alt">
+                  For a formatted HTML report you can open in a browser or share,
+                  use the Statistics panel's <strong>Export HTML</strong> — it bundles
+                  the statistics tables and the Analysis Findings for the current scope.
                 </div>
               </div>
               <div style="display: flex; align-items: center; gap: 12px">
@@ -1256,6 +1246,150 @@
           v-if="props.aiEnabled"
           class="nb-side-col"
         >
+          <!-- §10 — AI proposal, reviewed and select-and-added right here -->
+          <div
+            v-if="hasInlineProposal"
+            class="nb-card nb-proposal-card"
+          >
+            <div class="nb-assist-heading">
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="var(--accent)"
+              ><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" /></svg>
+              AI proposal
+            </div>
+            <p
+              v-if="proposalReview.summary"
+              class="nb-proposal-summary"
+            >
+              {{ proposalReview.summary }}
+            </p>
+            <ul
+              v-if="proposalReview.notes.length"
+              class="nb-proposal-notes"
+            >
+              <li
+                v-for="(n, ni) in proposalReview.notes"
+                :key="ni"
+              >
+                {{ n }}
+              </li>
+            </ul>
+
+            <p
+              v-if="!proposalReview.ok && !proposalReview.summary && !proposalReview.notes.length"
+              class="nb-assist-body"
+            >
+              Nothing in this suggestion applies to the current investigation.
+            </p>
+
+            <template v-if="proposalReview.ok">
+              <div
+                v-for="grp in proposalGroupList"
+                :key="grp.id"
+                class="nb-prop-group"
+              >
+                <div class="nb-prop-group-label">
+                  {{ grp.label }}
+                </div>
+                <label
+                  v-for="op in grp.ops"
+                  :key="op.index"
+                  class="nb-prop-op"
+                  :class="{ confirm: op.status === 'needs_confirmation' }"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="proposalSel.has(op.index)"
+                    @change="toggleProposalOp(op.index)"
+                  >
+                  <span class="nb-prop-op-body">
+                    <span class="nb-prop-op-line">{{ proposalOpSummary(op) }}</span>
+                    <span
+                      v-if="proposalSourceRefs(op).length"
+                      class="nb-prop-sources"
+                    >
+                      <span class="nb-prop-sources-label">from</span>
+                      <span
+                        v-for="rid in proposalSourceRefs(op)"
+                        :key="rid"
+                        class="nb-prop-src"
+                      >{{ rid }}</span>
+                    </span>
+                    <span
+                      v-if="op.status === 'needs_confirmation'"
+                      class="nb-prop-confirm"
+                    >
+                      <input
+                        type="checkbox"
+                        :checked="proposalConfirm.has(op.index)"
+                        @change="toggleProposalConfirm(op.index)"
+                      >
+                      Confirm — {{ op.reason }}
+                    </span>
+                    <span
+                      v-else-if="op.reason"
+                      class="nb-prop-note"
+                    >{{ op.reason }}</span>
+                  </span>
+                </label>
+              </div>
+            </template>
+
+            <div
+              v-if="proposalGroups && proposalGroups.rejected.length"
+              class="nb-prop-group rejected"
+            >
+              <div class="nb-prop-group-label">
+                Not applicable ({{ proposalGroups.rejected.length }})
+              </div>
+              <div
+                v-for="op in proposalGroups.rejected"
+                :key="op.index"
+                class="nb-prop-rejected"
+              >
+                {{ proposalOpSummary(op) }} — {{ op.reason }}
+              </div>
+            </div>
+
+            <p
+              v-if="proposalReview.ok && (proposalModel.model || proposalModel.provider)"
+              class="nb-prop-model"
+            >
+              Proposed by {{ proposalModel.provider || 'AI' }}<template v-if="proposalModel.model"> · {{ proposalModel.model }}</template>. Added cards keep this provenance.
+            </p>
+
+            <div class="nb-prop-actions">
+              <button
+                type="button"
+                class="nb-btn small"
+                @click="dismissProposal"
+              >
+                Dismiss
+              </button>
+              <span class="nb-prop-spacer" />
+              <template v-if="proposalReview.ok">
+                <button
+                  type="button"
+                  class="nb-btn small"
+                  :disabled="!proposalApplicableCount"
+                  @click="submitProposal(false)"
+                >
+                  Add selected ({{ proposalApplicableCount }})
+                </button>
+                <button
+                  type="button"
+                  class="nb-btn small primary"
+                  @click="submitProposal(true)"
+                >
+                  Add all
+                </button>
+              </template>
+            </div>
+          </div>
+
           <div class="nb-card nb-assist-card">
             <div class="nb-assist-heading">
               <svg
@@ -1279,7 +1413,7 @@
                 Cancel request
               </button>
             </template>
-            <template v-else-if="props.hasPendingProposal">
+            <template v-else-if="props.hasPendingProposal && !hasInlineProposal">
               <p class="nb-assist-body">
                 1 pending suggestion — see the review panel.
               </p>
@@ -1311,23 +1445,23 @@
                 >
                   Help refine question
                 </button>
-                <p
-                  v-if="stepAiReplyText"
-                  class="nb-assist-reply"
-                >
-                  {{ stepAiReplyText }}
-                </p>
               </template>
             </template>
             <template v-else-if="view.step === 'evidence'">
               <p class="nb-assist-body">
                 {{ sections.evidence.items.length }} evidence item(s), {{ view.selectedEvidenceIds.length }} selected.
               </p>
-              <p
-                v-if="stepAiReplyText"
-                class="nb-assist-reply"
+              <button
+                type="button"
+                class="nb-btn small primary"
+                :disabled="props.aiRequestState.busy"
+                @click="collaborate('gather_evidence')"
               >
-                {{ stepAiReplyText }}
+                Gather evidence with AI
+              </button>
+              <p class="nb-assist-body">
+                Calls trace tools across several rounds, then proposes measured
+                evidence cards for you to review and add.
               </p>
             </template>
             <template v-else-if="view.step === 'verify'">
@@ -1342,12 +1476,6 @@
               >
                 Suggest explanations
               </button>
-              <p
-                v-if="stepAiReplyText"
-                class="nb-assist-reply"
-              >
-                {{ stepAiReplyText }}
-              </p>
             </template>
             <template v-else-if="view.step === 'conclusion'">
               <p class="nb-assist-body">
@@ -1356,17 +1484,44 @@
               <button
                 type="button"
                 class="nb-btn small"
-                @click="collaborate('review_investigation'); emit('focus-ai-panel')"
+                @click="collaborate('review_investigation')"
               >
-                Discuss in AI Assistant
+                Review investigation
               </button>
-              <p
-                v-if="stepAiReplyText"
-                class="nb-assist-reply"
-              >
-                {{ stepAiReplyText }}
-              </p>
             </template>
+
+            <!-- The model answered in prose (no structured proposal). Present it
+                 as demo-style titled sections + bullets, not a raw text dump —
+                 the full exchange lives in the AI Assistant panel. -->
+            <div
+              v-if="stepAiReplyBlocks.length && !hasInlineProposal && !props.aiRequestState.busy"
+              class="nb-assist-note"
+            >
+              <span class="nb-assist-note-label">AI reply</span>
+              <div
+                v-for="(blk, bi) in stepAiReplyBlocks"
+                :key="bi"
+                class="nb-assist-note-block"
+              >
+                <p
+                  v-if="blk.title"
+                  class="nb-assist-note-title"
+                >
+                  {{ blk.title }}
+                </p>
+                <ul
+                  v-if="blk.items.length"
+                  class="nb-assist-note-list"
+                >
+                  <li
+                    v-for="(it, ii) in blk.items"
+                    :key="ii"
+                  >
+                    {{ it }}
+                  </li>
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
         <div
@@ -1441,12 +1596,13 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   BOOKMARK_TYPE_LABELS,
   EVIDENCE_BOOKMARK_TYPES,
   EVIDENCE_KIND_LABELS,
   NB_STATUS_CLOSED,
+  NOTEBOOK_STATUS_LABELS,
   addBookmark,
   conclusionEvidenceChains,
   detectBrokenReferences,
@@ -1469,6 +1625,9 @@ import {
   nbAiActionReason,
   collaborateContext,
   collaborateDigest,
+  parseReplyBlocks,
+  validateProposal,
+  proposalDiff,
 } from '../utils/investigationAi.js'
 
 const props = defineProps({
@@ -1483,6 +1642,10 @@ const props = defineProps({
   hasSecondTrace: { type: Boolean, default: false },
   aiRequestState: { type: Object, default: () => ({ busy: false, error: '', status: '' }) },
   hasPendingProposal: { type: Boolean, default: false },
+  // Raw `{ schema, operations[] }` proposal from the last collaborate reply.
+  // Reviewed and select-and-added inline in the right panel (no separate modal).
+  aiProposal: { type: Object, default: null },
+  allowOtherTrace: { type: Boolean, default: false },
   refineSuggestion: { type: String, default: '' },
   // { step, text } — the plain-text reply from the last collaborate() request
   // made from this dialog, so it's visible right here even though the chat
@@ -1494,7 +1657,7 @@ const emit = defineEmits([
   'close', 'update', 'undo', 'redo', 'restore', 'jump-range', 'open-statistics',
   'export-evidence-package', 'scaffold', 'collaborate',
   'restore-evidence-scope', 'undo-scope-restore', 'query-ai', 'focus-ai-panel',
-  'cancel-ai-request',
+  'cancel-ai-request', 'apply-proposal', 'dismiss-proposal',
 ])
 
 const STEP_ORDER = ['question', 'evidence', 'verify', 'conclusion']
@@ -1531,7 +1694,6 @@ const questionEditing = ref(false)
 const selectedFindingId = ref('')
 const addEvidenceMenuOpen = ref(false)
 const evidenceFormOpen = ref(false)
-const evidenceMoreFor = ref('')
 const addExplanationOpen = ref(false)
 const linkPickerFor = ref('')
 const previewOpen = ref(false)
@@ -1598,14 +1760,136 @@ const evidenceIndexById = computed(() => {
 const unresolvedChecks = computed(() => sections.value.open_checks.items.filter((x) => x.source === 'verification'))
 
 // The last AI reply, shown only on the step it was requested from — so
-// "Check evidence with AI" / "Suggest explanations" / "Discuss in AI
-// Assistant" all surface their plain-text answer right on this card,
-// without requiring the user to close the Notebook to read it.
+// "Check evidence with AI" / "Suggest explanations" / "Review investigation"
+// surface their answer right on this card, without requiring the user to
+// close the Notebook to read it.
 const stepAiReplyText = computed(() => {
   const reply = props.lastAiReply
   if (!reply || reply.step !== view.step || !reply.text) return ''
   return reply.text
 })
+
+// Present a prose AI reply as demo-style titled sections + bullets instead of
+// one raw pre-wrapped blob (parser lives in investigationAi.js, shared with
+// the Python side). Defensive: if a structured proposal leaked through as
+// prose (extraction failed upstream), strip the ```json block and the
+// btfnext:/btfstats: "next step" links so the card never shows machine noise.
+const stepAiReplyBlocks = computed(() => {
+  const raw = stepAiReplyText.value
+  if (!raw) return []
+  const cleaned = raw
+    .replace(/```(?:json)?\s*[\s\S]*?```/gi, '')
+    .split('\n')
+    .filter((ln) => !/\]\((?:btfnext|btfstats):/i.test(ln))
+    .join('\n')
+  return parseReplyBlocks(cleaned)
+})
+
+// --- inline AI proposal review (§10) — shown in the right panel, no modal ---
+// The shared validateProposal / proposalDiff give the accept/confirm rules;
+// this component is the only surface that renders them.
+const proposalReview = computed(() =>
+  props.aiProposal
+    ? validateProposal(props.investigation, props.aiProposal, { allowOtherTrace: props.allowOtherTrace })
+    : null)
+const proposalGroups = computed(() =>
+  proposalReview.value ? proposalDiff(props.investigation, proposalReview.value) : null)
+const hasInlineProposal = computed(() => !!proposalReview.value)
+const proposalModel = computed(() => proposalReview.value?.model || {})
+const proposalGroupList = computed(() => {
+  const s = proposalGroups.value?.by_section
+  if (!s) return []
+  return [
+    { id: 'hypotheses', label: 'Hypotheses', ops: s.hypotheses },
+    { id: 'evidence', label: 'Evidence', ops: s.evidence },
+    { id: 'conclusion', label: 'Conclusion', ops: s.conclusion },
+    { id: 'status', label: 'Status', ops: s.status },
+    { id: 'links', label: 'Links', ops: s.links },
+  ].filter((g) => g.ops.length)
+})
+
+const proposalSel = reactive(new Set())
+const proposalConfirm = reactive(new Set())
+const proposalBump = ref(0)
+
+watch(proposalReview, (v) => {
+  proposalSel.clear()
+  proposalConfirm.clear()
+  for (const op of v?.operations || []) {
+    if (op.status === 'ok') proposalSel.add(op.index)
+  }
+  proposalBump.value++
+}, { immediate: true })
+
+const proposalApplicableCount = computed(() => {
+  void proposalBump.value
+  return (proposalReview.value?.operations || []).filter((op) => {
+    if (!proposalSel.has(op.index)) return false
+    if (op.status === 'ok') return true
+    if (op.status === 'needs_confirmation') return proposalConfirm.has(op.index)
+    return false
+  }).length
+})
+
+function toggleProposalOp(i) {
+  if (proposalSel.has(i)) proposalSel.delete(i)
+  else proposalSel.add(i)
+  proposalBump.value++
+}
+function toggleProposalConfirm(i) {
+  if (proposalConfirm.has(i)) proposalConfirm.delete(i)
+  else { proposalConfirm.add(i); proposalSel.add(i) }
+  proposalBump.value++
+}
+function proposalSourceRefs(op) {
+  const ids = Array.isArray(op.evidence_ids) ? op.evidence_ids : []
+  return ids.map(String).map((s) => s.trim()).filter(Boolean)
+}
+function proposalBmTitle(id) {
+  const b = inv.value.bookmarks.find((x) => String(x.id) === String(id))
+  return b ? b.title : id
+}
+function proposalOpSummary(op) {
+  const role = String(op.role || op.type || '')
+  if (op.op === 'add') {
+    const label = BOOKMARK_TYPE_LABELS[role] || role || 'evidence'
+    return `Add ${label}: “${op.title || '(untitled)'}”`
+  }
+  if (op.op === 'update') {
+    if ('conclusion' in (op.changes || {})) return 'Replace the conclusion text'
+    return `Edit explanation of “${proposalBmTitle(op.bookmark_id)}”`
+  }
+  if (op.op === 'link') {
+    return `Link “${proposalBmTitle(op.from)}” —${op.relation || 'relates'}→ “${proposalBmTitle(op.to)}”`
+  }
+  if (op.op === 'change_status') {
+    const s = op.status_value || op.status
+    return `Set status to ${NOTEBOOK_STATUS_LABELS[s] || s}`
+  }
+  if (op.op === 'remove') return `Remove “${proposalBmTitle(op.bookmark_id)}”`
+  return op.op || 'operation'
+}
+function dismissProposal() { emit('dismiss-proposal') }
+function submitProposal(acceptAll) {
+  const v = proposalReview.value
+  if (!v) return
+  if (acceptAll) {
+    emit('apply-proposal', {
+      validated: v,
+      acceptIndices: null,
+      confirmedIndices: (v.operations || [])
+        .filter((op) => op.status === 'needs_confirmation').map((op) => op.index),
+      acceptAll: true,
+    })
+  } else {
+    emit('apply-proposal', {
+      validated: v,
+      acceptIndices: [...proposalSel],
+      confirmedIndices: [...proposalConfirm],
+      acceptAll: false,
+    })
+  }
+}
 
 const investigationHasContent = computed(() =>
   inv.value.bookmarks.length > 0
@@ -1632,7 +1916,9 @@ function resolveEvidenceNextAction() {
   if (props.aiEnabled && selectedCount > 0) {
     return { id: 'check', label: 'Check evidence with AI', reason: `${selectedCount} of ${evidenceCount} item(s) selected.` }
   }
-  if (props.aiEnabled && selectedCount === 0) return { id: 'select', label: 'Select evidence', reason: 'Choose which evidence to send to AI.' }
+  if (props.aiEnabled && selectedCount === 0) {
+    return { id: 'select', label: 'Select all evidence', reason: 'Or tick just the items you want to send to AI.' }
+  }
   return { id: 'explain', label: 'Add an explanation', reason: 'Move to Verify to test a possible explanation.' }
 }
 const evidenceNextAction = computed(resolveEvidenceNextAction)
@@ -1640,10 +1926,14 @@ const evidenceNextAction = computed(resolveEvidenceNextAction)
 function onEvidenceNextAction() {
   const a = evidenceNextAction.value
   if (a.id === 'cancel') emit('cancel-ai-request')
-  else if (a.id === 'review') { /* NotebookProposalDialog is already open */ }
+  else if (a.id === 'review') { /* the proposal card is already in the side panel */ }
   else if (a.id === 'add') { addEvidenceMenuOpen.value = true }
   else if (a.id === 'check') collaborate('review_investigation', { selectedEvidenceIds: view.selectedEvidenceIds })
-  else if (a.id === 'select') { /* nothing to send — focus stays on the checkboxes */ }
+  else if (a.id === 'select') {
+    // One click ticks every evidence item; the resolver then flips to
+    // "Check evidence with AI". Untick individually to narrow it.
+    view.selectedEvidenceIds = sections.value.evidence.items.map((x) => x.bookmark_id)
+  }
   else if (a.id === 'explain') goToStep('verify')
 }
 
@@ -1664,12 +1954,17 @@ function onVerifyNextAction() {
 }
 
 // --- header / more menu ------------------------------------------------
+// A pending AI proposal was validated against the investigation it was asked
+// from — drop it whenever that investigation is replaced, restored, or closed
+// so it can't be applied to unrelated state.
 function restoreSnapshot(index) {
   historyOpen.value = false
+  emit('dismiss-proposal')
   emit('restore', index)
 }
 function closeInvestigation() {
   if (!window.confirm('Close this investigation? You can reopen it later from the workspace.')) return
+  emit('dismiss-proposal')
   commit(setStatus(props.investigation, NB_STATUS_CLOSED))
 }
 // Q1 fix: there was no way to clear the current notebook and start over —
@@ -1679,6 +1974,7 @@ function closeInvestigation() {
 function startNewInvestigation() {
   if (investigationHasContent.value &&
       !window.confirm('Start a new investigation? The current one will be replaced (Undo restores it).')) return
+  emit('dismiss-proposal')
   commit(newInvestigation({
     title: '',
     traceIdentity: props.investigation.trace_identity,
@@ -1780,8 +2076,7 @@ function addDraft() {
   evidenceFormOpen.value = false
 }
 function removeEvidenceWithConfirm(id) {
-  evidenceMoreFor.value = ''
-  if (!window.confirm('Remove this evidence item?')) return
+  if (!window.confirm('Delete this evidence item? (Undo restores it.)')) return
   commit(removeBookmark(props.investigation, id))
   view.selectedEvidenceIds = view.selectedEvidenceIds.filter((x) => x !== id)
 }
@@ -1925,6 +2220,7 @@ async function onImportFile(ev) {
   if (!file) return
   try {
     const text = await file.text()
+    emit('dismiss-proposal')
     commit(loadInvestigation(text))
   } catch {
     /* ignore malformed file */
@@ -1949,7 +2245,6 @@ function onEscape() {
   if (stepSelectorOpen.value) { stepSelectorOpen.value = false; return }
   if (moreMenuOpen.value) { moreMenuOpen.value = false; return }
   if (addEvidenceMenuOpen.value) { addEvidenceMenuOpen.value = false; return }
-  if (evidenceMoreFor.value) { evidenceMoreFor.value = ''; return }
   if (linkPickerFor.value) { linkPickerFor.value = ''; return }
   if (historyOpen.value) { historyOpen.value = false; return }
   if (restoreConfirmFor.value) { restoreConfirmFor.value = ''; return }
@@ -2277,7 +2572,13 @@ onBeforeUnmount(() => {
   gap: 16px; flex-wrap: wrap;
 }
 .nb-next-title { font-weight: 700; font-size: 13.5px; }
-.nb-next-reason { font-size: 11.5px; color: var(--fg-dim); margin-top: 3px; }
+.nb-next-reason { font-size: 11.5px; color: var(--fg-dim); margin-top: 3px; line-height: 1.5; }
+.nb-next-reason strong { color: var(--fg); font-weight: 600; }
+.nb-next-reason-alt {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
 
 /* Evidence */
 .nb-add {
@@ -2313,7 +2614,7 @@ onBeforeUnmount(() => {
 .nb-ev-actions { display: flex; align-items: center; gap: 12px; margin-top: 2px; flex-wrap: wrap; }
 .nb-ev-action { font-size: 11.5px; font-weight: 600; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 4px; }
 .nb-ev-action.muted { color: var(--fg-dim); }
-.nb-ev-more-wrap { position: relative; }
+.nb-ev-delete:hover { color: var(--semantic-error, #e74c3c); }
 .nb-ev-details { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
 .nb-ev-details .detail { display: flex; gap: 6px; }
 .nb-ev-details .k { color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.03em; font-size: 10px; min-width: 90px; }
@@ -2374,10 +2675,100 @@ onBeforeUnmount(() => {
 .nb-assist-card { display: flex; flex-direction: column; gap: 8px; }
 .nb-assist-heading { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700; }
 .nb-assist-body { font-size: 12.5px; color: var(--fg-dim); line-height: 1.5; margin: 0; }
-.nb-assist-reply { font-size: 12.5px; color: var(--fg); line-height: 1.5; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-bg); white-space: pre-wrap; }
+/* Prose AI reply — demo `.chat`: soft accent tint, no hard border, labelled. */
+.nb-assist-note {
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel-bg));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.nb-assist-note-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.nb-assist-note-block { display: flex; flex-direction: column; gap: 4px; }
+.nb-assist-note-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg);
+  margin: 2px 0 0;
+}
+.nb-assist-note-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nb-assist-note-list li {
+  font-size: 12px;
+  color: var(--fg);
+  line-height: 1.5;
+}
+.nb-assist-note { max-height: 320px; overflow-y: auto; }
 .nb-suggestion { border: 1px solid var(--border); background: color-mix(in srgb, var(--semantic-warning, #e67e22) 8%, var(--panel-bg)); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
 .nb-suggestion-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--semantic-warning, #e67e22); }
 .nb-suggestion-text { font-size: 12.5px; margin: 0; line-height: 1.4; }
+
+/* §10 — inline AI proposal review (right panel) */
+.nb-proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-color: color-mix(in srgb, var(--semantic-warning, #e67e22) 40%, var(--border));
+  background: color-mix(in srgb, var(--semantic-warning, #e67e22) 6%, var(--panel-bg));
+}
+.nb-proposal-lead { font-size: 11.5px; color: var(--fg-dim); line-height: 1.45; margin: -2px 0 0; }
+.nb-proposal-summary { font-size: 12.5px; color: var(--fg); line-height: 1.5; margin: 0; }
+.nb-proposal-notes {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nb-proposal-notes li { font-size: 12px; color: var(--fg); line-height: 1.5; }
+.nb-prop-group { display: flex; flex-direction: column; gap: 6px; }
+.nb-prop-group-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-dim); }
+.nb-prop-group.rejected .nb-prop-group-label { color: var(--semantic-warning, #e67e22); }
+.nb-prop-op {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.nb-prop-op.confirm { border-color: color-mix(in srgb, var(--semantic-warning, #e67e22) 55%, var(--border)); }
+.nb-prop-op > input[type="checkbox"] { margin-top: 2px; flex: none; accent-color: var(--accent); }
+.nb-prop-op-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.nb-prop-op-line { line-height: 1.4; }
+.nb-prop-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.nb-prop-sources-label { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--fg-dim); }
+.nb-prop-src {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--fg);
+}
+.nb-prop-confirm { font-size: 10.5px; color: var(--semantic-warning, #e67e22); display: flex; align-items: flex-start; gap: 5px; line-height: 1.4; }
+.nb-prop-confirm input { margin-top: 1px; flex: none; accent-color: var(--accent); }
+.nb-prop-note { font-size: 10.5px; color: var(--fg-dim); line-height: 1.4; }
+.nb-prop-rejected { font-size: 11px; color: var(--fg-dim); line-height: 1.4; }
+.nb-prop-model { font-size: 10px; color: var(--fg-dim); line-height: 1.45; margin: 0; }
+.nb-prop-actions { display: flex; align-items: center; gap: 6px; padding-top: 2px; }
+.nb-prop-spacer { flex: 1; }
 
 /* Footer */
 .nb-footer {

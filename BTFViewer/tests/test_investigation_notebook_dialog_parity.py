@@ -15,11 +15,13 @@ VUE = (BTF_ROOT / "web" / "src" / "components"
        / "InvestigationNotebookDialog.vue").read_text(encoding="utf-8")
 APP = (BTF_ROOT / "web" / "src" / "App.vue").read_text(encoding="utf-8")
 
-# Just the new step-nav widget + dialog class, so unrelated mainwindow text
+# Just the step-nav widget + dialog class, so unrelated mainwindow text
 # (including the retired six-section widgets kept above it) can't satisfy a
-# match by accident.
+# match by accident. The old `_NotebookProposalDialog` boundary is gone — the
+# AI proposal is reviewed inline now, like the web dialog — so bound on the
+# next module-level helper.
 _DLG_START = MW.index('_NB_STEPS = ("question", "evidence", "verify", "conclusion")')
-_DLG_END = MW.index("class _NotebookProposalDialog(QDialog):")
+_DLG_END = MW.index("_EXPORT_TARGET_LABELS = {")
 DLG = MW[_DLG_START:_DLG_END]
 
 
@@ -176,6 +178,68 @@ class NotebookDialogParityTests(unittest.TestCase):
                       "Limitations" if "Limitations" in VUE else "LIMITATIONS"):
             self.assertIn(token.upper(), DLG.upper(), f"desktop missing {token!r}")
             self.assertIn(token, VUE, f"web missing {token!r}")
+
+    def test_export_report_card_points_to_the_statistics_html_report_on_both(self):
+        # The Notebook export is a JSON data file; the readable HTML report is
+        # the Statistics panel's "Export HTML" (bundles tables + Analysis
+        # Findings). Both dialogs say so in the Conclusion step's Export card.
+        for src, name in ((DLG, "desktop"), (VUE, "web")):
+            self.assertIn("Export report", src, f"{name} missing Export report card")
+            self.assertIn("JSON data file", src, f"{name} missing JSON-export wording")
+            self.assertIn("For a formatted HTML report you can open in a browser",
+                          src, f"{name} missing the HTML-report pointer")
+            self.assertIn("Analysis Findings for the current scope", src,
+                          f"{name} missing the HTML-report scope note")
+
+    def test_ai_proposal_is_reviewed_inline_no_modal_on_both(self):
+        # §10 — the proposal renders in the right panel with per-op checkboxes
+        # + Add selected / Add all / Dismiss; the old modal is retired on both.
+        self.assertIn("def set_ai_proposal(self", DLG)
+        self.assertIn("_render_ai_proposal_card", DLG)
+        for tok in ("AI PROPOSAL", "Add selected (", "Add all", "Dismiss",
+                    "Not applicable (", "needs_confirmation"):
+            self.assertIn(tok, DLG, f"desktop proposal card missing {tok!r}")
+        self.assertNotIn("class _NotebookProposalDialog", MW)
+        self.assertIn("set_ai_proposal(proposal)", MW)   # parent feeds it inline
+        # web
+        self.assertIn("aiProposal:", VUE)
+        self.assertIn("nb-proposal-card", VUE)
+        for tok in ("AI proposal", "Add selected (", "Add all"):
+            self.assertIn(tok, VUE, f"web proposal card missing {tok!r}")
+        self.assertNotIn("NotebookProposalDialog", APP)
+
+    def test_prose_reply_renders_as_titled_blocks_on_both(self):
+        self.assertIn("def _render_ai_reply_blocks(self", DLG)
+        self.assertIn("parse_reply_blocks(", DLG)
+        self.assertIn("btfnext|btfstats", DLG)   # link-line strip
+        self.assertIn("parseReplyBlocks(", VUE)
+        self.assertIn("btfnext|btfstats", VUE)
+
+    def test_evidence_card_open_statistics_and_delete_and_close_on_nav_on_both(self):
+        for tok in ("Open Statistics", "Delete evidence", "def _delete_evidence(self"):
+            self.assertIn(tok, DLG, f"desktop evidence card missing {tok!r}")
+        # navigation closes the (full-screen) Notebook first
+        self.assertIn("self.reject()", DLG)
+        self.assertIn("Open Statistics", VUE)
+        self.assertIn("emit('close'); onEvidenceJump", VUE)
+
+    def test_gather_evidence_button_on_both(self):
+        self.assertIn('"gather_evidence"', DLG)
+        self.assertIn("Gather evidence with AI", DLG)
+        self.assertIn("'gather_evidence'", VUE)
+        self.assertIn("Gather evidence with AI", VUE)
+
+    def test_select_all_evidence_action_on_both(self):
+        self.assertIn("Select all evidence", DLG)
+        self.assertIn("Select all evidence", VUE)
+
+    def test_conclusion_side_reviews_not_discusses_on_both(self):
+        # the non-functional generic "Discuss in AI Assistant" link/button is
+        # gone; the Conclusion AI side button is "Review investigation".
+        self.assertIn("Review investigation", DLG)
+        self.assertNotIn("Discuss in AI Assistant", DLG)
+        self.assertIn("Review investigation", VUE)
+        self.assertNotIn("Discuss in AI Assistant", VUE)
 
     def test_restore_evidence_scope_action_on_both(self):
         # A separate, previewable, cancelable, undoable action; never folded
@@ -453,44 +517,47 @@ class NotebookDialogRuntimeTests(unittest.TestCase):
         finally:
             dlg.deleteLater()
 
-    def test_checking_evidence_box_in_the_ui_enables_the_next_action_button(self):
-        # Live-reported bug: checking the box left "Select evidence to check
-        # with AI" stuck disabled — _toggle_evidence_selected() updated the
-        # selection set but never rebuilt the next-action row that reads it.
+    def test_zero_selected_next_action_selects_all_then_flips_to_check(self):
+        # Mirrors web: the zero-selected action is an ENABLED "Select all
+        # evidence" that ticks every item; the resolver then flips to
+        # "Check evidence with AI". (Was a disabled dead button before.)
         from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
         from btf_viewer_pkg.investigation_notebook import add_evidence, new_investigation
         inv = add_evidence(new_investigation(title="T"), title="ev", role="supporting")
+        inv = add_evidence(inv, title="ev2", role="supporting")
         dlg = self._dialog(inv, ai_enabled=True)
         app = QApplication.instance()
         try:
             dlg._select_step("evidence")
-            app.processEvents()  # let deleteLater() from _clear_qlayout actually run
+            app.processEvents()
 
             def find_next_btn():
-                # _clear_qlayout() hides + deleteLater()s retired widgets;
-                # deleteLater() only actually destroys them on a later trip
-                # through the event loop, so stale (but hidden, unreachable
-                # from any layout) instances can still show up in
-                # findChildren() right after a rebuild. isVisible() is what
-                # actually reflects the screen.
                 for btn in dlg._main_host.findChildren(QPushButton):
-                    if not btn.isHidden() and "AI" in btn.text() and "evidence" in btn.text().lower():
+                    if not btn.isHidden() and btn.text() in (
+                            "Select all evidence", "Check evidence with AI"):
                         return btn
                 return None
 
+            self.assertEqual(dlg._evidence_next_action()["id"], "select")
             btn = find_next_btn()
             self.assertIsNotNone(btn)
-            self.assertFalse(btn.isEnabled())
-            self.assertEqual(btn.text(), "Select evidence to check with AI")
+            self.assertTrue(btn.isEnabled())
+            self.assertEqual(btn.text(), "Select all evidence")
 
-            cb = dlg._main_host.findChildren(QCheckBox)[0]
-            cb.setChecked(True)  # fires the real toggled signal, as a click would
+            dlg._on_evidence_next_action("select")
             app.processEvents()
 
-            btn = find_next_btn()  # the row was rebuilt; re-find it
+            self.assertEqual(len(dlg._selected_evidence_ids), 2)
+            self.assertEqual(dlg._evidence_next_action()["id"], "check")
+            btn = find_next_btn()
             self.assertIsNotNone(btn)
-            self.assertTrue(btn.isEnabled())
             self.assertEqual(btn.text(), "Check evidence with AI")
+
+            # unticking one narrows it, still "check"
+            cb = next(c for c in dlg._main_host.findChildren(QCheckBox) if c.isChecked())
+            cb.setChecked(False)
+            app.processEvents()
+            self.assertEqual(dlg._evidence_next_action()["id"], "check")
         finally:
             dlg.deleteLater()
 

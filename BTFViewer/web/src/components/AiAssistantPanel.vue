@@ -373,20 +373,31 @@
           v-if="m.tools && m.tools.length"
           class="ai-tool-card"
         >
+          <!-- One row per request: "N tools" + status. For 2+ tools the
+               per-tool parameters collapse into a <details> (closed by
+               default); a lone tool renders inline. The batch is
+               applied/skipped once, below. -->
           <details
-            v-if="toolsCollapsible(m)"
+            v-if="m.tools.length > 1"
             class="ai-tool-fold"
           >
             <summary>
-              Evidence queries · {{ completedToolCount(m) }} completed
+              {{ toolBatchSummary(m) }}
             </summary>
-            <template
+            <div
               v-for="t in m.tools"
               :key="t.id"
+              class="ai-tool-detail"
             >
               <p>
                 ⚡ {{ toolLabel(t) }}
                 <span class="ai-tool-st">({{ t.status || 'pending' }})</span>
+              </p>
+              <p
+                v-if="toolParamsText(t)"
+                class="ai-tool-params"
+              >
+                {{ toolParamsText(t) }}
               </p>
               <p
                 v-if="t.status === 'failed' && (t.result || t.error)"
@@ -394,7 +405,7 @@
               >
                 {{ t.result || t.error }}
               </p>
-            </template>
+            </div>
           </details>
           <template v-else>
             <template
@@ -406,40 +417,46 @@
                 <span class="ai-tool-st">({{ t.status || 'pending' }})</span>
               </p>
               <p
+                v-if="toolParamsText(t)"
+                class="ai-tool-params"
+              >
+                {{ toolParamsText(t) }}
+              </p>
+              <p
                 v-if="t.status === 'failed' && (t.result || t.error)"
                 class="ai-tool-fail"
               >
                 {{ t.result || t.error }}
               </p>
             </template>
-            <div
-              v-if="batchPending(m)"
-              class="ai-tool-actions"
-            >
-              <button
-                type="button"
-                class="ai-btn primary"
-                @click="applyBatch(m.batchId)"
-              >
-                Apply
-              </button>
-              <button
-                type="button"
-                class="ai-link-btn"
-                @click="skipBatch(m.batchId)"
-              >
-                Skip
-              </button>
-            </div>
+          </template>
+          <div
+            v-if="batchPending(m)"
+            class="ai-tool-actions"
+          >
             <button
-              v-else-if="batchApplied(m)"
+              type="button"
+              class="ai-btn primary"
+              @click="applyBatch(m.batchId)"
+            >
+              Apply {{ m.tools.length }} action{{ m.tools.length === 1 ? '' : 's' }}
+            </button>
+            <button
               type="button"
               class="ai-link-btn"
-              @click="undoBatch(m.batchId)"
+              @click="skipBatch(m.batchId)"
             >
-              Undo
+              Skip
             </button>
-          </template>
+          </div>
+          <button
+            v-else-if="batchApplied(m)"
+            type="button"
+            class="ai-link-btn"
+            @click="undoBatch(m.batchId)"
+          >
+            Undo
+          </button>
         </div>
       </div>
     </div>
@@ -906,6 +923,7 @@ import {
   saveAiUserInvestigationTemplates,
 } from '../utils/settingsStore.js'
 import { templateRefEl } from '../utils/templateRefEl.js'
+import { extractNotebookProposal } from '../utils/investigationAi.js'
 
 const props = defineProps({
   analysisContext: { type: Object, default: null },
@@ -1253,24 +1271,29 @@ function batchApplied(m) {
   return m.batchId && (m.tools || []).some(t => t.status === 'applied')
 }
 
-function completedToolCount(m) {
-  return (m.tools || []).filter(t => {
-    const st = String(t.status || '')
-    return st === 'applied' || st === 'skipped' || st === 'done'
-  }).length
+/** One-line `<summary>` for a tool batch: how many tools + the batch state.
+ *  The details (per-tool parameters) stay collapsed until the user expands. */
+function toolBatchSummary(m) {
+  const tools = m.tools || []
+  const n = tools.length
+  const noun = `${n} tool${n === 1 ? '' : 's'}`
+  const failed = tools.filter(t => t.status === 'failed').length
+  if (batchPending(m)) return `${noun} — review, then Apply`
+  if (failed) return `${noun} · ${failed} failed`
+  if (tools.some(t => t.status === 'skipped')) return `${noun} · skipped`
+  return `${noun} · done`
 }
 
-/** Collapse finished read-only query/export/nav batches; keep Apply/fail visible. */
-function toolsCollapsible(m) {
-  const tools = m.tools || []
-  if (tools.length < 2) return false
-  if (batchPending(m)) return false
-  if (tools.some(t => t.status === 'failed')) return false
-  if (!toolBatchAutoRuns(tools)) return false
-  return tools.every((t) => {
-    const st = String(t.status || '')
-    return st === 'applied' || st === 'skipped' || st === 'done'
-  })
+/** The tool call's arguments as a compact `key=value, …` line. */
+function toolParamsText(t) {
+  const a = t.arguments && typeof t.arguments === 'object' ? t.arguments : {}
+  const fmt = (v) => Array.isArray(v)
+    ? `[${v.map(fmt).join(', ')}]`
+    : (v && typeof v === 'object') ? JSON.stringify(v) : String(v)
+  return Object.entries(a)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${k}=${fmt(v)}`)
+    .join(', ')
 }
 
 watch(() => props.responseLanguage, (v) => {
@@ -2506,25 +2529,12 @@ function completeFinalAssistantReply(text) {
 
 /** §10 — if the model answered a Notebook collaboration with a structured
  *  proposal (`schema: "btf-viewer-nb-proposal/1"`), hand it to App for the
- *  review dialog. Nothing is applied here. */
+ *  review dialog. Tolerant of the model wrapping it in a markdown list /
+ *  fence / prose (see extractNotebookProposal). Nothing is applied here. */
 function maybeEmitNotebookProposal(text) {
   if (!props.notebookCollab) return
-  const raw = String(text || '')
-  const blocks = []
-  const fence = /```(?:json)?\s*([\s\S]*?)```/gi
-  let m
-  while ((m = fence.exec(raw))) blocks.push(m[1])
-  if (!blocks.length) blocks.push(raw)
-  for (const b of blocks) {
-    let obj
-    try { obj = JSON.parse(b.trim()) } catch { continue }
-    if (obj && typeof obj === 'object'
-        && String(obj.schema || '').startsWith('btf-viewer-nb-proposal/')
-        && Array.isArray(obj.operations)) {
-      emit('notebook-proposal', obj)
-      return
-    }
-  }
+  const obj = extractNotebookProposal(text)
+  if (obj) emit('notebook-proposal', obj)
 }
 
 function snsFallbackReply() {
@@ -2540,6 +2550,12 @@ function ingestTurn(turn) {
   } else if (text) {
     chatMessages.push({ role: 'assistant', content: text })
   }
+
+  // §10 — during an agentic Notebook collab (e.g. gather_evidence) the model
+  // may emit the structured proposal in a turn that ALSO carries tool calls,
+  // or before the tool-round cap force-ends the loop with an empty final
+  // reply. Scan every turn's text, not just completeFinalAssistantReply's.
+  if (text) maybeEmitNotebookProposal(text)
 
   const toolsNorm = calls
     .filter((c) => {
@@ -3719,7 +3735,21 @@ defineExpose({
   list-style: none;
 }
 .ai-tool-fold > summary::-webkit-details-marker { display: none; }
+.ai-tool-fold > summary::before {
+  content: '▸ ';
+  color: #8b98a8;
+}
+.ai-tool-fold[open] > summary::before { content: '▾ '; }
 .ai-tool-card p { margin: 2px 0; }
+.ai-tool-detail { margin: 4px 0 4px 1.1em; }
+.ai-tool-detail:first-of-type { margin-top: 6px; }
+.ai-tool-params {
+  color: #8b98a8;
+  font-size: 11px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  word-break: break-word;
+  margin-left: 1.4em !important;
+}
 .ai-tool-st { color: #8b98a8; }
 .ai-tool-fail {
   margin: 2px 0 6px 1.2em;
