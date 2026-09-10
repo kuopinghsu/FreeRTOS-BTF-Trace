@@ -26,6 +26,7 @@ from .ai_case import (
     historical_knowledge_for_finding,
     mermaid_label_with_time,
 )
+from .ai_tool_usage import AI_TOOL_USAGE_CATEGORIES, summarize_tool_usage
 
 # Default checklist shown while Investigate / Root cause / agent templates run.
 INVESTIGATION_PLAN_STEPS: Tuple[Tuple[str, str], ...] = (
@@ -1482,6 +1483,35 @@ def extract_evidence_panel_payload(
             else "Low" if result_label == "DISPROVED"
             else "Medium"
         )
+    elif name in ("verify_claim", "challenge_conclusion"):
+        # Structured verification is authoritative (TODO §10): fold the verdict
+        # into payload["validation"] so an inconclusive / negative result cannot
+        # be displayed as Confirmed regardless of prose confidence.
+        verdict = str(
+            data.get("verdict") or data.get("status") or result.get("message") or ""
+        ).strip().lower()
+        reason = str(
+            data.get("reason") or data.get("detail") or data.get("summary") or ""
+        ).strip()
+        payload["conclusion"] = str(
+            result.get("message") or data.get("message") or reason or name
+        )
+        payload["confidence"] = str(data.get("confidence") or "Medium")
+        payload["verification"] = {
+            "tool": name, "verdict": verdict or "inconclusive", "reason": reason,
+        }
+        if verdict in (
+            "inconclusive", "rejected", "refuted", "contradicted", "unverified",
+            "fail", "failed", "not_verified", "unproven",
+        ):
+            payload["validation"] = {
+                "ok": False,
+                "unverified": 1,
+                "issues": [{
+                    "kind": "verification",
+                    "detail": reason or f"{name} was {verdict or 'inconclusive'}",
+                }],
+            }
     elif (
         name in (
         "plan_investigation", "suggest_scope", "detect_contradictions",
@@ -1490,8 +1520,8 @@ def extract_evidence_panel_payload(
         "generate_experiment_plan", "record_experiment_outcome",
         "score_investigation",
         "analyze_temporal_causality", "build_task_dependency_graph",
-        "decompose_response_time", "rank_root_causes", "verify_claim",
-        "challenge_conclusion", "investigation_memory", "cluster_incidents",
+        "decompose_response_time", "rank_root_causes",
+        "investigation_memory", "cluster_incidents",
         "close_investigation", "analyze_distribution", "analyze_periodicity",
         "summarize_investigation_context",
         ) or data.get("steps") or data.get("verdict") or data.get("pattern")
@@ -1841,6 +1871,7 @@ def merge_evidence_panel_payload(
         "falsification",
         "investigation_case",
         "graph_mermaid",
+        "tool_usage",
     ):
         if not out.get(key) and prev.get(key):
             out[key] = prev[key]
@@ -2341,6 +2372,19 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "contradicting": "Contradicting",
         "timeline_evidence": "Timeline evidence",
         "tools_used": "Tools used",
+        "tool_usage": "Tool Usage",
+        "calls": "calls",
+        "uniq_tools": "tools",
+        "trace_queries": "Trace queries",
+        "raw_calls": "Raw calls",
+        "cat_evidence": "Evidence",
+        "cat_analysis": "Analysis",
+        "cat_verification": "Verification",
+        "cat_viewer": "Viewer",
+        "analysis_completed": "Analysis completed",
+        "time_used": "",
+        "seconds_unit": "s",
+        "failed_word": "failed",
         "rows_label": "rows",
         "cost": "Investigation cost",
         "claims": "Claims",
@@ -2395,6 +2439,19 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "contradicting": "矛盾證據",
         "timeline_evidence": "時間軸證據",
         "tools_used": "已用工具",
+        "tool_usage": "工具使用",
+        "calls": "次呼叫",
+        "uniq_tools": "種工具",
+        "trace_queries": "追蹤查詢",
+        "raw_calls": "原始呼叫",
+        "cat_evidence": "證據",
+        "cat_analysis": "分析",
+        "cat_verification": "驗證",
+        "cat_viewer": "檢視器",
+        "analysis_completed": "分析完成",
+        "time_used": "用時",
+        "seconds_unit": "秒",
+        "failed_word": "失敗",
         "rows_label": "列",
         "investigation_details": "調查詳情",
         "cost": "調查成本",
@@ -2964,6 +3021,11 @@ def conclusion_status_from_payload(data: Optional[Dict[str, Any]] = None) -> str
     if conf in ("high",) and evidence and band in ("strong", "medium-high", ""):
         if band == "insufficient":
             return "insufficient"
+        # Structured verification is authoritative: an inconclusive / failed
+        # verify_claim (validation.ok is False) can never read as Confirmed,
+        # even when prose confidence says High.
+        if validation and validation.get("ok") is False:
+            return "correlated"
         return "confirmed" if band == "strong" else "correlated"
     if evidence or str(payload.get("conclusion") or "").strip():
         return "suspected"
@@ -3330,6 +3392,82 @@ def evidence_panel_toggle_label(
     return str(labels.get("expand_all") or "Expand all")
 
 
+_TOOL_USAGE_CAT_LABEL_KEY = {
+    "Evidence": "cat_evidence",
+    "Analysis": "cat_analysis",
+    "Verification": "cat_verification",
+    "Viewer": "cat_viewer",
+}
+
+
+def _format_tool_usage_fold(
+    tool_usage: Optional[dict],
+    labels: Dict[str, str],
+    *,
+    open: bool = False,
+    nested: bool = False,
+) -> List[str]:
+    """Compact "Tool Usage" fold for the evidence panel and exported report.
+
+    Every number comes from :func:`summarize_tool_usage` so the live panel, the
+    cost line, and the export can never disagree. Returns ``[]`` when no tools
+    ran. Lockstep with ``formatToolUsageFold`` in aiInvestigation.js.
+    """
+    s = summarize_tool_usage(tool_usage)
+    if not s["total"]:
+        return []
+    call_w = labels.get("calls", "calls")
+    tool_w = labels.get("uniq_tools", "tools")
+    title = (
+        f"{labels.get('tool_usage', 'Tool Usage')} · "
+        f"{s['total']} {call_w} / {s['unique']} {tool_w} · ✓ {s['ok']}"
+    )
+    if s["failed"]:
+        title += f" · ✗ {s['failed']}"
+
+    def cat_label(c: str) -> str:
+        return labels.get(_TOOL_USAGE_CAT_LABEL_KEY.get(c, ""), c)
+
+    cat_parts = [
+        f"{cat_label(c)} {s['by_category'][c]}"
+        for c in AI_TOOL_USAGE_CATEGORIES
+        if s["by_category"].get(c, 0) > 0
+    ]
+    body: List[str] = []
+    if cat_parts:
+        body.append(" · ".join(cat_parts))
+    body.append(f"{labels.get('trace_queries', 'Trace queries')} {s['trace_queries']}")
+
+    for cat in AI_TOOL_USAGE_CATEGORIES:
+        rows = [g for g in s["groups"] if g["category"] == cat]
+        if not rows:
+            continue
+        body.extend(["", f"**{cat_label(cat)}**"])
+        for g in rows:
+            times = f" ×{g['count']}" if g["count"] > 1 else ""
+            fail = f" ({g['failed']} ✗)" if g["failed"] else ""
+            body.append(f"- {g['name']}{times}{fail}")
+            if g["brief"]:
+                body.append(f"  {g['brief']}")
+
+    if s["total"] > s["unique"]:
+        calls = tool_usage.get("calls") if isinstance(tool_usage, dict) else []
+        raw_lines = [
+            f"- {c.get('name')} ({c.get('category')})"
+            + (" — ✗" if c.get("ok") is False else "")
+            for c in (calls or [])
+        ]
+        body.append("")
+        body.extend(_wrap_evidence_fold(
+            f"{labels.get('raw_calls', 'Raw calls')} · {s['total']}",
+            raw_lines,
+            open=False,
+            nested=True,
+        ))
+
+    return _wrap_evidence_fold(title, body, open=open, nested=nested)
+
+
 def format_evidence_panel_markdown(
     data: Optional[Dict[str, Any]],
     response_language: str = "English",
@@ -3546,6 +3684,15 @@ def format_evidence_panel_markdown(
             open=False,
         ))
 
+    tool_usage = data.get("tool_usage") or (
+        data.get("investigation_case", {}).get("tool_usage")
+        if isinstance(data.get("investigation_case"), dict) else None
+    )
+    tool_usage_fold = _format_tool_usage_fold(tool_usage, labels, open=False)
+    if tool_usage_fold:
+        lines.append("")
+        lines.extend(tool_usage_fold)
+
     falsify = data.get("falsify") if isinstance(data.get("falsify"), dict) else {}
     supporting = [s for s in (falsify.get("supporting") or []) if s]
     disprove = [
@@ -3675,23 +3822,9 @@ def format_evidence_panel_markdown(
             open=False,
             nested=True,
         ))
-    reasons = data.get("tool_reasons") or []
-    if reasons:
-        tool_lines: List[str] = []
-        for r in reasons:
-            if not isinstance(r, dict):
-                continue
-            tool = str(r.get("tool") or "")
-            why = str(r.get("reason") or "")
-            if tool:
-                tool_lines.append(f"- {tool}: {why}")
-        details.extend(_wrap_evidence_fold(
-            f"{labels.get('tools_used', labels.get('investigation', 'Tools used'))} · "
-            f"{len(tool_lines)}",
-            tool_lines,
-            open=False,
-            nested=True,
-        ))
+    # Tool history now lives in the top-level "Tool Usage" fold
+    # (_format_tool_usage_fold), derived from the authoritative
+    # investigation_case tool_usage record — not from data["tool_reasons"].
     root_chain = data.get("root_cause_chain") or []
     hyps = data.get("hypotheses") or []
     if root_chain or hyps:

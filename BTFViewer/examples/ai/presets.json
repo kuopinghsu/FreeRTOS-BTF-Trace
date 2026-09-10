@@ -3,7 +3,6 @@
   "response_language": "English",
   // Checkbox flags (Settings → AI). Omitted keys are left unchanged on import.
   "enabled": true,
-  "auto_apply": false,
   "redact_task_names": false,
   "trace_sensitive": false,
   "mcp_log": false,

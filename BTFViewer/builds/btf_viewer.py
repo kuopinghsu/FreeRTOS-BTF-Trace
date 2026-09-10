@@ -23201,6 +23201,410 @@ class TimelineView(QGraphicsView):
 # Custom progress dialog (more reliable than QProgressDialog on macOS)
 # ---------------------------------------------------------------------------
 # ===========================================================================
+# Authoritative AI tool-usage record
+# ===========================================================================
+
+AI_TOOL_USAGE_CATEGORIES = ("Evidence", "Analysis", "Verification", "Viewer")
+
+# Tools that retrieve raw trace data. These count as "trace queries".
+AI_TOOL_USAGE_EVIDENCE_TOOLS = (
+    "query_raw_metric",
+    "search_timeline",
+    "detect_anomalies",
+    "analyze_distribution",
+    "analyze_periodicity",
+    "find_related_findings",
+    "explain_finding",
+    "check_budget",
+    "compare_tasks",
+    "compare_performance",
+)
+
+# Tools that challenge or score a conclusion.
+AI_TOOL_USAGE_VERIFICATION_TOOLS = (
+    "verify_claim",
+    "challenge_conclusion",
+    "detect_contradictions",
+    "assess_evidence_sufficiency",
+    "score_investigation",
+    "close_investigation",
+)
+
+# Tools that mutate the viewer or export.
+AI_TOOL_USAGE_VIEWER_TOOLS = (
+    "set_cursors",
+    "zoom_to_range",
+    "highlight_task",
+    "set_view_mode",
+    "open_corridor_inspector",
+    "open_statistics_section",
+    "add_annotation",
+    "clear_marks",
+    "reset_view",
+    "bookmark_finding",
+    "trigger_compare",
+    "export_report",
+    "export_investigation",
+)
+
+_EVIDENCE_SET = frozenset(AI_TOOL_USAGE_EVIDENCE_TOOLS)
+_VERIFICATION_SET = frozenset(AI_TOOL_USAGE_VERIFICATION_TOOLS)
+_VIEWER_SET = frozenset(AI_TOOL_USAGE_VIEWER_TOOLS)
+
+_VERDICT_LABEL = {
+    "confirmed": "Confirmed",
+    "rejected": "Refuted",
+    "refuted": "Refuted",
+    "inconclusive": "Inconclusive",
+}
+
+
+def ai_tool_usage_category(name: str) -> str:
+    """Map a tool name to one of AI_TOOL_USAGE_CATEGORIES. Default: Analysis."""
+    n = str(name or "").strip()
+    if n in _EVIDENCE_SET:
+        return "Evidence"
+    if n in _VERIFICATION_SET:
+        return "Verification"
+    if n in _VIEWER_SET:
+        return "Viewer"
+    return "Analysis"
+
+
+def is_trace_query_tool(name: str) -> bool:
+    """A trace query is any Evidence-category call."""
+    return ai_tool_usage_category(name) == "Evidence"
+
+
+def _result_ok(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return True
+    if result.get("ok") is False:
+        return False
+    err = result.get("error")
+    if err not in (None, ""):
+        return False
+    st = str(result.get("status") or "").lower()
+    if st in ("error", "failed", "failure"):
+        return False
+    return True
+
+
+def _first_sentence(text: Any, max_len: int = 120) -> str:
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not s:
+        return ""
+    cut = re.split(r"(?<=[.!?])\s", s, maxsplit=1)[0] or s
+    if len(cut) > max_len:
+        return cut[: max_len - 1].rstrip() + "…"
+    return cut
+
+
+def tool_brief_result(name: str, result: Any) -> str:
+    """Short factual one-liner describing what a tool call contributed.
+
+    Deterministic — derived from the structured result only, never synthesised.
+    Returns '' when nothing concrete is available.
+    """
+    n = str(name or "").strip()
+    if not isinstance(result, dict):
+        return ""
+    data = result.get("data") if isinstance(result.get("data"), dict) else result
+
+    if n in ("verify_claim", "challenge_conclusion"):
+        raw = str(
+            data.get("verdict") or data.get("status") or result.get("message") or ""
+        ).strip().lower()
+        verdict = _VERDICT_LABEL.get(raw, raw[:1].upper() + raw[1:] if raw else "")
+        reason = data.get("reason") or data.get("detail") or data.get("summary") or ""
+        if not reason and isinstance(data.get("checks"), list):
+            for c in data["checks"]:
+                if isinstance(c, dict) and c.get("ok") is False:
+                    reason = c.get("detail") or ""
+                    break
+        reason = str(reason).strip()
+        if verdict and reason:
+            return f"{verdict} — {_first_sentence(reason)}"
+        if verdict:
+            return verdict
+        return ""
+
+    if n == "query_raw_metric":
+        metric = str(data.get("metric") or data.get("name") or "").strip()
+        id_val = data.get("id")
+        id_part = f"[{id_val}]" if id_val not in (None, "") else ""
+        stat = str(data.get("stat") or data.get("aggregate") or "").strip()
+        val = data.get("value") if data.get("value") is not None else data.get("result")
+        unit = str(data.get("unit") or data.get("units") or "").strip()
+        if unit and unit[:1].isalpha():
+            unit = f" {unit}"
+        if metric and val is not None:
+            stat_txt = f"{stat} = " if stat else ""
+            out = f"Found {metric}{id_part} {stat_txt}{val}{unit}"
+            return re.sub(r"\s+", " ", out).strip()
+
+    for key in ("evidence", "events", "path", "rows"):
+        arr = data.get(key)
+        if isinstance(arr, list) and arr:
+            first = next((x for x in arr if isinstance(x, dict)), None)
+            label = ""
+            if first:
+                label = str(
+                    first.get("label") or first.get("detail") or first.get("kind") or ""
+                ).strip()
+            noun = {
+                "rows": "rows",
+                "path": "path steps",
+                "events": "events",
+            }.get(key, "evidence rows")
+            if label:
+                return f"{len(arr)} {noun} · {_first_sentence(label, 80)}"
+            return f"{len(arr)} {noun}"
+
+    summary = data.get("summary") or data.get("message") or result.get("message")
+    if isinstance(summary, str) and summary.strip() and summary.strip().lower() != "ok":
+        return _first_sentence(summary)
+    return ""
+
+
+def record_tool_usage(
+    usage: Optional[dict],
+    *,
+    name: str,
+    result: Any = None,
+) -> Dict[str, Any]:
+    """Append one tool call to *usage* (returns a new dict; input untouched)."""
+    prev = list(usage["calls"]) if isinstance(usage, dict) and isinstance(usage.get("calls"), list) else []
+    n = str(name or "").strip()
+    if not n:
+        return {"calls": prev}
+    category = ai_tool_usage_category(n)
+    rec = {
+        "name": n,
+        "category": category,
+        "ok": _result_ok(result),
+        "trace_query": category == "Evidence",
+        "brief": tool_brief_result(n, result),
+    }
+    return {"calls": prev + [rec]}
+
+
+def seed_tool_usage(names: Optional[Sequence[Any]]) -> Dict[str, Any]:
+    """Seed *usage* from a list of tool names (no results yet)."""
+    out: Dict[str, Any] = {"calls": []}
+    for raw in names or []:
+        nm = str(raw.get("name") or "") if isinstance(raw, dict) else str(raw or "")
+        if nm.strip():
+            out = record_tool_usage(out, name=nm)
+    return out
+
+
+def summarize_tool_usage(usage: Optional[dict]) -> Dict[str, Any]:
+    """Roll up *usage* into everything the UI shows.
+
+    ``{total, unique, ok, failed, trace_queries,
+       by_category: {Evidence, Analysis, Verification, Viewer},
+       groups: [{name, category, count, ok, failed, brief}]}``
+    """
+    calls = usage["calls"] if isinstance(usage, dict) and isinstance(usage.get("calls"), list) else []
+    by_category = {"Evidence": 0, "Analysis": 0, "Verification": 0, "Viewer": 0}
+    order: List[str] = []
+    by_name: Dict[str, Dict[str, Any]] = {}
+    ok = 0
+    failed = 0
+    trace_queries = 0
+    for c in calls:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("name") or "").strip()
+        if not name:
+            continue
+        category = c.get("category") if c.get("category") in AI_TOOL_USAGE_CATEGORIES \
+            else ai_tool_usage_category(name)
+        call_ok = c.get("ok") is not False
+        if call_ok:
+            ok += 1
+        else:
+            failed += 1
+        by_category[category] += 1
+        if c.get("trace_query") or category == "Evidence":
+            trace_queries += 1
+        if name not in by_name:
+            order.append(name)
+            by_name[name] = {
+                "name": name, "category": category,
+                "count": 0, "ok": 0, "failed": 0, "brief": "",
+            }
+        g = by_name[name]
+        g["count"] += 1
+        if call_ok:
+            g["ok"] += 1
+        else:
+            g["failed"] += 1
+        brief = str(c.get("brief") or "").strip()
+        if brief:
+            g["brief"] = brief
+    return {
+        "total": len(calls),
+        "unique": len(order),
+        "ok": ok,
+        "failed": failed,
+        "trace_queries": trace_queries,
+        "by_category": by_category,
+        "groups": [by_name[n] for n in order],
+    }
+# ===========================================================================
+# AI response flow — one block per query
+# ===========================================================================
+
+def format_elapsed_seconds(s: Any) -> str:
+    """``28.3`` — one decimal, matches the TODO's own examples."""
+    try:
+        n = max(0.0, float(s))
+    except (TypeError, ValueError):
+        n = 0.0
+    return f"{round(n * 10) / 10:.1f}"
+
+
+def format_analysis_status(elapsed_s: Any, labels: Dict[str, str] | None = None) -> str:
+    """"Analysis completed · 28.3 s" / "分析完成 · 用時 28.3 秒"."""
+    lab = labels or {}
+    done = lab.get("analysis_completed") or "Analysis completed"
+    time_word = f"{lab['time_used']} " if lab.get("time_used") else ""
+    unit = lab.get("seconds_unit") or "s"
+    out = f"{done} · {time_word}{format_elapsed_seconds(elapsed_s)} {unit}"
+    return " ".join(out.split())
+
+
+def tool_usage_from_chat_tools(tools: Sequence[Any]) -> Dict[str, Any]:
+    """Roll up the chat-level tool list (name + status + result string) into the
+    same shape as :func:`summarize_tool_usage`, so every count agrees."""
+    u: Dict[str, Any] = {"calls": []}
+    for t in tools or []:
+        if not isinstance(t, dict) or not t.get("name"):
+            continue
+        failed = str(t.get("status") or "") == "failed"
+        u = record_tool_usage(u, name=str(t.get("name")), result={
+            "ok": not failed,
+            "message": t.get("result"),
+            "error": (t.get("result") or "failed") if failed else None,
+        })
+    return summarize_tool_usage(u)
+
+
+def format_tool_usage_summary_line(
+    tools: Sequence[Any],
+    labels: Dict[str, str] | None = None,
+) -> str:
+    """"Tool usage · 5 calls / 5 tools" (+ " · 1 failed")."""
+    lab = labels or {}
+    s = tool_usage_from_chat_tools(tools)
+    out = (
+        f"{lab.get('tool_usage') or 'Tool usage'} · "
+        f"{s['total']} {lab.get('calls') or 'calls'} / "
+        f"{s['unique']} {lab.get('uniq_tools') or 'tools'}"
+    )
+    if s["failed"]:
+        out += f" · {s['failed']} {lab.get('failed_word') or 'failed'}"
+    return out
+
+
+def _role(entry: Any) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("role") or "assistant")
+    if isinstance(entry, (list, tuple)) and entry:
+        return str(entry[0] or "assistant")
+    return "assistant"
+
+
+def _text(entry: Any) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("text") or entry.get("content") or "")
+    if isinstance(entry, (list, tuple)) and len(entry) > 1:
+        return str(entry[1] or "")
+    return ""
+
+
+def _tools(entry: Any) -> List[Dict[str, Any]]:
+    if isinstance(entry, dict):
+        raw = entry.get("tools")
+        if isinstance(raw, list):
+            return [t for t in raw if isinstance(t, dict)]
+    return []
+
+
+def plan_query_blocks(
+    entries: Sequence[Any],
+) -> Tuple[Set[int], Dict[int, Dict[str, Any]]]:
+    """For a completed conversation, decide how each entry renders.
+
+    Returns ``(hidden, meta)``:
+    - ``hidden`` — interstitial narration turns and per-round tool cards for a
+      query that has completed.
+    - ``meta``   — ``{idx: {elapsed_s, tools, batch_ids}}`` for the entry that
+      carries the status line + tool-usage summary (the final answer, or the
+      last tool turn when there is no written answer).
+    A query still running is left untouched. Lockstep with
+    ``planQueryBlocks`` in aiResponseFlow.js.
+    """
+    hidden: Set[int] = set()
+    meta: Dict[int, Dict[str, Any]] = {}
+    n = len(entries)
+    i = 0
+    while i < n:
+        if _role(entries[i]) != "user":
+            i += 1
+            continue
+        user_idx = i
+        j = i + 1
+        rest: List[int] = []
+        while j < n and _role(entries[j]) != "user":
+            rest.append(j)
+            j += 1
+        tool_idxs = [k for k in rest if _role(entries[k]) == "assistant" and _tools(entries[k])]
+        prose_idxs = [
+            k for k in rest
+            if _role(entries[k]) == "assistant" and _text(entries[k]).strip()
+        ]
+        all_tools: List[Dict[str, Any]] = []
+        for k in tool_idxs:
+            all_tools.extend(_tools(entries[k]))
+        any_pending = any(
+            str(t.get("status") or "pending") == "pending" for t in all_tools
+        )
+        user_entry = entries[user_idx] if isinstance(entries[user_idx], dict) else {}
+        complete = bool(user_entry.get("turn_complete")) and not any_pending
+        # Per-round tool cards are never shown in the chat — a tool-only turn
+        # with no written prose is hidden even while the query is still running.
+        # Only the one consolidated "Tool Usage" block surfaces tool activity.
+        for k in tool_idxs:
+            if not _text(entries[k]).strip():
+                hidden.add(k)
+        if complete and (tool_idxs or prose_idxs):
+            answer_idx = prose_idxs[-1] if prose_idxs else None
+            host = answer_idx if answer_idx is not None else (
+                tool_idxs[-1] if tool_idxs else None)
+            if host is not None:
+                batch_ids: List[str] = []
+                for k in tool_idxs:
+                    bid = str((entries[k].get("batch_id") if isinstance(entries[k], dict) else "") or "")
+                    if bid and bid not in batch_ids:
+                        batch_ids.append(bid)
+                meta[host] = {
+                    "elapsed_s": float(user_entry.get("analysis_elapsed_s") or 0.0),
+                    "tools": all_tools,
+                    "batch_ids": batch_ids,
+                }
+                hidden.discard(host)
+                # Hide only the assistant's own turns (interstitial narration +
+                # per-round tool cards). Never hide the Evidence & Validation
+                # panel (role 'evidence') or any other non-assistant entry.
+                for k in rest:
+                    if k != host and _role(entries[k]) == "assistant":
+                        hidden.add(k)
+        i = j
+    return hidden, meta
+# ===========================================================================
 # ai_case
 # ===========================================================================
 
@@ -23314,7 +23718,9 @@ GUIDED_STAGE_LABELS: Dict[str, str] = {
     "scope": "Scope",
     "investigate": "Investigate",
     "verify": "Verify",
-    "experiment": "Experiment",
+    # §12 — BTFViewer analyses traces; it does not run firmware experiments.
+    # The stage proposes a verification experiment; internal id stays "experiment".
+    "experiment": "Propose experiment",
     "compare": "Compare",
 }
 
@@ -23475,7 +23881,7 @@ def ai_context_limits(mode: Any = None) -> Dict[str, Any]:
     key = normalize_ai_context_mode(mode)
     if key == AI_CONTEXT_MODE_COMPACT:
         return {
-            "findings": 5,
+            "findings": 3,
             "tool_rows": 10,
             "history_user_turns": 2,
             "max_tokens": 500,
@@ -24081,7 +24487,7 @@ def format_context_usage_status(
     meter: Optional[dict] = None,
     mode: Any = None,
 ) -> str:
-    """AI panel usage bar: ``Context: Compact · 1.3k tok · 2 tools · 1.5s``."""
+    """AI panel usage bar: ``Context: Compact · 1.3k tok · 2 calls · 1.5s``."""
     label = ai_context_mode_label(mode)
     m = meter if isinstance(meter, dict) else empty_cost_meter()
     try:
@@ -24101,7 +24507,7 @@ def format_context_usage_status(
     time_part = f"{time_s:g}s" if time_s else "0s"
     return (
         f"Context: {label} · {_format_token_count(tokens)} tok · "
-        f"{tools} tools · {time_part}"
+        f"{tools} calls · {time_part}"
     )
 
 
@@ -24340,6 +24746,7 @@ def empty_investigation_case(
         "evidence": [],
         "tools_executed": [],
         "tool_reasons": [],
+        "tool_usage": {"calls": []},
         "evidence_timeline": [],
         "evidence_graph": {},
         "evidence_quality": {},
@@ -26002,7 +26409,7 @@ def _format_token_count(n: Any) -> str:
 
 
 def format_cost_status(meter: Optional[dict]) -> str:
-    """One-line status suffix: ``1.3k tok · 2 tools · 1.5s``."""
+    """One-line status suffix: ``1.3k tok · 2 calls · 1.5s``."""
     m = meter if isinstance(meter, dict) else empty_cost_meter()
     try:
         tokens = int(m.get("total_tokens") or 0)
@@ -26022,7 +26429,7 @@ def format_cost_status(meter: Optional[dict]) -> str:
         usd = 0.0
     parts = [
         f"{_format_token_count(tokens)} tok",
-        f"{tools} tools",
+        f"{tools} calls",
         f"{time_s:g}s" if time_s else "0s",
     ]
     if usd:
@@ -26811,6 +27218,11 @@ def build_investigation_case(
         {"tool": n, "reason": tool_call_reason(n, finding_obj or None)}
         for n in tool_names
     ]
+    ctx_usage = ctx.get("tool_usage")
+    if isinstance(ctx_usage, dict) and ctx_usage.get("calls"):
+        tool_usage = {"calls": list(ctx_usage["calls"])}
+    else:
+        tool_usage = seed_tool_usage(tool_names)
     case = empty_investigation_case(
         question=question or str(ctx.get("message") or ctx.get("question") or ""),
         trace=trace,
@@ -26824,6 +27236,7 @@ def build_investigation_case(
         "evidence": ev,
         "tools_executed": tool_names,
         "tool_reasons": reasons,
+        "tool_usage": tool_usage,
         "evidence_timeline": [
             {"time": e.get("time"), "label": e.get("label")}
             for e in ev if isinstance(e, dict) and e.get("time") is not None
@@ -26872,6 +27285,7 @@ def update_case_from_tool(
         finding = suspected[0]
     reasons.append({"tool": name, "reason": tool_call_reason(name, finding)})
     out["tool_reasons"] = reasons
+    out["tool_usage"] = record_tool_usage(out.get("tool_usage"), name=name, result=result)
     data = {}
     if isinstance(result, dict):
         data = result.get("data") if isinstance(result.get("data"), dict) else result
@@ -29855,6 +30269,35 @@ def extract_evidence_panel_payload(
             else "Low" if result_label == "DISPROVED"
             else "Medium"
         )
+    elif name in ("verify_claim", "challenge_conclusion"):
+        # Structured verification is authoritative (TODO §10): fold the verdict
+        # into payload["validation"] so an inconclusive / negative result cannot
+        # be displayed as Confirmed regardless of prose confidence.
+        verdict = str(
+            data.get("verdict") or data.get("status") or result.get("message") or ""
+        ).strip().lower()
+        reason = str(
+            data.get("reason") or data.get("detail") or data.get("summary") or ""
+        ).strip()
+        payload["conclusion"] = str(
+            result.get("message") or data.get("message") or reason or name
+        )
+        payload["confidence"] = str(data.get("confidence") or "Medium")
+        payload["verification"] = {
+            "tool": name, "verdict": verdict or "inconclusive", "reason": reason,
+        }
+        if verdict in (
+            "inconclusive", "rejected", "refuted", "contradicted", "unverified",
+            "fail", "failed", "not_verified", "unproven",
+        ):
+            payload["validation"] = {
+                "ok": False,
+                "unverified": 1,
+                "issues": [{
+                    "kind": "verification",
+                    "detail": reason or f"{name} was {verdict or 'inconclusive'}",
+                }],
+            }
     elif (
         name in (
         "plan_investigation", "suggest_scope", "detect_contradictions",
@@ -29863,8 +30306,8 @@ def extract_evidence_panel_payload(
         "generate_experiment_plan", "record_experiment_outcome",
         "score_investigation",
         "analyze_temporal_causality", "build_task_dependency_graph",
-        "decompose_response_time", "rank_root_causes", "verify_claim",
-        "challenge_conclusion", "investigation_memory", "cluster_incidents",
+        "decompose_response_time", "rank_root_causes",
+        "investigation_memory", "cluster_incidents",
         "close_investigation", "analyze_distribution", "analyze_periodicity",
         "summarize_investigation_context",
         ) or data.get("steps") or data.get("verdict") or data.get("pattern")
@@ -30215,6 +30658,7 @@ def merge_evidence_panel_payload(
         "falsification",
         "investigation_case",
         "graph_mermaid",
+        "tool_usage",
     ):
         if not out.get(key) and prev.get(key):
             out[key] = prev[key]
@@ -30715,6 +31159,19 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "contradicting": "Contradicting",
         "timeline_evidence": "Timeline evidence",
         "tools_used": "Tools used",
+        "tool_usage": "Tool Usage",
+        "calls": "calls",
+        "uniq_tools": "tools",
+        "trace_queries": "Trace queries",
+        "raw_calls": "Raw calls",
+        "cat_evidence": "Evidence",
+        "cat_analysis": "Analysis",
+        "cat_verification": "Verification",
+        "cat_viewer": "Viewer",
+        "analysis_completed": "Analysis completed",
+        "time_used": "",
+        "seconds_unit": "s",
+        "failed_word": "failed",
         "rows_label": "rows",
         "cost": "Investigation cost",
         "claims": "Claims",
@@ -30769,6 +31226,19 @@ _EVIDENCE_PANEL_EXTRA: Dict[str, Dict[str, str]] = {
         "contradicting": "矛盾證據",
         "timeline_evidence": "時間軸證據",
         "tools_used": "已用工具",
+        "tool_usage": "工具使用",
+        "calls": "次呼叫",
+        "uniq_tools": "種工具",
+        "trace_queries": "追蹤查詢",
+        "raw_calls": "原始呼叫",
+        "cat_evidence": "證據",
+        "cat_analysis": "分析",
+        "cat_verification": "驗證",
+        "cat_viewer": "檢視器",
+        "analysis_completed": "分析完成",
+        "time_used": "用時",
+        "seconds_unit": "秒",
+        "failed_word": "失敗",
         "rows_label": "列",
         "investigation_details": "調查詳情",
         "cost": "調查成本",
@@ -31338,6 +31808,11 @@ def conclusion_status_from_payload(data: Optional[Dict[str, Any]] = None) -> str
     if conf in ("high",) and evidence and band in ("strong", "medium-high", ""):
         if band == "insufficient":
             return "insufficient"
+        # Structured verification is authoritative: an inconclusive / failed
+        # verify_claim (validation.ok is False) can never read as Confirmed,
+        # even when prose confidence says High.
+        if validation and validation.get("ok") is False:
+            return "correlated"
         return "confirmed" if band == "strong" else "correlated"
     if evidence or str(payload.get("conclusion") or "").strip():
         return "suspected"
@@ -31705,6 +32180,82 @@ def evidence_panel_toggle_label(
     return str(labels.get("expand_all") or "Expand all")
 
 
+_TOOL_USAGE_CAT_LABEL_KEY = {
+    "Evidence": "cat_evidence",
+    "Analysis": "cat_analysis",
+    "Verification": "cat_verification",
+    "Viewer": "cat_viewer",
+}
+
+
+def _format_tool_usage_fold(
+    tool_usage: Optional[dict],
+    labels: Dict[str, str],
+    *,
+    open: bool = False,
+    nested: bool = False,
+) -> List[str]:
+    """Compact "Tool Usage" fold for the evidence panel and exported report.
+
+    Every number comes from :func:`summarize_tool_usage` so the live panel, the
+    cost line, and the export can never disagree. Returns ``[]`` when no tools
+    ran. Lockstep with ``formatToolUsageFold`` in aiInvestigation.js.
+    """
+    s = summarize_tool_usage(tool_usage)
+    if not s["total"]:
+        return []
+    call_w = labels.get("calls", "calls")
+    tool_w = labels.get("uniq_tools", "tools")
+    title = (
+        f"{labels.get('tool_usage', 'Tool Usage')} · "
+        f"{s['total']} {call_w} / {s['unique']} {tool_w} · ✓ {s['ok']}"
+    )
+    if s["failed"]:
+        title += f" · ✗ {s['failed']}"
+
+    def cat_label(c: str) -> str:
+        return labels.get(_TOOL_USAGE_CAT_LABEL_KEY.get(c, ""), c)
+
+    cat_parts = [
+        f"{cat_label(c)} {s['by_category'][c]}"
+        for c in AI_TOOL_USAGE_CATEGORIES
+        if s["by_category"].get(c, 0) > 0
+    ]
+    body: List[str] = []
+    if cat_parts:
+        body.append(" · ".join(cat_parts))
+    body.append(f"{labels.get('trace_queries', 'Trace queries')} {s['trace_queries']}")
+
+    for cat in AI_TOOL_USAGE_CATEGORIES:
+        rows = [g for g in s["groups"] if g["category"] == cat]
+        if not rows:
+            continue
+        body.extend(["", f"**{cat_label(cat)}**"])
+        for g in rows:
+            times = f" ×{g['count']}" if g["count"] > 1 else ""
+            fail = f" ({g['failed']} ✗)" if g["failed"] else ""
+            body.append(f"- {g['name']}{times}{fail}")
+            if g["brief"]:
+                body.append(f"  {g['brief']}")
+
+    if s["total"] > s["unique"]:
+        calls = tool_usage.get("calls") if isinstance(tool_usage, dict) else []
+        raw_lines = [
+            f"- {c.get('name')} ({c.get('category')})"
+            + (" — ✗" if c.get("ok") is False else "")
+            for c in (calls or [])
+        ]
+        body.append("")
+        body.extend(_wrap_evidence_fold(
+            f"{labels.get('raw_calls', 'Raw calls')} · {s['total']}",
+            raw_lines,
+            open=False,
+            nested=True,
+        ))
+
+    return _wrap_evidence_fold(title, body, open=open, nested=nested)
+
+
 def format_evidence_panel_markdown(
     data: Optional[Dict[str, Any]],
     response_language: str = "English",
@@ -31921,6 +32472,15 @@ def format_evidence_panel_markdown(
             open=False,
         ))
 
+    tool_usage = data.get("tool_usage") or (
+        data.get("investigation_case", {}).get("tool_usage")
+        if isinstance(data.get("investigation_case"), dict) else None
+    )
+    tool_usage_fold = _format_tool_usage_fold(tool_usage, labels, open=False)
+    if tool_usage_fold:
+        lines.append("")
+        lines.extend(tool_usage_fold)
+
     falsify = data.get("falsify") if isinstance(data.get("falsify"), dict) else {}
     supporting = [s for s in (falsify.get("supporting") or []) if s]
     disprove = [
@@ -32050,23 +32610,9 @@ def format_evidence_panel_markdown(
             open=False,
             nested=True,
         ))
-    reasons = data.get("tool_reasons") or []
-    if reasons:
-        tool_lines: List[str] = []
-        for r in reasons:
-            if not isinstance(r, dict):
-                continue
-            tool = str(r.get("tool") or "")
-            why = str(r.get("reason") or "")
-            if tool:
-                tool_lines.append(f"- {tool}: {why}")
-        details.extend(_wrap_evidence_fold(
-            f"{labels.get('tools_used', labels.get('investigation', 'Tools used'))} · "
-            f"{len(tool_lines)}",
-            tool_lines,
-            open=False,
-            nested=True,
-        ))
+    # Tool history now lives in the top-level "Tool Usage" fold
+    # (_format_tool_usage_fold), derived from the authoritative
+    # investigation_case tool_usage record — not from data["tool_reasons"].
     root_chain = data.get("root_cause_chain") or []
     hyps = data.get("hypotheses") or []
     if root_chain or hyps:
@@ -43852,7 +44398,7 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
 
     or a ``presets`` object carrying several at once. Unknown preset names
     (``deepseek``, ``grok``, …) become extra presets added to the combo.
-    Checkbox flags (``enabled``, ``auto_apply``, ``redact_task_names``,
+    Checkbox flags (``enabled``, ``redact_task_names``,
     ``trace_sensitive``, ``mcp_log``) are imported when present. snake_case
     and camelCase key names both work, so files exported from either app
     import into both. Whole-line ``//`` comments are ignored. Raises
@@ -43964,7 +44510,6 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
         patch["context_mode"] = normalize_ai_context_mode(context_mode)
     flags = (
         ("enabled", ("enabled", "ai_enabled", "aiEnabled")),
-        ("auto_apply", ("auto_apply", "ai_auto_apply", "aiAutoApply")),
         (
             "redact_task_names",
             (
@@ -45382,6 +45927,30 @@ def _tool_batch_summary(tools: Sequence[Dict[str, Any]], batch_id: str = "") -> 
     return f"{noun} · done"
 
 
+def _tool_batch_resolved(tools: Sequence[Dict[str, Any]]) -> bool:
+    """True once every tool in the batch has left the ``pending`` state — a
+    finished round rendered as one "Tool calls" fold (web: toolRunPlan)."""
+    tl = [t for t in tools if isinstance(t, dict)]
+    return bool(tl) and all(
+        str(t.get("status") or "pending") != "pending" for t in tl
+    )
+
+
+def _tool_calls_summary(tools: Sequence[Dict[str, Any]]) -> str:
+    """``Tool calls · 4`` (+ ` · 1 failed`) — the fold summary for a finished
+    round of tool use. Lockstep with web AiAssistantPanel.vue's
+    ``toolCallsSummary``."""
+    tl = [t for t in tools if isinstance(t, dict)]
+    failed = sum(1 for t in tl if str(t.get("status") or "") == "failed")
+    base = f"Tool calls · {len(tl)}"
+    return f"{base} · {failed} failed" if failed else base
+
+
+def _entry_batch_id(entry: Any) -> str:
+    return str((entry.get("batch_id") if isinstance(entry, dict) else "") or "")
+
+
+
 def _tool_params_text(args: Any) -> str:
     """A tool call's arguments as a compact ``key=value, …`` line — lockstep
     with web AiAssistantPanel.vue's ``toolParamsText``."""
@@ -45397,6 +45966,64 @@ def _tool_params_text(args: Any) -> str:
     return ", ".join(
         f"{k}={_fmt(v)}" for k, v in a.items()
         if v is not None and v != ""
+    )
+
+
+def _tool_usage_summary_fold_html(
+    tools: Sequence[Dict[str, Any]],
+    labels: Dict[str, str],
+    *,
+    is_dark: bool = True,
+    open_folds: Optional[Set[str]] = None,
+) -> str:
+    """Collapsed "Tool usage · X calls / Y tools" fold — one per query
+    (AI_RESPONSE_FLOW_TODO §4). Expands to ``name ×N`` + a short brief.
+    Lockstep with the ``queryMeta`` tool-usage block in AiAssistantPanel.vue."""
+    summary = format_tool_usage_summary_line(tools, labels)
+    groups = tool_usage_from_chat_tools(tools)["groups"]
+    if not groups:
+        return ""
+    fold_id = _ev_fold_id(summary, "toolusage:" + summary)
+    opened = open_folds if isinstance(open_folds, set) else set()
+    st_color = "#6b7280" if not is_dark else "#8b98a8"
+    rows: List[str] = []
+    for g in groups:
+        tag = (
+            f' <span style="color:{st_color}">({g["failed"]} '
+            f'{labels.get("failed_word") or "failed"})</span>'
+            if g.get("failed") else ""
+        )
+        rows.append(f'<p>{html.escape(str(g["name"]))} ×{g["count"]}{tag}</p>')
+        brief = str(g.get("brief") or "").strip()
+        if brief:
+            rows.append(
+                f'<p style="margin:1px 0 4px 0;color:{st_color};'
+                f'font-size:x-small;">{html.escape(brief)}</p>'
+            )
+    body_rows = "".join(rows)
+    if not is_dark:
+        fold = (
+            f'<details class="ai-tool-fold"><summary>{html.escape(summary)}'
+            f"</summary>{body_rows}</details>"
+        )
+    elif fold_id in opened:
+        fold = _ai_fold_toggle_html(
+            html.escape(summary), fold_id, expanded=True, is_dark=is_dark
+        ) + body_rows
+    else:
+        fold = _ai_fold_toggle_html(
+            html.escape(summary), fold_id, expanded=False, is_dark=is_dark)
+    if not is_dark:
+        return (
+            '<div class="ai-tool-card" style="margin-top:6px;padding:6px 10px;'
+            'border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">'
+            f"{fold}</div>"
+        )
+    return (
+        '<table width="100%" cellspacing="0" cellpadding="0">'
+        '<tr><td bgcolor="#2a2418" class="ai-tool-card" '
+        'style="border-left:3px solid #c9a227;padding:6px 10px;">'
+        f"{fold}</td></tr></table>"
     )
 
 
@@ -45456,9 +46083,60 @@ def _tool_cards_html(
             f'<p><a href="btfaction:undo/{html.escape(batch_id)}">Undo</a></p>'
         )
 
-    # For 2+ tools the per-tool details (labels + parameters) collapse into a
-    # fold that is closed by default; the summary is just the tool count +
-    # batch state. A lone tool renders inline.
+    # A finished round of tool use is ONE "Tool calls · N" card: a fold of the
+    # tool names — no per-tool params/status noise. Once the whole query
+    # completes, plan_query_blocks folds every round into the single
+    # "Tool usage" summary instead. Failure reasons for failed tools are kept.
+    if _tool_batch_resolved(tool_list):
+        summary = _tool_calls_summary(tool_list)
+        fold_id = _ev_fold_id(summary, batch_id or summary)
+        opened = open_folds if isinstance(open_folds, set) else set()
+        name_parts: List[str] = []
+        fail_parts: List[str] = []
+        for t in tool_list:
+            name = str(t.get("name") or "")
+            args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
+            label = html.escape(format_tool_action_label(name, args))
+            failed = str(t.get("status") or "") == "failed"
+            tag = f' <span style="color:{st_color}">(failed)</span>' if failed else ""
+            name_parts.append(f"<p>– {label}{tag}</p>")
+            detail = str(t.get("result") or t.get("error") or "").strip()
+            if failed and detail:
+                fail_parts.append(
+                    f'<p style="margin:2px 0 6px 1.2em;color:{st_color};'
+                    f'font-size:x-small;">{html.escape(detail)}</p>'
+                )
+        name_rows = "".join(name_parts)
+        # Failure reasons stay visible even when the fold is collapsed.
+        fail_rows = "".join(fail_parts)
+        if light:
+            fold = (
+                f'<details class="ai-tool-fold">'
+                f"<summary>{html.escape(summary)}</summary>{name_rows}</details>"
+            )
+        elif fold_id in opened:
+            fold = _ai_fold_toggle_html(
+                html.escape(summary), fold_id, expanded=True, is_dark=not light
+            ) + name_rows
+        else:
+            fold = _ai_fold_toggle_html(
+                html.escape(summary), fold_id, expanded=False, is_dark=not light)
+        body = fold + fail_rows + actions
+        if light:
+            return (
+                '<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;'
+                'border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">'
+                f"{body}</div>"
+            )
+        return (
+            '<table width="100%" cellspacing="0" cellpadding="0">'
+            '<tr><td bgcolor="#2a2418" class="ai-tool-card" '
+            'style="border-left:3px solid #c9a227;padding:8px 10px;">'
+            f"{body}</td></tr></table>"
+        )
+
+    # Pending batch still awaiting Apply/Skip: 2+ tools collapse into a fold
+    # that is closed by default; a lone tool renders inline.
     if len(tool_list) < 2:
         body = "".join(rows) + actions
         if light:
@@ -45575,6 +46253,8 @@ def _format_ai_log_html(
     open_folds: Optional[Set[str]] = None,
     closed_folds: Optional[Set[str]] = None,
     embed_ev_toggle: bool = False,
+    analysis_line: str = "",
+    tool_usage_tools: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> str:
     """One conversation turn as a self-contained table (Qt will not merge these).
 
@@ -45644,6 +46324,24 @@ def _format_ai_log_html(
         f'<tr><td class="ai-role {role_cls}"{_align} style="padding:10px 0 3px 0;">'
         f"{label}</td></tr>"
     )
+    # AI_RESPONSE_FLOW_TODO: "Analysis completed · N.N s" then a collapsed
+    # "Tool usage · X calls / Y tools" fold, immediately before the answer.
+    if analysis_line:
+        acc = "#8b98a8" if is_dark else "#5a6a7c"
+        rows += (
+            f'<tr><td style="padding:2px 0 4px 0;font-size:small;font-weight:600;'
+            f'color:{acc};">✨ {html.escape(analysis_line)}</td></tr>'
+        )
+        usage_html = _tool_usage_summary_fold_html(
+            tool_usage_tools or [],
+            evidence_panel_labels(response_language),
+            is_dark=is_dark, open_folds=open_folds,
+        )
+        if usage_html:
+            rows += (
+                f'<tr><td class="ai-tool-cards" style="padding:0 0 6px 0;">'
+                f"{usage_html}</td></tr>"
+            )
     # Written reply and tool cards are siblings (Web: .ai-msg-body then
     # .ai-tool-card). Nesting cards inside the green bubble made Calculation
     # cards look like the last line of the assistant answer.
@@ -45686,15 +46384,39 @@ def _ai_log_document_html(
     """Full conversation document for QTextBrowser.setHtml (avoids append merge)."""
     if not entries:
         return ""
+    # AI_RESPONSE_FLOW_TODO: once a query completes, collapse its turns to
+    # user -> "Analysis completed" -> "Tool usage" -> final answer. While a
+    # query is still running nothing is hidden (live tool cards stay).
+    hidden, meta = plan_query_blocks(entries)
+    labels = evidence_panel_labels(response_language)
     parts: List[str] = []
-    for i, entry in enumerate(entries):
-        if i:
+    for idx, entry in enumerate(entries):
+        if idx in hidden:
+            continue
+        if parts:
             parts.append('<hr class="ai-turn-sep">')
+        m = meta.get(idx)
+        if m:
+            parts.append(_format_ai_log_html(
+                "assistant",
+                ai_entry_text(entry),
+                None,
+                "",
+                response_language=response_language,
+                is_dark=is_dark,
+                open_folds=open_folds,
+                closed_folds=closed_folds,
+                analysis_line=format_analysis_status(m["elapsed_s"], labels),
+                tool_usage_tools=m["tools"],
+            ))
+            continue
+        # No per-round tool cards in the chat — only the consolidated
+        # "Tool Usage" block on the meta entry surfaces tool activity.
         parts.append(_format_ai_log_html(
             ai_entry_role(entry),
             ai_entry_text(entry),
-            ai_entry_tools(entry),
-            str((entry.get("batch_id") if isinstance(entry, dict) else "") or ""),
+            None,
+            "",
             response_language=response_language,
             is_dark=is_dark,
             open_folds=open_folds,
@@ -45723,21 +46445,43 @@ def format_ai_conversation_markdown(
     entries: Sequence[Any],
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
 ) -> str:
-    """Markdown transcript of the conversation (assistant replies kept as-is)."""
+    """Markdown transcript. A completed query exports the same clean block as
+    the UI (AI_RESPONSE_FLOW_TODO §15): ## Question / <q> / Analysis completed ·
+    N.N s / Tool usage · X calls / Y tools + groups / ## Answer / <final>."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    labels = evidence_panel_labels(response_language)
+    hidden, meta = plan_query_blocks(entries)
     out = ["# BTFViewer — AI Conversation", "", f"_Saved {stamp}_", ""]
-    for entry in entries:
+    for idx, entry in enumerate(entries):
+        if idx in hidden:
+            continue
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
-        tools = _tool_transcript_lines(entry)
         out.append(f"## {ai_role_label(role, response_language)}")
         out.append("")
+        m = meta.get(idx)
+        if m:
+            out.append(format_analysis_status(m["elapsed_s"], labels))
+            out.append("")
+            if m["tools"]:
+                out.append(format_tool_usage_summary_line(m["tools"], labels))
+                for g in tool_usage_from_chat_tools(m["tools"])["groups"]:
+                    tag = (
+                        f" ({g['failed']} {labels.get('failed_word') or 'failed'})"
+                        if g.get("failed") else ""
+                    )
+                    out.append(f"{g['name']} ×{g['count']}{tag}")
+                    if g.get("brief"):
+                        out.append(str(g["brief"]))
+                out.append("")
         if text:
             out.append(text)
             out.append("")
-        if tools:
-            out.extend(tools)
-            out.append("")
+        if not m:
+            tools = _tool_transcript_lines(entry)
+            if tools:
+                out.extend(tools)
+                out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -47791,6 +48535,12 @@ def create_ai_assistant_panel(
                 self._guide_step_row.addWidget(btn, 1)
                 self._guide_step_btns[sid] = btn
             g_lay.addWidget(self._guide_stepper)
+            # BTFVIEWER_DESIGN_AND_AI_PROMPT_TODO §5/§15 — the guided stages are
+            # an internal prompt-orchestration detail, not a user-facing
+            # workflow. The stage stepper rail is not shown (the Investigation
+            # Notebook is the only visible persistent-investigation model);
+            # `_guide_stage` still drives prompt composition.
+            self._guide_stepper.setVisible(False)
             self._start_inv_host = QWidget()
             self._start_inv_host.setObjectName("aiStartInv")
             start_lay = QVBoxLayout(self._start_inv_host)
@@ -48590,7 +49340,7 @@ def create_ai_assistant_panel(
                 prompt_tokens=usage.get("prompt_tokens") or 0,
                 completion_tokens=usage.get("completion_tokens") or 0,
                 tool_calls=len(names),
-                trace_queries=sum(1 for n in names if is_query_tool(n)),
+                trace_queries=sum(1 for n in names if is_trace_query_tool(n)),
                 model_time_s=elapsed,
             )
             self._refresh_usage()
@@ -50723,6 +51473,7 @@ def create_ai_assistant_panel(
                 case = update_case_from_tool(prev_case, name, res)
                 payload["investigation_case"] = case
                 payload["tool_reasons"] = case.get("tool_reasons") or []
+                payload["tool_usage"] = case.get("tool_usage") or {"calls": []}
                 payload["confidence_evolution"] = format_confidence_evolution(
                     case.get("confidence_history"))
             if prev.get("validation") and "validation" not in payload:
@@ -50978,6 +51729,30 @@ def create_ai_assistant_panel(
                     return True
             return False
 
+        def _stamp_query_complete(self) -> None:
+            """Mark the active query done + stamp its analysis time from the one
+            authoritative timer (cost meter's accumulated model time), so the
+            log flips to the compact block (AI_RESPONSE_FLOW_TODO §3)."""
+            elapsed = 0.0
+            try:
+                elapsed = float((self._cost_meter or {}).get("model_time_s") or 0.0)
+            except (TypeError, ValueError):
+                elapsed = 0.0
+            for k in range(len(self._entries) - 1, -1, -1):
+                e = self._entries[k]
+                if isinstance(e, dict) and e.get("role") == "user":
+                    e["turn_complete"] = True
+                    e["analysis_elapsed_s"] = elapsed
+                    return
+                if isinstance(e, tuple) and e and e[0] == "user":
+                    self._entries[k] = {
+                        "role": "user",
+                        "text": e[1] if len(e) > 1 else "",
+                        "turn_complete": True,
+                        "analysis_elapsed_s": elapsed,
+                    }
+                    return
+
         def _complete_final_assistant_reply(self, text: str) -> None:
             """Show a final assistant reply (linkified) and close the turn."""
             # After tools, the model often returns an empty follow-up. Always
@@ -50997,6 +51772,8 @@ def create_ai_assistant_panel(
             self._cleanup_worker()
             self._maybe_emit_notebook_proposal(source)
             self._notify_notebook_reply(source)
+            self._stamp_query_complete()
+            self._refresh_log()
 
         def _sns_fallback_reply(self) -> str:
             return format_sns_fallback_reply(
@@ -51046,10 +51823,8 @@ def create_ai_assistant_panel(
                     [str(t.get("name") or "") for t in tools_norm]
                 )
 
-            auto = (
-                parse_ai_auto_apply(self._settings_dict().get("auto_apply"))
-                or tool_batch_auto_runs(tools_norm)
-            )
+            # GUI actions from the model always auto-apply (no per-batch confirm).
+            auto = True
             if tools_norm:
                 self._batch_seq += 1
                 batch_id = f"b{self._batch_seq}"
@@ -79112,7 +79887,6 @@ class _RcSettings:
                 "enabled": "true",
                 "preset": "",
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
-                "auto_apply": "false",
                 "mcp_log": "false",
                 "extra_presets": "[]",
                 "split_bottom": "80",
@@ -79895,7 +80669,6 @@ class _SettingsDialog(QDialog):
                  ai_preset_settings: Optional[Dict[str, Dict[str, str]]] = None,
                  ai_extra_presets: Optional[List[Dict[str, str]]] = None,
                  response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
-                 ai_auto_apply: bool = False,
                  ai_mcp_log: bool = False,
                  ai_redact_task_names: bool = False,
                  ai_trace_sensitive: bool = False,
@@ -80280,13 +81053,6 @@ class _SettingsDialog(QDialog):
             self._ai_enabled_help,
             spacing=4,
         ))
-        self._ai_auto_apply_cb = _switch("Auto-apply GUI actions")
-        self._ai_auto_apply_cb.setChecked(bool(ai_auto_apply))
-        self._tip(
-            self._ai_auto_apply_cb,
-            "When on, tool calls from the model update the timeline immediately. "
-            "When off, the chat shows Apply / Skip on each action card.")
-        f4.addRow("", self._ai_auto_apply_cb)
         self._ai_context_combo = QComboBox()
         for _mid in AI_CONTEXT_MODES:
             self._ai_context_combo.addItem(AI_CONTEXT_MODE_LABELS[_mid], _mid)
@@ -80900,7 +81666,6 @@ class _SettingsDialog(QDialog):
                 self._ai_context_combo.setCurrentIndex(idx)
         flag_map = (
             ("enabled", self._ai_enabled_cb),
-            ("auto_apply", self._ai_auto_apply_cb),
             ("redact_task_names", self._ai_redact_cb),
             ("trace_sensitive", self._ai_sensitive_cb),
             ("mcp_log", self._ai_mcp_log_cb),
@@ -81094,7 +81859,6 @@ class _SettingsDialog(QDialog):
         self._task_deadlines_edit.setPlainText("")
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
-        self._ai_auto_apply_cb.setChecked(False)
         self._ai_context_combo.setCurrentIndex(
             max(0, self._ai_context_combo.findData(DEFAULT_AI_CONTEXT_MODE)))
         self._ai_redact_cb.setChecked(False)
@@ -81187,8 +81951,6 @@ class _SettingsDialog(QDialog):
     def task_deadlines_text(self) -> str: return self._task_deadlines_edit.toPlainText()
     @property
     def ai_enabled(self) -> bool:         return self._ai_enabled_cb.isChecked()
-    @property
-    def ai_auto_apply(self) -> bool:      return self._ai_auto_apply_cb.isChecked()
     @property
     def ai_context_mode(self) -> str:
         return normalize_ai_context_mode(self._ai_context_combo.currentData())
@@ -98798,7 +99560,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     @classmethod
     def _ai_setting_keys(cls, extra_ids=()) -> list:
-        keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
+        keys = ["enabled", "preset", "response_language", "mcp_log",
                 "user_investigation_templates", "user_historical_knowledge",
                 "redact_task_names", "trace_sensitive", "extra_presets",
                 "split_bottom", "investigation_session", "context_mode",
@@ -98823,7 +99585,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cfg["enabled"] = cfg["enabled"] or "true"
         cfg["response_language"] = (
             cfg["response_language"] or DEFAULT_AI_RESPONSE_LANGUAGE)
-        cfg["auto_apply"] = cfg["auto_apply"] or "false"
         cfg["mcp_log"] = cfg["mcp_log"] or "false"
         cfg["extra_presets"] = cfg.get("extra_presets") or "[]"
 
@@ -104256,8 +105017,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             },
             ai_extra_presets=parse_extra_ai_presets(_ai_cfg.get("extra_presets")),
             response_language=_ai_cfg["response_language"],
-            ai_auto_apply=str(_ai_cfg.get("auto_apply", "false")).lower()
-            in ("1", "true", "yes", "on"),
             ai_mcp_log=str(_ai_cfg.get("mcp_log", "false")).lower()
             in ("1", "true", "yes", "on"),
             ai_redact_task_names=str(_ai_cfg.get("redact_task_names", "false")).lower()
@@ -104325,7 +105084,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "enabled": str(dlg.ai_enabled).lower(),
                 "preset": dlg.ai_preset or DEFAULT_AI_PRESET,
                 "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
-                "auto_apply": str(dlg.ai_auto_apply).lower(),
                 "mcp_log": str(dlg.ai_mcp_log).lower(),
                 "redact_task_names": str(dlg.ai_redact_task_names).lower(),
                 "trace_sensitive": str(dlg.ai_trace_sensitive).lower(),

@@ -375,22 +375,6 @@
                   </p>
                 </div>
               </div>
-              <div class="settings-form-row settings-form-row--check">
-                <span
-                  class="settings-form-label"
-                  aria-hidden="true"
-                ></span>
-                <label
-                  class="settings-check"
-                  title="When on, tool calls from the model update the timeline immediately. When off, the chat shows Apply / Skip on each action card."
-                >
-                  <input
-                    v-model="draft.aiAutoApply"
-                    type="checkbox"
-                  >
-                  Auto-apply GUI actions
-                </label>
-              </div>
               <div class="settings-form-row settings-form-row--top">
                 <span class="settings-form-label">Context:</span>
                 <div class="settings-form-field">
@@ -1119,7 +1103,6 @@ function applyAiSettingsPatch(patch) {
   draft.aiPresets = presets
   if (patch.responseLanguage) draft.aiResponseLanguage = patch.responseLanguage
   if (patch.aiEnabled != null) draft.aiEnabled = !!patch.aiEnabled
-  if (patch.aiAutoApply != null) draft.aiAutoApply = !!patch.aiAutoApply
   if (patch.aiContextMode) draft.aiContextMode = patch.aiContextMode
   if (patch.aiRedactTaskNames != null) draft.aiRedactTaskNames = !!patch.aiRedactTaskNames
   if (patch.aiTraceSensitive != null) draft.aiTraceSensitive = !!patch.aiTraceSensitive

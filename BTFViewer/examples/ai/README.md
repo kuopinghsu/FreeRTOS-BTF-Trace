@@ -33,7 +33,6 @@ After import: review **Authentication**, paste a key or use **Sign in…** (open
 | `tls_verify` | Optional. `true` (default) verifies the HTTPS certificate. Set `false` (or `insecure_tls: true`) for a self-signed / private-CA gateway. Desktop then skips certificate checks; browsers still verify — trust the cert, use `http://`, or use the Desktop app. |
 | `response_language` | Optional reply language for the assistant. |
 | `enabled` | Optional. Settings → **Enable AI Assistant**. |
-| `auto_apply` | Optional. Settings → **Auto-apply GUI actions**. |
 | `context_mode` | Optional. Settings → **Context**: `compact`, `balanced` (default), or `full` (`full evidence` also accepted). |
 | `redact_task_names` | Optional. Settings → **Anonymize task names for cloud** (`anonymize_task_names` also accepted). |
 | `trace_sensitive` | Optional. Settings → **Treat this trace as sensitive**. |
@@ -48,7 +47,6 @@ one to select — see [`presets.json`](presets.json):
 {
   "preset": "ollama",
   "enabled": true,
-  "auto_apply": false,
   "presets": {
     "ollama": { "base_url": "http://localhost:11434/v1", "model": "qwen3.5:9b", "auth_mode": "none" },
     "deepseek": { "label": "DeepSeek", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-v4-flash", "auth_mode": "api_key" }

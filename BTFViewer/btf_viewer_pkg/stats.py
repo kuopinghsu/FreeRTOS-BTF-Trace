@@ -19203,7 +19203,6 @@ class _RcSettings:
                 "enabled": "true",
                 "preset": "",
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
-                "auto_apply": "false",
                 "mcp_log": "false",
                 "extra_presets": "[]",
                 "split_bottom": "80",
@@ -19986,7 +19985,6 @@ class _SettingsDialog(QDialog):
                  ai_preset_settings: Optional[Dict[str, Dict[str, str]]] = None,
                  ai_extra_presets: Optional[List[Dict[str, str]]] = None,
                  response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
-                 ai_auto_apply: bool = False,
                  ai_mcp_log: bool = False,
                  ai_redact_task_names: bool = False,
                  ai_trace_sensitive: bool = False,
@@ -20371,13 +20369,6 @@ class _SettingsDialog(QDialog):
             self._ai_enabled_help,
             spacing=4,
         ))
-        self._ai_auto_apply_cb = _switch("Auto-apply GUI actions")
-        self._ai_auto_apply_cb.setChecked(bool(ai_auto_apply))
-        self._tip(
-            self._ai_auto_apply_cb,
-            "When on, tool calls from the model update the timeline immediately. "
-            "When off, the chat shows Apply / Skip on each action card.")
-        f4.addRow("", self._ai_auto_apply_cb)
         self._ai_context_combo = QComboBox()
         for _mid in AI_CONTEXT_MODES:
             self._ai_context_combo.addItem(AI_CONTEXT_MODE_LABELS[_mid], _mid)
@@ -20991,7 +20982,6 @@ class _SettingsDialog(QDialog):
                 self._ai_context_combo.setCurrentIndex(idx)
         flag_map = (
             ("enabled", self._ai_enabled_cb),
-            ("auto_apply", self._ai_auto_apply_cb),
             ("redact_task_names", self._ai_redact_cb),
             ("trace_sensitive", self._ai_sensitive_cb),
             ("mcp_log", self._ai_mcp_log_cb),
@@ -21185,7 +21175,6 @@ class _SettingsDialog(QDialog):
         self._task_deadlines_edit.setPlainText("")
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
-        self._ai_auto_apply_cb.setChecked(False)
         self._ai_context_combo.setCurrentIndex(
             max(0, self._ai_context_combo.findData(DEFAULT_AI_CONTEXT_MODE)))
         self._ai_redact_cb.setChecked(False)
@@ -21278,8 +21267,6 @@ class _SettingsDialog(QDialog):
     def task_deadlines_text(self) -> str: return self._task_deadlines_edit.toPlainText()
     @property
     def ai_enabled(self) -> bool:         return self._ai_enabled_cb.isChecked()
-    @property
-    def ai_auto_apply(self) -> bool:      return self._ai_auto_apply_cb.isChecked()
     @property
     def ai_context_mode(self) -> str:
         return normalize_ai_context_mode(self._ai_context_combo.currentData())

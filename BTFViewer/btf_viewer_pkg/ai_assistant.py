@@ -55,7 +55,6 @@ from .ai_tools import (
     format_tool_result_content,
     is_export_tool,
     is_malformed_function_call_finish,
-    is_query_tool,
     max_tool_rounds,
     merge_tool_calls,
     assistant_message_text,
@@ -71,7 +70,6 @@ from .ai_tools import (
     strip_parsed_tool_markup,
     format_tool_action_label,
     summarise_tool_call,
-    tool_batch_auto_runs,
     tool_result_message,
     tool_result_payload,
     validate_tool_call,
@@ -106,6 +104,13 @@ from .ai_investigation import (
     linkify_next_check_lines,
 )
 from .investigation_ai import summarize_notebook_proposal_for_chat
+from .ai_tool_usage import is_trace_query_tool
+from .ai_response_flow import (
+    format_analysis_status,
+    format_tool_usage_summary_line,
+    plan_query_blocks,
+    tool_usage_from_chat_tools,
+)
 from .ai_case import (
     INVESTIGATION_MODE_LABELS,
     INVESTIGATION_MODES,
@@ -1449,7 +1454,7 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
 
     or a ``presets`` object carrying several at once. Unknown preset names
     (``deepseek``, ``grok``, …) become extra presets added to the combo.
-    Checkbox flags (``enabled``, ``auto_apply``, ``redact_task_names``,
+    Checkbox flags (``enabled``, ``redact_task_names``,
     ``trace_sensitive``, ``mcp_log``) are imported when present. snake_case
     and camelCase key names both work, so files exported from either app
     import into both. Whole-line ``//`` comments are ignored. Raises
@@ -1561,7 +1566,6 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
         patch["context_mode"] = normalize_ai_context_mode(context_mode)
     flags = (
         ("enabled", ("enabled", "ai_enabled", "aiEnabled")),
-        ("auto_apply", ("auto_apply", "ai_auto_apply", "aiAutoApply")),
         (
             "redact_task_names",
             (
@@ -2979,6 +2983,30 @@ def _tool_batch_summary(tools: Sequence[Dict[str, Any]], batch_id: str = "") -> 
     return f"{noun} · done"
 
 
+def _tool_batch_resolved(tools: Sequence[Dict[str, Any]]) -> bool:
+    """True once every tool in the batch has left the ``pending`` state — a
+    finished round rendered as one "Tool calls" fold (web: toolRunPlan)."""
+    tl = [t for t in tools if isinstance(t, dict)]
+    return bool(tl) and all(
+        str(t.get("status") or "pending") != "pending" for t in tl
+    )
+
+
+def _tool_calls_summary(tools: Sequence[Dict[str, Any]]) -> str:
+    """``Tool calls · 4`` (+ ` · 1 failed`) — the fold summary for a finished
+    round of tool use. Lockstep with web AiAssistantPanel.vue's
+    ``toolCallsSummary``."""
+    tl = [t for t in tools if isinstance(t, dict)]
+    failed = sum(1 for t in tl if str(t.get("status") or "") == "failed")
+    base = f"Tool calls · {len(tl)}"
+    return f"{base} · {failed} failed" if failed else base
+
+
+def _entry_batch_id(entry: Any) -> str:
+    return str((entry.get("batch_id") if isinstance(entry, dict) else "") or "")
+
+
+
 def _tool_params_text(args: Any) -> str:
     """A tool call's arguments as a compact ``key=value, …`` line — lockstep
     with web AiAssistantPanel.vue's ``toolParamsText``."""
@@ -2994,6 +3022,64 @@ def _tool_params_text(args: Any) -> str:
     return ", ".join(
         f"{k}={_fmt(v)}" for k, v in a.items()
         if v is not None and v != ""
+    )
+
+
+def _tool_usage_summary_fold_html(
+    tools: Sequence[Dict[str, Any]],
+    labels: Dict[str, str],
+    *,
+    is_dark: bool = True,
+    open_folds: Optional[Set[str]] = None,
+) -> str:
+    """Collapsed "Tool usage · X calls / Y tools" fold — one per query
+    (AI_RESPONSE_FLOW_TODO §4). Expands to ``name ×N`` + a short brief.
+    Lockstep with the ``queryMeta`` tool-usage block in AiAssistantPanel.vue."""
+    summary = format_tool_usage_summary_line(tools, labels)
+    groups = tool_usage_from_chat_tools(tools)["groups"]
+    if not groups:
+        return ""
+    fold_id = _ev_fold_id(summary, "toolusage:" + summary)
+    opened = open_folds if isinstance(open_folds, set) else set()
+    st_color = "#6b7280" if not is_dark else "#8b98a8"
+    rows: List[str] = []
+    for g in groups:
+        tag = (
+            f' <span style="color:{st_color}">({g["failed"]} '
+            f'{labels.get("failed_word") or "failed"})</span>'
+            if g.get("failed") else ""
+        )
+        rows.append(f'<p>{html.escape(str(g["name"]))} ×{g["count"]}{tag}</p>')
+        brief = str(g.get("brief") or "").strip()
+        if brief:
+            rows.append(
+                f'<p style="margin:1px 0 4px 0;color:{st_color};'
+                f'font-size:x-small;">{html.escape(brief)}</p>'
+            )
+    body_rows = "".join(rows)
+    if not is_dark:
+        fold = (
+            f'<details class="ai-tool-fold"><summary>{html.escape(summary)}'
+            f"</summary>{body_rows}</details>"
+        )
+    elif fold_id in opened:
+        fold = _ai_fold_toggle_html(
+            html.escape(summary), fold_id, expanded=True, is_dark=is_dark
+        ) + body_rows
+    else:
+        fold = _ai_fold_toggle_html(
+            html.escape(summary), fold_id, expanded=False, is_dark=is_dark)
+    if not is_dark:
+        return (
+            '<div class="ai-tool-card" style="margin-top:6px;padding:6px 10px;'
+            'border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">'
+            f"{fold}</div>"
+        )
+    return (
+        '<table width="100%" cellspacing="0" cellpadding="0">'
+        '<tr><td bgcolor="#2a2418" class="ai-tool-card" '
+        'style="border-left:3px solid #c9a227;padding:6px 10px;">'
+        f"{fold}</td></tr></table>"
     )
 
 
@@ -3053,9 +3139,60 @@ def _tool_cards_html(
             f'<p><a href="btfaction:undo/{html.escape(batch_id)}">Undo</a></p>'
         )
 
-    # For 2+ tools the per-tool details (labels + parameters) collapse into a
-    # fold that is closed by default; the summary is just the tool count +
-    # batch state. A lone tool renders inline.
+    # A finished round of tool use is ONE "Tool calls · N" card: a fold of the
+    # tool names — no per-tool params/status noise. Once the whole query
+    # completes, plan_query_blocks folds every round into the single
+    # "Tool usage" summary instead. Failure reasons for failed tools are kept.
+    if _tool_batch_resolved(tool_list):
+        summary = _tool_calls_summary(tool_list)
+        fold_id = _ev_fold_id(summary, batch_id or summary)
+        opened = open_folds if isinstance(open_folds, set) else set()
+        name_parts: List[str] = []
+        fail_parts: List[str] = []
+        for t in tool_list:
+            name = str(t.get("name") or "")
+            args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
+            label = html.escape(format_tool_action_label(name, args))
+            failed = str(t.get("status") or "") == "failed"
+            tag = f' <span style="color:{st_color}">(failed)</span>' if failed else ""
+            name_parts.append(f"<p>– {label}{tag}</p>")
+            detail = str(t.get("result") or t.get("error") or "").strip()
+            if failed and detail:
+                fail_parts.append(
+                    f'<p style="margin:2px 0 6px 1.2em;color:{st_color};'
+                    f'font-size:x-small;">{html.escape(detail)}</p>'
+                )
+        name_rows = "".join(name_parts)
+        # Failure reasons stay visible even when the fold is collapsed.
+        fail_rows = "".join(fail_parts)
+        if light:
+            fold = (
+                f'<details class="ai-tool-fold">'
+                f"<summary>{html.escape(summary)}</summary>{name_rows}</details>"
+            )
+        elif fold_id in opened:
+            fold = _ai_fold_toggle_html(
+                html.escape(summary), fold_id, expanded=True, is_dark=not light
+            ) + name_rows
+        else:
+            fold = _ai_fold_toggle_html(
+                html.escape(summary), fold_id, expanded=False, is_dark=not light)
+        body = fold + fail_rows + actions
+        if light:
+            return (
+                '<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;'
+                'border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">'
+                f"{body}</div>"
+            )
+        return (
+            '<table width="100%" cellspacing="0" cellpadding="0">'
+            '<tr><td bgcolor="#2a2418" class="ai-tool-card" '
+            'style="border-left:3px solid #c9a227;padding:8px 10px;">'
+            f"{body}</td></tr></table>"
+        )
+
+    # Pending batch still awaiting Apply/Skip: 2+ tools collapse into a fold
+    # that is closed by default; a lone tool renders inline.
     if len(tool_list) < 2:
         body = "".join(rows) + actions
         if light:
@@ -3172,6 +3309,8 @@ def _format_ai_log_html(
     open_folds: Optional[Set[str]] = None,
     closed_folds: Optional[Set[str]] = None,
     embed_ev_toggle: bool = False,
+    analysis_line: str = "",
+    tool_usage_tools: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> str:
     """One conversation turn as a self-contained table (Qt will not merge these).
 
@@ -3241,6 +3380,24 @@ def _format_ai_log_html(
         f'<tr><td class="ai-role {role_cls}"{_align} style="padding:10px 0 3px 0;">'
         f"{label}</td></tr>"
     )
+    # AI_RESPONSE_FLOW_TODO: "Analysis completed · N.N s" then a collapsed
+    # "Tool usage · X calls / Y tools" fold, immediately before the answer.
+    if analysis_line:
+        acc = "#8b98a8" if is_dark else "#5a6a7c"
+        rows += (
+            f'<tr><td style="padding:2px 0 4px 0;font-size:small;font-weight:600;'
+            f'color:{acc};">✨ {html.escape(analysis_line)}</td></tr>'
+        )
+        usage_html = _tool_usage_summary_fold_html(
+            tool_usage_tools or [],
+            evidence_panel_labels(response_language),
+            is_dark=is_dark, open_folds=open_folds,
+        )
+        if usage_html:
+            rows += (
+                f'<tr><td class="ai-tool-cards" style="padding:0 0 6px 0;">'
+                f"{usage_html}</td></tr>"
+            )
     # Written reply and tool cards are siblings (Web: .ai-msg-body then
     # .ai-tool-card). Nesting cards inside the green bubble made Calculation
     # cards look like the last line of the assistant answer.
@@ -3283,15 +3440,39 @@ def _ai_log_document_html(
     """Full conversation document for QTextBrowser.setHtml (avoids append merge)."""
     if not entries:
         return ""
+    # AI_RESPONSE_FLOW_TODO: once a query completes, collapse its turns to
+    # user -> "Analysis completed" -> "Tool usage" -> final answer. While a
+    # query is still running nothing is hidden (live tool cards stay).
+    hidden, meta = plan_query_blocks(entries)
+    labels = evidence_panel_labels(response_language)
     parts: List[str] = []
-    for i, entry in enumerate(entries):
-        if i:
+    for idx, entry in enumerate(entries):
+        if idx in hidden:
+            continue
+        if parts:
             parts.append('<hr class="ai-turn-sep">')
+        m = meta.get(idx)
+        if m:
+            parts.append(_format_ai_log_html(
+                "assistant",
+                ai_entry_text(entry),
+                None,
+                "",
+                response_language=response_language,
+                is_dark=is_dark,
+                open_folds=open_folds,
+                closed_folds=closed_folds,
+                analysis_line=format_analysis_status(m["elapsed_s"], labels),
+                tool_usage_tools=m["tools"],
+            ))
+            continue
+        # No per-round tool cards in the chat — only the consolidated
+        # "Tool Usage" block on the meta entry surfaces tool activity.
         parts.append(_format_ai_log_html(
             ai_entry_role(entry),
             ai_entry_text(entry),
-            ai_entry_tools(entry),
-            str((entry.get("batch_id") if isinstance(entry, dict) else "") or ""),
+            None,
+            "",
             response_language=response_language,
             is_dark=is_dark,
             open_folds=open_folds,
@@ -3320,21 +3501,43 @@ def format_ai_conversation_markdown(
     entries: Sequence[Any],
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
 ) -> str:
-    """Markdown transcript of the conversation (assistant replies kept as-is)."""
+    """Markdown transcript. A completed query exports the same clean block as
+    the UI (AI_RESPONSE_FLOW_TODO §15): ## Question / <q> / Analysis completed ·
+    N.N s / Tool usage · X calls / Y tools + groups / ## Answer / <final>."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    labels = evidence_panel_labels(response_language)
+    hidden, meta = plan_query_blocks(entries)
     out = ["# BTFViewer — AI Conversation", "", f"_Saved {stamp}_", ""]
-    for entry in entries:
+    for idx, entry in enumerate(entries):
+        if idx in hidden:
+            continue
         role = ai_entry_role(entry)
         text = (ai_entry_text(entry) or "").strip()
-        tools = _tool_transcript_lines(entry)
         out.append(f"## {ai_role_label(role, response_language)}")
         out.append("")
+        m = meta.get(idx)
+        if m:
+            out.append(format_analysis_status(m["elapsed_s"], labels))
+            out.append("")
+            if m["tools"]:
+                out.append(format_tool_usage_summary_line(m["tools"], labels))
+                for g in tool_usage_from_chat_tools(m["tools"])["groups"]:
+                    tag = (
+                        f" ({g['failed']} {labels.get('failed_word') or 'failed'})"
+                        if g.get("failed") else ""
+                    )
+                    out.append(f"{g['name']} ×{g['count']}{tag}")
+                    if g.get("brief"):
+                        out.append(str(g["brief"]))
+                out.append("")
         if text:
             out.append(text)
             out.append("")
-        if tools:
-            out.extend(tools)
-            out.append("")
+        if not m:
+            tools = _tool_transcript_lines(entry)
+            if tools:
+                out.extend(tools)
+                out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -5388,6 +5591,12 @@ def create_ai_assistant_panel(
                 self._guide_step_row.addWidget(btn, 1)
                 self._guide_step_btns[sid] = btn
             g_lay.addWidget(self._guide_stepper)
+            # BTFVIEWER_DESIGN_AND_AI_PROMPT_TODO §5/§15 — the guided stages are
+            # an internal prompt-orchestration detail, not a user-facing
+            # workflow. The stage stepper rail is not shown (the Investigation
+            # Notebook is the only visible persistent-investigation model);
+            # `_guide_stage` still drives prompt composition.
+            self._guide_stepper.setVisible(False)
             self._start_inv_host = QWidget()
             self._start_inv_host.setObjectName("aiStartInv")
             start_lay = QVBoxLayout(self._start_inv_host)
@@ -6187,7 +6396,7 @@ def create_ai_assistant_panel(
                 prompt_tokens=usage.get("prompt_tokens") or 0,
                 completion_tokens=usage.get("completion_tokens") or 0,
                 tool_calls=len(names),
-                trace_queries=sum(1 for n in names if is_query_tool(n)),
+                trace_queries=sum(1 for n in names if is_trace_query_tool(n)),
                 model_time_s=elapsed,
             )
             self._refresh_usage()
@@ -8320,6 +8529,7 @@ def create_ai_assistant_panel(
                 case = update_case_from_tool(prev_case, name, res)
                 payload["investigation_case"] = case
                 payload["tool_reasons"] = case.get("tool_reasons") or []
+                payload["tool_usage"] = case.get("tool_usage") or {"calls": []}
                 payload["confidence_evolution"] = format_confidence_evolution(
                     case.get("confidence_history"))
             if prev.get("validation") and "validation" not in payload:
@@ -8575,6 +8785,30 @@ def create_ai_assistant_panel(
                     return True
             return False
 
+        def _stamp_query_complete(self) -> None:
+            """Mark the active query done + stamp its analysis time from the one
+            authoritative timer (cost meter's accumulated model time), so the
+            log flips to the compact block (AI_RESPONSE_FLOW_TODO §3)."""
+            elapsed = 0.0
+            try:
+                elapsed = float((self._cost_meter or {}).get("model_time_s") or 0.0)
+            except (TypeError, ValueError):
+                elapsed = 0.0
+            for k in range(len(self._entries) - 1, -1, -1):
+                e = self._entries[k]
+                if isinstance(e, dict) and e.get("role") == "user":
+                    e["turn_complete"] = True
+                    e["analysis_elapsed_s"] = elapsed
+                    return
+                if isinstance(e, tuple) and e and e[0] == "user":
+                    self._entries[k] = {
+                        "role": "user",
+                        "text": e[1] if len(e) > 1 else "",
+                        "turn_complete": True,
+                        "analysis_elapsed_s": elapsed,
+                    }
+                    return
+
         def _complete_final_assistant_reply(self, text: str) -> None:
             """Show a final assistant reply (linkified) and close the turn."""
             # After tools, the model often returns an empty follow-up. Always
@@ -8594,6 +8828,8 @@ def create_ai_assistant_panel(
             self._cleanup_worker()
             self._maybe_emit_notebook_proposal(source)
             self._notify_notebook_reply(source)
+            self._stamp_query_complete()
+            self._refresh_log()
 
         def _sns_fallback_reply(self) -> str:
             return format_sns_fallback_reply(
@@ -8643,10 +8879,8 @@ def create_ai_assistant_panel(
                     [str(t.get("name") or "") for t in tools_norm]
                 )
 
-            auto = (
-                parse_ai_auto_apply(self._settings_dict().get("auto_apply"))
-                or tool_batch_auto_runs(tools_norm)
-            )
+            # GUI actions from the model always auto-apply (no per-batch confirm).
+            auto = True
             if tools_norm:
                 self._batch_seq += 1
                 batch_id = f"b{self._batch_seq}"

@@ -10584,7 +10584,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     @classmethod
     def _ai_setting_keys(cls, extra_ids=()) -> list:
-        keys = ["enabled", "preset", "response_language", "auto_apply", "mcp_log",
+        keys = ["enabled", "preset", "response_language", "mcp_log",
                 "user_investigation_templates", "user_historical_knowledge",
                 "redact_task_names", "trace_sensitive", "extra_presets",
                 "split_bottom", "investigation_session", "context_mode",
@@ -10609,7 +10609,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cfg["enabled"] = cfg["enabled"] or "true"
         cfg["response_language"] = (
             cfg["response_language"] or DEFAULT_AI_RESPONSE_LANGUAGE)
-        cfg["auto_apply"] = cfg["auto_apply"] or "false"
         cfg["mcp_log"] = cfg["mcp_log"] or "false"
         cfg["extra_presets"] = cfg.get("extra_presets") or "[]"
 
@@ -16039,8 +16038,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             },
             ai_extra_presets=parse_extra_ai_presets(_ai_cfg.get("extra_presets")),
             response_language=_ai_cfg["response_language"],
-            ai_auto_apply=str(_ai_cfg.get("auto_apply", "false")).lower()
-            in ("1", "true", "yes", "on"),
             ai_mcp_log=str(_ai_cfg.get("mcp_log", "false")).lower()
             in ("1", "true", "yes", "on"),
             ai_redact_task_names=str(_ai_cfg.get("redact_task_names", "false")).lower()
@@ -16108,7 +16105,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "enabled": str(dlg.ai_enabled).lower(),
                 "preset": dlg.ai_preset or DEFAULT_AI_PRESET,
                 "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
-                "auto_apply": str(dlg.ai_auto_apply).lower(),
                 "mcp_log": str(dlg.ai_mcp_log).lower(),
                 "redact_task_names": str(dlg.ai_redact_task_names).lower(),
                 "trace_sensitive": str(dlg.ai_trace_sensitive).lower(),

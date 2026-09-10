@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from .ai_tool_usage import record_tool_usage, seed_tool_usage
+
 HYPOTHESIS_STATUSES: Tuple[str, ...] = (
     "supported", "possible", "rejected", "need_evidence",
 )
@@ -121,7 +123,9 @@ GUIDED_STAGE_LABELS: Dict[str, str] = {
     "scope": "Scope",
     "investigate": "Investigate",
     "verify": "Verify",
-    "experiment": "Experiment",
+    # §12 — BTFViewer analyses traces; it does not run firmware experiments.
+    # The stage proposes a verification experiment; internal id stays "experiment".
+    "experiment": "Propose experiment",
     "compare": "Compare",
 }
 
@@ -282,7 +286,7 @@ def ai_context_limits(mode: Any = None) -> Dict[str, Any]:
     key = normalize_ai_context_mode(mode)
     if key == AI_CONTEXT_MODE_COMPACT:
         return {
-            "findings": 5,
+            "findings": 3,
             "tool_rows": 10,
             "history_user_turns": 2,
             "max_tokens": 500,
@@ -888,7 +892,7 @@ def format_context_usage_status(
     meter: Optional[dict] = None,
     mode: Any = None,
 ) -> str:
-    """AI panel usage bar: ``Context: Compact · 1.3k tok · 2 tools · 1.5s``."""
+    """AI panel usage bar: ``Context: Compact · 1.3k tok · 2 calls · 1.5s``."""
     label = ai_context_mode_label(mode)
     m = meter if isinstance(meter, dict) else empty_cost_meter()
     try:
@@ -908,7 +912,7 @@ def format_context_usage_status(
     time_part = f"{time_s:g}s" if time_s else "0s"
     return (
         f"Context: {label} · {_format_token_count(tokens)} tok · "
-        f"{tools} tools · {time_part}"
+        f"{tools} calls · {time_part}"
     )
 
 
@@ -1147,6 +1151,7 @@ def empty_investigation_case(
         "evidence": [],
         "tools_executed": [],
         "tool_reasons": [],
+        "tool_usage": {"calls": []},
         "evidence_timeline": [],
         "evidence_graph": {},
         "evidence_quality": {},
@@ -2809,7 +2814,7 @@ def _format_token_count(n: Any) -> str:
 
 
 def format_cost_status(meter: Optional[dict]) -> str:
-    """One-line status suffix: ``1.3k tok · 2 tools · 1.5s``."""
+    """One-line status suffix: ``1.3k tok · 2 calls · 1.5s``."""
     m = meter if isinstance(meter, dict) else empty_cost_meter()
     try:
         tokens = int(m.get("total_tokens") or 0)
@@ -2829,7 +2834,7 @@ def format_cost_status(meter: Optional[dict]) -> str:
         usd = 0.0
     parts = [
         f"{_format_token_count(tokens)} tok",
-        f"{tools} tools",
+        f"{tools} calls",
         f"{time_s:g}s" if time_s else "0s",
     ]
     if usd:
@@ -3618,6 +3623,11 @@ def build_investigation_case(
         {"tool": n, "reason": tool_call_reason(n, finding_obj or None)}
         for n in tool_names
     ]
+    ctx_usage = ctx.get("tool_usage")
+    if isinstance(ctx_usage, dict) and ctx_usage.get("calls"):
+        tool_usage = {"calls": list(ctx_usage["calls"])}
+    else:
+        tool_usage = seed_tool_usage(tool_names)
     case = empty_investigation_case(
         question=question or str(ctx.get("message") or ctx.get("question") or ""),
         trace=trace,
@@ -3631,6 +3641,7 @@ def build_investigation_case(
         "evidence": ev,
         "tools_executed": tool_names,
         "tool_reasons": reasons,
+        "tool_usage": tool_usage,
         "evidence_timeline": [
             {"time": e.get("time"), "label": e.get("label")}
             for e in ev if isinstance(e, dict) and e.get("time") is not None
@@ -3679,6 +3690,7 @@ def update_case_from_tool(
         finding = suspected[0]
     reasons.append({"tool": name, "reason": tool_call_reason(name, finding)})
     out["tool_reasons"] = reasons
+    out["tool_usage"] = record_tool_usage(out.get("tool_usage"), name=name, result=result)
     data = {}
     if isinstance(result, dict):
         data = result.get("data") if isinstance(result.get("data"), dict) else result

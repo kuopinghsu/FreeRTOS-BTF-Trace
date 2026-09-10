@@ -232,20 +232,11 @@
     <div
       class="ai-guide"
     >
-      <div
-        class="ai-guide-stepper"
-        title="Investigation stage (from Findings and tools already run)"
-      >
-        <button
-          v-for="sid in guidedStages"
-          :key="sid"
-          type="button"
-          class="ai-guide-step"
-          :class="{ now: guideStage === sid, done: stageDone(sid) }"
-          :aria-current="guideStage === sid ? 'step' : undefined"
-          @click="jumpGuideStage(sid)"
-        ><span class="ai-guide-tick" />{{ guidedStageLabel(sid) }}</button>
-      </div>
+      <!-- BTFVIEWER_DESIGN_AND_AI_PROMPT_TODO §5/§15 — the AI guided stages are
+           an internal prompt-orchestration detail (`guideStage`), not a
+           user-facing workflow. The stage stepper rail is not shown; the
+           Investigation Notebook is the only visible persistent-investigation
+           model. -->
       <div
         v-if="guideStage === 'idle' && !messages.length"
         class="ai-start-inv"
@@ -319,9 +310,12 @@
           Replies use the current Analysis Findings. Set the endpoint in Settings → AI.
         </span>
       </div>
-      <div
+      <template
         v-for="(m, i) in messages"
         :key="i"
+      >
+      <div
+        v-if="!queryHidden(i)"
         class="ai-msg"
         :class="m.role"
       >
@@ -354,6 +348,45 @@
           <div class="ai-msg-role">
             {{ aiRoleLabel(m.role, responseLanguage) }}
           </div>
+          <!-- AI_RESPONSE_FLOW_TODO: one clean block per query — status line +
+               collapsed Tool usage summary, right before the final answer. -->
+          <template v-if="queryMeta(i)">
+            <div class="ai-analysis-line">
+              ✨ {{ analysisStatusText(queryMeta(i).elapsedS) }}
+            </div>
+            <div
+              v-if="queryMeta(i).tools.length"
+              class="ai-tool-card ai-tool-usage"
+            >
+              <details class="ai-tool-fold">
+                <summary>{{ toolUsageSummary(queryMeta(i)) }}</summary>
+                <div
+                  v-for="g in toolUsageGroups(queryMeta(i))"
+                  :key="g.name"
+                  class="ai-tool-detail"
+                >
+                  <p>{{ g.name }} ×{{ g.count }}<span
+                    v-if="g.failed"
+                    class="ai-tool-st"
+                  > ({{ g.failed }} {{ failedWord }})</span></p>
+                  <p
+                    v-if="g.brief"
+                    class="ai-tool-usage-brief"
+                  >
+                    {{ g.brief }}
+                  </p>
+                </div>
+              </details>
+              <button
+                v-if="queryMeta(i).batchIds.length"
+                type="button"
+                class="ai-link-btn"
+                @click="undoMergedTools(queryMeta(i).batchIds)"
+              >
+                Undo
+              </button>
+            </div>
+          </template>
           <div
             class="ai-msg-body"
             :class="{ markdown: m.role === 'assistant' }"
@@ -369,96 +402,11 @@
         >
           View request context
         </button>
-        <div
-          v-if="m.tools && m.tools.length"
-          class="ai-tool-card"
-        >
-          <!-- One row per request: "N tools" + status. For 2+ tools the
-               per-tool parameters collapse into a <details> (closed by
-               default); a lone tool renders inline. The batch is
-               applied/skipped once, below. -->
-          <details
-            v-if="m.tools.length > 1"
-            class="ai-tool-fold"
-          >
-            <summary>
-              {{ toolBatchSummary(m) }}
-            </summary>
-            <div
-              v-for="t in m.tools"
-              :key="t.id"
-              class="ai-tool-detail"
-            >
-              <p>
-                ⚡ {{ toolLabel(t) }}
-                <span class="ai-tool-st">({{ t.status || 'pending' }})</span>
-              </p>
-              <p
-                v-if="toolParamsText(t)"
-                class="ai-tool-params"
-              >
-                {{ toolParamsText(t) }}
-              </p>
-              <p
-                v-if="t.status === 'failed' && (t.result || t.error)"
-                class="ai-tool-fail"
-              >
-                {{ t.result || t.error }}
-              </p>
-            </div>
-          </details>
-          <template v-else>
-            <template
-              v-for="t in m.tools"
-              :key="t.id"
-            >
-              <p>
-                ⚡ {{ toolLabel(t) }}
-                <span class="ai-tool-st">({{ t.status || 'pending' }})</span>
-              </p>
-              <p
-                v-if="toolParamsText(t)"
-                class="ai-tool-params"
-              >
-                {{ toolParamsText(t) }}
-              </p>
-              <p
-                v-if="t.status === 'failed' && (t.result || t.error)"
-                class="ai-tool-fail"
-              >
-                {{ t.result || t.error }}
-              </p>
-            </template>
-          </template>
-          <div
-            v-if="batchPending(m)"
-            class="ai-tool-actions"
-          >
-            <button
-              type="button"
-              class="ai-btn primary"
-              @click="applyBatch(m.batchId)"
-            >
-              Apply {{ m.tools.length }} action{{ m.tools.length === 1 ? '' : 's' }}
-            </button>
-            <button
-              type="button"
-              class="ai-link-btn"
-              @click="skipBatch(m.batchId)"
-            >
-              Skip
-            </button>
-          </div>
-          <button
-            v-else-if="batchApplied(m)"
-            type="button"
-            class="ai-link-btn"
-            @click="undoBatch(m.batchId)"
-          >
-            Undo
-          </button>
-        </div>
+        <!-- No per-round tool cards in the chat: GUI actions auto-apply and the
+             only tool surface is the one "Tool Usage" block on completion
+             (queryMeta above). Live progress shows in the status bar. -->
       </div>
+      </template>
     </div>
 
     <div
@@ -576,24 +524,6 @@
       class="ai-tool-bar"
     >
       <button
-        v-if="pendingBatchId"
-        type="button"
-        class="ai-btn primary"
-        title="Run the pending viewer tools from the last reply"
-        @click="applyBatch(pendingBatchId)"
-      >
-        Apply GUI actions
-      </button>
-      <button
-        v-if="pendingBatchId"
-        type="button"
-        class="ai-link-btn"
-        @click="skipBatch(pendingBatchId)"
-      >
-        Skip
-      </button>
-      <button
-        v-if="appliedBatchId && !pendingBatchId"
         type="button"
         class="ai-link-btn"
         @click="undoBatch(appliedBatchId)"
@@ -793,18 +723,14 @@ import {
   buildAiReportHtml,
   canonicalAssistantToolMessage,
   filterEntriesForAiReport,
-  toolBatchAutoRuns,
   isEmptyAssistantMessageError,
   isExportTool,
-  isQueryTool,
   maxToolRounds,
-  parseAiAutoApply,
   parseBtfHighlightHref,
   parseBtfJumpHref,
   parseBtfRangeHref,
   parseBtfStatsHref,
   summariseToolCall,
-  formatToolActionLabel,
   toolResultMessage,
   validateToolCall,
   canonicalToolName,
@@ -812,6 +738,13 @@ import {
   AI_VIEWER_TOOL_NAMES,
   btfJumpHref,
 } from '../utils/aiTools.js'
+import { isTraceQueryTool } from '../utils/aiToolUsage.js'
+import {
+  formatAnalysisStatus,
+  formatToolUsageSummaryLine,
+  toolUsageFromChatTools,
+  planQueryBlocks,
+} from '../utils/aiResponseFlow.js'
 import {
   INVESTIGATION_MODE_LABELS,
   INVESTIGATION_MODES,
@@ -889,6 +822,7 @@ import {
   refreshEvidencePanelScores,
   refreshEvidencePanelNextSteps,
   formatInvestigationPlanStatus,
+  evidencePanelLabels,
   elevateGuideStageForTemplate,
   isAgentTemplate,
   markPlanStepsFromTools,
@@ -936,7 +870,6 @@ const props = defineProps({
   /** { [presetId]: { baseUrl, model, apiKey } } */
   aiPresets: { type: Object, default: () => ({}) },
   responseLanguage: { type: String, default: DEFAULT_AI_RESPONSE_LANGUAGE },
-  aiAutoApply: { type: Boolean, default: false },
   aiContextMode: { type: String, default: 'balanced' },
   aiRedactTaskNames: { type: Boolean, default: false },
   aiTraceSensitive: { type: Boolean, default: false },
@@ -1165,6 +1098,7 @@ function updateEvidenceFromToolResult(name, res) {
     const caseObj = updateCaseFromTool(prevCase, name, res)
     merged.investigation_case = caseObj
     merged.tool_reasons = caseObj.tool_reasons || []
+    merged.tool_usage = caseObj.tool_usage || { calls: [] }
     merged.confidence_evolution = formatConfidenceEvolution(caseObj.confidence_history)
   }
   if (prev.validation && !merged.validation) merged.validation = prev.validation
@@ -1259,41 +1193,37 @@ function finishInvestigationPlan() {
   investigationPlan.value = completeInvestigationPlan(investigationPlan.value)
 }
 
-function toolLabel(t) {
-  return formatToolActionLabel(t.name, t.arguments || {})
-}
+/**
+ * One clean response block per user query (AI_RESPONSE_FLOW_TODO):
+ *   user → "Analysis completed · N.N s" → collapsed "Tool Usage · X calls / Y
+ *   tools" → final answer.
+ * Per-round tool cards are never rendered in the chat (GUI actions auto-apply);
+ * tool-only turns and interstitial narration are hidden (still reachable via
+ * "View request context"). Live progress shows in the status bar.
+ * Returns { hidden: Set<index>, meta: Map<index, {elapsedS, tools, batchIds}> }.
+ */
+const queryPlan = computed(() => planQueryBlocks(messages.value))
+function queryHidden(i) { return queryPlan.value.hidden.has(i) }
+function queryMeta(i) { return queryPlan.value.meta.get(i) || null }
 
-function batchPending(m) {
-  return m.batchId && (m.tools || []).some(t => (t.status || 'pending') === 'pending')
+function analysisStatusText(elapsedS) {
+  return formatAnalysisStatus(elapsedS, evidencePanelLabels(props.responseLanguage))
 }
-
-function batchApplied(m) {
-  return m.batchId && (m.tools || []).some(t => t.status === 'applied')
+function toolUsageSummary(d) {
+  return formatToolUsageSummaryLine(d.tools, evidencePanelLabels(props.responseLanguage))
 }
+function toolUsageGroups(d) { return toolUsageFromChatTools(d.tools).groups }
+const failedWord = computed(
+  () => evidencePanelLabels(props.responseLanguage).failed_word || 'failed',
+)
 
-/** One-line `<summary>` for a tool batch: how many tools + the batch state.
- *  The details (per-tool parameters) stay collapsed until the user expands. */
-function toolBatchSummary(m) {
-  const tools = m.tools || []
-  const n = tools.length
-  const noun = `${n} tool${n === 1 ? '' : 's'}`
-  const failed = tools.filter(t => t.status === 'failed').length
-  if (batchPending(m)) return `${noun} — review, then Apply`
-  if (failed) return `${noun} · ${failed} failed`
-  if (tools.some(t => t.status === 'skipped')) return `${noun} · skipped`
-  return `${noun} · done`
-}
-
-/** The tool call's arguments as a compact `key=value, …` line. */
-function toolParamsText(t) {
-  const a = t.arguments && typeof t.arguments === 'object' ? t.arguments : {}
-  const fmt = (v) => Array.isArray(v)
-    ? `[${v.map(fmt).join(', ')}]`
-    : (v && typeof v === 'object') ? JSON.stringify(v) : String(v)
-  return Object.entries(a)
-    .filter(([, v]) => v !== undefined && v !== null && v !== '')
-    .map(([k, v]) => `${k}=${fmt(v)}`)
-    .join(', ')
+async function undoMergedTools(batchIds) {
+  if (typeof props.undoTools === 'function') props.undoTools()
+  for (const id of batchIds || []) {
+    const msg = findBatch(id)
+    if (msg?.tools) msg.tools.forEach((t) => { t.status = 'undone' })
+  }
+  status.value = 'Reverted last AI GUI actions.'
 }
 
 watch(() => props.responseLanguage, (v) => {
@@ -1374,8 +1304,9 @@ const appliedBatchId = computed(() => {
 })
 
 const toolBarFallback = computed(() => {
-  const hasCards = messages.value.some(m => m.tools && m.tools.length)
-  return !!(pendingBatchId.value || appliedBatchId.value) && !hasCards
+  // GUI actions auto-apply and per-round cards are never rendered, so the
+  // toolbar carries the single "Undo last actions" whenever a batch ran.
+  return !!appliedBatchId.value
 })
 
 function templateDisabled(t) {
@@ -2036,7 +1967,7 @@ function recordTurnUsage(turn, calls) {
     promptTokens: usage.prompt_tokens,
     completionTokens: usage.completion_tokens,
     toolCalls: names.length,
-    traceQueries: names.filter(n => isQueryTool(n)).length,
+    traceQueries: names.filter(n => isTraceQueryTool(n)).length,
     modelTimeS: elapsed,
   })
 }
@@ -2503,6 +2434,20 @@ function hasProseAssistantReply() {
   )
 }
 
+/** Mark the active query done and stamp its end-to-end analysis time
+ *  (AI_RESPONSE_FLOW_TODO §3) from the one authoritative timer — the cost
+ *  meter's accumulated model time. Rendering flips to the compact block. */
+function stampQueryComplete() {
+  const elapsed = Number(costMeter.value?.model_time_s || 0)
+  for (let k = messages.value.length - 1; k >= 0; k -= 1) {
+    if (messages.value[k].role === 'user') {
+      messages.value[k].analysisElapsedS = elapsed
+      messages.value[k].turnComplete = true
+      break
+    }
+  }
+}
+
 function completeFinalAssistantReply(text) {
   // After tools, the model often returns an empty follow-up. Always synthesize
   // a wrap-up from Evidence so the log is never tools + Evidence only.
@@ -2525,6 +2470,7 @@ function completeFinalAssistantReply(text) {
   pinEvidenceLogEntry()
   doneStatusForText(source)
   maybeEmitNotebookProposal(source)
+  stampQueryComplete()
 }
 
 /** §10 — if the model answered a Notebook collaboration with a structured
@@ -2587,8 +2533,8 @@ function ingestTurn(turn) {
       batchId,
       requestContext: lastRequestContext,
     })
-    const auto = parseAiAutoApply(props.aiAutoApply) || toolBatchAutoRuns(toolsNorm)
-    return { batchId, text, auto }
+    // GUI actions from the model always auto-apply (no per-batch confirm).
+    return { batchId, text, auto: true }
   }
   if (text) {
     completeFinalAssistantReply(text)
@@ -2686,6 +2632,7 @@ async function continueAfterTools() {
         if (!evidencePayload) {
           messages.value.push({ role: 'assistant', content: `(Error) ${errMsg}` })
         }
+        stampQueryComplete()
         setErrorStatus(errMsg)
         noteAuthError(errMsg)
       }
@@ -2703,15 +2650,6 @@ async function continueAfterTools() {
     }
     await scrollLog()
   }
-}
-
-async function applyBatch(batchId) {
-  commitBatch(batchId, false)
-  await continueAfterTools()
-}
-
-async function skipBatch(batchId) {
-  commitBatch(batchId, true)
 }
 
 async function undoBatch(_batchId) {
@@ -2862,6 +2800,7 @@ async function send(overrideQuery = null, overrideCtx = null) {
         if (!evidencePayload) {
           messages.value.push({ role: 'assistant', content: `(Error) ${msg}` })
         }
+        stampQueryComplete()
         draft.value = query
         setErrorStatus(`${msg} — prompt restored; Send to retry.`)
         noteAuthError(msg)
@@ -3751,6 +3690,25 @@ defineExpose({
   margin-left: 1.4em !important;
 }
 .ai-tool-st { color: #8b98a8; }
+.ai-tool-done {
+  color: #8b98a8;
+  opacity: 0.85;
+}
+.ai-analysis-line {
+  margin: 4px 0 6px;
+  font-size: 12px;
+  color: var(--muted-fg, #8b98a8);
+  font-weight: 600;
+}
+.ai-tool-card.ai-tool-usage {
+  padding: 6px 10px;
+}
+.ai-tool-usage .ai-tool-detail { margin: 3px 0 3px 1.1em; }
+.ai-tool-usage-brief {
+  margin: 1px 0 4px 0 !important;
+  color: #8b98a8;
+  font-size: 11px;
+}
 .ai-tool-fail {
   margin: 2px 0 6px 1.2em;
   color: #8b98a8;
