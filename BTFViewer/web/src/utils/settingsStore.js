@@ -116,7 +116,6 @@ export const DEFAULT_SETTINGS = {
     AI_PRESETS.map((p) => [p.id, { baseUrl: '', model: '', apiKey: '', authMode: '', tlsVerify: true }]),
   ),
   aiResponseLanguage: DEFAULT_AI_RESPONSE_LANGUAGE,
-  aiAutoApply: false,
   aiRedactTaskNames: false,
   aiTraceSensitive: false,
   aiContextMode: DEFAULT_AI_CONTEXT_MODE,
@@ -223,7 +222,6 @@ export function normalizeSettings(raw) {
     aiExtraPresets: ai.extraPresets || [],
     aiResponseLanguage: String(s.aiResponseLanguage || DEFAULT_SETTINGS.aiResponseLanguage).trim()
       || DEFAULT_SETTINGS.aiResponseLanguage,
-    aiAutoApply: !!s.aiAutoApply,
     aiRedactTaskNames: !!s.aiRedactTaskNames,
     aiTraceSensitive: !!s.aiTraceSensitive,
     aiContextMode: normalizeAiContextMode(s.aiContextMode),

@@ -253,19 +253,19 @@ class InvestigationCaseTests(unittest.TestCase):
         )
         meter = accumulate_cost(meter, prompt_tokens=50, completion_tokens=10)
         text = status_with_cost("Done.", meter)
-        self.assertEqual(text, "Done. · 1.3k tok · 2 tools · 1.5s")
-        self.assertEqual(format_cost_status(empty_cost_meter()), "0 tok · 0 tools · 0s")
+        self.assertEqual(text, "Done. · 1.3k tok · 2 calls · 1.5s")
+        self.assertEqual(format_cost_status(empty_cost_meter()), "0 tok · 0 calls · 0s")
         self.assertEqual(
             format_context_usage_status(empty_cost_meter(), "compact"),
             "Context: Compact",
         )
         self.assertEqual(
             format_context_usage_status(meter, "compact"),
-            "Context: Compact · 1.3k tok · 2 tools · 1.5s",
+            "Context: Compact · 1.3k tok · 2 calls · 1.5s",
         )
         self.assertEqual(
             format_context_usage_status(meter, "balanced"),
-            "Context: Balanced · 1.3k tok · 2 tools · 1.5s",
+            "Context: Balanced · 1.3k tok · 2 calls · 1.5s",
         )
         shown = format_context_usage_status(meter, "balanced")
         self.assertNotIn("input", shown)
@@ -335,7 +335,7 @@ class InvestigationCaseTests(unittest.TestCase):
         self.assertIn("Critical stall", compact)
         self.assertIn("jump:100", compact)
         self.assertIn("Thrash", compact)
-        self.assertIn("2 more finding", compact)
+        self.assertIn("4 more finding", compact)   # Compact keeps up to 3 (§1)
         self.assertNotIn("id=i4 Extra", compact)
         payload = compact_tool_result_payload(
             {"ok": True, "message": "rows", "rows": list(range(25)),

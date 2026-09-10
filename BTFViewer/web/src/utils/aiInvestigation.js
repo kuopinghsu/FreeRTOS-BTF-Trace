@@ -22,6 +22,7 @@ import {
   computeNextSteps,
   NEXT_STEP_LIMIT_MAX,
 } from './aiCase.js'
+import { AI_TOOL_USAGE_CATEGORIES, summarizeToolUsage } from './aiToolUsage.js'
 
 export const INVESTIGATION_PLAN_STEPS = [
   ['findings', 'Read Analysis Findings'],
@@ -816,14 +817,38 @@ export function extractEvidencePanelPayload(toolName, result) {
     payload.confidence = resultLabel === 'VALIDATED'
       ? 'High'
       : resultLabel === 'DISPROVED' ? 'Low' : 'Medium'
+  } else if (name === 'verify_claim' || name === 'challenge_conclusion') {
+    // Structured verification is authoritative (TODO §10): fold the verdict
+    // into payload.validation so an inconclusive / negative result cannot be
+    // displayed as Confirmed regardless of prose confidence.
+    const verdict = String(data.verdict || data.status || result.message || '')
+      .trim().toLowerCase()
+    const reason = String(data.reason || data.detail || data.summary || '').trim()
+    payload.conclusion = String(result.message || data.message || reason || name)
+    payload.confidence = String(data.confidence || 'Medium')
+    payload.verification = { tool: name, verdict: verdict || 'inconclusive', reason }
+    const negative = [
+      'inconclusive', 'rejected', 'refuted', 'contradicted', 'unverified',
+      'fail', 'failed', 'not_verified', 'unproven',
+    ].includes(verdict)
+    if (negative) {
+      payload.validation = {
+        ok: false,
+        unverified: 1,
+        issues: [{
+          kind: 'verification',
+          detail: reason || `${name} was ${verdict || 'inconclusive'}`,
+        }],
+      }
+    }
   } else if ([
     'plan_investigation', 'suggest_scope', 'detect_contradictions',
     'assess_evidence_sufficiency', 'cluster_findings', 'generate_fingerprint',
     'find_similar_investigations', 'regression_localize', 'build_causal_chain',
     'generate_experiment_plan', 'record_experiment_outcome', 'score_investigation',
     'analyze_temporal_causality', 'build_task_dependency_graph',
-    'decompose_response_time', 'rank_root_causes', 'verify_claim',
-    'challenge_conclusion', 'investigation_memory', 'cluster_incidents',
+    'decompose_response_time', 'rank_root_causes',
+    'investigation_memory', 'cluster_incidents',
     'close_investigation', 'analyze_distribution', 'analyze_periodicity',
     'summarize_investigation_context',
   ].includes(name) || data.steps || data.verdict || data.pattern) {
@@ -988,7 +1013,7 @@ export function mergeEvidencePanelPayload(prev, next) {
     'alternatives', 'hypotheses', 'hypotheses_managed', 'root_cause_chain',
     'finding', 'subtitle', 'conclusion', 'confidence', 'coverage',
     'evidence_coverage', 'evidence_quality', 'falsification', 'investigation_case',
-    'graph_mermaid',
+    'graph_mermaid', 'tool_usage',
   ]) {
     // Match Python falsy lists/strings: empty [] must not wipe prior alts.
     const cur = out[key]
@@ -1415,6 +1440,12 @@ const EVIDENCE_PANEL_EXTRA = {
     unverified: 'unverified claims', next_check: 'Recommended next check',
     supporting: 'Supporting evidence', contradicting: 'Contradicting',
     timeline_evidence: 'Timeline evidence', tools_used: 'Tools used',
+    tool_usage: 'Tool Usage', calls: 'calls', uniq_tools: 'tools',
+    trace_queries: 'Trace queries', raw_calls: 'Raw calls',
+    cat_evidence: 'Evidence', cat_analysis: 'Analysis',
+    cat_verification: 'Verification', cat_viewer: 'Viewer',
+    analysis_completed: 'Analysis completed', time_used: '',
+    seconds_unit: 's', failed_word: 'failed',
     rows_label: 'rows',
     cost: 'Investigation cost',
     claims: 'Claims', validation: 'Validation',
@@ -1426,6 +1457,12 @@ const EVIDENCE_PANEL_EXTRA = {
     supported: '已支持', possible: '可能', needs_evidence: '需要證據',
     unverified: '未驗證的主張', next_check: '建議下一步',     supporting: '支持證據',
     contradicting: '矛盾證據', timeline_evidence: '時間軸證據', tools_used: '已用工具',
+    tool_usage: '工具使用', calls: '次呼叫', uniq_tools: '種工具',
+    trace_queries: '追蹤查詢', raw_calls: '原始呼叫',
+    cat_evidence: '證據', cat_analysis: '分析',
+    cat_verification: '驗證', cat_viewer: '檢視器',
+    analysis_completed: '分析完成', time_used: '用時',
+    seconds_unit: '秒', failed_word: '失敗',
     rows_label: '列', investigation_details: '調查詳情',
     cost: '調查成本', claims: '主張', validation: '驗證',
     evolution: '置信度演進', privacy: '隱私',
@@ -1824,6 +1861,10 @@ export function conclusionStatusFromPayload(data = null) {
   if ((band === 'medium-high' || band === 'medium') && evidence.length) return 'correlated'
   if (conf === 'high' && evidence.length && (band === 'strong' || band === 'medium-high' || band === '')) {
     if (band === 'insufficient') return 'insufficient'
+    // Structured verification is authoritative: an inconclusive / failed
+    // verify_claim (validation.ok === false) can never read as Confirmed,
+    // even when prose confidence says High.
+    if (validation && validation.ok === false) return 'correlated'
     return band === 'strong' ? 'confirmed' : 'correlated'
   }
   if (evidence.length || String(payload.conclusion || '').trim()) return 'suspected'
@@ -2072,6 +2113,62 @@ export function evidencePanelToggleLabel(expanded, responseLanguage = 'English')
     : (labels.expand_all || 'Expand all')
 }
 
+const TOOL_USAGE_CAT_LABEL_KEY = {
+  Evidence: 'cat_evidence', Analysis: 'cat_analysis',
+  Verification: 'cat_verification', Viewer: 'cat_viewer',
+}
+
+/**
+ * Compact "Tool Usage" fold for the evidence panel and the exported report.
+ * Every number comes from summarizeToolUsage() so the live panel, the cost
+ * line, and the export can never disagree. Returns [] when no tools ran.
+ */
+export function formatToolUsageFold(toolUsage, labels, { open = false, nested = false } = {}) {
+  const s = summarizeToolUsage(toolUsage)
+  if (!s.total) return []
+  const callW = labels.calls || 'calls'
+  const toolW = labels.uniq_tools || 'tools'
+  let title = `${labels.tool_usage || 'Tool Usage'} · ${s.total} ${callW}`
+    + ` / ${s.unique} ${toolW} · ✓ ${s.ok}`
+  if (s.failed) title += ` · ✗ ${s.failed}`
+
+  const catLabel = c => labels[TOOL_USAGE_CAT_LABEL_KEY[c]] || c
+  const catParts = AI_TOOL_USAGE_CATEGORIES
+    .filter(c => s.byCategory[c] > 0)
+    .map(c => `${catLabel(c)} ${s.byCategory[c]}`)
+
+  const body = []
+  if (catParts.length) body.push(catParts.join(' · '))
+  body.push(`${labels.trace_queries || 'Trace queries'} ${s.traceQueries}`)
+
+  for (const cat of AI_TOOL_USAGE_CATEGORIES) {
+    const rows = s.groups.filter(g => g.category === cat)
+    if (!rows.length) continue
+    body.push('', `**${catLabel(cat)}**`)
+    for (const g of rows) {
+      const times = g.count > 1 ? ` ×${g.count}` : ''
+      const fail = g.failed ? ` (${g.failed} ✗)` : ''
+      body.push(`- ${g.name}${times}${fail}`)
+      if (g.brief) body.push(`  ${g.brief}`)
+    }
+  }
+
+  if (s.total > s.unique) {
+    const rawLines = (toolUsage && Array.isArray(toolUsage.calls) ? toolUsage.calls : [])
+      .map(c => `- ${c.name} (${c.category})${c.ok === false ? ' — ✗' : ''}`)
+    body.push(
+      '',
+      ...wrapEvidenceFold(
+        `${labels.raw_calls || 'Raw calls'} · ${s.total}`,
+        rawLines,
+        { open: false, nested: true },
+      ),
+    )
+  }
+
+  return wrapEvidenceFold(title, body, { open, nested })
+}
+
 /** Markdown for Evidence & Validation (panel + conversation log + export). */
 export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') {
   if (!data || typeof data !== 'object') return ''
@@ -2241,6 +2338,12 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
     )
   }
 
+  const toolUsage = data.tool_usage
+    || (data.investigation_case && data.investigation_case.tool_usage)
+    || null
+  const toolUsageFold = formatToolUsageFold(toolUsage, labels, { open: false })
+  if (toolUsageFold.length) lines.push('', ...toolUsageFold)
+
   const falsify = data.falsify && typeof data.falsify === 'object' ? data.falsify : {}
   const supporting = (falsify.supporting || []).filter(Boolean)
   const disprove = (falsify.disprove || falsify.would_disprove || []).filter(Boolean)
@@ -2336,22 +2439,9 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
       ...wrapEvidenceFold(labels.evolution || 'Confidence evolution', evoLines, { open: false, nested: true }),
     )
   }
-  const reasons = data.tool_reasons || []
-  if (reasons.length) {
-    const toolLines = []
-    for (const r of reasons) {
-      if (!r || typeof r !== 'object') continue
-      const tool = String(r.tool || '')
-      if (tool) toolLines.push(`- ${tool}: ${String(r.reason || '')}`)
-    }
-    detailBlocks.push(
-      ...wrapEvidenceFold(
-        `${labels.tools_used || labels.investigation || 'Tools used'} · ${toolLines.length}`,
-        toolLines,
-        { open: false, nested: true },
-      ),
-    )
-  }
+  // Tool history now lives in the top-level "Tool Usage" fold (see
+  // formatToolUsageFold), derived from the authoritative investigation_case
+  // tool_usage record — not from data.tool_reasons.
   const chain = data.root_cause_chain || []
   const hyps = data.hypotheses || []
   if (chain.length || hyps.length) {

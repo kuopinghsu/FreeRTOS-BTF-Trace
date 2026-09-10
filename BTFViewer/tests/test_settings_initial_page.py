@@ -71,7 +71,6 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(dlg._sidebar.currentRow(), 3)
         self.assertEqual(dlg._content_stack.currentIndex(), 3)
         self.assertTrue(dlg.ai_enabled)
-        self.assertFalse(dlg.ai_auto_apply)
         self.assertEqual(dlg.ai_context_mode, "balanced")
         self.assertFalse(dlg.ai_mcp_log)
         self.assertEqual(dlg.ai_preset, "ollama")
@@ -99,11 +98,8 @@ class SettingsInitialPageTests(unittest.TestCase):
         dlg.resize(720, 520)
         dlg.show()
         QApplication.processEvents()
-        enable_x = dlg._ai_enabled_cb.mapTo(dlg, dlg._ai_enabled_cb.rect().topLeft()).x()
-        auto_x = dlg._ai_auto_apply_cb.mapTo(dlg, dlg._ai_auto_apply_cb.rect().topLeft()).x()
         help_x = help_lbl.mapTo(dlg, help_lbl.rect().topLeft()).x()
         ctx_x = dlg._ai_context_help.mapTo(dlg, dlg._ai_context_help.rect().topLeft()).x()
-        self.assertEqual(enable_x, auto_x)
         self.assertEqual(help_x, ctx_x)
         self.assertIn("Compact", dlg._ai_context_help.text())
         self.assertIn("Balanced (default)", dlg._ai_context_help.text())
@@ -191,7 +187,6 @@ class SettingsInitialPageTests(unittest.TestCase):
         dlg = self._dlg("AI")
         self.addCleanup(dlg.deleteLater)
         dlg._ai_enabled_cb.setChecked(True)
-        dlg._ai_auto_apply_cb.setChecked(False)
         summary = dlg.apply_ai_settings_patch({
             "preset": "deepseek",
             "extra_presets": '[{"id": "deepseek", "label": "DeepSeek"}]',
@@ -199,7 +194,6 @@ class SettingsInitialPageTests(unittest.TestCase):
             "deepseek_model": "deepseek-v4-flash",
             "deepseek_auth_mode": "api_key",
             "enabled": "true",
-            "auto_apply": "true",
             "context_mode": "compact",
             "redact_task_names": "true",
             "trace_sensitive": "false",
@@ -211,7 +205,6 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(dlg._ai_url_edit.text(), "https://api.deepseek.com/v1")
         self.assertEqual(dlg._ai_model_text(), "deepseek-v4-flash")
         self.assertTrue(dlg.ai_enabled)
-        self.assertTrue(dlg.ai_auto_apply)
         self.assertEqual(dlg.ai_context_mode, "compact")
         self.assertTrue(dlg.ai_redact_task_names)
         self.assertFalse(dlg.ai_trace_sensitive)

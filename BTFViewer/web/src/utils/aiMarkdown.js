@@ -8,6 +8,12 @@ import { btfHighlightHref, btfJumpHref, btfRangeHref, parseBtfHighlightHref, for
 import { btfHtmlReportDocument } from './htmlReport.js'
 
 import { evidencePanelLabels, evidencePanelSummaryLine, evidencePanelToggleLabel } from './aiInvestigation.js'
+import {
+  formatAnalysisStatus,
+  formatToolUsageSummaryLine,
+  toolUsageFromChatTools,
+  planQueryBlocks,
+} from './aiResponseFlow.js'
 import { DEFAULT_AI_RESPONSE_LANGUAGE } from './aiClient.js'
 import { summarizeNotebookProposalForChat } from './investigationAi.js'
 
@@ -557,25 +563,44 @@ export function aiFileStamp(date = new Date()) {
 }
 
 /**
- * Markdown transcript of the conversation (assistant replies kept as-is).
+ * Markdown transcript of the conversation. Once a query completes it exports
+ * the same clean block as the UI (AI_RESPONSE_FLOW_TODO §15):
+ *   ## Question / <q> / Analysis completed · N.N s / Tool usage · X calls /
+ *   Y tools + groups / ## Answer / <final>.
  * Keep in sync with ai_assistant.py::format_ai_conversation_markdown.
  */
 export function formatAiConversationMarkdown(entries, date = new Date(), responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
+  const list = entries || []
+  const labels = evidencePanelLabels(responseLanguage)
+  const { hidden, meta } = planQueryBlocks(list)
   const out = ['# BTFViewer — AI Conversation', '', `_Saved ${conversationStamp(date)}_`, '']
-  for (const entry of entries || []) {
+  list.forEach((entry, idx) => {
+    if (hidden.has(idx)) return
     const role = entry.role
     const text = String(entry.content || entry.text || '').trim()
     out.push(`## ${aiRoleLabel(role, responseLanguage)}`, '')
-    if (text) {
-      out.push(text, '')
+    const m = meta.get(idx)
+    if (m) {
+      out.push(formatAnalysisStatus(m.elapsedS, labels), '')
+      if (m.tools.length) {
+        out.push(formatToolUsageSummaryLine(m.tools, labels))
+        for (const g of toolUsageFromChatTools(m.tools).groups) {
+          out.push(`${g.name} ×${g.count}${g.failed ? ` (${g.failed} ${labels.failed_word || 'failed'})` : ''}`)
+          if (g.brief) out.push(g.brief)
+        }
+        out.push('')
+      }
     }
-    for (const t of entry.tools || []) {
-      const st = t.status || 'pending'
-      const label = formatToolActionLabel(t.name || '', t.arguments || {})
-      out.push(`- ⚡ ${label} (${st})`)
+    if (text) out.push(text, '')
+    if (!m) {
+      for (const t of entry.tools || []) {
+        const st = t.status || 'pending'
+        const label = formatToolActionLabel(t.name || '', t.arguments || {})
+        out.push(`- ⚡ ${label} (${st})`)
+      }
+      if (entry.tools?.length) out.push('')
     }
-    if (entry.tools?.length) out.push('')
-  }
+  })
   return `${out.join('\n').replace(/\s+$/, '')}\n`
 }
 

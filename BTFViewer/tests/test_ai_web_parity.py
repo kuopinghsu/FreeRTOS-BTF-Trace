@@ -171,6 +171,80 @@ class AiWebParityTests(unittest.TestCase):
         py_query = [n for n in AI_VIEWER_TOOL_NAMES if is_query_tool(n)]
         self.assertEqual(sorted(js_query), sorted(py_query))
 
+    def test_tool_usage_categories_match_web(self) -> None:
+        """aiToolUsage.js category lists stay aligned with ai_tool_usage.py."""
+        from btf_viewer_pkg.ai_tool_usage import (
+            AI_TOOL_USAGE_CATEGORIES,
+            AI_TOOL_USAGE_EVIDENCE_TOOLS,
+            AI_TOOL_USAGE_VERIFICATION_TOOLS,
+            AI_TOOL_USAGE_VIEWER_TOOLS,
+        )
+        js = (BTF_ROOT / "web/src/utils/aiToolUsage.js").read_text(encoding="utf-8")
+
+        def js_list(const: str) -> list[str]:
+            block = re.search(
+                rf"export const {const} = \[([\s\S]*?)\]\n", js)
+            self.assertIsNotNone(block, const)
+            return re.findall(r"'([a-z_]+)'", block.group(1))
+
+        cat_block = re.search(
+            r"export const AI_TOOL_USAGE_CATEGORIES = \[([^\]]*)\]", js)
+        self.assertIsNotNone(cat_block)
+        self.assertEqual(
+            tuple(re.findall(r"'(\w+)'", cat_block.group(1))),
+            AI_TOOL_USAGE_CATEGORIES,
+        )
+        self.assertEqual(
+            js_list("AI_TOOL_USAGE_EVIDENCE_TOOLS"),
+            list(AI_TOOL_USAGE_EVIDENCE_TOOLS),
+        )
+        self.assertEqual(
+            js_list("AI_TOOL_USAGE_VERIFICATION_TOOLS"),
+            list(AI_TOOL_USAGE_VERIFICATION_TOOLS),
+        )
+        self.assertEqual(
+            js_list("AI_TOOL_USAGE_VIEWER_TOOLS"),
+            list(AI_TOOL_USAGE_VIEWER_TOOLS),
+        )
+
+    def test_response_flow_helpers_and_labels_match_web(self) -> None:
+        """ai_response_flow.py <-> aiResponseFlow.js: same output + labels."""
+        from btf_viewer_pkg.ai_response_flow import (
+            format_analysis_status,
+            format_elapsed_seconds,
+            format_tool_usage_summary_line,
+        )
+        from btf_viewer_pkg.ai_investigation import evidence_panel_labels
+
+        js = (BTF_ROOT / "web/src/utils/aiResponseFlow.js").read_text(encoding="utf-8")
+        for fn in (
+            "formatElapsedSeconds", "formatAnalysisStatus",
+            "toolUsageFromChatTools", "formatToolUsageSummaryLine",
+            "planQueryBlocks",
+        ):
+            self.assertIn(f"export function {fn}", js)
+        # New EVIDENCE_PANEL keys exist EN + zh-TW, both sides.
+        inv_js = (BTF_ROOT / "web/src/utils/aiInvestigation.js").read_text("utf-8")
+        for key in (
+            "analysis_completed", "time_used", "seconds_unit", "failed_word",
+        ):
+            self.assertIn(f"{key}:", inv_js)
+            self.assertIn(f'"{key}"', (
+                BTF_ROOT / "btf_viewer_pkg/ai_investigation.py").read_text("utf-8"))
+        en = evidence_panel_labels("English")
+        zh = evidence_panel_labels("Traditional Chinese (繁體中文)")
+        self.assertEqual(format_elapsed_seconds(28.268), "28.3")
+        self.assertEqual(
+            format_analysis_status(10.14, en), "Analysis completed · 10.1 s")
+        self.assertEqual(
+            format_analysis_status(10.14, zh), "分析完成 · 用時 10.1 秒")
+        self.assertEqual(
+            format_tool_usage_summary_line(
+                [{"name": "query_raw_metric", "status": "applied"},
+                 {"name": "query_raw_metric", "status": "failed"}], en),
+            "Tool Usage · 2 calls / 1 tools · 1 failed",
+        )
+
     def test_tool_name_canonicalisation_matches_web(self) -> None:
         """canonical_tool_name / canonicalToolName + their alias tables align,
         so a mis-named tool call (e.g. ``nextstep:open_statistics``) recovers the
@@ -1096,8 +1170,13 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("return `Annotated ${ns}`", app)
         self.assertIn("def _export_ai_report", assist)
         self.assertIn("function exportAiReport", panel)
-        self.assertIn("tool_batch_auto_runs", assist)
-        self.assertIn("toolBatchAutoRuns", panel)
+        # GUI actions from the model always auto-apply on both apps (no
+        # per-batch confirm, no "Auto-apply GUI actions" setting).
+        self.assertIn("auto = True", assist)
+        self.assertIn("auto: true", panel)
+        self.assertNotIn("Auto-apply GUI actions", panel)
+        self.assertNotIn('"Auto-apply GUI actions"', (
+            BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8"))
         self.assertIn("is_export_tool", assist)
         self.assertIn("isExportTool", panel)
         tools_py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8")
@@ -1795,17 +1874,15 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('low.startswith("btfstats:")', assist)
         self.assertIn('class="ai-tool-cards"', assist)
         self.assertIn('class="ai-msg-body"', panel)
-        self.assertIn('class="ai-tool-card"', panel)
-        self.assertLess(
-            panel.find('class="ai-msg-body"'),
-            panel.find('class="ai-tool-card"'),
-        )
-        # One merged, collapsed-by-default tool batch per request (count +
-        # parameters), applied once — mirrored on both.
-        self.assertIn("def _tool_batch_summary", assist)
-        self.assertIn("function toolBatchSummary", panel)
-        self.assertIn("def _tool_params_text", assist)
-        self.assertIn("function toolParamsText", panel)
+        # AI_RESPONSE_FLOW_TODO — no per-round tool cards; the only tool surface
+        # in the chat is the one "Tool Usage" block per completed query.
+        self.assertIn('class="ai-tool-card ai-tool-usage"', panel)
+        self.assertIn("planQueryBlocks", panel)
+        self.assertIn("plan_query_blocks", assist)
+        self.assertIn("analysisStatusText", panel)
+        self.assertIn("format_analysis_status", assist)
+        self.assertNotIn("function toolBatchSummary", panel)
+        self.assertNotIn("function toolParamsText", panel)
         self.assertNotIn("Evidence queries", assist)
         self.assertNotIn("Evidence queries", panel)
         self.assertIn("getEvidencePayload", panel)
@@ -2592,7 +2669,7 @@ console.log(JSON.stringify({
             "import { AI_TOOL_PROMPT, AI_TOOL_SYSTEM_ADDENDUM, AI_MALFORMED_FUNCTION_CALL_NUDGE, aiViewerTools } from './src/utils/aiTools.js'\n"
             "import {\n"
             "  VALIDATE_EXPERIMENT_PROMPT, interpretedRunPrompt,\n"
-            "  investigationModePrompt, investigationTemplatePrompt,\n"
+            "  investigationModePrompt, investigationTemplatePrompt, aiContextLimits,\n"
             "  contextModeSystemAddendum, AI_CONTEXT_MODES, AI_CONTEXT_PROMPTS, INVESTIGATION_MODES,\n"
             "} from './src/utils/aiCase.js'\n"
             "const event = { task: 'Med[267]', core: 'Core_0', ns: 3087194,\n"
@@ -2605,6 +2682,11 @@ console.log(JSON.stringify({
             "  malformedFn: AI_MALFORMED_FUNCTION_CALL_NUDGE,\n"
             "  compose_en: buildAiSystemPrompt('English'),\n"
             "  compose_bal: buildAiSystemPrompt('English', 'balanced'),\n"
+            "  compose_matrix: Object.fromEntries(\n"
+            "    AI_RESPONSE_LANGUAGES.flatMap(lang => [...AI_CONTEXT_MODES].map(\n"
+            "      m => [lang + '|' + m, buildAiSystemPrompt(lang, m)]))),\n"
+            "  limits: Object.fromEntries(\n"
+            "    [...AI_CONTEXT_MODES].map(m => [m, aiContextLimits(m)])),\n"
             "  contextPrompts: AI_CONTEXT_PROMPTS,\n"
             "  templates: AI_TEMPLATE_QUESTIONS.map(t => (\n"
             "    { id: t.id, label: t.label, prompt: t.prompt })),\n"
@@ -2640,6 +2722,21 @@ console.log(JSON.stringify({
         self.assertEqual(web["malformedFn"], AI_MALFORMED_FUNCTION_CALL_NUDGE)
         self.assertEqual(web["compose_en"], build_ai_system_prompt("English"))
         self.assertEqual(web["compose_bal"], build_ai_system_prompt("English", "balanced"))
+        # §3 — the final composed system prompt (Core + Tool + Context + Language)
+        # is equivalent Desktop/Web for EVERY context mode × language.
+        from btf_viewer_pkg.ai_case import ai_context_limits
+        for lang in AI_RESPONSE_LANGUAGES:
+            for mode in AI_CONTEXT_MODES:
+                key = f"{lang}|{mode}"
+                self.assertEqual(
+                    web["compose_matrix"][key],
+                    build_ai_system_prompt(lang, mode),
+                    key,
+                )
+        # §1 / §24 — Compact means 3 findings; every context-limit value matches.
+        self.assertEqual(web["limits"]["compact"]["findings"], 3)
+        for mode in AI_CONTEXT_MODES:
+            self.assertEqual(web["limits"][mode], ai_context_limits(mode), mode)
         self.assertEqual(web["contextPrompts"]["balanced"], AI_CONTEXT_PROMPTS["balanced"])
         self.assertEqual(web["ask"], ASK_EVENT_PROMPT)
         self.assertEqual(

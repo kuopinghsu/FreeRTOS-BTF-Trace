@@ -191,11 +191,12 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertFalse(hasattr(panel, "_start_inv_blurb"))
         self.assertFalse(hasattr(panel, "_start_inv_context"))
         self.assertFalse(panel._guide_host.isHidden())
-        self.assertFalse(panel._guide_stepper.isHidden())
+        # §5/§15 — the guided-stage rail is internal, not a user-facing
+        # workflow; it is not shown. `_guide_stage` still drives prompts.
+        self.assertTrue(panel._guide_stepper.isHidden())
         for sid in GUIDED_STAGES:
             btn = panel._guide_step_btns[sid]
             self.assertIn(GUIDED_STAGE_LABELS[sid], btn.text())
-            self.assertFalse(btn.isHidden())
         panel.apply_theme(False)
         panel._refresh_guide_ui()
         idle_ss = panel._guide_step_btns["triage"].styleSheet()
@@ -237,29 +238,43 @@ class AiPanelUiTests(unittest.TestCase):
             src.index('header_row.addWidget(self._mode_chip)'))
         self.assertNotIn("self._scope_chip", src)
 
-    def test_tool_cards_merge_into_one_collapsed_batch_with_params(self) -> None:
+    def test_finished_round_is_one_tool_calls_card(self) -> None:
+        # Image spec / TODO §4/§13 — a finished round of tool use is ONE
+        # "Tool calls · N" fold of tool names; no per-tool params or status.
         from btf_viewer_pkg.ai_assistant import _ev_fold_id, _tool_cards_html
         from btf_viewer_pkg.ai_tools import AI_TOOL_SEARCH_TIMELINE
 
         done = [
-            {"name": AI_TOOL_SEARCH_TIMELINE, "arguments": {"query": "mutex"}, "status": "done"},
-            {"name": AI_TOOL_SEARCH_TIMELINE, "arguments": {}, "status": "done"},
+            {"name": AI_TOOL_SEARCH_TIMELINE, "arguments": {"query": "mutex"}, "status": "applied"},
+            {"name": AI_TOOL_SEARCH_TIMELINE, "arguments": {}, "status": "applied"},
         ]
         html_out = _tool_cards_html(done, "b1")
-        # one collapsed row: just the tool count + state
-        self.assertIn("2 tools · done", html_out)
+        self.assertIn("Tool calls · 2", html_out)
+        self.assertIn("▸ Tool calls · 2", html_out)
         self.assertIn("btffold:open/", html_out)
-        self.assertIn("▸ 2 tools · done", html_out)
-        self.assertNotIn("Search timeline", html_out)   # details collapsed
-        # expand -> per-tool labels AND their parameters
-        fold_id = _ev_fold_id("2 tools · done", "b1")
+        self.assertNotIn("Search timeline", html_out)     # collapsed by default
+        # expand -> plain tool-name list, still NO params / status spans
+        fold_id = _ev_fold_id("Tool calls · 2", "b1")
         opened = _tool_cards_html(done, "b1", open_folds={fold_id})
-        self.assertIn("btffold:close/", opened)
-        self.assertIn("▾ 2 tools · done", opened)
-        self.assertIn("Search timeline", opened)
-        self.assertIn("query=mutex", opened)           # parameters shown
+        self.assertIn("▾ Tool calls · 2", opened)
+        self.assertIn("<p>– [Navigation] Search timeline [contains] &#x27;mutex&#x27;</p>", opened)
+        self.assertNotIn("query=mutex", opened)
+        self.assertNotIn("(applied)", opened)
 
-        # pending batch: collapsed, ONE batch-level Apply (not per tool)
+        # A lone finished tool is the SAME card (Tool calls · 1), not inline.
+        lone = _tool_cards_html([done[0]], "b1")
+        self.assertIn("Tool calls · 1", lone)
+        self.assertIn("btfaction:undo/b1", lone)          # Undo still offered
+
+        # A finished failure keeps its reason and marks the count.
+        failed = _tool_cards_html([{
+            "name": "search_timeline", "arguments": {"query": "x"},
+            "status": "failed", "result": "no matching data in scope",
+        }], "b1", open_folds={_ev_fold_id("Tool calls · 1 · 1 failed", "b1")})
+        self.assertIn("Tool calls · 1 · 1 failed", failed)
+        self.assertIn("no matching data in scope", failed)
+
+        # pending batch is unchanged: closed fold, ONE batch-level Apply
         pending = [
             {"name": "set_cursors", "arguments": {"timestamps": [10, 20]}, "status": "pending"},
             {"name": "set_cursors", "arguments": {}, "status": "pending"},
@@ -488,7 +503,8 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIn("ping-pong", prompt)
         self.assertIn("handoff heuristic", prompt)
 
-    def test_apply_gui_actions_button_runs_pending_tools(self) -> None:
+    def test_gui_actions_auto_apply_on_reply(self) -> None:
+        # GUI actions from the model always run immediately — no Apply/Skip.
         executed = []
 
         def _exec(calls):
@@ -498,46 +514,21 @@ class AiPanelUiTests(unittest.TestCase):
         panel = create_ai_assistant_panel(
             None,
             get_context=lambda: {"findings_text": "findings"},
-            get_settings=lambda: {"enabled": "true", "auto_apply": "false"},
+            get_settings=lambda: {"enabled": "true"},
             on_execute_tools=_exec,
         )
-        self.assertTrue(panel._tool_bar.isHidden())
-        panel._on_ok(json.dumps({
-            "content": "Placing annotation.",
-            "tool_calls": [{
-                "id": "c1",
-                "name": "add_annotation",
-                "arguments": {"time": 10.0, "note": "spike"},
-            }],
-            "message": {"role": "assistant", "content": "Placing annotation."},
-        }))
-        # In-log Apply/Skip cards are the primary chrome; the under-log bar
-        # stays hidden when those cards exist.
-        self.assertTrue(panel._tool_bar.isHidden())
         with patch.object(panel, "_continue_with_messages"):
-            panel._on_jump_link(QUrl("btfaction:apply/b1"))
+            panel._on_ok(json.dumps({
+                "content": "Placing annotation.",
+                "tool_calls": [{
+                    "id": "c1",
+                    "name": "add_annotation",
+                    "arguments": {"time": 10.0, "note": "spike"},
+                }],
+                "message": {"role": "assistant", "content": "Placing annotation."},
+            }))
         self.assertEqual(len(executed), 1)
         self.assertEqual(executed[0][0]["name"], "add_annotation")
-        self.assertTrue(panel._tool_bar.isHidden())
-
-        panel2 = create_ai_assistant_panel(
-            None,
-            get_context=lambda: {"findings_text": "findings"},
-            get_settings=lambda: {"enabled": "true", "auto_apply": "false"},
-            on_execute_tools=_exec,
-        )
-        panel2._on_ok(json.dumps({
-            "content": "Again.",
-            "tool_calls": [{
-                "id": "c2",
-                "name": "set_view_mode",
-                "arguments": {"mode": "core"},
-            }],
-        }))
-        # Legacy colon hrefs must still Apply (QTextBrowser used to truncate them).
-        with patch.object(panel2, "_continue_with_messages"):
-            panel2._on_jump_link(QUrl("btfaction:apply:b1"))
-        self.assertEqual(executed[-1][0]["name"], "set_view_mode")
 
     def test_apply_runs_each_viewer_tool(self) -> None:
         executed = []
@@ -549,10 +540,10 @@ class AiPanelUiTests(unittest.TestCase):
         panel = create_ai_assistant_panel(
             None,
             get_context=lambda: {"findings_text": "findings"},
-            get_settings=lambda: {"enabled": "true", "auto_apply": "false"},
+            get_settings=lambda: {"enabled": "true"},
             on_execute_tools=_exec,
         )
-        panel._on_ok(json.dumps({
+        _on_ok_payload = json.dumps({
             "content": "Applying all tools.",
             "tool_calls": [
                 {"id": "c1", "name": "set_cursors",
@@ -676,13 +667,13 @@ class AiPanelUiTests(unittest.TestCase):
                 {"id": "c58", "name": AI_TOOL_SUMMARIZE_INVESTIGATION_CONTEXT,
                  "arguments": {"conclusion": "done"}},
             ],
-        }))
+        })
         with patch.object(panel, "_continue_with_messages"):
             with patch.object(
                 panel, "_export_ai_report",
                 return_value={"ok": True, "message": "Saved html report"},
             ):
-                panel._on_jump_link(QUrl("btfaction:apply/b1"))
+                panel._on_ok(_on_ok_payload)   # GUI actions auto-apply
         self.assertEqual(len(executed), 1)
         names = [c["name"] for c in executed[0]]
         host_names = [
@@ -1531,7 +1522,7 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(panel._status.text(), "Done.")
         self.assertIn("Context: Balanced", panel._usage.text())
         self.assertIn("1.2k tok", panel._usage.text())
-        self.assertIn("2 tools", panel._usage.text())
+        self.assertIn("2 calls", panel._usage.text())
         self.assertIn("1.5s", panel._usage.text())
         panel._record_turn_usage(
             {"usage": {"prompt_tokens": 50, "completion_tokens": 10}},
@@ -1539,7 +1530,7 @@ class AiPanelUiTests(unittest.TestCase):
         )
         panel._set_status("Done.")
         self.assertIn("1.3k tok", panel._usage.text())
-        self.assertIn("2 tools", panel._usage.text())
+        self.assertIn("2 calls", panel._usage.text())
         self.assertIn("1.5s", panel._usage.text())
         self.assertNotIn("input", panel._usage.text())
         self.assertNotIn("output", panel._usage.text())
@@ -1559,7 +1550,7 @@ class AiPanelUiTests(unittest.TestCase):
         panel2._refresh_usage()
         self.assertIn("Context: Balanced", panel2._usage.text())
         self.assertIn("1.3k tok", panel2._usage.text())
-        self.assertIn("2 tools", panel2._usage.text())
+        self.assertIn("2 calls", panel2._usage.text())
         self.assertIn("1.5s", panel2._usage.text())
         self.assertNotIn("input", panel2._usage.text())
         self.assertEqual(panel._status.text(), "Done.")

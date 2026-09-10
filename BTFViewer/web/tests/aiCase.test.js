@@ -274,15 +274,15 @@ describe('aiCase investigation lifecycle', () => {
     })
     meter = accumulateCost(meter, { promptTokens: 50, completionTokens: 10 })
     const text = statusWithCost('Done.', meter)
-    assert.equal(text, 'Done. · 1.3k tok · 2 tools · 1.5s')
-    assert.equal(formatCostStatus(emptyCostMeter()), '0 tok · 0 tools · 0s')
+    assert.equal(text, 'Done. · 1.3k tok · 2 calls · 1.5s')
+    assert.equal(formatCostStatus(emptyCostMeter()), '0 tok · 0 calls · 0s')
     assert.equal(formatContextUsageStatus(emptyCostMeter(), 'compact'), 'Context: Compact')
     assert.equal(
       formatContextUsageStatus(meter, 'compact'),
-      'Context: Compact · 1.3k tok · 2 tools · 1.5s',
+      'Context: Compact · 1.3k tok · 2 calls · 1.5s',
     )
     const balanced = formatContextUsageStatus(meter, 'balanced')
-    assert.equal(balanced, 'Context: Balanced · 1.3k tok · 2 tools · 1.5s')
+    assert.equal(balanced, 'Context: Balanced · 1.3k tok · 2 calls · 1.5s')
     assert.equal(balanced.includes('input'), false)
     assert.equal(balanced.includes('output'), false)
     assert.equal(clampAiSplitBottom(''), 80)
@@ -330,7 +330,7 @@ describe('aiCase investigation lifecycle', () => {
     const compact = compactFindingsText(findings, 'compact')
     assert.match(compact, /Critical stall/)
     assert.match(compact, /jump:100/)
-    assert.match(compact, /2 more finding/)
+    assert.match(compact, /4 more finding/)   // Compact keeps up to 3 findings (§1)
     assert.doesNotMatch(compact, /id=i4 Extra/)
     const hist = compactChatHistory([
       { role: 'system', content: 'sys' },

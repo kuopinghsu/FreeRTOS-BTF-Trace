@@ -368,13 +368,11 @@ class AiAssistantHelpersTests(unittest.TestCase):
             "preset": "ollama",
             "model": "qwen3.5:9b",
             "enabled": False,
-            "auto_apply": True,
             "redact_task_names": True,
             "trace_sensitive": True,
             "mcp_log": True,
         })
         self.assertEqual(patch["enabled"], "false")
-        self.assertEqual(patch["auto_apply"], "true")
         self.assertEqual(patch["redact_task_names"], "true")
         self.assertEqual(patch["trace_sensitive"], "true")
         self.assertEqual(patch["mcp_log"], "true")
@@ -384,7 +382,6 @@ class AiAssistantHelpersTests(unittest.TestCase):
             "model": "qwen3.5:9b",
         })
         self.assertNotIn("enabled", skipped)
-        self.assertNotIn("auto_apply", skipped)
 
     def test_parse_ai_settings_json_errors(self) -> None:
         for bad in (
@@ -418,7 +415,6 @@ class AiAssistantHelpersTests(unittest.TestCase):
             self.assertEqual(patch[f"{preset}_auth_mode"], auth, name)
             self.assertIn("// auth_mode:", text, name)
             self.assertEqual(patch["enabled"], "true", name)
-            self.assertEqual(patch["auto_apply"], "false", name)
             self.assertEqual(patch["redact_task_names"], "false", name)
             self.assertEqual(patch["trace_sensitive"], "false", name)
             self.assertEqual(patch["mcp_log"], "false", name)
@@ -779,6 +775,70 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertIn("Prompt two", doc)
         self.assertLess(doc.index("Reply one"), doc.index("Prompt two"))
 
+    def test_completed_query_collapses_to_one_response_block(self) -> None:
+        # AI_RESPONSE_FLOW_TODO — user -> "Analysis completed · N.N s" ->
+        # collapsed "Tool Usage · X calls / Y tools" -> final answer, with the
+        # model's interstitial narration hidden.
+        from btf_viewer_pkg.ai_assistant import _ev_fold_id
+        from btf_viewer_pkg.ai_response_flow import format_tool_usage_summary_line
+        from btf_viewer_pkg.ai_investigation import evidence_panel_labels
+
+        convo = [
+            {"role": "user", "text": "Investigate the stall.",
+             "turn_complete": True, "analysis_elapsed_s": 10.14},
+            {"role": "assistant", "text": "I will query the trace.",
+             "tools": [{"name": "correlate_events", "arguments": {"task": "Med[267]"},
+                        "status": "applied", "result": "40 events"}],
+             "batch_id": "b1"},
+            {"role": "assistant", "text": "Let me verify this.",
+             "tools": [{"name": "verify_claim", "arguments": {}, "status": "applied",
+                        "result": "inconclusive"}],
+             "batch_id": "b2"},
+            {"role": "assistant", "text": "Root cause: mutex CS[12]."},
+        ]
+        doc = _ai_log_document_html(convo)
+        self.assertIn("Analysis completed · 10.1 s", doc)
+        self.assertIn("Tool Usage · 2 calls / 2 tools", doc)
+        self.assertIn("Root cause: mutex CS[12].", doc)
+        # interstitial narration is gone from the transcript
+        self.assertNotIn("I will query the trace.", doc)
+        self.assertNotIn("Let me verify this.", doc)
+        # user + one merged response block -> exactly one separator
+        self.assertEqual(doc.count('class="ai-turn-sep"'), 1)
+        # expand -> grouped "name ×N"
+        summ = format_tool_usage_summary_line(
+            [{"name": "correlate_events", "status": "applied", "result": "40 events"},
+             {"name": "verify_claim", "status": "applied", "result": "inconclusive"}],
+            evidence_panel_labels("English"))
+        fold_id = _ev_fold_id(summ, "toolusage:" + summ)
+        opened = _ai_log_document_html(convo, open_folds={fold_id})
+        self.assertIn("correlate_events ×1", opened)
+        self.assertIn("verify_claim ×1", opened)
+
+        # A query still running: no status line yet, and per-round tool-only
+        # turns are NOT shown in the chat (GUI actions auto-apply).
+        running = _ai_log_document_html([
+            {"role": "user", "text": "q"},
+            {"role": "assistant", "text": "",
+             "tools": [{"name": "set_cursors", "arguments": {"timestamps": [1]},
+                        "status": "pending"}],
+             "batch_id": "b3"},
+            {"role": "assistant", "text": "Working on it…"},
+        ])
+        self.assertNotIn("Analysis completed", running)
+        self.assertNotIn("Set cursors", running)
+        self.assertNotIn("(pending)", running)
+        self.assertIn("Working on it…", running)
+
+        # Zero-tool completed query: status line, no Tool Usage section.
+        zero = _ai_log_document_html([
+            {"role": "user", "text": "q", "turn_complete": True,
+             "analysis_elapsed_s": 1.8},
+            {"role": "assistant", "text": "Short answer, no tools needed."},
+        ])
+        self.assertIn("Analysis completed · 1.8 s", zero)
+        self.assertNotIn("Tool Usage ·", zero)
+
     def test_format_ai_log_html_evidence_panel_collapse(self) -> None:
         from btf_viewer_pkg.ai_investigation import (
             EVIDENCE_SUBFOLDS_ALL,
@@ -866,7 +926,9 @@ class AiAssistantHelpersTests(unittest.TestCase):
         )
         self.assertIn("Verdict: mutex stall.", html_out)
         self.assertIn("ai-tool-card", html_out)
-        self.assertIn("(applied)", html_out)
+        # A finished round is one "Tool calls · N" fold (TODO §4/§13).
+        self.assertIn("Tool calls · 1", html_out)
+        self.assertNotIn("(applied)", html_out)
         bubble_at = html_out.find('class="ai-bubble"')
         self.assertGreaterEqual(bubble_at, 0)
         bubble_end = html_out.find("</td>", bubble_at)

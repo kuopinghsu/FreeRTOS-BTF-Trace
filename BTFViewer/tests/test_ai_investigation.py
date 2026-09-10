@@ -816,13 +816,112 @@ class AiInvestigationTests(unittest.TestCase):
             "confidence": "Medium",
             "evidence_quality": {"band": "weak", "bar": "weak"},
             "confidence_evolution": "Start → medium",
-            "tool_reasons": [{"tool": "search_timeline", "reason": "locate hits"}],
+            "tool_usage": {"calls": [
+                {"name": "search_timeline", "category": "Evidence",
+                 "ok": True, "trace_query": True, "brief": ""},
+            ]},
         }, "Traditional Chinese (繁體中文)")
         self.assertIn("<summary>調查詳情</summary>", md)
         self.assertNotIn("Investigation details", md)
-        self.assertIn("search_timeline: locate hits", md)
+        self.assertIn("<summary>工具使用 · 1 次呼叫 / 1 種工具 · ✓ 1</summary>", md)
+        self.assertIn("追蹤查詢 1", md)
+        self.assertIn("search_timeline", md)
         self.assertNotIn("Why?", md)
         self.assertNotIn("btftool:why", md)
+
+    def test_tool_usage_fold_groups_categorises_and_keeps_raw_calls(self) -> None:
+        # Mirrors formatToolUsageFold in web/tests/aiInvestigationTree.test.js.
+        from btf_viewer_pkg.ai_investigation import (
+            _format_tool_usage_fold,
+            evidence_panel_labels,
+        )
+
+        labels = evidence_panel_labels("English")
+        usage = {"calls": [
+            {"name": "query_raw_metric", "category": "Evidence", "ok": True,
+             "trace_query": True, "brief": "Found off_cpu[267] Max = 34.924 ms"},
+            {"name": "query_raw_metric", "category": "Evidence", "ok": True,
+             "trace_query": True, "brief": ""},
+            {"name": "query_raw_metric", "category": "Evidence", "ok": False,
+             "trace_query": True, "brief": ""},
+            {"name": "correlate_events", "category": "Analysis", "ok": True,
+             "trace_query": False, "brief": ""},
+            {"name": "verify_claim", "category": "Verification", "ok": True,
+             "trace_query": False,
+             "brief": "Inconclusive — mutex ownership not established"},
+            {"name": "set_cursors", "category": "Viewer", "ok": True,
+             "trace_query": False, "brief": ""},
+        ]}
+        self.assertEqual(_format_tool_usage_fold({"calls": []}, labels), [])
+        md = "\n".join(_format_tool_usage_fold(usage, labels))
+        self.assertIn(
+            "<summary>Tool Usage · 6 calls / 4 tools · ✓ 5 · ✗ 1</summary>", md)
+        self.assertIn("Evidence 3 · Analysis 1 · Verification 1 · Viewer 1", md)
+        self.assertIn("Trace queries 3", md)
+        self.assertIn(
+            "**Evidence**\n- query_raw_metric ×3 (1 ✗)\n"
+            "  Found off_cpu[267] Max = 34.924 ms", md)
+        self.assertIn("<summary>Raw calls · 6</summary>", md)
+        no_repeat = "\n".join(_format_tool_usage_fold({"calls": [
+            {"name": "query_raw_metric", "category": "Evidence", "ok": True,
+             "trace_query": True, "brief": ""},
+        ]}, labels))
+        self.assertNotIn("Raw calls", no_repeat)
+
+    def test_inconclusive_verify_claim_never_reads_as_confirmed(self) -> None:
+        # Mirrors web/tests/aiInvestigationTree.test.js (TODO §10).
+        from btf_viewer_pkg.ai_investigation import (
+            conclusion_status_from_payload,
+            extract_evidence_panel_payload,
+            format_evidence_panel_markdown,
+            merge_evidence_panel_payload,
+        )
+
+        payload = extract_evidence_panel_payload("verify_claim", {
+            "ok": True,
+            "data": {"verdict": "inconclusive",
+                     "reason": "mutex ownership was not established"},
+        })
+        self.assertIsNotNone(payload)
+        self.assertIs(payload["validation"]["ok"], False)
+        self.assertEqual(payload["validation"]["issues"][0]["kind"], "verification")
+
+        strong_prior = {
+            "conclusion": "Mutex CS[12] holds Worker[3] off-CPU",
+            "confidence": "High",
+            "evidence": [{
+                "label": "off-CPU episode", "time": 3088582,
+                "start": 3088582, "stop": 3089261, "task": "Worker[3]",
+            }],
+            "evidence_quality": {
+                "band": "strong", "bar": "strong",
+                "flags": {"direct_evidence": True},
+            },
+        }
+        merged = merge_evidence_panel_payload(strong_prior, payload)
+        md = format_evidence_panel_markdown(merged, "English")
+        verdict_line = md.splitlines()[0]
+        self.assertNotIn("Confirmed", verdict_line)
+
+        strong_band = {
+            "conclusion": "x", "confidence": "High",
+            "evidence": [{"label": "e", "time": 1}],
+            "evidence_quality": {"band": "strong", "flags": {"direct_evidence": True}},
+        }
+        self.assertEqual(conclusion_status_from_payload(strong_band), "confirmed")
+        self.assertEqual(
+            conclusion_status_from_payload({**strong_band, "validation": {"ok": False}}),
+            "suspected",
+        )
+        high_conf = {
+            "conclusion": "x", "confidence": "High",
+            "evidence": [{"label": "e", "time": 1}],
+            "evidence_quality": {"band": ""},
+        }
+        self.assertEqual(
+            conclusion_status_from_payload({**high_conf, "validation": {"ok": False}}),
+            "correlated",
+        )
 
     def test_evidence_panel_inner_fold_ids_nested(self) -> None:
         from btf_viewer_pkg.ai_investigation import evidence_panel_inner_fold_ids
@@ -856,7 +955,10 @@ class AiInvestigationTests(unittest.TestCase):
             ],
             "graph_mermaid": "graph LR\nA-->B",
             "confidence_evolution": "Start → medium",
-            "tool_reasons": [{"tool": "search_timeline", "reason": "locate hits"}],
+            "tool_usage": {"calls": [
+                {"name": "search_timeline", "category": "Evidence",
+                 "ok": True, "trace_query": True, "brief": ""},
+            ]},
         }, "English")
         self.assertRegex(
             md,
@@ -880,8 +982,8 @@ class AiInvestigationTests(unittest.TestCase):
         )
         self.assertRegex(
             md,
-            r'<details class="ai-ev-fold ai-ev-fold-l2">\s*'
-            r"<summary>Tools used · 1</summary>",
+            r'<details class="ai-ev-fold ai-ev-fold-l1">\s*'
+            r"<summary>Tool Usage · 1 calls / 1 tools · ✓ 1</summary>",
         )
         inner = evidence_panel_inner_fold_ids(md)
         closed = evidence_panel_default_closed_fold_ids(md)
@@ -892,7 +994,7 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertIn("▸ Timeline evidence", html_out)
         self.assertIn("▸ Evidence graph", html_out)
         self.assertIn("▸ Confidence evolution", html_out)
-        self.assertIn("▸ Tools used", html_out)
+        self.assertIn("▸ Tool Usage · 1 calls / 1 tools · ✓ 1", html_out)
 
     def test_format_evidence_panel_markdown_includes_jumps(self) -> None:
         from btf_viewer_pkg.ai_assistant import format_ai_conversation_markdown

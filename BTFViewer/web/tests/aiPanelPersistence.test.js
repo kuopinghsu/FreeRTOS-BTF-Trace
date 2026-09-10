@@ -35,26 +35,37 @@ describe('AI panel survives right-panel tab switches', () => {
 })
 
 describe('AI conversation turn layout', () => {
-  it('offers Apply GUI actions as a fallback under the log (desktop parity)', () => {
-    assert.match(aiPanel, /Apply GUI actions/)
+  it('carries only an "Undo last actions" toolbar (GUI actions auto-apply)', () => {
     assert.match(aiPanel, /Undo last actions/)
     assert.match(aiPanel, /toolBarFallback/)
+    assert.doesNotMatch(aiPanel, /Apply GUI actions/)
+    assert.doesNotMatch(aiPanel, /function applyBatch/)
+    assert.doesNotMatch(aiPanel, /function skipBatch/)
   })
 
-  it('renders one tool batch per request: 2+ tools collapse (count + params), one Apply', () => {
-    assert.match(aiPanel, /toolBatchSummary\(m\)/)
-    assert.match(aiPanel, /toolParamsText\(t\)/)
-    assert.match(aiPanel, /function toolBatchSummary\(m\)/)
-    assert.match(aiPanel, /function toolParamsText\(t\)/)
-    // 2+ tools -> a single <details> gated on the count (not on completed/auto)
-    assert.match(aiPanel, /<details v-if="m\.tools\.length > 1" class="ai-tool-fold" ?>/)
-    // one batch-level Apply, not one per tool
-    assert.match(aiPanel, /Apply \{\{ m\.tools\.length \}\} action/)
-    assert.match(aiPanel, /@click="applyBatch\(m\.batchId\)"/)
-    // the old auto/completed-only collapse heuristic is gone
-    assert.doesNotMatch(aiPanel, /toolsCollapsible/)
-    assert.doesNotMatch(aiPanel, /completedToolCount/)
-    assert.doesNotMatch(aiPanel, /Evidence queries/)
+  it('AI response is one clean block per query — no per-round tool cards', () => {
+    // AI_RESPONSE_FLOW_TODO — one clean block per query
+    assert.match(aiPanel, /const queryPlan = computed/)
+    assert.match(aiPanel, /function queryHidden\(i\)/)
+    assert.match(aiPanel, /function queryMeta\(i\)/)
+    assert.match(aiPanel, /function stampQueryComplete\(\)/)
+    assert.match(aiPanel, /function analysisStatusText\(elapsedS\)/)
+    assert.match(aiPanel, /function toolUsageSummary\(d\)/)
+    assert.match(aiPanel, /v-if="!queryHidden\(i\)"/)
+    assert.match(aiPanel, /v-if="queryMeta\(i\)"/)
+    assert.match(aiPanel, /class="ai-analysis-line"/)
+    assert.match(aiPanel, /toolUsageSummary\(queryMeta\(i\)\)/)
+    assert.match(aiPanel, /auto: true/)          // GUI actions always auto-apply
+    // no per-round / pending tool cards or their helpers remain
+    assert.doesNotMatch(aiPanel, /toolBatchSummary/)
+    assert.doesNotMatch(aiPanel, /toolCallsSummary/)
+    assert.doesNotMatch(aiPanel, /toolParamsText/)
+    assert.doesNotMatch(aiPanel, /batchPending/)
+    assert.doesNotMatch(aiPanel, /applyBatch/)
+    assert.doesNotMatch(aiPanel, /hideResolvedToolTurn/)
+    assert.doesNotMatch(aiPanel, /collapsedToolLine/)
+    assert.doesNotMatch(aiPanel, /mergedToolCard/)
+    assert.doesNotMatch(aiPanel, /aiAutoApply/)
   })
 
   it('is chat-first: log stretches; dynamic templates wrap like desktop', () => {
@@ -75,8 +86,9 @@ describe('AI conversation turn layout', () => {
     assert.match(aiPanel, /visibleTemplates/)
     assert.match(aiPanel, /recordTemplateUse/)
     assert.match(aiPanel, /Start Investigation/)
-    assert.match(aiPanel, /class="ai-guide-stepper"/)
-    assert.match(aiPanel, /jumpGuideStage/)
+    // §5/§15 — guided stages are internal (guideStage) only; no visible rail.
+    assert.doesNotMatch(aiPanel, /class="ai-guide-stepper"/)
+    assert.match(aiPanel, /const guideStage = computed/)
     assert.match(aiPanel, /ai-msg-flash/)
     assert.match(aiPanel, /dumpInvestigationSession/)
     assert.match(aiPanel, /investigationSessionHasChat/)

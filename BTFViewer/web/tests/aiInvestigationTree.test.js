@@ -18,7 +18,111 @@ import {
   mergeEvidencePanelPayload,
   refreshEvidencePanelScores,
   refreshEvidencePanelNextSteps,
+  formatToolUsageFold,
+  evidencePanelLabels,
+  conclusionStatusFromPayload,
 } from '../src/utils/aiInvestigation.js'
+
+// Tool Usage fold — mirrors _format_tool_usage_fold in
+// btf_viewer_pkg/ai_investigation.py for Desktop/Web parity.
+describe('formatToolUsageFold', () => {
+  const L = evidencePanelLabels('English')
+  const usage = { calls: [
+    { name: 'query_raw_metric', category: 'Evidence', ok: true, trace_query: true, brief: 'Found off_cpu[267] Max = 34.924 ms' },
+    { name: 'query_raw_metric', category: 'Evidence', ok: true, trace_query: true, brief: '' },
+    { name: 'query_raw_metric', category: 'Evidence', ok: false, trace_query: true, brief: '' },
+    { name: 'correlate_events', category: 'Analysis', ok: true, trace_query: false, brief: '' },
+    { name: 'verify_claim', category: 'Verification', ok: true, trace_query: false, brief: 'Inconclusive — mutex ownership not established' },
+    { name: 'set_cursors', category: 'Viewer', ok: true, trace_query: false, brief: '' },
+  ] }
+
+  it('returns [] when no tools ran', () => {
+    assert.deepEqual(formatToolUsageFold({ calls: [] }, L), [])
+    assert.deepEqual(formatToolUsageFold(null, L), [])
+  })
+
+  it('summary line distinguishes calls from unique tools and shows failures', () => {
+    const md = formatToolUsageFold(usage, L).join('\n')
+    assert.match(md, /<summary>Tool Usage · 6 calls \/ 4 tools · ✓ 5 · ✗ 1<\/summary>/)
+    assert.match(md, /Evidence 3 · Analysis 1 · Verification 1 · Viewer 1/)
+    assert.match(md, /Trace queries 3/)
+  })
+
+  it('groups repeated calls with ×N and a per-tool brief, keeps a Raw calls sub-fold', () => {
+    const md = formatToolUsageFold(usage, L).join('\n')
+    assert.match(md, /\*\*Evidence\*\*\n- query_raw_metric ×3 \(1 ✗\)\n  Found off_cpu\[267\] Max = 34\.924 ms/)
+    assert.match(md, /\*\*Verification\*\*\n- verify_claim\n  Inconclusive — mutex ownership not established/)
+    assert.match(md, /<summary>Raw calls · 6<\/summary>/)
+  })
+
+  it('omits the Raw calls sub-fold when there are no repeats', () => {
+    const md = formatToolUsageFold({ calls: [
+      { name: 'query_raw_metric', category: 'Evidence', ok: true, trace_query: true, brief: '' },
+      { name: 'verify_claim', category: 'Verification', ok: true, trace_query: false, brief: '' },
+    ] }, L).join('\n')
+    assert.doesNotMatch(md, /Raw calls/)
+  })
+})
+
+// TODO §10 — structured verification is authoritative over prose.
+describe('inconclusive verify_claim can never read as Confirmed', () => {
+  const strongPrior = {
+    conclusion: 'Mutex CS[12] holds Worker[3] off-CPU',
+    confidence: 'High',
+    evidence: [
+      { label: 'off-CPU episode', time: 3088582, start: 3088582, stop: 3089261, task: 'Worker[3]' },
+    ],
+    evidence_quality: { band: 'strong', bar: 'strong', flags: { direct_evidence: true } },
+  }
+
+  it('folds an inconclusive verdict into payload.validation', () => {
+    const payload = extractEvidencePanelPayload('verify_claim', {
+      ok: true,
+      data: { verdict: 'inconclusive', reason: 'mutex ownership was not established' },
+    })
+    assert.ok(payload)
+    assert.equal(payload.validation.ok, false)
+    assert.equal(payload.validation.issues[0].kind, 'verification')
+  })
+
+  it('downgrades the merged verdict away from Confirmed', () => {
+    const merged = mergeEvidencePanelPayload(strongPrior, extractEvidencePanelPayload('verify_claim', {
+      ok: true,
+      data: { verdict: 'inconclusive', reason: 'mutex ownership was not established' },
+    }))
+    const md = formatEvidencePanelMarkdown(merged, 'English')
+    const verdict = evidencePanelSummaryLine(md)
+    assert.doesNotMatch(verdict, /Confirmed/)
+    assert.match(verdict, /Suspected|Correlated/)
+  })
+
+  it('gates both confirmed paths of conclusionStatusFromPayload on validation.ok', () => {
+    const strongBand = {
+      conclusion: 'x',
+      confidence: 'High',
+      evidence: [{ label: 'e', time: 1 }],
+      evidence_quality: { band: 'strong', flags: { direct_evidence: true } },
+    }
+    // Genuine confirmed: no negative verification.
+    assert.equal(conclusionStatusFromPayload(strongBand), 'confirmed')
+    // band==='strong' path is gated.
+    assert.equal(
+      conclusionStatusFromPayload({ ...strongBand, validation: { ok: false } }),
+      'suspected',
+    )
+    // conf==='high' + empty band path is gated too.
+    const highConf = {
+      conclusion: 'x',
+      confidence: 'High',
+      evidence: [{ label: 'e', time: 1 }],
+      evidence_quality: { band: '' },
+    }
+    assert.equal(
+      conclusionStatusFromPayload({ ...highConf, validation: { ok: false } }),
+      'correlated',
+    )
+  })
+})
 
 // Phase 4: investigation tree mermaid — mirrors
 // tests/test_ai_investigation.py (Python) for Desktop/Web parity.
@@ -337,17 +441,21 @@ describe('computeEvidenceScore', () => {
     assert.doesNotMatch(timeline, /\*\*▸ Investigation details\*\*/)
   })
 
-  it('localizes Investigation details for Traditional Chinese', () => {
+  it('localizes Investigation details and Tool Usage for Traditional Chinese', () => {
     const md = formatEvidencePanelMarkdown({
       conclusion: '相關事件',
       confidence: 'medium',
       evidence_quality: { band: 'weak', bar: 'weak' },
       confidence_evolution: 'Start → medium',
-      tool_reasons: [{ tool: 'search_timeline', reason: 'locate hits' }],
+      tool_usage: { calls: [
+        { name: 'search_timeline', category: 'Evidence', ok: true, trace_query: true, brief: '' },
+      ] },
     }, 'Traditional Chinese (繁體中文)')
     assert.match(md, /<summary>調查詳情<\/summary>/)
     assert.doesNotMatch(md, /Investigation details/)
-    assert.match(md, /search_timeline: locate hits/)
+    assert.match(md, /<summary>工具使用 · 1 次呼叫 \/ 1 種工具 · ✓ 1<\/summary>/)
+    assert.match(md, /追蹤查詢 1/)
+    assert.match(md, /search_timeline/)
     assert.doesNotMatch(md, /Why\?/)
     assert.doesNotMatch(md, /btftool:why/)
   })

@@ -4,6 +4,7 @@
  */
 
 import { scoreInvestigationMetrics } from './aiPlanner.js'
+import { recordToolUsage, seedToolUsage } from './aiToolUsage.js'
 
 export const HYPOTHESIS_STATUSES = [
   'supported', 'possible', 'rejected', 'need_evidence',
@@ -106,7 +107,9 @@ export const GUIDED_STAGE_LABELS = {
   scope: 'Scope',
   investigate: 'Investigate',
   verify: 'Verify',
-  experiment: 'Experiment',
+  // §12 — BTFViewer analyses traces; it does not run firmware experiments.
+  // The stage proposes a verification experiment; internal id stays `experiment`.
+  experiment: 'Propose experiment',
   compare: 'Compare',
 }
 
@@ -265,7 +268,7 @@ export function aiContextLimits(mode = null) {
   const key = normalizeAiContextMode(mode)
   if (key === AI_CONTEXT_MODE_COMPACT) {
     return {
-      findings: 5, tool_rows: 10, history_user_turns: 2,
+      findings: 3, tool_rows: 10, history_user_turns: 2,
       max_tokens: 500, what_if: 3, diagrams: 'asked',
     }
   }
@@ -782,7 +785,7 @@ export function formatContextUsageStatus(meter = null, mode = null) {
   if (tokens <= 0 && tools <= 0 && timeS <= 0) return `Context: ${label}`
   const timePart = timeS ? `${timeS}s` : '0s'
   return `Context: ${label} · ${formatTokenCount(tokens)} tok · `
-    + `${Number.isFinite(tools) ? Math.max(0, Math.trunc(tools) || 0) : 0} tools · `
+    + `${Number.isFinite(tools) ? Math.max(0, Math.trunc(tools) || 0) : 0} calls · `
     + timePart
 }
 
@@ -976,6 +979,7 @@ export function emptyInvestigationCase({
     evidence: [],
     tools_executed: [],
     tool_reasons: [],
+    tool_usage: { calls: [] },
     evidence_timeline: [],
     evidence_graph: {},
     evidence_quality: {},
@@ -2330,7 +2334,7 @@ export function formatCostStatus(meter = null) {
   const usd = Number(m.estimated_usd || 0)
   const parts = [
     `${formatTokenCount(tokens)} tok`,
-    `${Number.isFinite(tools) ? Math.max(0, Math.trunc(tools) || 0) : 0} tools`,
+    `${Number.isFinite(tools) ? Math.max(0, Math.trunc(tools) || 0) : 0} calls`,
     `${Number.isFinite(timeS) && timeS ? timeS : 0}s`,
   ]
   if (usd) parts.push(`$${usd.toFixed(3)}`)
@@ -2979,6 +2983,9 @@ export function buildInvestigationCase(investigateCtx = null, {
     if (n) toolNames.push(n)
   }
   const reasons = toolNames.map(n => ({ tool: n, reason: toolCallReason(n, finding) }))
+  const toolUsage = (ctx.tool_usage && Array.isArray(ctx.tool_usage.calls) && ctx.tool_usage.calls.length)
+    ? { calls: [...ctx.tool_usage.calls] }
+    : seedToolUsage(toolNames)
   const caseObj = emptyInvestigationCase({
     question: question || String(ctx.message || ctx.question || ''),
     trace,
@@ -2995,6 +3002,7 @@ export function buildInvestigationCase(investigateCtx = null, {
     evidence,
     tools_executed: toolNames,
     tool_reasons: reasons,
+    tool_usage: toolUsage,
     evidence_timeline: evidence
       .filter(e => e && typeof e === 'object' && e.time != null)
       .map(e => ({ time: e.time, label: e.label })),
@@ -3034,6 +3042,7 @@ export function updateCaseFromTool(caseObj, toolName, result = null) {
   if (suspected[0] && typeof suspected[0] === 'object') finding = suspected[0]
   reasons.push({ tool: name, reason: toolCallReason(name, finding) })
   out.tool_reasons = reasons
+  out.tool_usage = recordToolUsage(out.tool_usage, { name, result })
   let data = {}
   if (result && typeof result === 'object') {
     data = result.data && typeof result.data === 'object' ? result.data : result

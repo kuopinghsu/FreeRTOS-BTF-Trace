@@ -916,7 +916,7 @@ export function stripAiSettingsJsonc(text) {
  * Accepts a flat file describing one endpoint
  * (`{ preset, base_url, model, api_key, auth_mode }`) or a `presets` object carrying
  * several. Unknown preset names become extra presets added to the combo.
- * Checkbox flags (`enabled`, `auto_apply`, `redact_task_names`,
+ * Checkbox flags (`enabled`, `redact_task_names`,
  * `trace_sensitive`, `mcp_log`) are imported when present. snake_case and
  * camelCase key names both work, so files exported from either app import into
  * both. Whole-line `//` comments are ignored. Throws `Error` with a
@@ -1019,7 +1019,6 @@ export function parseAiSettingsJson(data) {
   if (language) out.responseLanguage = language
   const flags = [
     ['aiEnabled', ['enabled', 'ai_enabled', 'aiEnabled']],
-    ['aiAutoApply', ['auto_apply', 'ai_auto_apply', 'aiAutoApply']],
     ['aiRedactTaskNames', [
       'redact_task_names', 'anonymize_task_names', 'ai_redact_task_names',
       'aiRedactTaskNames', 'anonymize', 'redact',

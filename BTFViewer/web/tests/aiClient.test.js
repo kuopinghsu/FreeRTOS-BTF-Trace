@@ -324,21 +324,18 @@ describe('AI endpoint helpers', () => {
       preset: 'ollama',
       model: 'qwen3.5:9b',
       enabled: false,
-      auto_apply: true,
       context_mode: 'compact',
       redact_task_names: true,
       trace_sensitive: true,
       mcp_log: true,
     })
     assert.equal(patch.aiEnabled, false)
-    assert.equal(patch.aiAutoApply, true)
     assert.equal(patch.aiContextMode, 'compact')
     assert.equal(patch.aiRedactTaskNames, true)
     assert.equal(patch.aiTraceSensitive, true)
     assert.equal(patch.aiMcpLog, true)
     const skipped = parseAiSettingsJson({ preset: 'ollama', model: 'qwen3.5:9b' })
     assert.equal(skipped.aiEnabled, undefined)
-    assert.equal(skipped.aiAutoApply, undefined)
   })
 
   it('parseAiSettingsJson reports unusable files', () => {
@@ -370,7 +367,6 @@ describe('AI endpoint helpers', () => {
       assert.equal(patch.presets[preset].authMode, auth)
       assert.match(text, /\/\/ auth_mode:/)
       assert.equal(patch.aiEnabled, true)
-      assert.equal(patch.aiAutoApply, false)
       assert.equal(patch.aiRedactTaskNames, false)
       assert.equal(patch.aiTraceSensitive, false)
       assert.equal(patch.aiMcpLog, false)
