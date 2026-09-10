@@ -1,29 +1,44 @@
 # BTFViewer 初學者操作與驗證流程
 
-本文件帶領第一次使用 BTFViewer 的讀者完成一項完整分析：先認識檢視器操作，找出一項工作（Task），讀懂相關 Statistics，在時間軸驗證一個事件，並可選擇使用 AI 助理整理證據、調查與檢驗可能的解釋。
+本文件帶領第一次使用 BTFViewer 的讀者完成一項完整分析：先認識檢視器操作，找出一項工作（Task），讀懂相關 Statistics，在時間軸驗證一個事件，並可選擇使用 AI Assistant整理證據、調查與檢驗可能的解釋。
 
 ```mermaid
 flowchart TD
-  open["1. 開啟追蹤資料<br/>Fit Trace 並辨識工作負載階段"] --> tools["2. 認識必要工具<br/>View、Load、Find、Cursors、Statistics"]
-  tools --> quality{"3. 追蹤資料可用嗎？"}
-  quality -->|否| recapture["修正追蹤記錄或擷取設定<br/>再重新擷取"]
+  open["1. 開啟並認識追蹤資料<br/>Fit Trace · Task/Core View · Load"] --> quality{"2. 追蹤資料可用嗎？"}
+  quality -->|否| recapture["修正擷取或追蹤事件<br/>重新擷取"]
   recapture --> open
-  quality -->|是| task["4. 選擇一項工作與一個可量測的症狀"]
-  task --> stats["5. 使用 Statistics 量測<br/>樣本數、分布、尾端與最差事件"]
-  stats --> triage["6. 使用 Analysis Findings 初步判斷<br/>選擇證據，不直接下結論"]
-  triage --> scope["7. 界定單一事件<br/>C1–Cn 與 Limit to C1–Cn"]
-  scope --> dependency["8. 只追蹤必要的相依路徑<br/>TIMING、SCHED、SYNC、DETAIL"]
-  dependency --> timeline{"9. 時間軸支持目前假設嗎？"}
-  timeline -->|否| refine["調整分析範圍或測試其他假設"]
-  refine --> scope
-  timeline -->|是| ai["10. 選用：以 AI 整理並挑戰現有證據"]
-  ai --> sufficient{"證據足以提出可驗證的修改嗎？"}
-  sufficient -->|否| refine
-  sufficient -->|是| change["11. 定義一項可量測的修改<br/>重新擷取並 Compare"]
-  change --> record["12. 記錄證據、結果與仍未確定之處"]
+  quality -->|是| question["3. 定義一個可量測問題<br/>一項工作 · 一個症狀"]
+  question --> triage["4. 用統計資料與 Analysis Findings 初步判斷<br/>Count · 尾端 · 最差事件"]
+  triage --> scope["5. 界定單一事件<br/>C1–Cn · Limit to C1–Cn"]
+  scope --> investigate["6. 沿最短證據路徑調查<br/>TIMING · SCHED · SYNC · DETAIL"]
+  investigate --> verify{"7. 時間軸支持目前解釋嗎？"}
+  verify -->|否| scope
+  verify -->|是| record["8. 將證據記錄到 Investigation Notebook"]
+  record --> ai["9. 選用 AI<br/>挑戰證據 · 建議下一項檢查"]
+  ai --> decision{"證據足以進行可驗證的修改嗎？"}
+  decision -->|否| scope
+  decision -->|是| compare["10. 一次修改一項 · 重新擷取 · Compare"]
+  compare --> conclude["11. 驗證結果 · 記錄結論"]
 ```
 
-流程順序很重要。Statistics 與時間軸提供量測證據；**Analysis Findings** 協助找出應優先檢查的位置。AI 助理是選用工具，應在症狀與分析範圍已有證據後，用來整理證據、檢驗解釋或規劃下一項檢查。**What-if** 與 **Optimize** 只提供估算。未設定 AI 時，也可以直接從已驗證的證據進入受控實驗。
+這是建議的預設流程。調查時應保持範圍單純：先定義一個可量測問題，用統計資料與 ****Analysis Findings**** 找出證據，再以 C1–Cn 縮小到單一事件，最後回到時間軸確認事件順序。調查過程中的重要證據應逐步記錄到 **Investigation Notebook（調查筆記本）**。AI 是選用工具，應在已有證據後才使用，用來挑戰目前解釋或決定下一項檢查，而不是產生量測結果。**What-if** 與 **Optimize** 仍屬估算；修改後必須重新擷取等效工作負載，並以 **Compare** 驗證實際結果。
+
+## 建議的調查路徑
+
+大多數問題都可以依照以下順序處理：
+
+1. **認識資料** — 確認工作負載階段、工作、核心、分析範圍、篩選條件與追蹤品質。
+2. **定義問題** — 寫下一個可量測的症狀，不要先假設根本原因。
+3. **初步判斷** — 使用統計資料與 ****Analysis Findings**** 選出一個指標與一個證據時間。
+4. **界定事件** — 以 C1–Cn 包住單一事件，並啟用 **Limit to C1–Cn**。
+5. **調查原因** — 只沿著能區分主要解釋所需的統計相依路徑前進。
+6. **時間軸驗證** — 重現量測值，檢查實際工作、核心與事件順序。
+7. **記錄證據** — 將問題與最重要的證據加入**調查筆記本**；需要時連結支持證據或矛盾證據。
+8. **挑戰解釋** — 選擇性使用 AI 檢驗目前解釋、找出缺失證據，並決定下一項檢查。
+9. **進行實驗** — 一次只修改一項，先寫下預期指標變化，再重新擷取相同工作負載並使用 **Compare**。
+10. **完成結論** — 記錄實際量測結果、信心程度、限制與未解問題。
+
+> **簡單原則：** 統計資料告訴你**哪裡發生變化**；時間軸確認**何時發生以及事件順序**；調查筆記本記錄**為什麼證據支持這個結論**；AI 協助判斷**下一步該檢查什麼**。
 
 <a id="what-you-will-learn" name="what-you-will-learn"></a>
 ## 完成本流程後可以學到什麼
@@ -47,7 +62,7 @@ flowchart TD
 
 > `ControlTask` 通常運作正常，但有些執行週期比預期更晚完成。
 
-本流程不預設原因。回應時間過長可能來自工作本身執行時間增加、遭到搶占、離開 CPU 的等待、派送延遲、同步、核心遷移，或追蹤資料不完整。分析的目的，是用證據區分這些可能性。
+本流程不預設原因。回應時間過長可能來自工作本身執行時間增加、遭到搶佔、離開 CPU 的等待、派送延遲、同步、核心遷移，或追蹤資料不完整。分析的目的，是用證據區分這些可能性。
 
 <a id="essential-terms" name="essential-terms"></a>
 ## 必要名詞
@@ -55,14 +70,14 @@ flowchart TD
 | 名詞 | 在本流程中的意義 |
 |---|---|
 | **Full Trace** | 完整的擷取時間範圍，未使用游標限制分析區段 |
-| **分析範圍（Scope）** | Statistics、Analysis 分析結果 與 AI 使用的時間範圍，可以是 Full Trace 或 C1–Cn |
-| **篩選條件（Filter）** | 目前分析範圍內的工作、核心或遷移資料子集合 |
+| **分析範圍** | Statistics、**Analysis Findings** 與 AI 使用的時間範圍，可以是 Full Trace 或 C1–Cn |
+| **篩選條件** | 目前分析範圍內的工作、核心或遷移資料子集合 |
 | **選取項目（Selection）** | 持續選取以便查看的工作或物件；本身不會改變統計計算 |
 | **反白（Highlight）** | 暫時的視覺強調；不會改變統計計算 |
 | **執行片段（Slice）** | 一項工作在一個核心上連續執行的區段 |
 | **Off-CPU** | 工作未在 CPU 上執行的時間；追蹤資料不一定能分辨工作當時是就緒、阻塞、暫停，還是等待下一次啟動 |
 | **STI 事件** | 選用的軟體追蹤事件，可記錄 ready/resume、互斥鎖、佇列、區間、標籤、生命週期或優先權事件 |
-| **分析結果（Finding）** | Analysis 依固定規則或啟發式方法找出的線索，不等於已確認的根本原因 |
+| **分析結果（分析結果）** | Analysis 依固定規則或啟發式方法找出的線索，不等於已確認的根本原因 |
 | **假設（Hypothesis）** | 仍需支持證據與其他可能性檢查的原因解釋 |
 
 選取項目與反白不會自動變成篩選條件。解讀數值前，請固定檢查狀態列與統計資料的 **Filtered:** 指示。
@@ -181,7 +196,7 @@ flowchart TD
 1. 使用 **Find** 或圖例找到 `ControlTask`。
 2. 選取該工作，方便持續追蹤它的時間軸列。
 3. 在 **Statistics** 開啟 **Response Time、Execution Time Per Slice、Blocking Time** 與 **Period / Jitter**。
-4. 除非其他工作讓資料無法閱讀，否則先不要套用工作篩選條件。其他工作可能正是搶占或同步延遲的來源。
+4. 除非其他工作讓資料無法閱讀，否則先不要套用工作篩選條件。其他工作可能正是搶佔或同步延遲的來源。
 5. 記錄目前分析範圍與所有作用中的篩選條件。
 
 ### 將症狀改寫成可量測的問題
@@ -235,7 +250,7 @@ flowchart TD
 |---|---|---|
 | Avg 正常，但 Max 高出很多 | 單一罕見事件或少量離群樣本 | 跳到 Max 並檢查周圍時間軸 |
 | p95 與 p99 都偏高 | 重複出現的尾端延遲 | 檢查 Recurring Patterns 與多個證據時間 |
-| Execution 高，但 Off-CPU 很少 | 自身 CPU 工作增加或連續執行片段變長 | Distribution、Intervals、Tags 與搶占前後關係 |
+| Execution 高，但 Off-CPU 很少 | 自身 CPU 工作增加或連續執行片段變長 | Distribution、Intervals、Tags 與搶佔前後關係 |
 | Response 高，但 Execution 正常 | 延遲可能位於自身執行片段之外 | Blocking、Dispatch、Preemption、Mutex、Migration |
 | CV 高 | 相對於平均值的變動程度高 | Scatter 與工作負載階段切分 |
 
@@ -254,7 +269,7 @@ flowchart TD
 導覽示範（工具列或 Help）會帶你完整走一遍範例追蹤資料。
 
 <a id="workflow-step-6" name="workflow-step-6"></a>
-## 步驟 6 — 使用 Analysis 分析結果 進行初步判斷
+## 步驟 6 — 使用 **Analysis Findings** 進行初步判斷
 
 選取 **Analysis**。分析結果使用目前分析範圍計算；視窗開啟時仍可操作時間軸。
 
@@ -267,7 +282,7 @@ flowchart TD
 5. **Open Statistics** 只是開啟該結果對應 Statistics 區段的捷徑——不會改變 Scope、Filters 或 **Limit to C1–Cn**。若接著使用 **Apply cursors**，其建議的游標範圍只視為提案；請先在步驟 7 驗證，再啟用 **Limit to C1–Cn**。
 6. 已檢視可標 **Done**；不適用可 **Dismiss…** 並寫簡短原因；要保留此項證據時，使用 **Add to investigation**。
 
-如果沒有相關分析結果，仍可從已選定的 Statistics 樣本繼續。沒有 分析結果 不代表工作沒有問題；症狀可能不符合內建啟發式規則。
+如果沒有相關分析結果，仍可從已選定的 Statistics 樣本繼續。沒有分析結果 不代表工作沒有問題；症狀可能不符合內建啟發式規則。
 
 ### 適合第一次檢查的 TRIAGE 區段
 
@@ -280,7 +295,7 @@ flowchart TD
 
 ### 繼續條件
 
-你已選定一項工作、一個指標，以及至少一個證據時間點或區間。
+你已選定一項工作、一個指標，以及至少一個證據時間點或區間。若這項分析結果值得保留，現在就使用 **Add to investigation** 加入調查筆記本，讓筆記從量測證據開始，而不是最後才補寫摘要。
 
 <a id="workflow-step-7" name="workflow-step-7"></a>
 ## 步驟 7 — 使用游標界定單一事件
@@ -293,7 +308,7 @@ flowchart TD
 2. 在可能引發延遲的活動之前放置 **C1**。
 3. 在 `ControlTask` 完成或恢復之後放置 **C2**。其他游標可用來標示中間證據。
 4. 選取 **Fit Cursors**（`Ctrl+R`），顯示最早至最晚游標之間的範圍。
-5. 在 Statistics 啟用 **Limit to C1–Cn**、點選工具列 **C1–Cn** 狀態晶片，或使用橫幅：**Use C1–Cn as analysis Scope** → **Enable Limit to C1–Cn**。核取後晶片改為 Scope 色彩。
+5. 在 Statistics 啟用 **Limit to C1–Cn**、點選工具列 **C1–Cn** 狀態晶片，或使用橫幅：**Use C1–Cn as analysis Scope** → **Enable Limit to C1–Cn**。核取後晶片改為 分析範圍色彩。
 6. 確認狀態列與 Statistics 標頭顯示 **Scope: C1–Cn · duration**。
 7. 再次檢查 **Filtered:** 指示，清除非預期的工作、核心或遷移篩選條件。
 8. 重新開啟 **Analysis**，讓 分析結果 使用相同分析範圍。
@@ -411,7 +426,7 @@ flowchart LR
 1. 該數值是否能在目前 C1–Cn 分析範圍內重現？
 2. 點選數值後，是否開啟預期的工作、核心與時間？
 3. 延遲發生前、發生期間與發生後，分別執行了什麼？
-4. `ControlTask` 當時正在執行、就緒、遭搶占、阻塞、暫停，還是等待下一次啟動？追蹤事件是否足以分辨？
+4. `ControlTask` 當時正在執行、就緒、遭搶佔、阻塞、暫停，還是等待下一次啟動？追蹤事件是否足以分辨？
 5. 互斥鎖、佇列、優先權、核心遷移或 ready 事件是否支持目前機制？
 6. 事件關係是因果、相關，還是只在時間上接近？
 7. 哪一項證據會推翻目前解釋？
@@ -428,30 +443,39 @@ flowchart LR
 
 只有應用程式需求與追蹤事件明確定義必要邊界，而且多次等效量測都支持相同結論時，才使用 **Confirmed**。
 
+### 繼續前先記錄
+
+在使用 AI 或修改系統前，先更新**調查筆記本**：
+
+1. 在 **Question** 步驟寫下可量測的問題。
+2. 將最重要的分析結果、量測指標與 C1–Cn 範圍保留為證據。
+3. 將目前解釋記錄為假設，不要先寫成結論。
+4. 至少加入一項可能推翻此假設的檢查。
+
 ### 繼續條件
 
-不使用 AI，你也能寫出一段以證據為基礎的敘述。例如：「在此分析範圍內，觀測到最長的 `ControlTask` 回應包含正常的執行片段，但具有與特定搶占活動重疊的長 Off-CPU 間隔。」
+即使不使用 AI，你也應能寫出一段以證據為基礎的敘述。例如：「在此分析範圍內，觀測到最長的 `ControlTask` 回應包含正常的執行片段，但具有與特定搶佔活動重疊的長 Off-CPU 間隔。」
 
 <a id="workflow-step-10" name="workflow-step-10"></a>
-## 步驟 10 — 選用 AI 助理檢驗目前的解釋
+## 步驟 10 — 選用 AI Assistant檢驗目前的解釋
 
-AI 是選用工具。選定分析結果、工作、事件、分布圖或 C1–Cn 範圍後再使用。AI 接收結構化 分析結果 與工具結果，不會取得完整的原始 `.btf` 事件資料流。
+AI 是選用工具。建議先在調查筆記本中寫下明確的問題，並加入至少一項量測證據，或至少已選定分析結果、工作、事件、分布圖或 C1–Cn 範圍後再使用。AI 接收結構化的分析結果與工具結果，不會取得完整的原始 `.btf` 事件資料流。AI 建議不會取代由使用者維護的調查筆記。
 
 ### 第一次使用的設定
 
 1. 開啟 **Settings → AI**。
 2. 選擇服務供應商預設集、端點、模型與認證方式。
 3. 使用 **Test connection** 確認連線。
-4. 先使用 **Balanced** Context。內容長度較小時可使用 Compact；調查確實需要更多 分析結果 與對話記錄時再使用 Full evidence。
+4. 先使用 **Balanced** Context。內容長度較小時可使用 Compact；調查確實需要更多分析結果 與對話記錄時再使用 Full Evidence。
 5. 使用雲端端點前，先檢查隱私設定。本機 Ollama 通常不需要 API 金鑰。
 
 ### 依現有證據選擇進入方式
 
 | 已選定的證據 | AI 進入方式 | 傳送內容 |
 |---|---|---|
-| 還沒有明確問題 | **Start Investigation** 或 **Triage findings** | 目前分析範圍、篩選條件與可用 分析結果 |
-| 一項 Analysis 分析結果 | **Investigate、Explain、Verify** 或 **Auto investigate** | 所選 分析結果與其證據 |
-| C1–Cn 事件 | **Explain this region with AI** 或 **Explain region** | 游標範圍與限定範圍的 分析結果 |
+| 還沒有明確問題 | **Start Investigation** 或 **Triage findings** | 目前分析範圍、篩選條件與可用的分析結果 |
+| 一項 **Analysis Findings** | **Investigate、Explain、Verify** 或 **Auto investigate** | 所選 Finding與其證據 |
+| C1–Cn 事件 | **Explain this region with AI** 或 **Explain region** | 游標範圍與限定範圍內的分析結果 |
 | 一個時間軸執行片段 | **Ask AI about this event** | 所選工作、核心、片段與附近證據 |
 | 已開啟的分布圖 | **Query with AI…** | 所選指標、工作與圖表顯示的樣本 |
 | Migration & Corridor Inspector | **Investigate with AI** | 分析範圍、所選路徑、ping-pong／停留時間、handoff 啟發式、負載平衡、Inspector 篩選 |
@@ -475,7 +499,7 @@ flowchart TD
 3. 確認引用的每個時間都位於 C1–Cn 內。
 4. 使用 **Verify finding**，要求列出支持證據、矛盾證據、其他解釋與缺失資訊。
 5. 若敘述無法在 Statistics 重現，或假設了未記錄的事件，就不應採用。
-6. 在 **Evidence & Validation** 點 **▶ Next check** 的 **[Run]**，在相同的 Investigation Case、Context 與 Scope 中繼續。額外的主程式後續檢查收在 **More next steps…**。
+6. 在 **Evidence & Validation** 點 **▶ Next check** 的 **[Run]**，在相同的 Investigation Case、Context 與分析範圍 中繼續。額外的主程式後續檢查收在 **More next steps…**。
 7. 若回覆包含獨立一行 `nextstep:{action}`（`nextstep:` 維持英文，action 使用回覆語言），該列也有 **[Run]**，會送出那一句。沒有此標記的 **Next check:** 標題不是按鈕。
 8. 把後續回覆當成完成前，先在時間軸與指定 Statistics 頁面確認。
 
@@ -506,7 +530,7 @@ AI 的解釋與 Statistics、時間軸證據一致，或 AI 已指出需要重�
 <a id="workflow-step-11" name="workflow-step-11"></a>
 ## 步驟 11 — 定義一項修改並重新量測
 
-不要從 分析結果 直接跳到修正。只有證據支持某項機制後，才開始修改。
+不要從分析結果直接跳到修正。只有證據支持某項機制後，才開始修改。
 
 ### 操作
 
@@ -611,7 +635,7 @@ manifest.json                 格式與 BTFViewer 版本、時間戳記、追蹤
 trace/source.btf              追蹤本身，預設內嵌（或以路徑參照以節省空間）
 state/view.json               游標、標記、視窗範圍、篩選條件
 analysis/health.json          Trace Health Check 結果
-analysis/findings.json        Investigation Findings
+analysis/findings.json        Investigation 分析結果
 investigation/bookmarks.json  上述調查筆記
 investigation/ai_case.json    AI 調查工作階段（證據負載 + 計畫 + 對話），存在時才寫入
 reports/report.html           匯出的報告（選用）
@@ -675,8 +699,8 @@ Headless：
 | 6 | 開啟 Analysis，使用 **Show on timeline** 並檢查對應統計資料 | 分析結果與統計資料指向相同事件 |
 | 7 | 在觸發前放置 C1，完成後放置 C2，再啟用 Limit | Statistics 現在只描述一個事件 |
 | 8 | 依 Response → Execution/Blocking → Preemption/Mutex/Migration 分析 | 收集最短且足以支持判斷的相依資料 |
-| 9 | 在時間軸驗證工作／核心／事件順序 | 得出 Supported、Plausible、Inconclusive 或 Unsupported |
-| 10 | 選用：要求 AI Investigate，再使用 Verify finding；以 Evidence **[Run]** 或標記的 `nextstep:{…}` **[Run]** 繼續 | 以相同證據核對 AI 解釋 |
+| 9 | 在時間軸驗證工作／核心／事件順序，並在調查筆記本記錄問題、證據、假設與一項反證檢查 | 得出 Supported、Plausible、Inconclusive 或 Unsupported |
+| 10 | 選用：要求 AI Investigate，再使用 Verify finding；用 AI 檢驗筆記中的證據並決定下一項檢查 | 以相同證據核對 AI 解釋 |
 | 11 | 定義一項預期指標變化、擷取 Candidate、使用 Compare | 修改結果經過實際量測 |
 | 12 | 儲存分析範圍、數值、證據時間、結論與報告 | 其他工程師可以重現調查 |
 
@@ -688,11 +712,12 @@ Headless：
 - [ ] 我已選定一項工作與一個可量測問題。
 - [ ] 我在解讀 p95 或 p99 前先讀取 Count。
 - [ ] 我已比較 Avg、p95、p99、Max 與分布。
-- [ ] 我把 Analysis 分析結果 當成線索，而不是結論。
+- [ ] 我把 **Analysis Findings** 當成線索，而不是結論。
 - [ ] 我已放置至少兩個游標並啟用 **Limit to C1–Cn**。
 - [ ] 我已檢查相關統計相依性。
 - [ ] 我已在時間軸開啟精確樣本。
 - [ ] 我已檢查矛盾證據與其他可能解釋。
+- [ ] 我已在調查筆記本記錄問題、最重要的證據與目前假設。
 - [ ] 我只在選定證據後使用 AI。
 - [ ] 我已用 Evidence **[Run]** 或對話中的 `nextstep:{…}` **[Run]** 繼續 AI 調查。
 - [ ] 我已驗證 AI 引用的每個量測與時間點。
@@ -705,9 +730,9 @@ Headless：
 
 | 錯誤 | 較好的做法 |
 |---|---|
-| 一開始就要求 AI 分析完整追蹤資料 | 先選定 Finding、工作、事件、分布圖或 C1–Cn 範圍 |
+| 一開始就要求 AI 分析完整追蹤資料 | 先選定 分析結果、工作、事件、分布圖或 C1–Cn 範圍 |
 | 把反白當成篩選條件 | 檢查狀態列與 Statistics **Filtered:** 指示 |
-| 把畫面縮放範圍當成分析範圍 | 啟用 **Limit to C1–Cn** 並確認 Scope 標示 |
+| 把畫面縮放範圍當成分析範圍 | 啟用 **Limit to C1–Cn** 並確認 分析範圍標示 |
 | 用很少的樣本解讀 p99 | 先看 Count，對小樣本百分位數保持保守 |
 | 把 Max 稱為保證的 WCET | 使用「此追蹤資料與分析範圍內觀測到的最大值」 |
 | 把所有 Off-CPU 間隔都稱為互斥鎖阻塞 | 要求同步證據，否則只稱 Off-CPU／Blocking Time |

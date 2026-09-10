@@ -451,7 +451,7 @@ describe('§10 proposal review is shown inline in the Notebook right panel', () 
   })
 
   it('AiAssistantPanel parses the proposal via the shared tolerant extractor, on every turn', () => {
-    assert.match(aiPanel, /import \{ extractNotebookProposal \} from '\.\.\/utils\/investigationAi\.js'/)
+    assert.match(aiPanel, /import \{ extractNotebookProposal(?:, [^}]+)? \} from '\.\.\/utils\/investigationAi\.js'/)
     assert.match(aiPanel, /const obj = extractNotebookProposal\(text\)/)
     // §10: also scanned from ingestTurn, so an agentic gather_evidence loop
     // that emits the proposal in a tool-call turn is not missed

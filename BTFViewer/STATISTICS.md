@@ -286,7 +286,7 @@ The table below identifies the strongest dependencies. “Requires” describes 
 
 ## Advanced analysis tutorials
 
-The following tutorials restore the worked explanations from the earlier guide. They complement the per-section reference below.
+The following tutorials provide practical investigation sequences that complement the per-section reference below.
 
 ### Migration investigation
 
@@ -445,10 +445,10 @@ The `<section-id>` is the same identifier used by the Statistics panel. English 
 |---|---|
 | **OVERVIEW** | `cores`, `health`, `task_health` |
 | **TRIAGE** | `anomalies`, `worst`, `patterns` |
-| **TIMING** | `response`, `exec`, `dispatch`, `block`, `crit_path`, `period`, `jitter`, `inter` |
-| **SCHED** | `task_core`, `core_time`, `migrations`, `core_pairs`, `affinity`, `preempt_matrix`, `preemption`, `priority`, `concurrency` |
-| **SYNC** | `mutex_block`, `wait_owner`, `sync`, `queue` |
-| **DETAIL** | `core_breakdown`, `switch_overhead`, `tasks`, `distrib`, `intervals`, `tags`, `lifecycle`, `deadline` |
+| **TIMING** | `response`, `exec`, `dispatch`, `block`, `crit_path`, `period`, `jitter`, `inter`, `activation`, `ready_gap` |
+| **SCHED** | `task_core`, `core_time`, `migrations`, `core_pairs`, `affinity`, `preempt_matrix`, `preemption`, `priority`, `concurrency`, `switch_reason`, `sched_load` |
+| **SYNC** | `mutex_block`, `wait_owner`, `sync`, `queue`, `sync_level` |
+| **DETAIL** | `core_breakdown`, `idle`, `switch_overhead`, `tasks`, `distrib`, `intervals`, `tags`, `lifecycle`, `deadline` |
 
 The categories describe an investigation purpose:
 

@@ -4,26 +4,41 @@ This guide takes a first-time user through one complete investigation: learn the
 
 ```mermaid
 flowchart TD
-  open["1. Open the trace<br/>Fit Trace and identify workload phases"] --> tools["2. Learn the essential tools<br/>View, Load, Find, Cursors, Statistics"]
-  tools --> quality{"3. Is the trace usable?"}
-  quality -->|No| recapture["Fix instrumentation or capture settings<br/>then capture again"]
+  open["1. Open & orient<br/>Fit Trace · Task/Core View · Load"] --> quality{"2. Trace usable?"}
+  quality -->|No| recapture["Fix capture / instrumentation<br/>and recapture"]
   recapture --> open
-  quality -->|Yes| task["4. Select one task and one measurable symptom"]
-  task --> stats["5. Measure with Statistics<br/>Count, distribution, tail, worst event"]
-  stats --> triage["6. Use Analysis Findings for triage<br/>choose evidence, not a conclusion"]
-  triage --> scope["7. Scope one incident<br/>C1–Cn and Limit to C1–Cn"]
-  scope --> dependency["8. Follow the smallest relevant dependency path<br/>TIMING, SCHED, SYNC, DETAIL"]
-  dependency --> timeline{"9. Does the timeline support the hypothesis?"}
-  timeline -->|No| refine["Refine Scope or test another hypothesis"]
-  refine --> scope
-  timeline -->|Yes| ai["10. Optional: use AI to organize and challenge the evidence"]
-  ai --> sufficient{"Evidence sufficient for a testable change?"}
-  sufficient -->|No| refine
-  sufficient -->|Yes| change["11. Define one measurable change<br/>recapture and Compare"]
-  change --> record["12. Record the evidence, result, and remaining uncertainty"]
+  quality -->|Yes| question["3. Define one measurable question<br/>one task · one symptom"]
+  question --> triage["4. Triage with Statistics & Findings<br/>Count · tail · worst event"]
+  triage --> scope["5. Scope one incident<br/>C1–Cn · Limit to C1–Cn"]
+  scope --> investigate["6. Investigate the shortest evidence path<br/>TIMING · SCHED · SYNC · DETAIL"]
+  investigate --> verify{"7. Timeline supports the explanation?"}
+  verify -->|No| scope
+  verify -->|Yes| record["8. Record evidence in Investigation Notebook"]
+  record --> ai["9. Optional AI<br/>challenge evidence · suggest next check"]
+  ai --> decision{"Evidence sufficient for a testable change?"}
+  decision -->|No| scope
+  decision -->|Yes| compare["10. Change one thing · recapture · Compare"]
+  compare --> conclude["11. Verify result · record conclusion"]
 ```
 
-The order matters. Statistics and the timeline provide the measured evidence. **Analysis Findings** point to areas worth checking. The AI Assistant is optional; use it only after the symptom and Scope are grounded, to organize evidence, challenge an explanation, or plan the next check. **What-if** and **Optimize** are estimates, not measurements. If AI is not configured, continue from verified evidence to a controlled experiment.
+This is the recommended default flow. Keep the investigation narrow: define one measurable question, use Statistics and **Analysis Findings** to identify evidence, narrow the analysis to one C1–Cn incident, and verify the event order on the timeline. Record useful evidence in **Investigation Notebook** as you go. AI is optional and comes after evidence exists; use it to challenge the explanation or choose the next check, not to create measurements. **What-if** and **Optimize** remain estimates. Treat a change as effective only after an equivalent workload is captured again and **Compare** confirms the measured result.
+
+## Recommended investigation path
+
+For most problems, use this sequence:
+
+1. **Orient** — confirm the workload phase, task, cores, Scope, Filters, and trace quality.
+2. **Question** — state one measurable symptom. Do not start from a presumed root cause.
+3. **Triage** — use Statistics and Analysis Findings to select one metric and one evidence time.
+4. **Scope** — place C1–Cn around one incident and enable **Limit to C1–Cn**.
+5. **Investigate** — follow only the Statistics dependencies needed to distinguish the main explanations.
+6. **Verify** — reproduce the metric and inspect the exact task/core/event order on the timeline.
+7. **Record** — add the question and strongest evidence to **Investigation Notebook**; link supporting or contradictory evidence when useful.
+8. **Challenge** — optionally use AI to test the explanation, identify missing evidence, and propose the next check.
+9. **Experiment** — change one thing, predict the metric effect, recapture the same workload, and use **Compare**.
+10. **Conclude** — record the measured result, confidence, limitations, and unresolved questions.
+
+> **Rule of thumb:** Statistics tells you **what changed**; the timeline shows **when and in what order**; the Notebook records **why the evidence supports the conclusion**; AI helps ask **what should be checked next**.
 
 <a id="what-you-will-learn" name="what-you-will-learn"></a>
 ## What you will learn
@@ -282,7 +297,7 @@ If no relevant finding exists, continue from the measured Statistics sample. A m
 
 ### Continue when
 
-You have one task, one metric, and at least one evidence timestamp or interval.
+You have one task, one metric, and at least one evidence timestamp or interval. If the finding is useful, use **Add to investigation** now so the Notebook starts with measured evidence rather than a later summary.
 
 <a id="workflow-step-7" name="workflow-step-7"></a>
 ## Step 7 — Scope one incident with Cursors
@@ -430,6 +445,15 @@ Ask these questions:
 
 Use **Confirmed** only when the application requirement and instrumentation define the relevant boundaries, and repeated equivalent measurements support the same conclusion.
 
+### Record before continuing
+
+Before using AI or changing the system, update **Investigation Notebook**:
+
+1. Put the measurable problem in **Question**.
+2. Keep the strongest measured Finding, metric, and C1–Cn range as **Evidence**.
+3. Add the current explanation as a hypothesis, not a conclusion.
+4. Add at least one check that could contradict the hypothesis.
+
 ### Continue when
 
 You can write one evidence-based statement without using the AI, for example: “The longest observed `ControlTask` response in this Scope contains a normal execution slice but a long off-CPU interval that overlaps specific preemption activity.”
@@ -437,7 +461,7 @@ You can write one evidence-based statement without using the AI, for example: �
 <a id="workflow-step-10" name="workflow-step-10"></a>
 ## Step 10 — Optionally use the AI Assistant to challenge the explanation
 
-AI is optional. Use it after selecting a finding, task, event, distribution, or C1–Cn range. It receives structured Findings and tool results, not the complete raw `.btf` event stream.
+AI is optional. Use it only after the Notebook has a clear Question and at least one measured Evidence item, or after you have otherwise selected a finding, task, event, distribution, or C1–Cn range. It receives structured Findings and tool results, not the complete raw `.btf` event stream. AI suggestions do not replace the user-owned Notebook record.
 
 ### One-time setup
 
@@ -677,8 +701,8 @@ The following example shows the entire path without inventing numeric results.
 | 6 | Open Analysis; use Show on timeline and review the supporting Statistics | Finding and Statistics point to the same episode |
 | 7 | Place C1 before the trigger and C2 after completion; enable Limit | Statistics now describe one incident |
 | 8 | Follow Response → Execution/Blocking → Preemption/Mutex/Migration | The smallest supporting dependency path is collected |
-| 9 | Verify exact task/core/event order on the timeline | Explanation is Supported, Plausible, Inconclusive, or Unsupported |
-| 10 | Optionally ask AI to Investigate and Verify finding; use it to challenge the evidence, not replace the timeline check | AI explanation is checked against the same evidence |
+| 9 | Verify exact task/core/event order on the timeline; record Question, Evidence, hypothesis, and a contradicting check in Investigation Notebook | Explanation is Supported, Plausible, Inconclusive, or Unsupported |
+| 10 | Optionally ask AI to Investigate and Verify finding; use it to challenge the Notebook evidence and choose the next check | AI explanation is checked against the same evidence |
 | 11 | Define one expected metric change, capture Candidate, Compare | The change is measured rather than assumed |
 | 12 | Save Scope, values, evidence times, conclusion, and report | Another engineer can reproduce the investigation |
 
@@ -695,6 +719,7 @@ The following example shows the entire path without inventing numeric results.
 - [ ] I followed the relevant statistic dependencies.
 - [ ] I opened the exact sample on the timeline.
 - [ ] I checked contradictory evidence and alternative explanations.
+- [ ] I recorded the Question, strongest Evidence, and current hypothesis in Investigation Notebook.
 - [ ] I used AI only after selecting evidence.
 - [ ] I continued the AI investigation with Evidence **[Run]** or a conversation `nextstep:{…}` **[Run]**.
 - [ ] I verified every AI measurement and timestamp.

@@ -43,6 +43,15 @@ describe('AI conversation turn layout', () => {
     assert.doesNotMatch(aiPanel, /function skipBatch/)
   })
 
+  it('lifts the reply token budget for Notebook collaboration turns', () => {
+    // A btf-viewer-nb-proposal JSON must not be truncated by the Compact
+    // 500-token cap or an unset (server-default) budget.
+    assert.match(aiPanel, /NB_PROPOSAL_REPLY_TOKENS/)
+    assert.match(aiPanel, /function notebookCollabReplyTokens\(modeCap\)/)
+    assert.match(aiPanel, /if \(!props\.notebookCollab\) return modeCap/)
+    assert.match(aiPanel, /maxTokens: notebookCollabReplyTokens\(/)
+  })
+
   it('AI response is one clean block per query — no per-round tool cards', () => {
     // AI_RESPONSE_FLOW_TODO — one clean block per query
     assert.match(aiPanel, /const queryPlan = computed/)

@@ -857,7 +857,7 @@ import {
   saveAiUserInvestigationTemplates,
 } from '../utils/settingsStore.js'
 import { templateRefEl } from '../utils/templateRefEl.js'
-import { extractNotebookProposal } from '../utils/investigationAi.js'
+import { extractNotebookProposal, NB_PROPOSAL_REPLY_TOKENS } from '../utils/investigationAi.js'
 
 const props = defineProps({
   analysisContext: { type: Object, default: null },
@@ -2368,8 +2368,18 @@ async function runCompletion(active, finalRound = false) {
     tlsVerify: active.tlsVerify,
     responseLanguage: props.responseLanguage,
     signal: abortCtrl?.signal,
-    maxTokens: aiContextLimits(props.aiContextMode).max_tokens,
+    maxTokens: notebookCollabReplyTokens(aiContextLimits(props.aiContextMode).max_tokens),
   })
+}
+
+/** During a Notebook collaboration the reply must fit a full
+ *  btf-viewer-nb-proposal JSON — override both the Compact 500-token cap and an
+ *  unset (server-default) budget with an explicit proposal-sized floor. Outside
+ *  a collaboration the context-mode cap is used unchanged. */
+function notebookCollabReplyTokens(modeCap) {
+  if (!props.notebookCollab) return modeCap
+  const cap = Number(modeCap) || 0
+  return Math.max(cap, NB_PROPOSAL_REPLY_TOKENS)
 }
 
 function analysisFindingsList() {

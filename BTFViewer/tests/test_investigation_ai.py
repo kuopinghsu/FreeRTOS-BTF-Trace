@@ -340,6 +340,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ("def parse_question_suggestion", "export function parseQuestionSuggestion"),
             ("def parse_reply_blocks", "export function parseReplyBlocks"),
             ("def extract_notebook_proposal", "export function extractNotebookProposal"),
+            ("def looks_like_truncated_proposal",
+             "export function looksLikeTruncatedProposal"),
+            ("NB_PROPOSAL_TRUNCATED_HINT", "export const NB_PROPOSAL_TRUNCATED_HINT"),
+            ("NB_PROPOSAL_REPLY_TOKENS", "export const NB_PROPOSAL_REPLY_TOKENS"),
             ("def summarize_notebook_proposal_for_chat",
              "export function summarizeNotebookProposalForChat"),
             ("PROPOSAL_SCHEMA", "export const PROPOSAL_SCHEMA"),
@@ -367,6 +371,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         ):
             self.assertIn(phrase, js, f"web NB prompt missing: {phrase!r}")
             self.assertIn(phrase, py, f"desktop NB prompt missing: {phrase!r}")
+        # the proposal reply budget is the same number on both sides
+        from btf_viewer_pkg.investigation_ai import NB_PROPOSAL_REPLY_TOKENS
+        self.assertEqual(NB_PROPOSAL_REPLY_TOKENS, 4096)
+        self.assertIn("NB_PROPOSAL_REPLY_TOKENS = 4096", js)
 
 
 class ReplyBlocksTests(unittest.TestCase):
@@ -434,6 +442,32 @@ class ExtractNotebookProposalTests(unittest.TestCase):
         self.assertIsNone(extract_notebook_proposal(None))
 
 
+class TruncatedProposalTests(unittest.TestCase):
+    """looks_like_truncated_proposal — spot a proposal the model got cut off on.
+    Parity with web/tests/investigationAi.test.js's looksLikeTruncatedProposal."""
+
+    CUT = ('Here you go:\n```json\n{"schema":"btf-viewer-nb-proposal/1",'
+           '"summary":"針對 Low[266] 的 64.224 ms Off-CPU 峰值",'
+           '"notes":["有 873 次阻塞但缺乏具體時間點","需查詢 sync 與 priority_inheritance",'
+           '"需確認 Low[266] 最長阻塞是否與 PS[228] 共用同一 mut')
+
+    def test_unbalanced_proposal_json_is_truncated(self) -> None:
+        from btf_viewer_pkg.investigation_ai import looks_like_truncated_proposal
+        self.assertTrue(looks_like_truncated_proposal(self.CUT))
+
+    def test_complete_or_absent_proposal_is_not_truncated(self) -> None:
+        from btf_viewer_pkg.investigation_ai import looks_like_truncated_proposal
+        full = ('```json\n{"schema":"btf-viewer-nb-proposal/1","summary":"s",'
+                '"notes":["a"],"operations":[]}\n```')
+        self.assertFalse(looks_like_truncated_proposal(full))
+        # marker present, braces balanced, just malformed → not "truncated"
+        self.assertFalse(looks_like_truncated_proposal(
+            '{"schema":"btf-viewer-nb-proposal/1"}'))
+        self.assertFalse(looks_like_truncated_proposal("a normal prose answer"))
+        self.assertFalse(looks_like_truncated_proposal(""))
+        self.assertFalse(looks_like_truncated_proposal(None))
+
+
 class SummarizeNotebookProposalTests(unittest.TestCase):
     """summarize_notebook_proposal_for_chat — readable summary in the AI panel.
     Parity with web/tests/investigationAi.test.js."""
@@ -463,7 +497,8 @@ class SummarizeNotebookProposalTests(unittest.TestCase):
         from btf_viewer_pkg.investigation_ai import summarize_notebook_proposal_for_chat
         s = summarize_notebook_proposal_for_chat(
             '```json\n{"schema":"btf-viewer-nb-proposal/1","summary":"s","notes":["a"]}\n```')
-        self.assertIn("Review only", s)
+        self.assertIn("No Notebook changes proposed.", s)
+        self.assertNotIn("open the Investigation Notebook", s)
         self.assertNotIn('"schema"', s)
         self.assertEqual(summarize_notebook_proposal_for_chat("plain answer"), "plain answer")
         self.assertEqual(summarize_notebook_proposal_for_chat(""), "")
@@ -472,7 +507,8 @@ class SummarizeNotebookProposalTests(unittest.TestCase):
         from pathlib import Path
         src = (Path(__file__).resolve().parents[1]
                / "btf_viewer_pkg" / "ai_assistant.py").read_text(encoding="utf-8")
-        self.assertIn("from .investigation_ai import summarize_notebook_proposal_for_chat", src)
+        self.assertIn("from .investigation_ai import", src)
+        self.assertIn("summarize_notebook_proposal_for_chat", src)
         body = src[src.index("def _ai_message_body_html"):src.index("def _ai_message_body_html") + 900]
         self.assertIn("summarize_notebook_proposal_for_chat(body_text)", body)
 

@@ -1805,6 +1805,7 @@ import {
 import {
   collaborateContext, collaborateHeader, collaborateDigest,
   NB_AI_ACTION_PROMPTS, applyProposal, parseQuestionSuggestion,
+  looksLikeTruncatedProposal, NB_PROPOSAL_TRUNCATED_HINT,
 } from './utils/investigationAi.js'
 import {
   exportTargets, defaultExportTarget, cursorRange as exportCursorRange,
@@ -3590,7 +3591,16 @@ async function onNotebookCollaborate({ action = '', selectedEvidenceIds = null, 
   // panel, which sits behind this dialog's full-screen modal.
   if (notebookCollab.value) {
     const replyText = aiPanelRef.value?.lastAssistantText?.() || ''
-    notebookCollab.value.lastReplyText = replyText
+    // A local model can run out of context mid-answer and hand back a
+    // btf-viewer-nb-proposal JSON that never closes — extraction then silently
+    // yields nothing. Detect that and show an actionable hint on the step card
+    // instead of the garbled partial JSON.
+    if (looksLikeTruncatedProposal(replyText)) {
+      notebookCollab.value.lastReplyText = NB_PROPOSAL_TRUNCATED_HINT
+      showToast(NB_PROPOSAL_TRUNCATED_HINT, 'error')
+    } else {
+      notebookCollab.value.lastReplyText = replyText
+    }
     // "Help refine question" isn't a structured proposal — a single scalar
     // field (the question text) doesn't need the operations/proposal review
     // machinery. Pull the plain-text suggestion straight out of the reply.

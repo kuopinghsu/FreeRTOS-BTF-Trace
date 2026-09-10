@@ -249,10 +249,12 @@ from .investigation_notebook import (
 from .investigation_ai import (
     NB_AI_ACTIONS,
     NB_AI_DISABLED_REASON,
+    NB_PROPOSAL_TRUNCATED_HINT,
     apply_proposal,
     collaborate_context,
     collaborate_digest,
     collaborate_header,
+    looks_like_truncated_proposal,
     nb_ai_action_reason,
     parse_question_suggestion,
     parse_reply_blocks,
@@ -13425,6 +13427,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """§9 fix — show the plain-text collaborate reply inline on the
         Notebook step that asked for it, not only in the AI Assistant panel
         this full-screen dialog covers."""
+        # A local model can run out of context mid-answer and hand back a
+        # btf-viewer-nb-proposal JSON that never closes — extraction then
+        # silently yields nothing. Show an actionable hint instead of the
+        # garbled partial JSON.
+        if looks_like_truncated_proposal(text):
+            text = NB_PROPOSAL_TRUNCATED_HINT
+            self.statusBar().showMessage(NB_PROPOSAL_TRUNCATED_HINT, 8000)
         dlg = getattr(self, "_notebook_dlg", None)
         if dlg is not None and hasattr(dlg, "set_last_ai_reply"):
             try:

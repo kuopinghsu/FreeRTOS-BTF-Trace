@@ -208,6 +208,46 @@ export function extractNotebookProposal(text) {
   return null
 }
 
+// Explicit reply budget for a Notebook collaboration turn. The proposal JSON
+// (summary + notes + operations, often CJK) does not fit the Compact 500-token
+// cap, and leaving it unset lets a local server apply its own small default —
+// both truncate the JSON mid-string. Sent as max_tokens for every NB collab
+// request regardless of context mode. Lockstep with investigation_ai.py.
+export const NB_PROPOSAL_REPLY_TOKENS = 4096
+
+export const NB_PROPOSAL_TRUNCATED_HINT =
+  'The AI’s reply was cut off before the Notebook proposal finished. The '
+  + 'model likely hit its output limit or stopped early — try a larger / '
+  + 'stronger model, shrink the request (narrower Scope, fewer findings, '
+  + 'clear a long chat), and for a local server make sure its context window '
+  + 'is large (Ollama: `OLLAMA_CONTEXT_LENGTH` / `num_ctx` ≥ 8192, and '
+  + 'restart it). Then run this action again.'
+
+/**
+ * Heuristic: the reply was emitting a `btf-viewer-nb-proposal` but was cut off
+ * before the JSON closed (a local model running out of context mid-answer).
+ * True only when a proposal marker is present, extraction failed, and the
+ * braces from the marker onward stay unbalanced. Lockstep with
+ * investigation_ai.py's looks_like_truncated_proposal.
+ */
+export function looksLikeTruncatedProposal(text) {
+  const raw = String(text || '')
+  if (!raw.trim() || !raw.includes('btf-viewer-nb-proposal')) return false
+  if (extractNotebookProposal(raw)) return false
+  const sIdx = raw.indexOf('btf-viewer-nb-proposal')
+  const open = raw.lastIndexOf('{', sIdx)
+  if (open < 0) return false
+  let depth = 0
+  for (let i = open; i < raw.length; i += 1) {
+    if (raw[i] === '{') depth += 1
+    else if (raw[i] === '}') {
+      depth -= 1
+      if (depth === 0) return false
+    }
+  }
+  return depth > 0
+}
+
 /**
  * Rewrite an assistant reply that carries a `btf-viewer-nb-proposal/…` object
  * so the AI panel (and the Notebook) show a readable summary instead of a raw
@@ -238,9 +278,11 @@ export function summarizeNotebookProposalForChat(text) {
   if (summary) { out.push('', summary) }
   const notes = Array.isArray(obj.notes) ? obj.notes.map(n => String(n || '').trim()).filter(Boolean) : []
   if (notes.length) { out.push(''); for (const n of notes) out.push(`- ${n}`) }
+  // P0.3 — the proposal review opens the Notebook itself; no "open the
+  // Notebook" instruction, and no Review action for zero operations.
   out.push('', nOps
-    ? `_${nOps} change${nOps === 1 ? '' : 's'} proposed — open the Investigation Notebook to review and add._`
-    : '_Review only — open the Investigation Notebook for details._')
+    ? `_${nOps} change${nOps === 1 ? '' : 's'} proposed._`
+    : '_No Notebook changes proposed._')
   if (rest) out.push('', rest)
   return out.join('\n')
 }

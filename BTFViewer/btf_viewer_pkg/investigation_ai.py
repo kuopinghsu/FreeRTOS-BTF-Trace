@@ -237,6 +237,50 @@ def extract_notebook_proposal(text: Optional[str]) -> Optional[Dict[str, Any]]:
     return None
 
 
+# Explicit reply budget for a Notebook collaboration turn. The proposal JSON
+# (summary + notes + operations, often CJK) does not fit the Compact 500-token
+# cap, and leaving it unset lets a local server apply its own small default --
+# both truncate the JSON mid-string. Sent as max_tokens for every NB collab
+# request regardless of context mode. Lockstep with investigationAi.js.
+NB_PROPOSAL_REPLY_TOKENS = 4096
+
+NB_PROPOSAL_TRUNCATED_HINT = (
+    "The AI's reply was cut off before the Notebook proposal finished. The "
+    "model likely hit its output limit or stopped early -- try a larger / "
+    "stronger model, shrink the request (narrower Scope, fewer findings, clear "
+    "a long chat), and for a local server make sure its context window is large "
+    "(Ollama: `OLLAMA_CONTEXT_LENGTH` / `num_ctx` >= 8192, and restart it). "
+    "Then run this action again."
+)
+
+
+def looks_like_truncated_proposal(text: Optional[str]) -> bool:
+    """Heuristic: the reply was emitting a ``btf-viewer-nb-proposal`` but was cut
+    off before the JSON closed (a local model running out of context mid-answer).
+    True only when a proposal marker is present, extraction failed, and the
+    braces from the marker onward stay unbalanced. Lockstep with
+    ``investigationAi.js``'s ``looksLikeTruncatedProposal``.
+    """
+    raw = str(text or "")
+    if not raw.strip() or "btf-viewer-nb-proposal" not in raw:
+        return False
+    if extract_notebook_proposal(raw) is not None:
+        return False
+    s_idx = raw.find("btf-viewer-nb-proposal")
+    open_i = raw.rfind("{", 0, s_idx)
+    if open_i < 0:
+        return False
+    depth = 0
+    for i in range(open_i, len(raw)):
+        if raw[i] == "{":
+            depth += 1
+        elif raw[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return False
+    return depth > 0
+
+
 _NB_FENCE_ANY_RE = re.compile(r"```(?:json)?\s*[\s\S]*?```", re.IGNORECASE)
 _NB_LINK_LINE_RE = re.compile(r"\]\((?:btfnext|btfstats):", re.IGNORECASE)
 _NB_SCHEMA_LINE_RE = re.compile(r'"schema"\s*:\s*"btf-viewer-nb-proposal')
@@ -275,11 +319,12 @@ def summarize_notebook_proposal_for_chat(text: Optional[str]) -> str:
     if notes:
         out.append("")
         out += [f"- {n}" for n in notes]
+    # P0.3 — the proposal review opens the Notebook itself; no "open the
+    # Notebook" instruction, and no Review action for zero operations.
     out += ["", (
-        f"_{n_ops} change{'' if n_ops == 1 else 's'} proposed — open the "
-        "Investigation Notebook to review and add._"
+        f"_{n_ops} change{'' if n_ops == 1 else 's'} proposed._"
         if n_ops else
-        "_Review only — open the Investigation Notebook for details._"
+        "_No Notebook changes proposed._"
     )]
     if rest:
         out += ["", rest]

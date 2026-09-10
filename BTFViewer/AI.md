@@ -13,7 +13,7 @@ checks, and plan the next step.
 
 For most investigations, use this simple flow:
 
-``` mermaid
+```mermaid
 flowchart LR
   A["1. Find<br/>Findings + Statistics"] --> B["2. Verify<br/>Scope + Timeline"]
   B --> C["3. Continue<br/>AI or experiment"]
@@ -30,7 +30,8 @@ flowchart LR
     change helped.
 
 AI is optional. You can complete an investigation with Statistics, the
-timeline, Investigation Notebook, and Trace Compare.
+timeline, Investigation Notebook, and Trace Compare. The Notebook is the
+user-facing record; AI suggestions remain opt-in and do not edit it automatically.
 
 ## Contents
 
@@ -50,8 +51,8 @@ timeline, Investigation Notebook, and Trace Compare.
 
 ### Engineering reference
 
-12. [Complete tool reference](#complete-tool-reference)
-13. [Engine limits](#engine-limits)
+12. [Engine limits](#engine-limits)
+13. [Complete tool reference](#complete-tool-reference)
 14. [Investigation Case](#investigation-case)
 15. [Investigation planner](#investigation-planner)
 16. [Saved results and reports](#saved-results-and-reports)
@@ -134,7 +135,7 @@ the best default for a new user.
 
 The flow is:
 
-``` text
+```text
 Triage → Scope → Investigate → Verify → Experiment → Compare
 ```
 
@@ -187,8 +188,10 @@ Confidence should come from evidence.
 
 ## Built-in actions
 
-The AI panel provides shortcuts for common tasks. Think of them as
-different questions, not separate analysis systems.
+The AI panel provides shortcuts for common tasks. The visible shortcuts are
+context-sensitive, and additional templates are available from **More templates…**.
+Treat them as different questions that reuse the same investigation context, not
+as separate analysis systems.
 
 ### Start Investigation
 
@@ -216,7 +219,7 @@ to the relevant Statistics or timeline check.
 
 **What it does:** ranks the Findings that deserve attention first.
 
-**Does not:** perform a full root-cause investigation.
+**Does not:** perform a full root-cause analysis.
 
 ### Explain region
 
@@ -358,10 +361,10 @@ Use this sequence when opening an unfamiliar trace:
 11. Capture a new trace under comparable conditions.
 12. Use **Trace Compare** to measure the result.
 
-The useful output of an investigation is not a long AI answer. It is a
+A useful investigation result is not a long AI answer. It is a
 short chain that can be checked:
 
-``` text
+```text
 Measured symptom
     ↓
 Scoped incident
@@ -387,7 +390,7 @@ Use this when you already see a suspicious timeline segment.
     sequence and continue with **Explain region**.
 
 This path is intended for a local question. It should not automatically
-become a full-trace root-cause investigation.
+become a full-trace root-cause analysis.
 
 ### Explain one region
 
@@ -533,7 +536,7 @@ A useful investigation is:
 
 A good final note is concise:
 
-``` text
+```text
 Observation:
 Worker response-time p99 is elevated in the selected phase.
 
@@ -551,7 +554,7 @@ One measurable change or one additional evidence check.
 
 ## Continue the investigation
 
-The AI conversation is not meant to restart from zero after every reply.
+The AI conversation should continue from the current investigation instead of restarting after every reply.
 
 Use **Next check** when the Evidence panel already identifies the most
 useful missing check. Use a normal follow-up question when you want to
@@ -608,7 +611,7 @@ configured, or simulated/estimated. These are not equally strong.
 
 Prefer this order when making a decision:
 
-``` text
+```text
 measured event/value
     ↓
 derived statistic
@@ -947,6 +950,31 @@ Use a more focused Scope, clear an excessively long conversation, or use
 a model with more reliable tool calling. A verification action should
 reuse existing evidence whenever possible.
 
+### A local model's reply or proposal is cut off
+
+If **Gather evidence with AI** (or another Notebook collaboration) returns
+an incomplete answer -- a `btf-viewer-nb-proposal` JSON block that stops
+mid-way -- the model hit its output limit or stopped early while
+generating. The Notebook shows a hint in place of the truncated text.
+
+BTFViewer already asks for a proposal-sized reply budget (4096 tokens) on
+every Notebook collaboration, so the remaining causes are the model and
+the server:
+
+1.  Use a larger or instruction-tuned model; small models lose track of a
+    long structured reply and emit an end-of-text token early.
+2.  Reduce the request size: narrow the Scope, trim the investigation to
+    the essential evidence before collaborating, and clear a long chat.
+3.  Give a local server a large input window and restart it. For Ollama,
+    `OLLAMA_CONTEXT_LENGTH=8192 ollama serve` (or larger), or add
+    `PARAMETER num_ctx 8192` to a `Modelfile` and `ollama create`. A value
+    set only for an interactive `ollama run` session does not apply to API
+    calls.
+
+`num_ctx` (input window) is separate from the reply budget. **Compact**
+context mode is fine for Notebook collaboration -- the 4096-token proposal
+budget overrides its usual 500-token reply cap.
+
 ### Connection errors
 
 For browser CORS, authentication, TLS, model-not-found, timeout, or
@@ -1157,9 +1185,9 @@ raw tool logs the main report.
 
 ## CLI and regression checks
 
-The AI documentation includes engineering workflows for automated
-verification. These commands are implementation-dependent and must be
-checked against the current BTFViewer CLI/desktop source before release.
+The Desktop CLI includes `ai-test` for AI evidence and validator regression
+testing. Offline fixtures are used by default; `--models` runs configured live
+endpoints. CLI behavior is Desktop-only and does not need a matching Web command.
 
 Use CLI regression checks to answer questions such as:
 

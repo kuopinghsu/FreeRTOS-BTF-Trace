@@ -47,7 +47,7 @@ BTFViewer 可協助使用者從時序異常快速找到可查證、可重現的�
 | [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md) | 依照步驟進行問題調查 |
 | [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md) | 了解統計指標的定義、公式與判讀方式 |
 | [AI_zh-TW.md](AI_zh-TW.md) | 設定及使用 AI 輔助調查 |
-| [demos/README.md](demos/README.md) | 建立及維護導覽示範 |
+| [demos/README.md](demos/README.md) | 建立與維護導覽示範 |
 
 若是第一次使用 BTFViewer，請先閱讀[快速開始](#quick-start)，再依照[基本分析流程](#basic-analysis-workflow)操作。需要詳細步驟或指標定義時，再查閱其他文件。
 
@@ -138,13 +138,13 @@ make demo-pack
 make demo-pack DEMO_LANGS=en,zh-tw
 ```
 
-產生的 `builds/demo_8cores.btfw` 包含指令稿、追蹤資料及選取的語音檔，可在桌面版或網頁版中開啟。建立、錄製及維護示範的說明，請參閱 [demos/README.md](demos/README.md)。
+產生的 `builds/demo_8cores.btfw` 包含指令稿、追蹤資料及選取的語音檔，可在桌面版或網頁版中開啟。建立、錄製與維護示範的說明，請參閱 [demos/README.md](demos/README.md)。
 
 <a id="viewer-controls" name="viewer-controls">&#x200B;</a>
 
 ## BTFViewer 操作
 
-BTFViewer 使用一致的檢視介面、控制項目及分析流程。判讀結果前，請先確認目前的追蹤資料、**Scope**（分析範圍）、**Filters**（篩選條件）、檢視模式、**Selection**（選取項目）與 **Highlight**（反白項目）。
+BTFViewer 使用一致的檢視介面、控制項目與分析流程。判讀結果前，請先確認目前的追蹤資料、**Scope（分析範圍）**、**Filters（篩選條件）**、檢視模式、**Selection（選取項目）**與 **Highlight（反白項目）**。
 
 ### 主視窗
 
@@ -155,7 +155,7 @@ BTFViewer 使用一致的檢視介面、控制項目及分析流程。判讀結�
 | # | 區域 | 說明 |
 |---|---|---|
 | 1 | **活動列（Activity rail）** | 開啟與時間軸並列的工具——**Migration heatmap**、**Analysis Findings**、[**Investigation notebook**](#investigation-notebook)、**Compare traces** 與 **Snapshot editor**——底部為 **Help** 與 **Settings**。 |
-| 2 | **工具列（Toolbar）** | 分組控制項——開啟、版面方向、縮放、檢視模式、**Load**、佈景主題、示範、錄影。將滑鼠移到圖示上可看到名稱與快捷鍵；視窗過窄時會將分組收進 **More (⋯)**。詳見[主要控制項目](#主要控制項目)。 |
+| 2 | **工具列** | 分組控制項——開啟、版面方向、縮放、檢視模式、**Load**、佈景主題、示範、錄影。將滑鼠移到圖示上可看到名稱與快捷鍵；視窗過窄時會將分組收進 **More (⋯)**。詳見[主要控制項目](#主要控制項目)。 |
 | 3 | **追蹤資料分頁（Trace tabs）** | 每份開啟的追蹤資料各一個分頁，並各自保留分析範圍、篩選條件、檢視模式、縮放、游標與標記。 |
 | 4 | **圖例／工作清單（Legend / task list）** | 各列的顏色對照。將滑鼠移到項目上為 **Highlight**，點選為 **Selection**；在 Core View 中，**Cores** 核取方塊即為 Core Filter。 |
 | 5 | **時間軸與時間刻度（Timeline and time ruler）** | 依比例呈現的事件檢視。`Ctrl`+滾輪以游標為中心縮放、拖曳可平移、點選可放置游標，將滑鼠移到區段上會顯示工作、核心、起訖時間與長度。右下角的小方框是整份擷取的概覽圖。 |
@@ -206,7 +206,7 @@ BTFViewer 使用一致的檢視介面、控制項目及分析流程。判讀結�
 | **Task View** | 追蹤各工作在所有核心上的執行情形 |
 | **Core View** | 查看各核心執行的工作；核心可以展開或收合 |
 
-**Task View** 適合檢查工作的執行及核心遷移情形；**Core View** 適合檢查使用率、閒置時間及負載分配。切換檢視模式會保留時間軸位置、縮放、游標與分析範圍。
+**Task View** 適合檢查工作的執行與核心遷移情形；**Core View** 適合檢查使用率、閒置時間及負載分配。切換檢視模式會保留時間軸位置、縮放、游標與分析範圍。
 
 在 **Core View** 中，圖例的 **Cores** 核取清單即為 **Core Filter**：取消勾選的核心會從 Timeline Core View 列、CPU Load 圖、狀態列晶片、Statistics **Filtered:** 狀態與 AI 內容中排除。
 
@@ -256,7 +256,7 @@ BTFViewer 使用一致的檢視介面、控制項目及分析流程。判讀結�
 
 ### 多份追蹤資料
 
-每份追蹤資料會在個別分頁中開啟，並保留各自的縮放比例、游標、標記及篩選條件。
+每份追蹤資料會在個別分頁中開啟，並保留各自的縮放比例、游標、標記與篩選條件。
 
 - `Ctrl+Tab`：下一個分頁
 - `Ctrl+Shift+Tab`：上一個分頁
@@ -306,7 +306,7 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 | 就緒後仍延遲執行 | **Dispatch Latency** | 阻塞及搶佔 |
 | 優先權反轉 | **Priority Inheritance** | 互斥鎖配對及阻塞 |
 | 頻繁在核心間移動 | **Core Migrations** | 負載平衡、核心遷移與路徑檢視器（Migration & Corridor Inspector），以及同步交接的可疑關聯 |
-| 鎖或佇列問題 | **Mutex / Semaphore / Queue** | 阻塞及核心遷移 |
+| 鎖或佇列問題 | **Mutex / Semaphore / Queue** | 阻塞與核心遷移 |
 
 統計指標的詳細定義與公式請參閱 [STATISTICS_zh-TW.md](STATISTICS_zh-TW.md)。
 
@@ -330,7 +330,7 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 
 請將分析結果視為線索，而非已確認的根因。若結果建議有用的時間窗，請套用游標後，再於該分析範圍內重新檢查 **Statistics**。
 
-對於可量測使用率的多核心追蹤資料，核心平衡分析會顯示 **Load Balance Score** 與相關分布數值。分數越高，表示工作分配越平均。判斷分配方式是否適合目前工作負載前，仍應檢查時間軸及核心遷移資料。
+對於可量測使用率的多核心追蹤資料，核心平衡分析會顯示 **Load Balance Score** 與相關分布數值。分數越高，表示工作分配越平均。判斷分配方式是否適合目前工作負載前，仍應檢查時間軸與核心遷移資料。
 
 可從工具列的 **Investigation** 分組，或活動列的 **Analysis findings** 按鈕開啟分析結果視窗。
 
@@ -359,7 +359,7 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 確認負載平衡後，再檢查工作是否過度頻繁地在核心間移動。工作移至新核心後，可能無法從該核心的 L1 快取找到最近使用的資料，因而增加快取未命中。在 Xtensa 處理器上，核心遷移也可能降低延遲式內容切換的效益。工作移至另一個核心時，系統可能必須儲存協同處理器暫存器，因而增加內容切換的額外成本。
 
-請一併檢查 **Task View**、各核心負載、**Core Migrations** 及 **Migration & Corridor Inspector**。此檢視器以三欄顯示核心路徑、遷移熱圖與 **Topology**；點選熱圖會在右欄開啟 **Path info**。**Analysis Scope** 預設為 **Follow zoom**（完整顯示時視為 **Full Trace**；放大後視為 **Viewport**）。也可固定使用 **Full Trace**、**Viewport** 或 **Cursor C1–Cn**。若偏高的核心遷移次數同時伴隨快取行為變差、內容切換成本增加、延遲升高或負載分配不穩，才具有較明確的分析意義。同步交接關聯是啟發式結果，不是量測到的快取行搬移。
+請一併檢查 **Task View**、各核心負載、**Core Migrations** 與 **Migration & Corridor Inspector**。此檢視器分成三個區域，分別顯示核心路徑、遷移熱圖與 **Topology**。點選熱圖中的區塊後，右側的 **Path info** 會顯示該路徑的詳細資料。**Analysis Scope** 預設使用 **Follow zoom**：顯示完整追蹤資料時視為 **Full Trace**，放大後則使用目前的 **Viewport**。也可以固定使用 **Full Trace**、**Viewport** 或 **Cursor C1–Cn**。只有在核心遷移次數偏高，且同時伴隨快取行為變差、內容切換成本增加、延遲升高或負載分配不穩時，才具有較明確的分析意義。同步交接關聯屬於啟發式結果，並非實際量測到的快取行搬移。
 
 可從工具列的 **Investigation** 分組，或活動列的 **Migration heatmap** 按鈕開啟此檢視器。
 
@@ -367,19 +367,19 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 | # | 區域 | 說明 |
 |---|---|---|
-| 1 | **判讀列（Verdict strip）** | 一行結論加上佐證資料：分析範圍、最受影響的工作、負載平衡、最熱路徑、遷移總數（含速率），以及主要疑慮。 |
-| 2 | **工具列（Toolbar）** | **Analysis Scope**（Follow zoom / Full Trace / Viewport / Cursor C1–Cn）、**Show** 路徑深度、**All Migrations** 與僅顯示彈跳（ping-pong）路徑的切換、**Direction**，以及 **Task filter**。 |
-| 3 | **範圍橫幅（Scope banner）** | 數據對應的確切時間視窗與時間單位，避免將放大或游標限定的檢視誤認為整份追蹤資料。 |
-| 4 | **核心路徑樹（Core-path tree）** | 依速率排序的來源 → 目的走廊，並列出 Count、Ping（彈跳比例）、Dwell、Handoff、Net 與 Share。展開某列（▶）可看該走廊的各工作細目。 |
-| 5 | **遷移熱圖（Migration heatmap）** | 各走廊在每個時間區間的遷移次數——儲存格顏色代表次數，斜線標示同步交接（synchronization handoff）疑似比例超過門檻的區間，並標出空白區間。點選儲存格可聚焦該走廊與區間。 |
+| 1 | **判讀列** | 一行結論加上佐證資料：分析範圍、最受影響的工作、負載平衡、最熱路徑、遷移總數（含速率），以及主要疑慮。 |
+| 2 | **工具列** | **Analysis Scope**（Follow zoom / Full Trace / Viewport / Cursor C1–Cn）、**Show** 路徑深度、**All Migrations** 與僅顯示彈跳（ping-pong）路徑的切換、**Direction**，以及 **Task filter**。 |
+| 3 | **範圍橫幅** | 數據對應的確切時間視窗與時間單位，避免將放大或游標限定的檢視誤認為整份追蹤資料。 |
+| 4 | **核心路徑樹** | 依速率排序的來源 → 目的走廊，並列出 Count、Ping（彈跳比例）、Dwell、Handoff、Net 與 Share。展開某列（▶）可看該走廊的各工作細目。 |
+| 5 | **遷移熱圖** | 各走廊在每個時間區間的遷移次數——儲存格顏色代表次數，斜線標示同步交接（synchronization handoff）疑似比例超過門檻的區間，並標出空白區間。點選儲存格可聚焦該走廊與區間。 |
 | 6 | **Topology / Path info** | 核心間流量的弦圖；**Path info** 分頁顯示所選路徑的細節。右上角的按鈕可切換版面。 |
-| 7 | **AI 動作（AI actions）** | **Investigate with AI**，以及一鍵提示——Investigate this path、Explain this migration burst、Verify possible ping-pong 與 Compare with another trace。 |
+| 7 | **AI 動作** | **Investigate with AI**，以及一鍵提示——Investigate this path、Explain this migration burst、Verify possible ping-pong 與 Compare with another trace。 |
 
 ### 比較已開啟的追蹤資料
 
 開啟兩份以上的追蹤資料時，可以使用 **Compare** 查看使用率、核心遷移、執行時間、阻塞時間、回應時間（Response Time）、同步活動及錯過截止期限（Deadline Miss）等差異。
 
-**Summary** 分頁會標示 **Baseline**（基準追蹤資料）與 **Candidate**（候選追蹤資料），統計變差與改善的項目，並說明整體結果。沒有實際工程影響的小幅變化會省略。點選欄位標題可排序任一比較表格，再點一次可反向排序。
+**Summary** 分頁會標示 **Baseline（基準）**與 **Candidate（候選）**，統計變差與改善的項目，並說明整體結果。沒有實際工程影響的小幅變化會省略。點選欄位標題可排序任一比較表格，再點一次可反向排序。
 
 ![Trace Compare](../images/btfviewer-web-compare.png)
 
@@ -400,7 +400,7 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 ### 調查筆記本（Investigation Notebook）
 
-Notebook 是一份書面、分成四個步驟的單次調查紀錄——**Question → Evidence → Verify → Conclusion**——與追蹤資料一併保存。它可搭配或不搭配 AI 使用：每個 AI 動作都是選用的、僅作用於目前步驟，且不會自行變更 Notebook 內容（詳見下方的**與 AI 協同作業**）。這與 AI Assistant 本身的導引步驟列（**Investigation Case**，見 [AI_zh-TW.md → 調查案例](AI_zh-TW.md#investigation-case)）不同——Notebook 是用來以你自己的文字，保存你自己調查發現的地方。
+**Investigation Notebook（調查筆記本）**用來記錄一次完整的調查，分為 **Question → Evidence → Verify → Conclusion** 四個步驟，並與追蹤資料一併保存。調查筆記本可單獨使用，也可搭配 AI。每個 AI 動作都是選用功能，只會針對目前步驟提供協助，不會自行修改筆記內容（詳見下方的**與 AI 協同作業**）。調查筆記本是使用者實際操作與保存結果的地方；AI Assistant 另以內部的 **Investigation Case（調查案例）**（[AI_zh-TW.md → 調查案例](AI_zh-TW.md#investigation-case)）維持上下文，但使用者不需要管理這個內部狀態。
 
 可從活動列的 **Investigation notebook** 按鈕開啟，或在分析結果上選取 **Add to investigation**。
 
@@ -408,27 +408,27 @@ Notebook 是一份書面、分成四個步驟的單次調查紀錄——**Questi
 
 | # | 區域 | 說明 |
 |---|---|---|
-| 1 | **標頭（Header）** | 標題（記錄的問題）與狀態標籤（**Open** / **Needs evidence** / **Ready to conclude** / **Closed**），以及 **⋯ More** 選單——**Add from Findings**、**History…**、**Import / Export JSON**、**Evidence package…**、**New investigation…**、**Close investigation**。在標頭空白處拖曳即可移動視窗。 |
-| 2 | **步驟導覽（Step nav）** | **Question → Evidence → Verify → Conclusion**；打勾圖示代表該步驟已完成。視窗變窄時會收合成 **Step N of 4** 選單。 |
-| 3 | **內容列（Context strip）** | 新增每個項目當下的追蹤資料、記錄的 **Scope** 與 **Filters**。**Context details** 會顯示實際會傳送給 AI 的內容。 |
-| 4 | **工作區（Working area）** | 目前步驟的內容——問題表單、證據卡片、解釋，或結論編輯器。詳見下方的**調查步驟**。 |
-| 5 | **AI 協助（AI assistance）** | 目前步驟專屬的單一 AI 動作；請求得到回覆後，內容會直接顯示在此卡片中——不需切換到 AI Assistant 面板閱讀。 |
-| 6 | **底部列（Footer）** | **Undo** / **Redo** 可還原或重做 Notebook 的任何修改，並顯示儲存狀態說明，以及可在步驟間移動的 **Back** / **Next**。 |
+| 1 | **標頭** | 標題（記錄的問題）與狀態標籤（**Open** / **Needs evidence** / **Ready to conclude** / **Closed**），以及 **⋯ More** 選單——**Add from Findings**、**History…**、**Import / Export JSON**、**Evidence package…**、**New investigation…**、**Close investigation**。在標頭空白處拖曳即可移動視窗。 |
+| 2 | **步驟導覽** | **Question → Evidence → Verify → Conclusion**；打勾圖示代表該步驟已完成。視窗變窄時會收合成 **Step N of 4** 選單。 |
+| 3 | **內容列** | 新增每個項目當下的追蹤資料、記錄的 **Scope** 與 **Filters**。**Context details** 會顯示實際會傳送給 AI 的內容。 |
+| 4 | **工作區** | 目前步驟的內容——問題表單、證據卡片、解釋，或結論編輯器。詳見下方的**調查步驟**。 |
+| 5 | **AI 協助** | 目前步驟專屬的單一 AI 動作；請求得到回覆後，內容會直接顯示在此卡片中——不需切換到 AI Assistant 面板閱讀。 |
+| 6 | **底部列** | **Undo** / **Redo** 可還原或重做 Notebook 的任何修改，並顯示儲存狀態說明，以及可在步驟間移動的 **Back** / **Next**。 |
 
 **調查步驟**
 
 1. **Question** — 記錄你想了解的問題；此文字會成為條目標題。可選擇從目前的分析結果之一開始，或選取 **Help refine question** 讓 AI 建議更清楚的問法——在你選取 **Use this question** 前不會有任何變更。**Start investigation** 會在一個可還原的步驟中記錄該問題。
-2. **Evidence** — 建立證據集合。卡片本身的 **Add evidence → From Findings** 一次新增一項結果；標頭的 **⋯ → Add from Findings** 則會一次帶入多達 8 項依嚴重度排序的結果。每張卡片也可以從目前量測值或自由文字備註開始。每張卡片都有一個永遠可編輯的 **Explanation (your words)** 欄位——在這裡寫下你自己的解讀，或複製貼上 AI 回覆中相關的部分（詳見下方的**與 AI 協同作業**）。用核取方塊選取卡片後，可使用 **View source** / **Ask AI about this** / **Details**（唯讀來源資訊：追蹤資料、工作／核心、記錄的分析範圍、時間戳記、來源，以及新增者）。
-3. **Verify** — 草擬可能的解釋（**Add explanation**，或選取 **Suggest explanations** 讓 AI 針對這個開放性問題提出候選解釋——回覆會顯示在本步驟的 AI 協助卡片上；請將你想保留的解釋，以自己的文字寫入該卡片的 **Reasoning** 欄位），將證據連結到各項解釋作為支持或反駁，並用 **Add a check** / **Link evidence** 追蹤待辦事項。解釋的狀態（**Open** / **Supported** / **Contradicted**）只依你建立的連結而定——絕不會自動假設。
-4. **Conclusion** — 寫下證據所支持的結論；即使仍有未完成的檢查項目也能匯出。**Cited evidence**、**Unresolved checks**、**Stale references**（後續編輯已使其失效的引用）與 **Limitations** 皆由記錄的資料自動推導，絕不憑空捏造。
+2. **Evidence** — 建立證據集合。卡片內的 **Add evidence → From Findings** 一次新增一項分析結果；標頭的 **⋯ → Add from Findings** 則可一次加入最多 8 項依嚴重度排序的結果。每張卡片也可以從目前量測值或自由文字備註開始。每張卡片都有可隨時編輯的 **Explanation (your words)** 欄位——在這裡寫下你自己的解讀，或複製貼上 AI 回覆中相關的部分（詳見下方的**與 AI 協同作業**）。用核取方塊選取卡片後，可使用 **View source** / **Ask AI about this** / **Details**（唯讀來源資訊：追蹤資料、工作／核心、記錄時的分析範圍、時間戳記、來源與新增者）。
+3. **Verify** — 草擬可能的解釋（**Add explanation**，或選取 **Suggest explanations** 讓 AI 針對這個開放性問題提出候選解釋——回覆會顯示在本步驟的 AI 協助卡片上；請將想保留的解釋，以自己的文字寫入該卡片的 **Reasoning（推論）** 欄位），將證據連結到各項解釋作為支持或反駁，並用 **Add a check** / **Link evidence** 追蹤待辦事項。解釋的狀態（**Open** / **Supported** / **Contradicted**）只依你建立的連結而定——絕不會自動假設。
+4. **Conclusion** — 寫下證據所支持的結論；即使仍有未完成的檢查項目也能匯出。**Cited evidence（引用證據）**、**Unresolved checks（未完成檢查）**、**Stale references（失效引用）**與 **Limitations（限制）** 都會由已記錄的資料自動產生，不會自行補出不存在的內容。
 
 ![Investigation Notebook — Question step](../images/btfviewer-web-notebook-question.png)
 ![Investigation Notebook — Verify step](../images/btfviewer-web-notebook-verify.png)
 ![Investigation Notebook — Conclusion step](../images/btfviewer-web-notebook-conclusion.png)
 
-**清空調查（Clear the investigation）**：**⋯ → New investigation…** 會在單一可還原步驟中，以全新空白調查取代目前的調查，因此誤按一次只要 **Undo** 就能復原。這與 **Close investigation** 不同，後者會保留所有內容，只將案件標記為已結案。
+**清空調查**：**⋯ → New investigation…** 會在單一可還原步驟中，以全新空白調查取代目前的調查，因此誤按一次只要 **Undo** 就能復原。這與 **Close investigation** 不同，後者會保留所有內容，只將案件標記為已結案。
 
-**與 AI 協同作業（Cowork with AI）**：每個步驟的 AI 協助卡片都只執行一個選用的動作——**Help refine question**、**Suggest explanations**、**Check evidence with AI**（來自 Evidence 步驟的下一步卡片），或 **Review conclusion** / **Discuss in AI Assistant**。AI 不會直接修改 Notebook：結構化建議會開啟既有的建議審核對話框，讓你逐行接受、調整或拒絕；純文字回覆（例如來自 **Suggest explanations** 或 **Check evidence with AI**）會直接顯示在提出請求的卡片上，由你自行決定要把哪些內容保留並複製進 Notebook——可以是證據卡片的 **Explanation**、解釋卡片自己的 Reasoning 欄位（**Verify**），或是 **Conclusion** 文字。
+**與 AI 協同作業**：每個步驟的 AI 協助卡片都只執行一個選用的動作——**Help refine question**、**Suggest explanations**、**Check evidence with AI**（來自 Evidence 步驟的下一步卡片），或 **Review conclusion** / **Discuss in AI Assistant**。AI 不會直接修改調查筆記本：結構化建議會開啟既有的建議審核對話框，讓你逐行接受、調整或拒絕；純文字回覆（例如來自 **Suggest explanations** 或 **Check evidence with AI**）會直接顯示在提出請求的卡片上，由你自行決定要保留哪些內容，並複製到調查筆記本——可以是證據卡片的 **Explanation**、解釋卡片自己的 Reasoning 欄位（**Verify**），或 **Conclusion** 的結論文字。
 
 調查筆記本（問題、證據、連結與結論）只要有內容，就會自動包含在 Statistics 的 **Export HTML** 報告中——詳見[匯出](#export)。
 
@@ -444,12 +444,12 @@ Notebook 是一份書面、分成四個步驟的單次調查紀錄——**Questi
 
 | # | 區域 | 說明 |
 |---|---|---|
-| 1 | **標頭（Header）** | 面板標題、供應商／隱私標記（**Local** 或 **Cloud**），以及目前的內容層級。 |
-| 2 | **工具列（Toolbar）** | **Clear** 清除對話、切換回覆 **Language…**，或開啟 **Settings…**（模型、端點、驗證、隱私）。 |
+| 1 | **標頭** | 面板標題、供應商／隱私標記（**Local** 或 **Cloud**），以及目前的內容層級。 |
+| 2 | **工具列** | **Clear** 清除對話、切換回覆 **Language…**，或開啟 **Settings…**（模型、端點、驗證、隱私）。 |
 | 3 | **導引式調查** | **Triage → Scope → Investigate → Verify → Experiment → Compare** 步驟列與 **Start Investigation**，帶你走一遍結構化流程。 |
 | 4 | **對話與起始提示** | 回覆討論串。第一則訊息前會顯示目前的追蹤資料、分析範圍與篩選條件，以及分組的一鍵提示（Start、Investigate、SMP、Verify、Compare）。 |
 | 5 | **快捷範本** | 針對目前選取內容的現成提示——**Investigate**、**Verify finding**、**Explain evidence** 與 **More…**。 |
-| 6 | **輸入框與內容量表** | 輸入問題（Enter 送出，Shift+Enter 換行）；下方量表顯示本次請求使用的 內容層級。 |
+| 6 | **輸入框與內容量表** | 輸入問題（Enter 送出，Shift+Enter 換行）；下方量表顯示本次請求使用的內容層級。 |
 
 建議操作方式：
 
@@ -472,7 +472,7 @@ API 金鑰：在 **Settings → AI** 為各預設設定輸入金鑰，或在主�
 <a id="investigation-case" name="investigation-case">&#x200B;</a>
 <a id="investigation-planner" name="investigation-planner">&#x200B;</a>
 
-**Investigation Case** 保存目前調查的問題、分析範圍、假設、證據與結論。**Start Investigation** 與導引步驟列會執行主機端的調查規劃器（**Investigation planner**）（先取成本最低的證據）。細節見 [AI_zh-TW.md → 調查案例](AI_zh-TW.md#investigation-case) 與 [調查規劃器](AI_zh-TW.md#investigation-planner)。
+**Investigation Case** 保存目前調查的問題、分析範圍、假設、證據與結論。**Start Investigation** 會執行主機端的調查規劃器（**Investigation planner**）（先取成本最低的證據）；隨著工具執行，Case 會在內部推進各階段——它不是你要逐步操作的獨立流程。細節見 [AI_zh-TW.md → 調查案例](AI_zh-TW.md#investigation-case) 與 [調查規劃器](AI_zh-TW.md#investigation-planner)。
 
 設定、隱私、模型選項、工具、疑難排解、命令列測試及評估方式的詳細說明，請參閱 [AI_zh-TW.md](AI_zh-TW.md)。
 
@@ -507,7 +507,7 @@ Statistics 與 Trace Compare 都使用單一的 **Export HTML** 功能。儲存�
 | 3 | **歷史（History）** | 完整的復原／重做——繪製、移動、縮放、改樣式、刪除與裁切皆為可回復的步驟（`Ctrl+Z`、`Ctrl+Shift+Z`）。 |
 | 4 | **縮放與平移（Zoom & pan）** | 縮小、放大（放大鏡圖示按鈕）、百分比顯示與 **Fit**。`Ctrl`+滾輪以游標為中心縮放；按住 `Space` 拖曳可平移。開啟時會自動縮放至符合畫面。 |
 | 5 | **浮動屬性面板（Floating inspector）** | 出現在選取的圖形旁並跟隨移動：顏色（含最近使用色與影像取色器）、線寬、虛線、透明度、標籤／文字、字型大小、堆疊順序、複製，以及刪除該圖形的垃圾桶按鈕。 |
-| 6 | **底部列（Footer）** | **Copy to Clipboard**、**Save PNG…**、**Close**。若已設定裁切，僅會匯出裁切後的區域。 |
+| 6 | **底部列** | **Copy to Clipboard**、**Save PNG…**、**Close**。若已設定裁切，僅會匯出裁切後的區域。 |
 
 `?` 開啟鍵盤快捷鍵面板。`Esc` 會逐層退出——先關閉面板、再取消選取、最後回到 Select 工具——不會關閉編輯器本身。
 
@@ -529,6 +529,8 @@ Statistics 與 Trace Compare 都使用單一的 **Export HTML** 功能。儲存�
 | `snapshot` | 儲存時間軸、核心遷移或指標圖片 |
 | `perfetto` | 匯出 Chrome Trace JSON |
 | `slice` | 將選取的時間範圍儲存為較小的 BTF 檔案 |
+| `workspace` | 檢查或解開可攜式 `.btfw` 工作區 |
+| `verify` | 依 JSON 規則檢查追蹤資料，可用於 CI 驗證 |
 
 ```bash
 python builds/btf_viewer.py info trace.btf
@@ -540,7 +542,7 @@ python builds/btf_viewer.py perfetto trace.btf -o trace.json
 python builds/btf_viewer.py slice trace.btf -o window.btf --lo 100000 --hi 500000
 ```
 
-執行 `python builds/btf_viewer.py <command> -h` 可查看所有選項。
+`report` 可輸出 HTML、CSV 或 JSON，也可以一次產生多種格式。執行 `python builds/btf_viewer.py <command> -h` 可查看所有選項。
 
 <a id="settings" name="settings">&#x200B;</a>
 
@@ -550,9 +552,9 @@ python builds/btf_viewer.py slice trace.btf -o window.btf --lo 100000 --hi 50000
 
 | 區域 | 選項 |
 |---|---|
-| **Appearance** | 佈景主題、字型及色盲友善色盤 |
-| **Display** | 面板、時間軸疊加資訊（含選用的事件標記）、切換比較分頁時的 **Link A/B timeline zoom**、CPU 預算及工作截止期限 |
-| **Layout** | 標籤寬度、列高、縮放密度、游標數量上限、時間精度及圖表大小 |
+| **Appearance** | 佈景主題、字型與色盲友善色盤 |
+| **Display** | 面板、時間軸疊加資訊（含選用的事件標記）、切換比較分頁時的 **Link A/B timeline zoom**、CPU 預算與工作截止期限 |
+| **Layout** | 標籤寬度、列高、縮放密度、游標數量上限、時間精度與圖表大小 |
 | **AI** | 啟用狀態、內容層級、隱私、服務供應商、模型、驗證方式及回覆語言 |
 
 桌面版將設定儲存在 BTFViewer 旁的 `btf_viewer.rc`；網頁版則儲存在瀏覽器的 `localStorage`。變更會立即預覽；選取 **OK** 儲存，或選取 **Cancel** 還原先前的設定值。

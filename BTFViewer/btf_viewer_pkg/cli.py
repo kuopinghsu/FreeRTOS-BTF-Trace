@@ -245,7 +245,11 @@ Time range (--lo / --hi):
 Output format (--format, report and compare only):
   html   Styled report (default when -o has no extension or ends in .html)
   csv    Tabular export (default when -o ends in .csv)
+  json   Machine-readable statistics snapshot (report only)
   both   Write PATH.html and PATH.csv (or stem.html + stem.csv)
+  all    Write PATH.html + PATH.csv + PATH.json (report only)
+
+  report accepts all five; compare accepts html, csv, both.
 """
 
 _CLI_EPILOG_GUI = """\
@@ -288,7 +292,8 @@ Same content as Statistics → Export in the GUI:
 
   HTML — summary KPIs, CPU bars, and detail tables (priority episodes,
          mutex/semaphore holds, interval instances).
-  CSV  — all statistics sections as worksheets in one file.
+  CSV  — machine-readable tabular statistics export.
+         Per-table CSV is also available from the HTML report.
 
 examples:
   %(prog)s trace.btf -o statistics.html

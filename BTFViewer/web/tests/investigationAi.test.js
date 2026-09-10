@@ -14,6 +14,7 @@ import {
   collaborateDigest,
   collaborateHeader,
   extractNotebookProposal,
+  looksLikeTruncatedProposal,
   nbAiActionReason,
   parseQuestionSuggestion,
   parseReplyBlocks,
@@ -291,6 +292,24 @@ describe('extractNotebookProposal (tolerant of how the model wraps the JSON)', (
   })
 })
 
+describe('looksLikeTruncatedProposal (model ran out of context mid-proposal)', () => {
+  const CUT = 'Here you go:\n```json\n{"schema":"btf-viewer-nb-proposal/1",'
+    + '"summary":"針對 Low[266] 的 64.224 ms Off-CPU 峰值",'
+    + '"notes":["有 873 次阻塞但缺乏具體時間點","需查詢 sync 與 priority_inheritance",'
+    + '"需確認 Low[266] 最長阻塞是否與 PS[228] 共用同一 mut'
+  it('true for an unbalanced proposal JSON block', () => {
+    assert.equal(looksLikeTruncatedProposal(CUT), true)
+  })
+  it('false for a complete proposal, a balanced-but-malformed one, and plain text', () => {
+    assert.equal(looksLikeTruncatedProposal(
+      '```json\n{"schema":"btf-viewer-nb-proposal/1","summary":"s","notes":["a"],"operations":[]}\n```'), false)
+    assert.equal(looksLikeTruncatedProposal('{"schema":"btf-viewer-nb-proposal/1"}'), false)
+    assert.equal(looksLikeTruncatedProposal('a normal prose answer'), false)
+    assert.equal(looksLikeTruncatedProposal(''), false)
+    assert.equal(looksLikeTruncatedProposal(null), false)
+  })
+})
+
 describe('summarizeNotebookProposalForChat (readable summary in the AI panel, not raw JSON)', () => {
   const OBJ = '{"schema":"btf-viewer-nb-proposal/1","summary":"Only one measured item so far.","notes":["No hypotheses yet","Conclusion is empty"],"operations":[{"op":"add","role":"observation","title":"Check Mutex Blocking","note":"open section","evidence_ids":["E2"]},{"op":"add","role":"observation","title":"Exec Time Max","note":"jump to max","evidence_ids":["E6"]}]}'
 
@@ -309,9 +328,10 @@ describe('summarizeNotebookProposalForChat (readable summary in the AI panel, no
     assert.match(s, /- No hypotheses yet/)
     assert.match(s, /2 changes proposed/)
   })
-  it('review-only proposal (no ops) → "Review only" line', () => {
+  it('review-only proposal (no ops) → "No Notebook changes proposed" line', () => {
     const s = summarizeNotebookProposalForChat('```json\n{"schema":"btf-viewer-nb-proposal/1","summary":"s","notes":["a"]}\n```')
-    assert.match(s, /Review only/)
+    assert.match(s, /No Notebook changes proposed\./)
+    assert.doesNotMatch(s, /open the Investigation Notebook/)
     assert.ok(!s.includes('"schema"'))
   })
   it('no proposal → text returned unchanged', () => {

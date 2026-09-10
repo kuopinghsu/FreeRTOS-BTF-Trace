@@ -103,7 +103,10 @@ from .ai_investigation import (
     parse_btf_scope_href,
     linkify_next_check_lines,
 )
-from .investigation_ai import summarize_notebook_proposal_for_chat
+from .investigation_ai import (
+    NB_PROPOSAL_REPLY_TOKENS,
+    summarize_notebook_proposal_for_chat,
+)
 from .ai_tool_usage import is_trace_query_tool
 from .ai_response_flow import (
     format_analysis_status,
@@ -8705,6 +8708,12 @@ def create_ai_assistant_panel(
                 n = int(cap) if cap else 0
             except (TypeError, ValueError):
                 n = 0
+            # During a Notebook collaboration the reply must fit a full
+            # btf-viewer-nb-proposal JSON — override both the Compact 500-token
+            # cap and an unset (server-default) budget with a proposal-sized
+            # floor so a local server does not truncate the JSON mid-string.
+            if getattr(self, "_nb_collab", None):
+                return max(n, NB_PROPOSAL_REPLY_TOKENS)
             return n or None
 
         def _analysis_findings(self) -> List[Dict[str, Any]]:

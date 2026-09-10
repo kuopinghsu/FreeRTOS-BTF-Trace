@@ -400,7 +400,7 @@ This is an optional comparison tool. It is not required by the basic investigati
 
 ### Investigation Notebook
 
-The Notebook is a written, four-step record of one investigation — **Question → Evidence → Verify → Conclusion** — kept alongside the trace. It works with or without AI: every AI action is optional, scoped to the current step, and never changes the Notebook by itself (see **Cowork with AI** below). This is distinct from the AI Assistant's own guided stepper (**Investigation Case**, see [AI.md → Investigation Case](AI.md#investigation-case)) — the Notebook is where you keep your own findings, in your own words.
+The Notebook is a written, four-step record of one investigation — **Question → Evidence → Verify → Conclusion** — kept alongside the trace. It works with or without AI: every AI action is optional, scoped to the current step, and never changes the Notebook by itself (see **Cowork with AI** below). The Notebook is the user-facing investigation record. The AI Assistant keeps its own internal **Investigation Case** ([AI.md → Investigation Case](AI.md#investigation-case)) for context, but users do not need to manage it.
 
 Open it from the activity rail's **Investigation notebook** button, or select **Add to investigation** on an Analysis Finding.
 
@@ -456,7 +456,7 @@ Recommended use:
 1. Select a finding or define a time range with cursors.
 2. Ask the AI Assistant to investigate or explain it.
 3. Review the cited Statistics and timeline evidence.
-4. Use **Verify with AI** to challenge the proposed cause.
+4. Use **Verify finding** to challenge the proposed cause.
 5. If you make a change, capture a new trace and repeat the same scoped measurements.
 
 Select text in a reply and right-click **Ask AI (preview…)** to send that snippet as a follow-up (enabled for two or more words). Replies can include `nextstep:{action}` on its own line (`nextstep:` in English; the action in the reply language); conversation **[Run]** sends that follow-up.
@@ -472,7 +472,7 @@ API keys: enter a key per preset in **Settings → AI**, or rely on `OPENAI_API_
 <a id="investigation-case" name="investigation-case">&#x200B;</a>
 <a id="investigation-planner" name="investigation-planner">&#x200B;</a>
 
-**Investigation Case** holds the question, Scope, hypotheses, evidence, and conclusion for the current investigation. **Start Investigation** and the guided stepper run the host-side **Investigation planner** (cheapest evidence first). Details: [AI.md → Investigation Case](AI.md#investigation-case) and [Investigation planner](AI.md#investigation-planner).
+**Investigation Case** holds the question, Scope, hypotheses, evidence, and conclusion for the current investigation. **Start Investigation** runs the host-side **Investigation planner** (cheapest evidence first) and the Case advances through its stages internally as tools run — it is not a separate workflow you step through. Details: [AI.md → Investigation Case](AI.md#investigation-case) and [Investigation planner](AI.md#investigation-planner).
 
 See [AI.md](AI.md) for setup, privacy, model options, tools, troubleshooting, CLI testing, and evaluation details.
 
@@ -529,6 +529,8 @@ The Desktop CLI uses the same analysis engine as the graphical application. Set 
 | `snapshot` | Save a timeline, migration, or metric image |
 | `perfetto` | Export Chrome Trace JSON |
 | `slice` | Save a selected timestamp range as a smaller BTF file |
+| `workspace` | Inspect or extract a portable `.btfw` workspace |
+| `verify` | Check a trace against JSON rules for CI |
 
 ```bash
 python builds/btf_viewer.py info trace.btf
@@ -540,7 +542,7 @@ python builds/btf_viewer.py perfetto trace.btf -o trace.json
 python builds/btf_viewer.py slice trace.btf -o window.btf --lo 100000 --hi 500000
 ```
 
-Run `python builds/btf_viewer.py <command> -h` for all options.
+`report` can write HTML, CSV, or JSON, and can generate multiple formats in one run. Run `python builds/btf_viewer.py <command> -h` for all options.
 
 <a id="settings" name="settings">&#x200B;</a>
 

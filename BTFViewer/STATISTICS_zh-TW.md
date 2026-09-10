@@ -145,7 +145,7 @@ BTFViewer 先依追蹤資料中的排程事件，重建工作連續執行的區�
 - 各統計表格的搜尋、排序、Problems only 與 Show all；
 - Core Utilization 下方的 SVG 負載平衡量表。
 
-HTML 報告可指出應調查的位置，但無法保留所有 時間軸互動。若其他人需要驗證事件，仍應保留原始追蹤資料。
+HTML 報告可指出應調查的位置，但無法保留所有時間軸互動。若其他人需要驗證事件，仍應保留原始追蹤資料。
 
 機器可讀快照（`--format json`）使用 `btf-viewer-stats/2` schema：`findings` 每一項新增 `rule_id`，另有新的 `investigation_findings` 陣列，內含完整結構化發現（id、rule_id、severity、status、observation、category、comparison_basis、affected_range、entities、measured_values、evidence_refs、limitations、rank_score）。附加調查時，會以 `investigation` 回填並附上解析後的 `chains` 與 `broken_references`。
 
@@ -191,12 +191,12 @@ flowchart TD
 <a id="analysis-context-strip" name="analysis-context-strip"></a>
 ### 分析脈絡列（Analysis Context strip）
 
-分析結果、AI 與比較功能會顯示完整的 **Analysis Context** 列（追蹤名稱、分析範圍、篩選條件、樣本數）。統計面板的標頭則保留分析範圍與篩選條件；若已放置游標但未開啟 **Limit to C1–Cn**，則只顯示簡短提示：**Not limited to cursors**。**Clear filters** 仍可使用。選取項目與反白不會列為分析條件。
+分析結果、AI 與比較功能會顯示完整的 **Analysis Context（分析脈絡）**列，包含追蹤名稱、分析範圍、篩選條件與樣本數。統計面板的標頭則保留分析範圍與篩選條件；若已放置游標但未開啟 **Limit to C1–Cn**，則只顯示簡短提示：**Not limited to cursors**。**Clear filters** 仍可使用。選取項目與反白不會列為分析條件。
 
 若結果計算完成後又變更分析範圍或篩選條件，分析結果與 AI 內容可能標示為 **stale**，並提供 **Recalculate with current context**。統計面板則會在分析範圍或篩選條件變更時自動重新計算，桌面版行為相同。
 
 <a id="symptom-shortcuts" name="symptom-shortcuts"></a>
-### 症狀捷徑（Symptom shortcuts）
+### 症狀捷徑
 
 **Where should I start?** 是統計工具列上的選用導引，桌面版與網頁版皆可使用。預設關閉，讓熟悉的使用者直接看到表格。開啟後可選症狀卡片（未知問題、延遲工作、尖峰、派送延遲、阻塞、抖動、負載不均、遷移、同步、截止時間）；每一張會跳到第一個建議指標。當分析結果對應到某症狀時，會出現 **Recommended from Findings**。
 
@@ -214,7 +214,7 @@ flowchart TD
 
 ### 流程 B：調查延遲尖峰
 
-1. 從**回應時間**、**最差事件**或**時間軸異常** 找出目標工作。
+1. 從**回應時間**、**最差事件**或**時間軸異常**找出目標工作。
 2. 同時比較 Avg、p95、p99 與 Max。p95 與 Max 差距很大通常表示少見事件；p95 已偏高則表示尾端問題反覆發生。
 3. 使用**執行時間**、**阻塞時間**與**關鍵路徑**，區分工作本身執行與離開 CPU 的時間。
 4. 若執行時間增加，查看**分布瀏覽器**、**區間分析**與相關標記（Tag）。
@@ -242,13 +242,13 @@ flowchart TD
 ### 流程 E：調查同步延遲
 
 1. 確認追蹤資料包含必要的 STI take/give 或 send/receive 事件。
-2. 先使用 **Mutex / Semaphore**或**Queue** 檢查事件配對品質。
-3. 使用**Mutex 阻塞** 依工作與物件找出可能的資源競爭。
-4. 使用**等待工作 × 持有者** 找出反覆交接的工作組合。
-5. 使用**優先權繼承** 檢查優先權提升與可能的反轉型態。
+2. 先使用 **Mutex / Semaphore** 或 **Queue** 檢查事件配對品質。
+3. 使用**Mutex 阻塞**依工作與物件找出可能的資源競爭。
+4. 使用**等待工作 × 持有者**找出反覆交接的工作組合。
+5. 使用**優先權繼承**檢查優先權提升與可能的反轉型態。
 6. 回到時間軸確認 take/give 順序。推估交接關係不等同 RTOS 的實際等待佇列。
 
-### 流程 F：使用 **Trace Compare**驗證修改
+### 流程 F：使用 **Trace Compare** 驗證修改
 
 1. 在基準版本 A 與候選版本 B 選擇相同工作負載階段。
 2. 確認追蹤事件、工作名稱、時間單位與核心設定具有可比性。
@@ -288,7 +288,7 @@ flowchart TD
 
 ## 進階分析教學
 
-以下內容補回舊版較完整的操作與判讀說明，並與後方各統計區段互相搭配。
+以下內容提供較完整的操作與判讀方式，可搭配後方各統計區段使用。
 
 ### 核心遷移分析
 
@@ -298,12 +298,12 @@ flowchart TD
 
 1. 先確認負載平衡。SMP 排程器可能把工作移到閒置核心，因此部分遷移是預期行為。
 2. 開啟**核心遷移**，優先比較 Rate、Dwell 與 Ping，不要只看 Count。
-3. 開啟 **Migration & Corridor Inspector**。工作區為三欄：**核心路徑**、**遷移熱圖**、**拓樸**，預設寬度比為 **1 : 2 : 1**。可拖曳分隔線調整欄寬；桌面版儲存在 `btf_viewer.rc`，網頁版儲存在 `localStorage`。路徑表格欄位可拖曳標題分隔線調整寬度；點選標題排序時寬度維持不變。拓樸可使用圓形（Circle）與矩陣（Matrix）檢視（圖示固定在右上）。超過 16 個核心時會改用矩陣檢視。點選熱圖儲存格時，右側改顯示 **路徑資訊**。拓樸與路徑資訊共用右欄，且互斥。
+3. 開啟 **Migration & Corridor Inspector**。工作區分成三欄：**核心路徑**、**遷移熱圖**與**拓樸**，預設寬度比為 **1 : 2 : 1**。可拖曳分隔線調整欄寬；桌面版儲存在 `btf_viewer.rc`，網頁版儲存在 `localStorage`。路徑表格欄位可拖曳標題分隔線調整寬度；點選標題排序時寬度維持不變。拓樸可切換 **Circle（圓形）**與 **Matrix（矩陣）**檢視，切換圖示固定在右上角。超過 16 個核心時會改用矩陣檢視。點選熱圖儲存格後，右側會顯示 **Path info（路徑資訊）**。拓樸與路徑資訊共用右欄，一次只顯示其中一種。
 4. 檢查所選路徑的 ping-pong、中位停留時間與短停留比例。
 5. **交接** 是同步擁有權啟發式關聯，不是量測到的快取行搬移。
-6. 使用 **Show events**檢查相關 **Timeline**視窗。**Filter Timeline**是持續的工作篩選；Inspector 篩選只作用於對話框內。**Analysis Scope**預設為**跟隨縮放**：Fit（或可見範圍 ≥ 追蹤資料的 92%）視為 **Full Trace**；放大後的視窗視為 **目前顯示範圍**並跟隨平移／縮放。可從選單鎖定**Full Trace**或**目前顯示範圍**，或在已放置至少兩個游標時選擇 **Cursor C1–Cn**。若未放置至少兩個游標，Cursor C1–Cn 會停用。
+6. 使用 **Show events**檢查相關 **Timeline** 視窗。**Filter Timeline**是持續的工作篩選；Inspector 篩選只作用於對話框內。**Analysis Scope** 預設使用 **Follow zoom**：使用 **Fit**，或可見範圍達整份追蹤資料的 92% 以上時，視為 **Full Trace**；放大後則使用目前的 **Viewport**，並跟隨平移與縮放。可從選單固定使用 **Full Trace** 或 **Viewport**；放置至少兩個游標後，也可選擇 **Cursor C1–Cn**。若游標少於兩個，**Cursor C1–Cn** 會停用。
 
-總覽列顯示分析範圍、負載平衡狀態、遷移次數與速率、最受影響的工作、最熱路徑，以及主要關注點（None / Burst / Ping-pong / Short dwell / 交接 suspect）。請使用 **Show Top 5 / 10 / 25 / All paths**，不要用百分比截斷。核心路徑 表格列出 Rate、Count、Ping、Dwell、交接、Net、Share（游標停在標題上可看到完整名稱）。點選欄位標題可一併排序路徑列表與熱圖；再點一次可反向排序。**Investigate with AI** 會把這些結構化內容送到 `migrations` 範本；除非你另外選擇檢視器動作，否則不會篩選 **Timeline**或移動游標。
+總覽列顯示分析範圍、負載平衡狀態、遷移次數與速率、最受影響的工作、最熱路徑，以及主要關注點（**None / Burst / Ping-pong / Short dwell / Handoff suspect**）。請使用 **Show Top 5 / 10 / 25 / All paths**，不要用百分比截斷。核心路徑表格列出 **Rate、Count、Ping、Dwell、Handoff、Net、Share**（游標停在標題上可看到完整名稱）。點選欄位標題可一併排序路徑列表與熱圖；再點一次可反向排序。**Investigate with AI** 會將這些結構化內容送到 `migrations` 範本；除非另外選擇檢視器動作，否則不會篩選 **Timeline** 或移動游標。
 
 遷移路徑只能證明工作配置反覆改變，不能直接證明快取成本。快取遺失、Lazy coprocessor context 失效或額外暫存器儲存，仍需要處理器專屬證據。
 
@@ -377,7 +377,7 @@ AvgHold = \frac{1}{N} \sum_h \tau_h
 
 完成的 Interval 可計算 Count、Min、Avg、Max、Jitter、σ、p50、p95、p99。分析範圍邊界附近未配對的事件會被排除，可能只是部分擷取。除非追蹤規格明確定義巢狀順序，否則應避免以相同 ID 遞迴或重疊記錄。
 
-Tag 數值的單位由應用程式定義。BTFViewer 可彙整並繪製數字，但無法判斷 `10` 代表位元組、訊息數、溫度或狀態碼。應記錄每個通道的定義，並將數值變化與 **Timeline**事件比對。
+Tag 數值的單位由應用程式定義。BTFViewer 可彙整並繪製數字，但無法判斷 `10` 代表位元組、訊息數、溫度或狀態碼。應記錄每個通道的定義，並將數值變化與 **Timeline** 事件比對。
 
 ### 散佈圖、直方圖與 CDF 判讀
 
@@ -439,16 +439,16 @@ Tickless 行為在閒置比例較高的游標範圍最容易看出；完全忙�
 STATISTICS_zh-TW.md#statistics-<section-id>
 ```
 
-`<section-id>` 與 統計面板使用的區段識別碼相同。英文與繁體中文文件使用相同錨點，因此程式只需切換檔名，不必修改連結片段。
+`<section-id>` 與統計面板使用的區段識別碼相同。英文與繁體中文文件使用相同錨點，因此程式只需切換檔名，不必修改連結片段。
 
 | 分類 | 預設順序與區段識別碼 |
 |---|---|
 | **OVERVIEW** | `cores`、`health`、`task_health` |
 | **TRIAGE** | `anomalies`、`worst`、`patterns` |
-| **TIMING** | `response`、`exec`、`dispatch`、`block`、`crit_path`、`period`、`jitter`、`inter` |
-| **SCHED** | `task_core`、`core_time`、`migrations`、`core_pairs`、`affinity`、`preempt_matrix`、`preemption`、`priority`、`concurrency` |
-| **SYNC** | `mutex_block`、`wait_owner`、`sync`、`queue` |
-| **DETAIL** | `core_breakdown`、`switch_overhead`、`tasks`、`distrib`、`intervals`、`tags`、`lifecycle`、`deadline` |
+| **TIMING** | `response`、`exec`、`dispatch`、`block`、`crit_path`、`period`、`jitter`、`inter`、`activation`、`ready_gap` |
+| **SCHED** | `task_core`、`core_time`、`migrations`、`core_pairs`、`affinity`、`preempt_matrix`、`preemption`、`priority`、`concurrency`、`switch_reason`、`sched_load` |
+| **SYNC** | `mutex_block`、`wait_owner`、`sync`、`queue`、`sync_level` |
+| **DETAIL** | `core_breakdown`、`idle`、`switch_overhead`、`tasks`、`distrib`、`intervals`、`tags`、`lifecycle`、`deadline` |
 
 各分類代表不同的分析目的：
 
@@ -472,7 +472,7 @@ STATISTICS_zh-TW.md#statistics-<section-id>
 
 **負載平衡分數（Load Balance Score）** 用來概括工作是否平均分布在各個作用中的核心。分數高表示各核心使用率接近；分數低表示工作集中在少數核心。這個分數不代表系統是否過載，因為系統可能平均忙碌，也可能平均閒置。
 
-可用本區段找出高負載核心與不平均的工作配置，再搭配 **Task × Core**、**Core Migrations**與**Core Affinity**確認原因。
+可用本區段找出高負載核心與不平均的工作配置，再搭配 **Task × Core**、**Core Migrations** 與**Core Affinity** 確認原因。
 
 **計算方式：** 針對每個核心，將一般工作執行片段與分析範圍的重疊時間加總，再除以分析範圍時間。忙碌時間不包含 IDLE 與 TICK。負載平衡分數為各核心使用率的 `100 × (1 − Gini 係數)`；愈接近 100 代表分布愈平均，不表示剩餘處理能力較高。
 
@@ -496,7 +496,7 @@ STATISTICS_zh-TW.md#statistics-<section-id>
 
 **計算方式：** 以相鄰 TICK 時間戳記建立間隔樣本，再計算平均值、最大值、CV 與典型間隔。遺漏 Tick 估算值會將異常大型間隔與名義週期比較，但不能證明硬體 Tick 確實遺失。
 
-**如何使用：** 先判斷系統採固定週期 Tick 或 Tickless，再決定大型間隔是否異常。搭配**核心時間分布**、CPU 負載與 **Timeline**判讀。若同一範圍內所有事件都消失，應優先懷疑擷取缺口；若工作繼續執行而 TICK 消失，則可檢查 Tick 抑制、中斷遮蔽或追蹤事件。
+**如何使用：** 先判斷系統採固定週期 Tick 或 Tickless，再決定大型間隔是否異常。搭配**核心時間分布**、CPU 負載與 **Timeline** 判讀。若同一範圍內所有事件都消失，應優先懷疑擷取缺口；若工作仍持續執行而 TICK 消失，則可檢查 Tick 抑制、中斷遮蔽或追蹤事件。
 
 ![TICK 間隔散佈圖與直方圖](../images/stats/stats-tick.svg)
 
@@ -636,7 +636,7 @@ d_k = t_{end,k} - t_{start,k}
 
 **如何使用：** Avg 或 p50 可表示典型成本，p95／p99 用來觀察反覆出現的尾端，Max 用來定位最大的已捕捉區段。若完整操作可能被搶佔切開，應使用**區間分析**量測，再搭配 Tag、Mutex 持有時間與 **Timeline**判讀。
 
-在此範例中，散佈圖顯示較長的執行片段發生於哪些時間；直方圖與 CDF 則顯示它們是常態，還是只佔少量尾端。當短樣本與長樣本跨越很大的時間尺度時，圖表可能改用對數 **Timeline**。
+在此範例中，散佈圖顯示較長的執行片段發生於哪些時間；直方圖與 CDF 則顯示它們是常態，還是只佔少量尾端。當短樣本與長樣本跨越很大的時間尺度時，圖表可能改用對數時間軸。
 
 ![CS[11] 的執行時間分布](../images/stats/stats-exec-cs11.svg)
 
@@ -749,7 +749,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **如何使用：** 以中位數與分布找出主要節奏，搭配**週期／抖動**進行分類，並以**阻塞時間**解釋大型間隔。需要精確的應用程式釋放時間時，應在釋放點記錄 STI Tag 或 Interval。
 
-此範例同時包含很短與較長的啟動間隔，因此使用對數 **Timeline**。與**阻塞時間**比較時需注意：到達間隔同時包含前一個執行片段與後續離開 CPU 的間隔。
+此範例同時包含很短與較長的啟動間隔，因此使用對數時間軸。與**阻塞時間**比較時需注意：到達間隔同時包含前一個執行片段與後續離開 CPU 的間隔。
 
 ![CS[11] 的到達間隔時間分布](../images/stats/stats-inter-cs11.svg)
 
@@ -762,7 +762,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：** 週期 `T` 取到達間隔的 p50（也就是**週期／抖動**中的「Expected」）。格線為 `anchor + k·T`，錨定在目前分析範圍內的第一次啟動。對啟動時刻 `t`，誤差為 `min_k |t − (anchor + k·T)|`，即到最近格線點的距離。Min／Avg／Max／Jitter／σ／p50／p95／p99 欄彙整此誤差分布，Max 最大者排在最前。每個工作至少需三次啟動。
 
-**如何使用：** 接近零的列代表工作緊貼排程。Max 大而 p50 小是偶發滑移；p50 本身就大則是穩定的相位漂移——檢查該工作的釋放路徑與延誤它的低優先權工作。與 **Dispatch / Scheduling Latency**（就緒→執行）及 **Ready-Gap** 比較，判斷延遲釋放是工作本身還是排程器造成。點選列可開啟啟動延遲分布圖，並在 **Timeline**上突顯該工作。
+**如何使用：** 接近零的列代表工作緊貼排程。Max 大而 p50 小是偶發滑移；p50 本身就大則是穩定的相位漂移——檢查該工作的釋放路徑與延誤它的低優先權工作。與 **Dispatch / Scheduling Latency**（就緒→執行）及 **Ready-Gap** 比較，判斷延遲釋放是工作本身還是排程器造成。點選列可開啟啟動延遲分布圖，並在 **Timeline** 上突顯該工作。
 
 <a id="statistics-ready_gap" name="statistics-ready_gap"></a>
 ### 就緒間隔（Ready-Gap / Starvation）
@@ -773,7 +773,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：** 建立在與 **Switch Reason Breakdown**相同的離開 CPU 間隔分類器之上。工作連續兩段之間的每個間隔會被標為 `preempted`（其他工作在其核心上執行）、`blocked`（該區段以 STI take/recv 結束）、`suspended`（STI suspend）、`period_wait`（整段只有 IDLE 執行）或 `unknown`。就緒間隔保留 `preempted` / `blocked` / `unknown`，捨棄 `suspended` / `period_wait`（工作自願離開 CPU）。欄位：間隔數、最長單一間隔、總計、平均、p95，以及 **% preempt**——被搶佔部分佔總計的比例，用以區分排程飢餓（比例高）與鎖競爭（比例低）。依最長間隔排序。
 
-**如何使用：** 依「最長」或「總計」排序。**% preempt**高指向優先權或親和性——對照**Preemption Chain Analysis**與工作優先權。**% preempt**低代表間隔多半是 `blocked`；追進**Mutex / Semaphore**與**Waiter × Owner**。此處的 `blocked` 是啟發式判斷（區段結尾附近的 STI take/recv），非核心記錄的等待。點選列可開啟就緒間隔分布圖，並在 **Timeline**上突顯該工作。
+**如何使用：** 依「最長」或「總計」排序。**% preempt**高指向優先權或親和性——對照**Preemption Chain Analysis**與工作優先權。**% preempt**低代表間隔多半是 `blocked`；追進**Mutex / Semaphore**與**Waiter × Owner**。此處的 `blocked` 是啟發式判斷（區段結尾附近的 STI take/recv），非核心記錄的等待。點選列可開啟就緒間隔分布圖，並在 **Timeline** 上突顯該工作。
 
 ## 4. SCHED — 多核心排程與工作配置
 
@@ -830,7 +830,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 ![核心遷移與路徑檢視器](../images/migration.svg)
 
-若要在 **Timeline**中觀察遷移工作的前後關係，可在 Task View 鎖定反白該工作，並開啟各核心的 CPU Load。若問題只發生在特定時間，可放大 **Timeline**（**跟隨縮放**會改為 目前顯示範圍）、鎖定 Inspector 的**Analysis Scope**為**目前顯示範圍**，或放置至少兩個游標並選擇 **Cursor C1–Cn**。Statistics 的 **Limit to C1–Cn** 是獨立設定：它改變 Statistics 計算，不會自動改變 Inspector 結果。
+若要在 **Timeline**中觀察遷移工作的前後關係，可在 Task View 鎖定反白該工作，並開啟各核心的 CPU Load。若問題只發生在特定時間，可放大 **Timeline**；使用 **Follow zoom** 時，分析範圍會改為目前的 **Viewport**。也可以將 Inspector 的 **Analysis Scope** 固定為 **Viewport**，或放置至少兩個游標後選擇 **Cursor C1–Cn**。**Statistics** 的 **Limit to C1–Cn** 是獨立設定：它會改變統計計算範圍，但不會自動改變 Inspector 的結果。
 
 ![在 Task View 鎖定反白 CS[22] 並顯示各核心 CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
 
@@ -838,7 +838,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 - **Dwell** 顯示每次在核心上連續執行的時間；大量短樣本可能表示配置不穩定。
 - **Rate** 顯示與前一次遷移的時間差；短間隔集中成群，表示短時間內快速移動。
-- **Gap**顯示遷移後緊接的正值離開 CPU 間隔；應與包含所有離開 CPU 間隔的**阻塞時間**比較。
+- **Gap** 顯示遷移後緊接的正值離開 CPU 間隔；應與包含所有離開 CPU 間隔的**阻塞時間**比較。
 
 ![CS[22] 的核心停留時間分布](../images/stats/stats-mig-dwell-cs22.svg)
 
@@ -913,7 +913,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 顯示觀察到的優先權高於建立時優先權的工作。當高優先權工作等待低優先權工作持有的 Mutex 時，系統通常會暫時提升持有者的優先權，這就是優先權繼承。
 
-橘色區段代表優先權提升；紅色 L/M/H 模式表示中優先權工作曾以介於持有者原始與提升後優先權之間的優先權執行。這些是輔助證據，仍需搭配 Mutex 與 **Timeline**事件確認。
+橘色區段代表優先權提升；紅色 L/M/H 模式表示中優先權工作曾以介於持有者原始與提升後優先權之間的優先權執行。這些是輔助證據，仍需搭配 Mutex 與 **Timeline** 事件確認。
 
 **計算方式：** 以工作建立時的優先權為基準，後續 `set_priority` STI 事件更新時間上的優先權；高於基準的區段視為提升。L/M/H 型態結合同一事件中的低／原始、中與高／提升後優先權活動。
 
@@ -951,7 +951,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：** 依上述優先順序，使用同核心區段重疊與距離區段結尾約 50 個原生時間單位內的 STI 事件，為每個連續區段之間的離開 CPU 間隔分類。這是啟發式篩選，不是核心記錄的原因。
 
-**如何使用：** 依 **Preempted**或**Preempt/s**排序。點選任一列可在 **Timeline**上突顯該工作。對照**Preemption Matrix**與**Preemption Chain Analysis**找出干擾工作，並檢查工作優先權。週期性工作在兩次工作之間睡眠時，**Period** 次數偏高是正常的。
+**如何使用：** 依 **Preempted** 或**Preempt/s** 排序。點選任一列可在 **Timeline** 上突顯該工作。對照**Preemption Matrix**與**Preemption Chain Analysis**找出干擾工作，並檢查工作優先權。週期性工作在兩次工作之間睡眠時，**Period** 次數偏高是正常的。
 
 <a id="statistics-sched_load" name="statistics-sched_load"></a>
 ### 排程負載隨時間變化（Scheduling Load Over Time）
@@ -962,7 +962,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：** 分箱沿用 Core Utilization Over Time 的格線（4–32 箱）。每箱的內容切換次數為各核心落在該箱內的區段起點數。Util σ 與 LB score 使用該箱各核心的使用率百分比。
 
-**如何使用：** 尋找 Ctx sw/s 突增、LB score 持續偏低，或負載變化與他處延遲尖峰對齊的分箱。點選任一列可在 **Timeline**上選取該時間分箱，再用 **工作 × 核心** 與 **Switch Reason Breakdown** 找出其中的工作。
+**如何使用：** 尋找 Ctx sw/s 突增、LB score 持續偏低，或負載變化與他處延遲尖峰對齊的分箱。點選任一列可在 **Timeline** 上選取該時間分箱，再用 **工作 × 核心** 與 **Switch Reason Breakdown** 找出其中的工作。
 
 ## 5. SYNC — 同步與等待
 
@@ -979,7 +979,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **計算方式：** 依同步物件將完成的持有區段排序。不同工作在前一個持有者之後取得同一物件時，視為可能的交接，並依可觀察的持有與取得順序推估等待區間；結果再依可能的等待工作、物件與前一個持有者彙整。
 
-**如何使用：** Total 可找出累積競爭，Max 與尾端數值可找出嚴重事件。使用前應先檢查 **Mutex / Semaphore**配對品質，再搭配**等待工作 × 持有者**、**優先權繼承**與 **Timeline**。點選列可開啟等待時間分布圖。這是資源競爭推估，不是精確的核心阻塞時間。
+**如何使用：** Total 可找出累積競爭，Max 與尾端數值可找出嚴重事件。使用前應先檢查 **Mutex / Semaphore** 配對品質，再搭配**等待工作 × 持有者**、**優先權繼承**與 **Timeline**。點選列可開啟等待時間分布圖。這是資源競爭推估，不是精確的核心阻塞時間。
 
 ![Mutex 阻塞表格](../images/stats/stats-mutex-block.svg)
 
@@ -1009,7 +1009,7 @@ g_k = t_{start,k+1} - t_{end,k}
 
 **欄位：** 除了 `Avg hold`，表格也提供 **p95 hold**/**p99 hold**——持有時間分布的尾端，即使平均值看起來正常，單一異常的長持有也會顯現。**Waiters**是在物件已被持有時仍取得該物件的不同工作數（一種扇入計數）；**MaxNest**是同時開啟的 take 最深疊層。兩者皆以整條追蹤計算，而非目前分析範圍。只有當擷取在前一位持有者 `give` 之前就記錄 `take` 時才會有數值——這發生於遞迴 mutex，或在阻塞嘗試時就記錄 `take` 的追蹤器；只在取得時記錄 `take` 的追蹤器，即使是高度競爭的鎖也會顯示 `0`。
 
-**如何使用：** 先處理配對品質，再信任持有或阻塞推估。依 **p99 hold**排序找出持有尾端最差的物件，接著非零的**Waiters**代表該尾端確實延誤了其他工作——追進**Mutex 阻塞**與**等待工作 × 持有者**。**MaxNest** 大於 1 表示有鎖疊層；對照鎖取得順序與鎖階層以評估死結風險。長時間但無競爭（Waiters 為 0）的持有不一定有害。點選列可開啟持有時間分布圖。搭配優先權與 **Timeline**判讀。
+**如何使用：** 先處理配對品質，再信任持有或阻塞推估。依 **p99 hold**排序找出持有尾端最差的物件，接著非零的**Waiters** 代表該尾端確實延誤了其他工作——追進**Mutex 阻塞**與**等待工作 × 持有者**。**MaxNest** 大於 1 表示有鎖疊層；對照鎖取得順序與鎖階層以評估死結風險。長時間但無競爭（Waiters 為 0）的持有不一定有害。點選列可開啟持有時間分布圖。搭配優先權與 **Timeline**判讀。
 
 <a id="statistics-queue" name="statistics-queue"></a>
 ### 佇列（Queue）
@@ -1068,7 +1068,7 @@ Gap 可能包含排程開銷、中斷、臨界區段、追蹤資料缺口或解�
 
 **計算方式：** 將每個核心區段清單中的 IDLE 區段裁切至分析範圍。**Idle total**為其總和，**Longest**為最大的單一片段，**Frags**為數量，**p95**為第 95 百分位片段。所有核心同時閒置的視窗，是對所有核心閒置區間掃描出「每個核心同時涵蓋」的最長區段。依閒置總計排序，最閒置的核心在前。
 
-**如何使用：** 用總計對照**核心使用率**估算餘裕。所有核心同時閒置的長視窗，若當時沒有待處理工作就沒問題——用同一區間的 **Ready-Gap**與**阻塞時間**確認不是全系統停滯。片段數多但最長片段小，通常是細碎阻塞；追進 **Switch Reason Breakdown**。點選列可開啟閒置片段分布圖，並在 **Timeline**上突顯該核心。
+**如何使用：** 用總計對照**核心使用率**估算餘裕。所有核心同時閒置的長視窗，若當時沒有待處理工作就沒問題——用同一區間的 **Ready-Gap**與**阻塞時間**確認不是全系統停滯。片段數多但最長片段小，通常是細碎阻塞；追進 **Switch Reason Breakdown**。點選列可開啟閒置片段分布圖，並在 **Timeline** 上突顯該核心。
 
 <a id="statistics-switch_overhead" name="statistics-switch_overhead"></a>
 ### 核心切換開銷（Kernel Switch Overhead）
@@ -1216,7 +1216,7 @@ O_{switch} = t_{next\ start} - t_{previous\ end}
 
 **計算方式：** 將兩側該指標的原始逐區段樣本排序，再以單次合併掃描同時走過兩條 ECDF，追蹤各側的累積比例；`D` 取過程中出現的最大絕對差。樣本依顯示名稱、在各追蹤的比較範圍內逐工作收集——與其他欄位相同的配對與範圍規則——並排除 IDLE 與 TICK。儲存格顯示 `D` 到小數點兩位；顯示「—」代表其中一側樣本少於三個，樣本數不足時，不適合據此判斷分布形狀是否改變。
 
-**判讀方式：** 將它視為距離而非方向：它說明分布位移了「多少」，而非「往哪個方向」——方向請對照帶正負號的 `Δ`、`p95`、`p99` 欄，並開啟分布圖檢視變化。大致區間：`< 0.10` 形狀幾乎相同；`0.10–0.30` 有明顯變化，值得在 **Timeline**上檢查；`> 0.30` 為顯著位移。樣本數極大時，即使實質差異微小也會得到非零的 `D`，因此不必追逐小數值；樣本數接近三個下限時，單一離群值就可能讓 `D` 大幅波動，應以多組執行結果佐證。**Shape Δ** 僅為原始統計量——BTFViewer 不套用任何臨界值或 p 值——因此它是差異的證據，而非統計顯著性檢定。
+**判讀方式：** 將它視為距離而非方向：它說明分布位移了「多少」，而非「往哪個方向」——方向請對照帶正負號的 `Δ`、`p95`、`p99` 欄，並開啟分布圖檢視變化。大致區間：`< 0.10` 形狀幾乎相同；`0.10–0.30` 有明顯變化，值得在 **Timeline** 上檢查；`> 0.30` 為顯著位移。樣本數極大時，即使實質差異微小也會得到非零的 `D`，因此不必追逐小數值；樣本數接近三個下限時，單一離群值就可能讓 `D` 大幅波動，應以多組執行結果佐證。**Shape Δ** 僅為原始統計量——BTFViewer 不套用任何臨界值或 p 值——因此它是差異的證據，而非統計顯著性檢定。
 
 ### 比較流程與相依關係
 

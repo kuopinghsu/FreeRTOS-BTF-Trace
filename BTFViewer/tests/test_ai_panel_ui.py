@@ -174,6 +174,23 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertTrue(composer.isAncestorOf(panel._send_btn))
         self.assertFalse(hasattr(panel, "_stop_btn"))
 
+    def test_notebook_collab_reply_budget_overrides_context_cap(self) -> None:
+        # A Notebook collaboration reply must fit a full btf-viewer-nb-proposal
+        # JSON — the Compact 500-token cap (and an unset budget) would truncate
+        # it mid-string. _chat_max_tokens lifts it to NB_PROPOSAL_REPLY_TOKENS
+        # while _nb_collab is active, then restores the context-mode cap.
+        from btf_viewer_pkg.investigation_ai import NB_PROPOSAL_REPLY_TOKENS
+
+        cfg = {"enabled": "true", "context_mode": "compact"}
+        panel = self._panel(get_settings=lambda: cfg)
+        self.assertEqual(panel._chat_max_tokens(), 500)
+        panel.set_notebook_collab({"investigation_title": "Why late?"}, digest="d")
+        self.assertEqual(panel._chat_max_tokens(), NB_PROPOSAL_REPLY_TOKENS)
+        cfg["context_mode"] = "balanced"
+        self.assertEqual(panel._chat_max_tokens(), NB_PROPOSAL_REPLY_TOKENS)
+        panel.clear_notebook_collab()
+        self.assertIsNone(panel._chat_max_tokens())
+
     def test_guided_investigation_chrome(self) -> None:
         from btf_viewer_pkg.ai_case import GUIDED_STAGES, GUIDED_STAGE_LABELS
 
