@@ -1,3 +1,12 @@
 % Identifier wraps inside longtable (tool names such as summarize_investigation_context).
 \AddToHook{env/longtable/begin}{\renewcommand{\_}{\textunderscore\allowbreak}}
+
+% Pandoc emits `{\def\LTcaptype{none} ... \begin{longtable}...}` for
+% uncaptioned tables to keep them out of the "table" counter. Recent
+% longtable.sty (TeX Live 2023+, LaTeX3-based) calls
+% \@kernel@refstepcounter{\LTcaptype} unconditionally at \begin{longtable},
+% which now requires a real counter named "none" to exist -- older
+% longtable.sty silently tolerated the bogus name. Define a throwaway
+% counter so the step is a harmless no-op instead of "No counter 'none'
+% defined".
 \newcounter{none}

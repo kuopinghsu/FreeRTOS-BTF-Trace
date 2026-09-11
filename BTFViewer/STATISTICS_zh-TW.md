@@ -191,7 +191,7 @@ flowchart TD
 <a id="analysis-context-strip" name="analysis-context-strip"></a>
 ### 分析脈絡列（Analysis Context strip）
 
-分析結果、AI 與比較功能會顯示完整的 **Analysis Context（分析脈絡）**列，包含追蹤名稱、分析範圍、篩選條件與樣本數。統計面板的標頭則保留分析範圍與篩選條件；若已放置游標但未開啟 **Limit to C1–Cn**，則只顯示簡短提示：**Not limited to cursors**。**Clear filters** 仍可使用。選取項目與反白不會列為分析條件。
+分析結果、AI 與比較功能會顯示完整的 **Analysis Context（分析脈絡）** 列，包含追蹤名稱、分析範圍、篩選條件與樣本數。統計面板的標頭則保留分析範圍與篩選條件；若已放置游標但未開啟 **Limit to C1–Cn**，則只顯示簡短提示：**Not limited to cursors**。**Clear filters** 仍可使用。選取項目與反白不會列為分析條件。
 
 若結果計算完成後又變更分析範圍或篩選條件，分析結果與 AI 內容可能標示為 **stale**，並提供 **Recalculate with current context**。統計面板則會在分析範圍或篩選條件變更時自動重新計算，桌面版行為相同。
 
@@ -298,7 +298,7 @@ flowchart TD
 
 1. 先確認負載平衡。SMP 排程器可能把工作移到閒置核心，因此部分遷移是預期行為。
 2. 開啟**核心遷移**，優先比較 Rate、Dwell 與 Ping，不要只看 Count。
-3. 開啟 **Migration & Corridor Inspector**。工作區分成三欄：**核心路徑**、**遷移熱圖**與**拓樸**，預設寬度比為 **1 : 2 : 1**。可拖曳分隔線調整欄寬；桌面版儲存在 `btf_viewer.rc`，網頁版儲存在 `localStorage`。路徑表格欄位可拖曳標題分隔線調整寬度；點選標題排序時寬度維持不變。拓樸可切換 **Circle（圓形）**與 **Matrix（矩陣）**檢視，切換圖示固定在右上角。超過 16 個核心時會改用矩陣檢視。點選熱圖儲存格後，右側會顯示 **Path info（路徑資訊）**。拓樸與路徑資訊共用右欄，一次只顯示其中一種。
+3. 開啟 **Migration & Corridor Inspector**。工作區分成三欄：**核心路徑**、**遷移熱圖**與**拓樸**，預設寬度比為 **1 : 2 : 1**。可拖曳分隔線調整欄寬；桌面版儲存在 `btf_viewer.rc`，網頁版儲存在 `localStorage`。路徑表格欄位可拖曳標題分隔線調整寬度；點選標題排序時寬度維持不變。拓樸可切換 **Circle（圓形）** 與 **Matrix（矩陣）** 檢視，切換圖示固定在右上角。超過 16 個核心時會改用矩陣檢視。點選熱圖儲存格後，右側會顯示 **Path info（路徑資訊）**。拓樸與路徑資訊共用右欄，一次只顯示其中一種。
 4. 檢查所選路徑的 ping-pong、中位停留時間與短停留比例。
 5. **交接** 是同步擁有權啟發式關聯，不是量測到的快取行搬移。
 6. 使用 **Show events**檢查相關 **Timeline** 視窗。**Filter Timeline**是持續的工作篩選；Inspector 篩選只作用於對話框內。**Analysis Scope** 預設使用 **Follow zoom**：使用 **Fit**，或可見範圍達整份追蹤資料的 92% 以上時，視為 **Full Trace**；放大後則使用目前的 **Viewport**，並跟隨平移與縮放。可從選單固定使用 **Full Trace** 或 **Viewport**；放置至少兩個游標後，也可選擇 **Cursor C1–Cn**。若游標少於兩個，**Cursor C1–Cn** 會停用。
