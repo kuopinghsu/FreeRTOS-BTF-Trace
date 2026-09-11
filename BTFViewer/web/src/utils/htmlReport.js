@@ -3,7 +3,7 @@
  * Keep in sync with btf_viewer_pkg/html_report.py.
  */
 
-export const APP_VERSION = '1.4.0'
+export const APP_VERSION = '1.5.0'
 export const PRODUCT_NAME = 'BTFViewer'
 export const PRODUCT_TAGLINE = 'Portable BTF trace analysis and evidence reports'
 

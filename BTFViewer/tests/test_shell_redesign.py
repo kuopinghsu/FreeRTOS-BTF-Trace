@@ -31,7 +31,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from btf_viewer_pkg.config import _PANEL_TAB_FIND  # noqa: E402
 from btf_viewer_pkg.mainwindow import _IconRail  # noqa: E402
 from btf_viewer_pkg.mainwindow import MainWindow  # noqa: E402
-from btf_viewer_pkg.stats import _LoadProgressDialog, _RcSettings  # noqa: E402
+from btf_viewer_pkg.stats import _LoadProgressBridge, _RcSettings  # noqa: E402
 
 from tests import destroy_main_window  # noqa: E402
 
@@ -252,12 +252,13 @@ class ShellRedesignTest(unittest.TestCase):
 
     # ---- Inline loading (no modal card) ---------------------------------
 
-    def test_load_progress_dialog_never_shows(self) -> None:
+    def test_load_progress_bridge_is_headless(self) -> None:
         win = self._make_win()
-        dlg = _LoadProgressDialog("Loading x…", win)
+        dlg = _LoadProgressBridge(win)
         self.addCleanup(dlg.deleteLater)
-        dlg.show_centered(win.geometry())          # now a no-op
-        self.assertFalse(dlg.isVisible())
+        # Plain QObject signal hub — no window, no show/isVisible surface.
+        self.assertFalse(hasattr(dlg, "isVisible"))
+        self.assertFalse(hasattr(dlg, "show_centered"))
         seen: list = []
         dlg.progressed.connect(lambda p, m: seen.append((p, m)))
         dlg.update_progress(42, "parsing")

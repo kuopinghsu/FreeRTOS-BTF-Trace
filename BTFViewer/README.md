@@ -1,6 +1,6 @@
 # BTF Trace Viewer
 
-**Version 1.4.0 — Desktop and Web**
+**Version 1.5.0 — Desktop and Web**
 
 ![BTFViewer AI-assisted analysis](../images/btfviewer-ai.png)
 

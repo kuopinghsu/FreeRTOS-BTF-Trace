@@ -39,7 +39,10 @@
     </div>
 
     <div class="legend-list-scroll">
-      <div class="legend-list">
+      <div
+        v-if="visibleTasks.length"
+        class="legend-list"
+      >
         <div
           v-for="mk in visibleTasks"
           :key="String(mk).replace(/\0|\uFFFD/g, '|')"
@@ -57,6 +60,10 @@
           <span class="name">{{ taskDisplayName(trace.taskRepr.get(mk) || mk) }}</span>
         </div>
       </div>
+      <p
+        v-else
+        class="legend-empty"
+      >No tasks match the current filter.</p>
     </div>
 
     <div
@@ -266,6 +273,15 @@ const showCoreFilter = computed(() => (props.trace?.coreNames?.length ?? 0) > 1)
   flex: 1;
   min-height: 40px;
   overflow-y: auto;
+}
+
+.legend-empty {
+  margin: var(--sp-3, 12px) var(--sp-2, 8px);
+  font-size: var(--type-meta, 11px);
+  color: var(--fg-dim);
+  opacity: 0.75;
+  line-height: 1.4;
+  text-align: center;
 }
 
 .legend-cores {

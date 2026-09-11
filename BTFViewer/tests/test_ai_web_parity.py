@@ -1260,8 +1260,8 @@ class AiWebParityTests(unittest.TestCase):
             BTF_ROOT / "btf_viewer_pkg/config.py").read_text(encoding="utf-8"))
         # Shell redesign: loading is an inline skeleton + status-bar progress,
         # not a modal card — web `.timeline-skeleton` / `.status-loading`,
-        # desktop `_LoadSkeleton` + `_status_load_lbl` (the old `_LoadProgressDialog`
-        # stays only as a hidden signal hub whose show_centered() is a no-op).
+        # desktop `_LoadSkeleton` + `_status_load_lbl` (`_LoadProgressBridge`
+        # is a headless QObject signal hub — no dialog is ever created).
         self.assertIn("timeline-skeleton", app)
         self.assertIn("status-loading", app)
         self.assertNotIn("loading-overlay", app)

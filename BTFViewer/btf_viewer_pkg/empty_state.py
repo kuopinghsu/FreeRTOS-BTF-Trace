@@ -33,7 +33,7 @@ EMPTY_STATES: Dict[str, Dict[str, Any]] = {
     },
     "no_marks": {
         "message": "No bookmarks or annotations yet.",
-        "hint": "Double-click the Timeline or press B / A to add one.",
+        "hint": "Right-click the Timeline or press B / A to add one.",
         "action": None,
     },
     "no_ai": {

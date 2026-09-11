@@ -2029,7 +2029,7 @@ _IC_DEMO_NEXT = (
 # App icon - multi-colour 72x72 SVG rendered in the About dialog header.
 # Timeline lanes + amber cursor + AI insight badge (keep in sync with
 # images/btfviewer-ai-icon.svg and web htmlReport / index.html favicon).
-_APP_VERSION = "1.4.0"
+_APP_VERSION = "1.5.0"
 _APP_ICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">'
     '<rect width="72" height="72" rx="14" fill="#1C3A6E"/>'

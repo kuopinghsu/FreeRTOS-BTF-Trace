@@ -72,6 +72,53 @@ class TestStatsLegendSpacing(unittest.TestCase):
         legend.close()
         self._app.processEvents()
 
+    def test_legend_shows_empty_placeholder_when_filter_matches_nothing(self) -> None:
+        # Web parity: LegendPanel.vue's `v-else class="legend-empty"` block —
+        # a filter that hides every task must not leave a blank list.
+        if not EXAMPLE_BTF.is_file():
+            self.skipTest(f"missing trace fixture: {EXAMPLE_BTF}")
+
+        legend = _LegendWidget()
+        trace = _parse_btf(str(EXAMPLE_BTF))
+        legend.rebuild(trace)
+        self.assertIsNone(legend._empty_item)
+        self.assertTrue(
+            any(not it.isHidden() for it in legend._task_items.values()))
+
+        legend._filter_tasks("no task name can possibly match this")
+        self.assertIsNotNone(legend._empty_item)
+        self.assertFalse(legend._empty_item.isHidden())
+        self.assertTrue(
+            all(it.isHidden() for it in legend._task_items.values()))
+
+        legend._filter_tasks("")
+        self.assertTrue(legend._empty_item.isHidden())
+        self.assertTrue(
+            any(not it.isHidden() for it in legend._task_items.values()))
+
+        legend.close()
+        self._app.processEvents()
+
+    def test_legend_empty_placeholder_survives_rebuild(self) -> None:
+        # rebuild() clears the QListWidget (deleting the C++ item); the stale
+        # Python reference must be dropped, not reused after deletion.
+        if not EXAMPLE_BTF.is_file():
+            self.skipTest(f"missing trace fixture: {EXAMPLE_BTF}")
+
+        legend = _LegendWidget()
+        trace = _parse_btf(str(EXAMPLE_BTF))
+        legend.rebuild(trace)
+        legend._filter_tasks("no task name can possibly match this")
+        self.assertIsNotNone(legend._empty_item)
+
+        legend.rebuild(trace)  # clears the list; must not raise
+        self.assertIsNone(legend._empty_item)
+        self.assertTrue(
+            any(not it.isHidden() for it in legend._task_items.values()))
+
+        legend.close()
+        self._app.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()

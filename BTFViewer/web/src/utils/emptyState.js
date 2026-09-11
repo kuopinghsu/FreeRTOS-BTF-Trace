@@ -32,7 +32,7 @@ export const EMPTY_STATES = Object.freeze({
   },
   noMarks: {
     message: 'No bookmarks or annotations yet.',
-    hint: 'Double-click the Timeline or press B / A to add one.',
+    hint: 'Right-click the Timeline or press B / A to add one.',
     action: null,
   },
   noAi: {

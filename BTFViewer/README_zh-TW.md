@@ -1,6 +1,6 @@
 # BTF Trace Viewer
 
-**版本 1.4.0 — 桌面版與網頁版**
+**版本 1.5.0 — 桌面版與網頁版**
 
 ![BTFViewer AI 輔助分析](../images/btfviewer-ai.png)
 

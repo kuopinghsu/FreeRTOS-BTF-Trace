@@ -359,132 +359,20 @@ class _AiListModelsWorker(QObject):
             self.failed.emit(str(exc))
 
 
-class _LoadProgressDialog(QWidget):
-    """Headless load-progress controller (shell redesign: no modal card).
+class _LoadProgressBridge(QObject):
+    """Headless load-progress signal hub (shell redesign: no modal card).
 
-    Was a borderless modal dialog; now it never shows itself — it stays a
-    hidden signal hub so all existing wiring (``cancel_requested``,
-    ``update_progress`` from the parser thread, the finalize handoff) keeps
-    working, while ``progressed`` drives the inline status-bar progress +
-    timeline skeleton that replaced the card (web App.vue parity).
+    Bridges the parser thread's progress and the Cancel action to the inline
+    status-bar progress + timeline skeleton that replaced the old modal
+    dialog (web App.vue parity). Never creates or shows a window.
     """
 
     cancel_requested = Signal()
     progressed = Signal(int, str)   # (pct, formatted message)
 
-    def __init__(self, title: str, parent=None):
-        # The frameless Qt.WindowType.Tool variant is primarily needed on macOS to avoid
-        # delayed first paint at startup. On Windows it may leave a tiny black
-        # artifact near (0, 0), so use a regular dialog there.
-        if sys.platform == "darwin":
-            flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
-        else:
-            flags = Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint | Qt.WindowType.CustomizeWindowHint
-        super().__init__(parent, flags)
-        self.setWindowModality(Qt.WindowModality.NonModal)
-        if sys.platform != "darwin":
-            self.setWindowTitle("Loading")
-        self.setMinimumWidth(420)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
-
-        self._title_lbl = QLabel(title, self)
-        self._title_lbl.setWordWrap(True)
-        layout.addWidget(self._title_lbl)
-
-        self._bar = QProgressBar(self)
-        self._bar.setRange(0, 100)
-        self._bar.setValue(0)
-        self._bar.setTextVisible(True)
-        layout.addWidget(self._bar)
-
-        self._msg_lbl = QLabel("", self)
-        layout.addWidget(self._msg_lbl)
-
-        self._cancel_btn = QPushButton("Cancel", self)
-        self._cancel_btn.clicked.connect(self.cancel_requested.emit)
-        layout.addWidget(self._cancel_btn, alignment=Qt.AlignmentFlag.AlignRight)
-
-        # Draw a subtle border via the stylesheet.
-        # Use the object name so the QWidget selector matches only this dialog.
-        self.setObjectName("loadprog")
-        _is_dark = QApplication.instance().palette().color(QPalette.Window).lightness() < 128
-        if _is_dark:
-            self.setStyleSheet("""
-                QWidget#loadprog {
-                    background: #2B2B2B;
-                    border: 1px solid #555;
-                    border-radius: 6px;
-                }
-                QLabel { color: #D4D4D4; font-size: 12px; }
-                QProgressBar {
-                    border: 1px solid #555; border-radius: 3px;
-                    background: #1E1E1E; height: 18px; text-align: center;
-                    color: #D4D4D4;
-                }
-                QProgressBar::chunk { background: #0E4D80; border-radius: 2px; }
-            """)
-        else:
-            self.setStyleSheet("""
-                QWidget#loadprog {
-                    background: #F5F5F5;
-                    border: 1px solid #CCCCCC;
-                    border-radius: 6px;
-                }
-                QLabel { color: #1E1E1E; font-size: 12px; }
-                QProgressBar {
-                    border: 1px solid #AAAAAA; border-radius: 3px;
-                    background: #FFFFFF; height: 18px; text-align: center;
-                    color: #1E1E1E;
-                }
-                QProgressBar::chunk { background: #005A9E; border-radius: 2px; }
-            """)
-        self.adjustSize()
-
-    def setValue(self, pct: int) -> None:
-        self._bar.setValue(pct)
-
-    def setLabelText(self, msg: str) -> None:
-        self._msg_lbl.setText(msg)
-
     def update_progress(self, pct: int, msg: str) -> None:
         formatted = format_loading_message(msg)
-        self._bar.setValue(pct)
-        self._msg_lbl.setText(formatted)
         self.progressed.emit(int(pct), formatted)
-        _process_ui_events_safely()
-
-    def _centre_on_parent(self) -> None:
-        """Reposition this dialog centred over its parent window."""
-        p = self.parent()
-        if p is None:
-            return
-        pg = p.geometry()
-        self.move(pg.center().x() - self.width() // 2,
-                  pg.center().y() - self.height() // 2)
-
-    def eventFilter(self, obj, event) -> bool:
-        """Track parent-window moves and reposition the dialog to follow."""
-        if obj is self.parent() and event.type() == QEvent.Type.Move:
-            self._centre_on_parent()
-        return super().eventFilter(obj, event)
-
-    def closeEvent(self, event) -> None:
-        """Uninstall the parent event filter when the dialog closes."""
-        p = self.parent()
-        if p is not None:
-            p.removeEventFilter(self)
-        super().closeEvent(event)
-
-    def show_centered(self, parent_geom) -> None:
-        # No-op: the modal card was replaced by the inline status-bar progress
-        # + timeline skeleton (shell redesign).  Kept for call-site compat.
-        return
-        self.activateWindow()
-        # Force an immediate paint so the bar is visible before the thread starts.
-        self.repaint()
         _process_ui_events_safely()
 
 # ---------------------------------------------------------------------------
@@ -1148,6 +1036,10 @@ class _LegendWidget(QWidget):
         self.setPalette(palette)
         self._task_items: Dict[str, QListWidgetItem] = {}
         self._task_display: Dict[str, str] = {}
+        # "No tasks match the current filter." placeholder row (web parity:
+        # LegendPanel.vue's .legend-empty) — created lazily in _filter_tasks(),
+        # never part of _task_items so it can't be mistaken for a real task.
+        self._empty_item: Optional[QListWidgetItem] = None
         self._sti_rows: List[tuple] = []  # [(channel_or_note_lc, row_widget)]
         self._heatmap_filter_mks: Optional[set] = None
         self._heatmap_filter_label: Optional[str] = None
@@ -1395,6 +1287,10 @@ class _LegendWidget(QWidget):
         self._task_list.setUpdatesEnabled(False)
         try:
             self._task_list.clear()
+            # clear() deletes the C++ item, including any empty-filter
+            # placeholder from a previous rebuild — drop the dangling ref so
+            # _filter_tasks() recreates it instead of touching a deleted item.
+            self._empty_item = None
             if trace is None:
                 return
             app = QApplication.instance()
@@ -1450,6 +1346,22 @@ class _LegendWidget(QWidget):
             item.setForeground(filter_accent if in_filter else QBrush())
         for key_lc, row_w in self._sti_rows:
             row_w.setVisible((not q) or (q in key_lc))
+        # "No tasks match the current filter." placeholder (web parity:
+        # LegendPanel.vue's .legend-empty) — only when tasks exist but every
+        # one of them is currently hidden, never when there simply are no
+        # tasks yet (no trace loaded).
+        any_visible = any(not item.isHidden() for item in self._task_items.values())
+        show_empty = bool(self._task_items) and not any_visible
+        if show_empty:
+            if self._empty_item is None:
+                empty = QListWidgetItem("No tasks match the current filter.")
+                empty.setFlags(Qt.ItemFlag.NoItemFlags)
+                empty.setForeground(QBrush(QColor("#888888")))
+                self._task_list.addItem(empty)
+                self._empty_item = empty
+            self._empty_item.setHidden(False)
+        elif self._empty_item is not None:
+            self._empty_item.setHidden(True)
 
 # ===========================================================================
 # Metrics Plot Dialog
@@ -22326,11 +22238,6 @@ class SnapshotEditorDialog(QDialog):
 
     def _on_dash_toggled(self, checked: bool) -> None:
         self._dashed = checked
-
-    def _sync_dash_from_shape(self, idx: int) -> None:
-        # Kept for call-site compatibility; the toolbar toggle is a stable
-        # default now and no longer follows the selection.
-        return
 
     def _show_color_menu(self) -> None:
         self._color_menu.exec(

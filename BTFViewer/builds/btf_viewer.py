@@ -2278,7 +2278,7 @@ _IC_DEMO_NEXT = (
 # App icon - multi-colour 72x72 SVG rendered in the About dialog header.
 # Timeline lanes + amber cursor + AI insight badge (keep in sync with
 # images/btfviewer-ai-icon.svg and web htmlReport / index.html favicon).
-_APP_VERSION = "1.4.0"
+_APP_VERSION = "1.5.0"
 _APP_ICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">'
     '<rect width="72" height="72" rx="14" fill="#1C3A6E"/>'
@@ -19268,96 +19268,6 @@ class _LabelColumnGripItem(QGraphicsItem):
             return
         super().mouseReleaseEvent(event)
 
-class _LabelColumnGrip(QWidget):
-    """Legacy viewport QWidget grip — hidden; use _LabelColumnGripItem instead."""
-
-    GRIP_W = 10
-
-    def __init__(self, view: "TimelineView") -> None:
-        super().__init__(view.viewport())
-        self._view = view
-        self._dragging = False
-        self._start_global_x = 0
-        self._start_w = 0
-        self.setCursor(Qt.CursorShape.SizeHorCursor)
-        self.setMouseTracking(True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-        self.setToolTip("Drag to resize label column")
-        self.hide()
-
-    def paintEvent(self, _event) -> None:
-        dark = getattr(self._view._scene, "_dark_ui", True)
-        line = QColor("#4a9eff") if (self._dragging or self.underMouse()) else (
-            QColor("#666666") if dark else QColor("#CCCCCC"))
-        p = QPainter(self)
-        try:
-            cx = self.width() // 2
-            p.setPen(QPen(line, 2))
-            p.drawLine(cx, 0, cx, self.height())
-        finally:
-            p.end()
-
-    def eventFilter(self, obj, event) -> bool:
-        """App-level mouse capture during drag — Wayland-safe replacement for grabMouse()."""
-        if not self._dragging:
-            return False
-        et = event.type()
-        if et == QEvent.Type.MouseMove:
-            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-            self._view._apply_label_width_drag(
-                self._start_w + (event.globalPosition().x() - self._start_global_x))
-            return True
-        if et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = False
-            app = QApplication.instance()
-            if app:
-                app.removeEventFilter(self)
-            self._view._finish_label_width_drag()
-            return True
-        return False
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = True
-            self._start_global_x = event.globalPosition().x()
-            self._start_w = self._view._scene._label_width
-            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-            app = QApplication.instance()
-            if app:
-                app.installEventFilter(self)
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:
-        if self._dragging:
-            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-            self._view._apply_label_width_drag(
-                self._start_w + (event.globalPosition().x() - self._start_global_x))
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:
-        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = False
-            app = QApplication.instance()
-            if app:
-                app.removeEventFilter(self)
-            self._view._finish_label_width_drag()
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def enterEvent(self, _event) -> None:
-        _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-        self.update()
-
-    def leaveEvent(self, _event) -> None:
-        if not self._dragging:
-            _HoverCursor.hide(Qt.CursorShape.SizeHorCursor)
-        self.update()
-
 # ===========================================================================
 # View
 # ===========================================================================
@@ -19505,7 +19415,6 @@ class TimelineView(QGraphicsView):
         self._label_resize_dragging = False
         self._label_resize_start_x  = 0
         self._label_resize_start_w  = 0
-        self._label_grip = _LabelColumnGrip(self)
 
         # Middle-button time-range selection (drag to select, release to zoom)
         self._mid_press_ns: Optional[int]   = None   # ns at middle-press
@@ -19548,7 +19457,6 @@ class TimelineView(QGraphicsView):
         self._scene.scene_rebuilt.connect(self._reposition_frozen)
         self._scene.scene_rebuilt.connect(self._reposition_frozen_top)
         self._scene.scene_rebuilt.connect(self._sync_timeline_column_clip)
-        self._scene.scene_rebuilt.connect(self._update_label_grip_geometry)
 
         # Optional hook (set by MainWindow) fired at the start of any manual
         # zoom (toolbar/keyboard/wheel/pinch/Fit/1:1/demo op). Lets the AI
@@ -20530,11 +20438,6 @@ class TimelineView(QGraphicsView):
         self._zoom_timer.setInterval(_zoom_debounce_ms(len(trace.tasks)))
         self._scene.set_trace(trace, self._fit_viewport_size())
         self.zoom_changed.emit(self._scene.timescale_per_px)
-        self._update_label_grip_geometry()
-
-    def _update_label_grip_geometry(self) -> None:
-        """Hide the legacy viewport QWidget grip (scene-frozen grip is used instead)."""
-        self._label_grip.hide()
 
     def _apply_label_width_drag(self, new_w: int) -> None:
         """Live label-column resize during splitter drag."""
@@ -20546,7 +20449,6 @@ class TimelineView(QGraphicsView):
                 self.zoom_changed.emit(self._scene.timescale_per_px)
         else:
             self._reposition_frozen_top()
-        self._update_label_grip_geometry()
         self.label_width_resizing.emit(int(self._scene._label_width))
 
     def _finish_label_width_drag(self) -> None:
@@ -20708,7 +20610,6 @@ class TimelineView(QGraphicsView):
         self.resetTransform()
         self.zoom_changed.emit(self._scene._timescale_per_px)
         self.viewport().update()
-        self._update_label_grip_geometry()
         self._show_nav()
 
     def set_show_sti(self, show: bool) -> None:
@@ -21464,7 +21365,6 @@ class TimelineView(QGraphicsView):
             self._reposition_frozen()
         else:
             self._reposition_frozen_top()
-        self._update_label_grip_geometry()
         self.label_width_changed.emit(int(sc._label_width))
 
     def _snap_to_boundary(self, ns: int) -> int:
@@ -22958,7 +22858,6 @@ class TimelineView(QGraphicsView):
     def resizeEvent(self, event) -> None:
         """Reflow the timeline on every resize to preserve the current zoom ratio."""
         super().resizeEvent(event)
-        self._update_label_grip_geometry()
         win = self.window()
         splitting = getattr(win, "_cpu_splitter_resizing", False)
         if not splitting:
@@ -56061,7 +55960,7 @@ EMPTY_STATES: Dict[str, Dict[str, Any]] = {
     },
     "no_marks": {
         "message": "No bookmarks or annotations yet.",
-        "hint": "Double-click the Timeline or press B / A to add one.",
+        "hint": "Right-click the Timeline or press B / A to add one.",
         "action": None,
     },
     "no_ai": {
@@ -61090,132 +60989,20 @@ class _AiListModelsWorker(QObject):
             self.failed.emit(str(exc))
 
 
-class _LoadProgressDialog(QWidget):
-    """Headless load-progress controller (shell redesign: no modal card).
+class _LoadProgressBridge(QObject):
+    """Headless load-progress signal hub (shell redesign: no modal card).
 
-    Was a borderless modal dialog; now it never shows itself — it stays a
-    hidden signal hub so all existing wiring (``cancel_requested``,
-    ``update_progress`` from the parser thread, the finalize handoff) keeps
-    working, while ``progressed`` drives the inline status-bar progress +
-    timeline skeleton that replaced the card (web App.vue parity).
+    Bridges the parser thread's progress and the Cancel action to the inline
+    status-bar progress + timeline skeleton that replaced the old modal
+    dialog (web App.vue parity). Never creates or shows a window.
     """
 
     cancel_requested = Signal()
     progressed = Signal(int, str)   # (pct, formatted message)
 
-    def __init__(self, title: str, parent=None):
-        # The frameless Qt.WindowType.Tool variant is primarily needed on macOS to avoid
-        # delayed first paint at startup. On Windows it may leave a tiny black
-        # artifact near (0, 0), so use a regular dialog there.
-        if sys.platform == "darwin":
-            flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
-        else:
-            flags = Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint | Qt.WindowType.CustomizeWindowHint
-        super().__init__(parent, flags)
-        self.setWindowModality(Qt.WindowModality.NonModal)
-        if sys.platform != "darwin":
-            self.setWindowTitle("Loading")
-        self.setMinimumWidth(420)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
-
-        self._title_lbl = QLabel(title, self)
-        self._title_lbl.setWordWrap(True)
-        layout.addWidget(self._title_lbl)
-
-        self._bar = QProgressBar(self)
-        self._bar.setRange(0, 100)
-        self._bar.setValue(0)
-        self._bar.setTextVisible(True)
-        layout.addWidget(self._bar)
-
-        self._msg_lbl = QLabel("", self)
-        layout.addWidget(self._msg_lbl)
-
-        self._cancel_btn = QPushButton("Cancel", self)
-        self._cancel_btn.clicked.connect(self.cancel_requested.emit)
-        layout.addWidget(self._cancel_btn, alignment=Qt.AlignmentFlag.AlignRight)
-
-        # Draw a subtle border via the stylesheet.
-        # Use the object name so the QWidget selector matches only this dialog.
-        self.setObjectName("loadprog")
-        _is_dark = QApplication.instance().palette().color(QPalette.Window).lightness() < 128
-        if _is_dark:
-            self.setStyleSheet("""
-                QWidget#loadprog {
-                    background: #2B2B2B;
-                    border: 1px solid #555;
-                    border-radius: 6px;
-                }
-                QLabel { color: #D4D4D4; font-size: 12px; }
-                QProgressBar {
-                    border: 1px solid #555; border-radius: 3px;
-                    background: #1E1E1E; height: 18px; text-align: center;
-                    color: #D4D4D4;
-                }
-                QProgressBar::chunk { background: #0E4D80; border-radius: 2px; }
-            """)
-        else:
-            self.setStyleSheet("""
-                QWidget#loadprog {
-                    background: #F5F5F5;
-                    border: 1px solid #CCCCCC;
-                    border-radius: 6px;
-                }
-                QLabel { color: #1E1E1E; font-size: 12px; }
-                QProgressBar {
-                    border: 1px solid #AAAAAA; border-radius: 3px;
-                    background: #FFFFFF; height: 18px; text-align: center;
-                    color: #1E1E1E;
-                }
-                QProgressBar::chunk { background: #005A9E; border-radius: 2px; }
-            """)
-        self.adjustSize()
-
-    def setValue(self, pct: int) -> None:
-        self._bar.setValue(pct)
-
-    def setLabelText(self, msg: str) -> None:
-        self._msg_lbl.setText(msg)
-
     def update_progress(self, pct: int, msg: str) -> None:
         formatted = format_loading_message(msg)
-        self._bar.setValue(pct)
-        self._msg_lbl.setText(formatted)
         self.progressed.emit(int(pct), formatted)
-        _process_ui_events_safely()
-
-    def _centre_on_parent(self) -> None:
-        """Reposition this dialog centred over its parent window."""
-        p = self.parent()
-        if p is None:
-            return
-        pg = p.geometry()
-        self.move(pg.center().x() - self.width() // 2,
-                  pg.center().y() - self.height() // 2)
-
-    def eventFilter(self, obj, event) -> bool:
-        """Track parent-window moves and reposition the dialog to follow."""
-        if obj is self.parent() and event.type() == QEvent.Type.Move:
-            self._centre_on_parent()
-        return super().eventFilter(obj, event)
-
-    def closeEvent(self, event) -> None:
-        """Uninstall the parent event filter when the dialog closes."""
-        p = self.parent()
-        if p is not None:
-            p.removeEventFilter(self)
-        super().closeEvent(event)
-
-    def show_centered(self, parent_geom) -> None:
-        # No-op: the modal card was replaced by the inline status-bar progress
-        # + timeline skeleton (shell redesign).  Kept for call-site compat.
-        return
-        self.activateWindow()
-        # Force an immediate paint so the bar is visible before the thread starts.
-        self.repaint()
         _process_ui_events_safely()
 
 # ---------------------------------------------------------------------------
@@ -61879,6 +61666,10 @@ class _LegendWidget(QWidget):
         self.setPalette(palette)
         self._task_items: Dict[str, QListWidgetItem] = {}
         self._task_display: Dict[str, str] = {}
+        # "No tasks match the current filter." placeholder row (web parity:
+        # LegendPanel.vue's .legend-empty) — created lazily in _filter_tasks(),
+        # never part of _task_items so it can't be mistaken for a real task.
+        self._empty_item: Optional[QListWidgetItem] = None
         self._sti_rows: List[tuple] = []  # [(channel_or_note_lc, row_widget)]
         self._heatmap_filter_mks: Optional[set] = None
         self._heatmap_filter_label: Optional[str] = None
@@ -62126,6 +61917,10 @@ class _LegendWidget(QWidget):
         self._task_list.setUpdatesEnabled(False)
         try:
             self._task_list.clear()
+            # clear() deletes the C++ item, including any empty-filter
+            # placeholder from a previous rebuild — drop the dangling ref so
+            # _filter_tasks() recreates it instead of touching a deleted item.
+            self._empty_item = None
             if trace is None:
                 return
             app = QApplication.instance()
@@ -62181,6 +61976,22 @@ class _LegendWidget(QWidget):
             item.setForeground(filter_accent if in_filter else QBrush())
         for key_lc, row_w in self._sti_rows:
             row_w.setVisible((not q) or (q in key_lc))
+        # "No tasks match the current filter." placeholder (web parity:
+        # LegendPanel.vue's .legend-empty) — only when tasks exist but every
+        # one of them is currently hidden, never when there simply are no
+        # tasks yet (no trace loaded).
+        any_visible = any(not item.isHidden() for item in self._task_items.values())
+        show_empty = bool(self._task_items) and not any_visible
+        if show_empty:
+            if self._empty_item is None:
+                empty = QListWidgetItem("No tasks match the current filter.")
+                empty.setFlags(Qt.ItemFlag.NoItemFlags)
+                empty.setForeground(QBrush(QColor("#888888")))
+                self._task_list.addItem(empty)
+                self._empty_item = empty
+            self._empty_item.setHidden(False)
+        elif self._empty_item is not None:
+            self._empty_item.setHidden(True)
 
 # ===========================================================================
 # Metrics Plot Dialog
@@ -83062,11 +82873,6 @@ class SnapshotEditorDialog(QDialog):
     def _on_dash_toggled(self, checked: bool) -> None:
         self._dashed = checked
 
-    def _sync_dash_from_shape(self, idx: int) -> None:
-        # Kept for call-site compatibility; the toolbar toggle is a stable
-        # default now and no longer follows the selection.
-        return
-
     def _show_color_menu(self) -> None:
         self._color_menu.exec(
             self._color_btn.mapToGlobal(QPoint(0, self._color_btn.height())))
@@ -94103,7 +93909,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._dock_stabilize_timer: Optional[QTimer] = None
         self._right_dock_custom_drag: bool = False
         self._focus_mode: bool = False
-        self._progress_dialog: Optional[QProgressDialog] = None
+        self._progress_dialog: Optional["_LoadProgressBridge"] = None
         self._pending_demo: Optional[dict] = None
         self._pending_workspace: Optional[dict] = None
         self._demo_runner: Optional[InAppDemoRunner] = None
@@ -94259,10 +94065,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         QTimer.singleShot(150, self._verify_startup_dock_visibility)
         QTimer.singleShot(400, self._verify_startup_dock_visibility)
 
-    def _finish_startup_dock_layout(self) -> None:
-        """Legacy hook (visibility now applied in _run_startup_dock_layout)."""
-        pass
-
     def _verify_startup_dock_visibility(self) -> None:
         """Last-chance pass if Qt layout settled with docks still hidden."""
         if self._shutting_down or not hasattr(self, "_panel_dock"):
@@ -94362,7 +94164,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._close_heatmap_dialog()
         self._close_chord_dialog()
         if self._progress_dialog is not None:
-            self._progress_dialog.close()
+            self._progress_dialog.deleteLater()
             self._progress_dialog = None
 
     @property
@@ -95344,13 +95146,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._recompute_find_hits()
 
-    def _dismiss_load_progress(self, progress_dialog: Optional["_LoadProgressDialog"] = None) -> None:
+    def _dismiss_load_progress(self, progress_dialog: Optional["_LoadProgressBridge"] = None) -> None:
         """Close the load progress overlay (safe if already dismissed)."""
         dlg = progress_dialog if progress_dialog is not None else self._progress_dialog
         if dlg is None:
             return
         try:
-            dlg.close()
             dlg.deleteLater()
         except RuntimeError:
             pass
@@ -95950,10 +95751,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Apply dock-size metrics persisted via _collect_dock_metrics()."""
         self._apply_dock_metrics_sizes(packed)
 
-    def _complete_startup_dock_layout(self) -> None:
-        """Legacy entry point — delegates to the coalesced startup scheduler."""
-        self._schedule_startup_dock_layout(0)
-
     def _apply_view_prefs_from_vm(self) -> None:
         """Apply AppSettingsViewModel values to timeline widgets (after RC load)."""
         self._apply_settings_to_all_tabs()
@@ -96055,10 +95852,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _sync_panel_visibility_prefs_for_persist(self) -> bool:
         """Legend visibility is the show_legend tab flag (not a separate dock)."""
         return self._show_legend
-
-    def _finalize_dock_layout_from_rc(self) -> None:
-        """Apply Layout checkboxes after restoreState / resizeDocks (deferred)."""
-        self._complete_startup_dock_layout()
 
     def _apply_settings_to_all_tabs_impl(self) -> None:
         self._view.set_font_size(self._font_size_val)
@@ -97977,10 +97770,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel_dock.setMinimumHeight(200)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, panel_dock)
         self._panel_dock = panel_dock
-        # Legacy aliases — all panel tabs live in one dock.
-        self._stats_dock = panel_dock
-        self._marks_dock = panel_dock
-        self._find_dock = panel_dock
 
         self._sync_panel_tab_visibility()
         self._focus_statistics_panel()
@@ -104314,7 +104103,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stash_active_tab_state()
 
         if self._progress_dialog is not None:
-            self._progress_dialog.close()
+            self._progress_dialog.deleteLater()
             self._progress_dialog = None
 
         # Abort any in-progress load before starting a new one.
@@ -104333,10 +104122,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _reset_render_state_for_new_trace()
         _process_ui_events_safely()
 
-        # Progress dialog - created before closures so progress_dialog is defined.
-        progress_dialog = _LoadProgressDialog(
-            f"Loading {load_label}…", self)
-        progress_dialog.show_centered(self.geometry())   # no-op; kept for compat
+        # Progress bridge - created before closures so progress_dialog is defined.
+        progress_dialog = _LoadProgressBridge(self)
         self._progress_dialog = progress_dialog
         # Inline progress + timeline skeleton replace the modal card.
         progress_dialog.progressed.connect(self._on_load_progress)
@@ -104351,7 +104138,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         def _teardown_loading_dialog(*, clear_load_flag: bool = True) -> None:
             try:
-                progress_dialog.close()
                 progress_dialog.deleteLater()
             except RuntimeError:
                 pass
@@ -104422,7 +104208,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 str(exc))
 
     def _finalize_loaded_trace(self, trace: BtfTrace, path: str,
-                               progress_dialog: _LoadProgressDialog) -> None:
+                               progress_dialog: "_LoadProgressBridge") -> None:
         """Complete all post-parse UI/state updates for a successful load."""
         self._settings.set(
             "files", "last_dir",

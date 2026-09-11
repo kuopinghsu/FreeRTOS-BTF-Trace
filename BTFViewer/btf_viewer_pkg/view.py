@@ -706,96 +706,6 @@ class _LabelColumnGripItem(QGraphicsItem):
             return
         super().mouseReleaseEvent(event)
 
-class _LabelColumnGrip(QWidget):
-    """Legacy viewport QWidget grip — hidden; use _LabelColumnGripItem instead."""
-
-    GRIP_W = 10
-
-    def __init__(self, view: "TimelineView") -> None:
-        super().__init__(view.viewport())
-        self._view = view
-        self._dragging = False
-        self._start_global_x = 0
-        self._start_w = 0
-        self.setCursor(Qt.CursorShape.SizeHorCursor)
-        self.setMouseTracking(True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-        self.setToolTip("Drag to resize label column")
-        self.hide()
-
-    def paintEvent(self, _event) -> None:
-        dark = getattr(self._view._scene, "_dark_ui", True)
-        line = QColor("#4a9eff") if (self._dragging or self.underMouse()) else (
-            QColor("#666666") if dark else QColor("#CCCCCC"))
-        p = QPainter(self)
-        try:
-            cx = self.width() // 2
-            p.setPen(QPen(line, 2))
-            p.drawLine(cx, 0, cx, self.height())
-        finally:
-            p.end()
-
-    def eventFilter(self, obj, event) -> bool:
-        """App-level mouse capture during drag — Wayland-safe replacement for grabMouse()."""
-        if not self._dragging:
-            return False
-        et = event.type()
-        if et == QEvent.Type.MouseMove:
-            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-            self._view._apply_label_width_drag(
-                self._start_w + (event.globalPosition().x() - self._start_global_x))
-            return True
-        if et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = False
-            app = QApplication.instance()
-            if app:
-                app.removeEventFilter(self)
-            self._view._finish_label_width_drag()
-            return True
-        return False
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = True
-            self._start_global_x = event.globalPosition().x()
-            self._start_w = self._view._scene._label_width
-            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-            app = QApplication.instance()
-            if app:
-                app.installEventFilter(self)
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:
-        if self._dragging:
-            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-            self._view._apply_label_width_drag(
-                self._start_w + (event.globalPosition().x() - self._start_global_x))
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:
-        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = False
-            app = QApplication.instance()
-            if app:
-                app.removeEventFilter(self)
-            self._view._finish_label_width_drag()
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def enterEvent(self, _event) -> None:
-        _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-        self.update()
-
-    def leaveEvent(self, _event) -> None:
-        if not self._dragging:
-            _HoverCursor.hide(Qt.CursorShape.SizeHorCursor)
-        self.update()
-
 # ===========================================================================
 # View
 # ===========================================================================
@@ -943,7 +853,6 @@ class TimelineView(QGraphicsView):
         self._label_resize_dragging = False
         self._label_resize_start_x  = 0
         self._label_resize_start_w  = 0
-        self._label_grip = _LabelColumnGrip(self)
 
         # Middle-button time-range selection (drag to select, release to zoom)
         self._mid_press_ns: Optional[int]   = None   # ns at middle-press
@@ -986,7 +895,6 @@ class TimelineView(QGraphicsView):
         self._scene.scene_rebuilt.connect(self._reposition_frozen)
         self._scene.scene_rebuilt.connect(self._reposition_frozen_top)
         self._scene.scene_rebuilt.connect(self._sync_timeline_column_clip)
-        self._scene.scene_rebuilt.connect(self._update_label_grip_geometry)
 
         # Optional hook (set by MainWindow) fired at the start of any manual
         # zoom (toolbar/keyboard/wheel/pinch/Fit/1:1/demo op). Lets the AI
@@ -1968,11 +1876,6 @@ class TimelineView(QGraphicsView):
         self._zoom_timer.setInterval(_zoom_debounce_ms(len(trace.tasks)))
         self._scene.set_trace(trace, self._fit_viewport_size())
         self.zoom_changed.emit(self._scene.timescale_per_px)
-        self._update_label_grip_geometry()
-
-    def _update_label_grip_geometry(self) -> None:
-        """Hide the legacy viewport QWidget grip (scene-frozen grip is used instead)."""
-        self._label_grip.hide()
 
     def _apply_label_width_drag(self, new_w: int) -> None:
         """Live label-column resize during splitter drag."""
@@ -1984,7 +1887,6 @@ class TimelineView(QGraphicsView):
                 self.zoom_changed.emit(self._scene.timescale_per_px)
         else:
             self._reposition_frozen_top()
-        self._update_label_grip_geometry()
         self.label_width_resizing.emit(int(self._scene._label_width))
 
     def _finish_label_width_drag(self) -> None:
@@ -2146,7 +2048,6 @@ class TimelineView(QGraphicsView):
         self.resetTransform()
         self.zoom_changed.emit(self._scene._timescale_per_px)
         self.viewport().update()
-        self._update_label_grip_geometry()
         self._show_nav()
 
     def set_show_sti(self, show: bool) -> None:
@@ -2902,7 +2803,6 @@ class TimelineView(QGraphicsView):
             self._reposition_frozen()
         else:
             self._reposition_frozen_top()
-        self._update_label_grip_geometry()
         self.label_width_changed.emit(int(sc._label_width))
 
     def _snap_to_boundary(self, ns: int) -> int:
@@ -4396,7 +4296,6 @@ class TimelineView(QGraphicsView):
     def resizeEvent(self, event) -> None:
         """Reflow the timeline on every resize to preserve the current zoom ratio."""
         super().resizeEvent(event)
-        self._update_label_grip_geometry()
         win = self.window()
         splitting = getattr(win, "_cpu_splitter_resizing", False)
         if not splitting:

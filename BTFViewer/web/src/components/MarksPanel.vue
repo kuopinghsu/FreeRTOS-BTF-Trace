@@ -392,7 +392,7 @@ defineExpose({ focusAnnotation })
   color: var(--fg-dim);
   padding: 1px 4px;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: var(--type-body, 13px);
   line-height: 1;
   flex-shrink: 0;
   opacity: 0;

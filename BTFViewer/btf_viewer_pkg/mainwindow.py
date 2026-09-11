@@ -5076,7 +5076,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._dock_stabilize_timer: Optional[QTimer] = None
         self._right_dock_custom_drag: bool = False
         self._focus_mode: bool = False
-        self._progress_dialog: Optional[QProgressDialog] = None
+        self._progress_dialog: Optional["_LoadProgressBridge"] = None
         self._pending_demo: Optional[dict] = None
         self._pending_workspace: Optional[dict] = None
         self._demo_runner: Optional[InAppDemoRunner] = None
@@ -5232,10 +5232,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         QTimer.singleShot(150, self._verify_startup_dock_visibility)
         QTimer.singleShot(400, self._verify_startup_dock_visibility)
 
-    def _finish_startup_dock_layout(self) -> None:
-        """Legacy hook (visibility now applied in _run_startup_dock_layout)."""
-        pass
-
     def _verify_startup_dock_visibility(self) -> None:
         """Last-chance pass if Qt layout settled with docks still hidden."""
         if self._shutting_down or not hasattr(self, "_panel_dock"):
@@ -5335,7 +5331,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._close_heatmap_dialog()
         self._close_chord_dialog()
         if self._progress_dialog is not None:
-            self._progress_dialog.close()
+            self._progress_dialog.deleteLater()
             self._progress_dialog = None
 
     @property
@@ -6317,13 +6313,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._recompute_find_hits()
 
-    def _dismiss_load_progress(self, progress_dialog: Optional["_LoadProgressDialog"] = None) -> None:
+    def _dismiss_load_progress(self, progress_dialog: Optional["_LoadProgressBridge"] = None) -> None:
         """Close the load progress overlay (safe if already dismissed)."""
         dlg = progress_dialog if progress_dialog is not None else self._progress_dialog
         if dlg is None:
             return
         try:
-            dlg.close()
             dlg.deleteLater()
         except RuntimeError:
             pass
@@ -6923,10 +6918,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Apply dock-size metrics persisted via _collect_dock_metrics()."""
         self._apply_dock_metrics_sizes(packed)
 
-    def _complete_startup_dock_layout(self) -> None:
-        """Legacy entry point — delegates to the coalesced startup scheduler."""
-        self._schedule_startup_dock_layout(0)
-
     def _apply_view_prefs_from_vm(self) -> None:
         """Apply AppSettingsViewModel values to timeline widgets (after RC load)."""
         self._apply_settings_to_all_tabs()
@@ -7028,10 +7019,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _sync_panel_visibility_prefs_for_persist(self) -> bool:
         """Legend visibility is the show_legend tab flag (not a separate dock)."""
         return self._show_legend
-
-    def _finalize_dock_layout_from_rc(self) -> None:
-        """Apply Layout checkboxes after restoreState / resizeDocks (deferred)."""
-        self._complete_startup_dock_layout()
 
     def _apply_settings_to_all_tabs_impl(self) -> None:
         self._view.set_font_size(self._font_size_val)
@@ -8950,10 +8937,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel_dock.setMinimumHeight(200)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, panel_dock)
         self._panel_dock = panel_dock
-        # Legacy aliases — all panel tabs live in one dock.
-        self._stats_dock = panel_dock
-        self._marks_dock = panel_dock
-        self._find_dock = panel_dock
 
         self._sync_panel_tab_visibility()
         self._focus_statistics_panel()
@@ -15286,7 +15269,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stash_active_tab_state()
 
         if self._progress_dialog is not None:
-            self._progress_dialog.close()
+            self._progress_dialog.deleteLater()
             self._progress_dialog = None
 
         # Abort any in-progress load before starting a new one.
@@ -15305,10 +15288,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _reset_render_state_for_new_trace()
         _process_ui_events_safely()
 
-        # Progress dialog - created before closures so progress_dialog is defined.
-        progress_dialog = _LoadProgressDialog(
-            f"Loading {load_label}…", self)
-        progress_dialog.show_centered(self.geometry())   # no-op; kept for compat
+        # Progress bridge - created before closures so progress_dialog is defined.
+        progress_dialog = _LoadProgressBridge(self)
         self._progress_dialog = progress_dialog
         # Inline progress + timeline skeleton replace the modal card.
         progress_dialog.progressed.connect(self._on_load_progress)
@@ -15323,7 +15304,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         def _teardown_loading_dialog(*, clear_load_flag: bool = True) -> None:
             try:
-                progress_dialog.close()
                 progress_dialog.deleteLater()
             except RuntimeError:
                 pass
@@ -15394,7 +15374,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 str(exc))
 
     def _finalize_loaded_trace(self, trace: BtfTrace, path: str,
-                               progress_dialog: _LoadProgressDialog) -> None:
+                               progress_dialog: "_LoadProgressBridge") -> None:
         """Complete all post-parse UI/state updates for a successful load."""
         self._settings.set(
             "files", "last_dir",
