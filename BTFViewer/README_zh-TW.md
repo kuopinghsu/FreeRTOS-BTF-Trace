@@ -1,6 +1,6 @@
 # BTF Trace Viewer
 
-**版本 1.5.0 — 桌面版與網頁版**
+**版本 1.0.0 — 桌面版與網頁版**
 
 ![BTFViewer AI 輔助分析](../images/btfviewer-ai.png)
 
@@ -142,6 +142,25 @@ make demo-pack DEMO_LANGS=en,zh-tw
 
 <a id="viewer-controls" name="viewer-controls">&#x200B;</a>
 
+## 基本分析流程
+
+第一次檢查時，請依照以下順序操作：
+
+1. 開啟追蹤資料，並選取 **Fit Trace** 查看完整時間範圍。
+2. 選取 **Load**，確認所有核心是否分擔合理的工作量。
+3. 開啟 **Analysis**，先查看嚴重程度最高的分析結果（Triage）。
+4. 在結果上選 **Open Statistics**，開啟對應的 **Statistics** 區段。此操作不會變更分析範圍、篩選條件或 **Limit to C1–Cn**；若要套用該結果建議的游標範圍（C1–C2），請另外按 **Apply cursors**。
+5. 選 **Show on timeline**，將時間軸移至相關事件。此操作不會變更分析範圍或篩選條件。
+6. 使用證據檢視器的 **Back / Forward** 回到先前的時間軸跳轉位置，不會變更分析範圍或篩選條件。
+7. 選取偏高的數值或離群值，跳至對應的時間軸事件。
+8. 在問題區段前後放置游標，確認狀態列 **Scope: C1–Cn**，並啟用 **Limit to C1–Cn**。
+9. 檢查工作、核心、搶佔、阻塞、同步或核心遷移的詳細資料。
+10. 必要時，請 **AI Assistant** 說明或驗證量測證據。
+
+請從量測證據開始，不要先假設原因。確認時間軸與 **Statistics** 中的行為後，再下結論。詳細流程請參閱 [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md)。
+
+<a id="analysis-and-statistics" name="analysis-and-statistics">&#x200B;</a>
+
 ## BTFViewer 操作
 
 BTFViewer 使用一致的檢視介面、控制項目與分析流程。判讀結果前，請先確認目前的追蹤資料、**Scope（分析範圍）**、**Filters（篩選條件）**、檢視模式、**Selection（選取項目）**與 **Highlight（反白項目）**。
@@ -270,25 +289,6 @@ BTFViewer 使用一致的檢視介面、控制項目與分析流程。判讀結�
 
 <a id="basic-analysis-workflow" name="basic-analysis-workflow">&#x200B;</a>
 
-## 基本分析流程
-
-第一次檢查時，請依照以下順序操作：
-
-1. 開啟追蹤資料，並選取 **Fit Trace** 查看完整時間範圍。
-2. 選取 **Load**，確認所有核心是否分擔合理的工作量。
-3. 開啟 **Analysis**，先查看嚴重程度最高的分析結果（Triage）。
-4. 在結果上選 **Open Statistics**，開啟對應的 **Statistics** 區段。此操作不會變更分析範圍、篩選條件或 **Limit to C1–Cn**；若要套用該結果建議的游標範圍（C1–C2），請另外按 **Apply cursors**。
-5. 選 **Show on timeline**，將時間軸移至相關事件。此操作不會變更分析範圍或篩選條件。
-6. 使用證據檢視器的 **Back / Forward** 回到先前的時間軸跳轉位置，不會變更分析範圍或篩選條件。
-7. 選取偏高的數值或離群值，跳至對應的時間軸事件。
-8. 在問題區段前後放置游標，確認狀態列 **Scope: C1–Cn**，並啟用 **Limit to C1–Cn**。
-9. 檢查工作、核心、搶佔、阻塞、同步或核心遷移的詳細資料。
-10. 必要時，請 **AI Assistant** 說明或驗證量測證據。
-
-請從量測證據開始，不要先假設原因。確認時間軸與 **Statistics** 中的行為後，再下結論。詳細流程請參閱 [WORKFLOWS_zh-TW.md](WORKFLOWS_zh-TW.md)。
-
-<a id="analysis-and-statistics" name="analysis-and-statistics">&#x200B;</a>
-
 ## 分析與統計
 
 BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會檢查原始碼或 ELF 檔案、不會模擬 RTOS 排程器，也不會估算追蹤資料中沒有記錄的資料。
@@ -375,30 +375,7 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 | 6 | **Topology / Path info** | 核心間流量的弦圖；**Path info** 分頁顯示所選路徑的細節。右上角的按鈕可切換版面。 |
 | 7 | **AI 動作** | **Investigate with AI**，以及一鍵提示——Investigate this path、Explain this migration burst、Verify possible ping-pong 與 Compare with another trace。 |
 
-### 比較已開啟的追蹤資料
-
-開啟兩份以上的追蹤資料時，可以使用 **Compare** 查看使用率、核心遷移、執行時間、阻塞時間、回應時間（Response Time）、同步活動及錯過截止期限（Deadline Miss）等差異。
-
-**Summary** 分頁會標示 **Baseline（基準）**與 **Candidate（候選）**，統計變差與改善的項目，並說明整體結果。沒有實際工程影響的小幅變化會省略。點選欄位標題可排序任一比較表格，再點一次可反向排序。
-
-![Trace Compare](../images/btfviewer-web-compare.png)
-
-| # | 區域 | 說明 |
-|---|---|---|
-| 1 | **Trace A / Trace B 選擇器** | 選擇哪一份已開啟的追蹤資料作為 **Baseline (A)**、哪一個作為 **Candidate (B)**。 |
-| 2 | **範圍與 Δ 慣例** | 可選擇僅比較各分頁的游標範圍；說明文字指出 **Δ = Baseline A − Candidate B**（`—` 代表無法取得，`pp` 代表百分點）。 |
-| 3 | **區段導覽列** | 在各比較區段間切換——Summary、Top Tasks、Core Utilization、Migrations、Execution、Blocking、Inter-Arrival、Response、Preemption、Sync、Mutex，以及跨追蹤資料的 **Trends**。 |
-| 4 | **可比較性檢查** | 當兩份追蹤資料無法直接比較時提出警告——核心數不同，或工作集幾乎不重疊——提醒謹慎解讀各核心與負載平衡的差異。 |
-| 5 | **判定橫幅（Verdict banner）** | 整體結論（Improved / Regressed / Mixed / Unchanged），以及其背後的變差與改善數量。 |
-| 6 | **摘要卡片** | 變差數、改善數、警告數，以及單一的 **Biggest mover**（變動最大項）。 |
-| 7 | **變化圖與指標表** | 具工程意義的差異以雙向長條圖呈現（改善 ↔ 變差），下方為完整的 **All summary metrics** 表格（Metric / Baseline A / Candidate B / Change）。 |
-| 8 | **底部列** | **Export HTML**、**Save baseline** / **Score vs baseline**、**Validate experiment…**，或 **Ask AI about this**。 |
-
-這是選用的比較工具，不是基本分析流程的必要步驟。使用時，應比較相同的工作負載階段與量測範圍。若要在 Baseline 與 Candidate 時間軸分頁之間切換時維持相同的相對階段視野，請啟用 **Settings → Display → Link A/B timeline zoom when switching compare tabs**（詳見[多份追蹤資料](#多份追蹤資料)）。
-
-<a id="investigation-notebook" name="investigation-notebook">&#x200B;</a>
-
-### 調查筆記本（Investigation Notebook）
+## 調查筆記本（Investigation Notebook）
 
 **Investigation Notebook（調查筆記本）**用來記錄一次完整的調查，分為 **Question → Evidence → Verify → Conclusion** 四個步驟，並與追蹤資料一併保存。調查筆記本可單獨使用，也可搭配 AI。每個 AI 動作都是選用功能，只會針對目前步驟提供協助，不會自行修改筆記內容（詳見下方的**與 AI 協同作業**）。調查筆記本是使用者實際操作與保存結果的地方；AI Assistant 另以內部的 **Investigation Case（調查案例）**（[AI_zh-TW.md → 調查案例](AI_zh-TW.md#investigation-case)）維持上下文，但使用者不需要管理這個內部狀態。
 
@@ -477,6 +454,29 @@ API 金鑰：在 **Settings → AI** 為各預設設定輸入金鑰，或在主�
 設定、隱私、模型選項、工具、疑難排解、命令列測試及評估方式的詳細說明，請參閱 [AI_zh-TW.md](AI_zh-TW.md)。
 
 <a id="export" name="export">&#x200B;</a>
+
+## 追蹤資料比較
+
+開啟兩份以上的追蹤資料時，可以使用 **Compare** 查看使用率、核心遷移、執行時間、阻塞時間、回應時間（Response Time）、同步活動及錯過截止期限（Deadline Miss）等差異。
+
+**Summary** 分頁會標示 **Baseline（基準）**與 **Candidate（候選）**，統計變差與改善的項目，並說明整體結果。沒有實際工程影響的小幅變化會省略。點選欄位標題可排序任一比較表格，再點一次可反向排序。
+
+![Trace Compare](../images/btfviewer-web-compare.png)
+
+| # | 區域 | 說明 |
+|---|---|---|
+| 1 | **Trace A / Trace B 選擇器** | 選擇哪一份已開啟的追蹤資料作為 **Baseline (A)**、哪一個作為 **Candidate (B)**。 |
+| 2 | **範圍與 Δ 慣例** | 可選擇僅比較各分頁的游標範圍；說明文字指出 **Δ = Baseline A − Candidate B**（`—` 代表無法取得，`pp` 代表百分點）。 |
+| 3 | **區段導覽列** | 在各比較區段間切換——Summary、Top Tasks、Core Utilization、Migrations、Execution、Blocking、Inter-Arrival、Response、Preemption、Sync、Mutex，以及跨追蹤資料的 **Trends**。 |
+| 4 | **可比較性檢查** | 當兩份追蹤資料無法直接比較時提出警告——核心數不同，或工作集幾乎不重疊——提醒謹慎解讀各核心與負載平衡的差異。 |
+| 5 | **判定橫幅（Verdict banner）** | 整體結論（Improved / Regressed / Mixed / Unchanged），以及其背後的變差與改善數量。 |
+| 6 | **摘要卡片** | 變差數、改善數、警告數，以及單一的 **Biggest mover**（變動最大項）。 |
+| 7 | **變化圖與指標表** | 具工程意義的差異以雙向長條圖呈現（改善 ↔ 變差），下方為完整的 **All summary metrics** 表格（Metric / Baseline A / Candidate B / Change）。 |
+| 8 | **底部列** | **Export HTML**、**Save baseline** / **Score vs baseline**、**Validate experiment…**，或 **Ask AI about this**。 |
+
+這是選用的比較工具，不是基本分析流程的必要步驟。使用時，應比較相同的工作負載階段與量測範圍。若要在 Baseline 與 Candidate 時間軸分頁之間切換時維持相同的相對階段視野，請啟用 **Settings → Display → Link A/B timeline zoom when switching compare tabs**（詳見[多份追蹤資料](#多份追蹤資料)）。
+
+<a id="investigation-notebook" name="investigation-notebook">&#x200B;</a>
 
 ## 匯出
 
@@ -627,3 +627,4 @@ BTF 欄位定義請參閱上層目錄中的 `TRACE_FORMAT.md`。
 | 貢獻者 | 貢獻內容 |
 |---|---|
 | [DiogoRoseira](https://github.com/DiogoRoseira) | CPU 負載圖（CPU Load Graph）與指標分布圖 |
+

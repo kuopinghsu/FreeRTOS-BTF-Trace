@@ -100,364 +100,26 @@ The confidence of a result depends on its source:
 
 Do not combine metrics with different confidence levels as if they were equally exact. Use a heuristic to locate an episode, then confirm it with direct or instrumented evidence when possible.
 
-## Analysis workflows
+<a id="statistics-health-check" name="statistics-health-check"></a>
+## Trace quality precheck
 
-The following workflows show how statistics should be combined. They are not rigid checklists; begin with the question you need to answer and follow the evidence.
+### Trace Health Check
 
-### Statistics panel scope and controls
+**What it tells you**
 
-The Statistics tab is available in the right-side panel. Its header shows **Full Trace** or the active **C1–Cn** cursor range. When a task, core, or migration filter is active, the panel shows a **Filtered** indicator. Scope and filters apply to the calculated samples, so they must be checked before any value is interpreted.
+Deterministic structural checks on the parsed event model, run after parsing and whenever the Scope changes. It answers one question: *is the reconstructed schedule internally consistent enough to trust the statistics below it?* It is independent of AI and separate from **Trace Health (TICK)**, which only measures tick regularity.
 
-Place at least two cursors and enable **Limit to C1–Cn** to recalculate Statistics and Analysis Findings for that time range. The toolbar **C1–Cn** chip (before the right-hand icons) uses the Statistics Scope colour when Limit is on and the muted Detail colour when it is off. Click it to toggle. Clear the cursor range to return to Full Trace. Restricting the range is useful for separating start-up, steady-state, overload, and recovery phases.
-
-| Control | Action |
+| Status | Meaning |
 |---|---|
-| **+** | Expand all sections |
-| **−** | Collapse all sections; pinned sections remain open |
-| Reset order | Restore `OVERVIEW → TRIAGE → TIMING → SCHED → SYNC → DETAIL` |
-| Section title / chevron | Expand or collapse one section |
-| **⠿** grip | Drag a section to another position |
-| Pin | Keep a section open when Collapse All is used |
+| **Pass** | No structural inconsistencies under the current checks |
+| **Caution** | One or more warnings; valid metrics are still calculated, affected ones are marked limited |
+| **Insufficient data** | A blocking error (empty range, unknown timestamp unit, or a schedule with many overlapping slices); dependent values are withheld rather than shown wrong |
 
-Section order, pins, expanded state, and table heights are retained across launches. Reordering changes presentation only; it does not change a section's category or calculation.
+**Checks.** Non-monotonic or dropped timestamps; unrecognised timestamp units; task slices that overlap in time on the same core; core identifiers outside the valid 0–31 range; missing task identity (task-table overflow or unnamed tasks); `interval_start` events with no matching `interval_stop`; mutex/semaphore pairing issues; capture truncation and ring-buffer overflow; a long interval with no scheduled task; and metric prerequisites (event types a section needs but the trace does not contain).
 
-### From a statistic back to evidence
+**How to use it.** Read the status first. On **Caution** or **Insufficient data**, expand each check for its time range, affected cores or tasks, and the list of metrics it limits — those sections show *Insufficient data* or a limitation notice instead of a number. A warning never suppresses a metric that can still be computed.
 
-Supported tables and charts provide direct navigation:
-
-- Click a row or task name to highlight the related task or open its scatter/histogram distribution.
-- Click Min, Max, p50, p95, or p99 to jump to the corresponding captured sample.
-- Click an anomaly, worst event, or critical-path episode to zoom and place evidence cursors.
-- Click a synchronization issue to jump to the related STI event.
-- Click a core-time bin, migration pair, or matrix cell to inspect the matching time range.
-
-A navigation action does not make the selected event a root cause. It only connects the summary value to the evidence that produced it.
-
-### Exported statistics reports
-
-**Export HTML** uses the current Scope and creates a self-contained review report with search, sorting, Problems only, and Show all on each statistics table. The report includes:
-
-- Analysis Scope, trace metadata, filters, and timestamp origin;
-- diagnostic KPIs and Analysis Findings;
-- the **Trace Health Check** status and any limited metrics;
-- an **Investigation** section when a saved investigation is attached (GUI) or passed with `--investigation` (headless CLI);
-- the same Statistics tables, grouped table of contents, and section notes;
-- search, sorting, Problems only, and Show all for each statistics table; and
-- an SVG load-balance gauge under Core Utilization.
-
-The HTML report can identify where to investigate, but it cannot preserve every interactive timeline action. Keep the source trace when another reviewer may need to verify an event.
-
-The machine-readable snapshot (`--format json`) uses schema `btf-viewer-stats/2`: each entry in `findings` gains a `rule_id`, and a new `investigation_findings` array carries the full structured finding (id, rule_id, severity, status, observation, category, comparison_basis, affected_range, entities, measured_values, evidence_refs, limitations, rank_score). When an investigation is attached it is echoed back under `investigation` with resolved `chains` and `broken_references`.
-
-### Analysis flow
-
-Use this flow to move from the full trace to a testable explanation. The categories narrow the problem; the timeline confirms the event order.
-
-```mermaid
-flowchart TD
-    A[Set Scope and filters] --> B[Check trace quality and overall load]
-    B --> C[Use triage to select an incident]
-    C --> D{"What evidence dominates?"}
-    D -->|Own CPU time or timing variation| E[TIMING analysis]
-    D -->|Preemption, placement, or migration| F[SCHED analysis]
-    D -->|Mutex, semaphore, or queue wait| G[SYNC analysis]
-    E --> H[Use DETAIL for supporting measurements]
-    F --> H
-    G --> H
-    H --> I[Confirm the event order on the timeline]
-    I --> J{"Enough evidence?"}
-    J -->|No| C
-    J -->|Yes| K[Record the finding and compare the change]
-```
-
-The flow is intentionally iterative. If supporting data does not confirm the first explanation, return to triage and test the next plausible cause.
-
-### Using Analysis Findings
-
-Toolbar **Analysis** provides a heuristic inbox for the current Scope. It stays open while the timeline remains interactive. Each finding separates the measured **Evidence** from the interpretation:
-
-- **Open Statistics** opens the related Statistics section without changing Scope, Filters, or **Limit to C1–Cn**.
-- **Show on timeline** centers the timeline on the supporting timestamp and can highlight the related task. It never changes Scope or Filters.
-- **Apply cursors** optionally places the finding's recommended cursor window; treat it as a proposal and verify it before enabling **Limit to C1–Cn**.
-- Severity ranks attention; it does not assign failure probability.
-- Each finding shows an **evidence-strength** label (Direct / Derived / Estimated / Configured) with tooltips where applicable.
-- Every finding carries a stable **rule id**, and its **measured values** (name, value, unit, sample count) and **comparison basis** are kept separate from the display text, so exported reports and the JSON snapshot stay reproducible and localizable.
-- Findings for the same rule, entity, and overlapping time range are **merged** into one.
-- The list is **ranked** by severity, then magnitude, evidence duration, and evidence quality.
-- When no rule fires the list shows **No findings under the current rules** — this is not a clean bill of health.
-
-<a id="analysis-context-strip" name="analysis-context-strip"></a>
-### Analysis Context strip
-
-Findings, AI, and Compare show the full **Analysis Context** strip (trace name, **Scope**, **Filters**, sample count). The Statistics panel keeps Scope and Filters in its header; when cursors are placed but **Limit to C1–Cn** is off, it shows only a short note: **Not limited to cursors**. **Clear filters** remains available. Selection and Highlight are never listed as analysis constraints.
-
-When Scope or Filters change after results were calculated, Findings and AI may mark content **stale** and offer **Recalculate with current context**. The Statistics panel recalculates automatically when Scope or Filters change (same as Desktop).
-
-<a id="symptom-shortcuts" name="symptom-shortcuts"></a>
-### Symptom shortcuts
-
-**Where should I start?** is an optional guide on the Statistics toolbar (Desktop and Web). It stays closed by default so familiar users see tables immediately. Open it to pick a symptom card (unknown issue, late task, spike, dispatch delay, blocking, jitter, load imbalance, migration, sync, deadline); each jumps to the first recommended metric. **Recommended from Findings** appears when a finding maps to a symptom.
-
-Use a finding to select the next measurement, not as the conclusion. Confirm the sample count, related distribution, and timeline event order before recording a root cause.
-
-### Workflow A — first review of an unfamiliar trace
-
-1. Set the Scope to a meaningful workload phase.
-2. Open **Trace Health** and confirm that the captured TICK pattern and gaps are plausible.
-3. Check **Core Utilization**, **Core Time Breakdown**, and **Concurrent Core Active Distribution** for overall load and missing time.
-4. Use **Timeline Anomalies**, **Worst Events**, and **Task Health** to choose a task or time range.
-5. Inspect the relevant **Execution**, **Blocking**, **Response**, or **Period** distribution.
-6. Return to the timeline and place cursors around the selected sample.
-7. Use scheduling or synchronization statistics to explain what happened inside that range.
-
-### Workflow B — investigate a latency spike
-
-1. Find the task in **Response Time**, **Worst Events**, or **Timeline Anomalies**.
-2. Compare Avg, p95, p99, and Max. A large gap between p95 and Max suggests a rare episode; a high p95 suggests a recurring tail.
-3. Split the episode into own execution and off-CPU time with **Execution Time**, **Blocking Time**, and **Critical Path**.
-4. If own execution grew, inspect **Distribution Explorer**, **Intervals**, and relevant Tags.
-5. If off-CPU time grew, inspect **Dispatch Latency**, **Preemption Matrix**, **Mutex Blocking**, and **Core Migrations**.
-6. Confirm the event order on the timeline. Use an instrumented Interval when an exact end-to-end boundary is required.
-
-### Workflow C — investigate an unstable periodic task
-
-1. Use **Period / Jitter** to find missed, extra, or burst activations.
-2. Open **Inter-Arrival Time** and compare the median, p95, and Max.
-3. Check **Unified Jitter** to determine whether variation comes mainly from execution, off-CPU gaps, response, or dispatch.
-4. Check **Core Utilization Over Time** for load bursts at the same time.
-5. Check **Preemption**, **Mutex Blocking**, and **Migrations** for interference.
-6. If the application defines an explicit period or deadline, compare against that requirement rather than only the observed median.
-
-### Workflow D — investigate multicore load balance or migration
-
-1. Confirm that load balancing and task migration are enabled by the RTOS design. Migration is not expected for pinned tasks.
-2. Use **Core Utilization** and **Core Utilization Over Time** to distinguish a persistent imbalance from a short phase.
-3. Use **Task × Core** to identify which tasks contribute to each core.
-4. Use **Core Migrations** and **Core-Pair Migration Summary** to find frequent moves and bounce paths.
-5. Validate the allowed placement with **Core Affinity**.
-6. Correlate migration with **Execution**, **Response**, **Switch Overhead**, and **Preemption**. A migration count alone does not measure its cost.
-
-### Workflow E — investigate synchronization delay
-
-1. Confirm that the trace contains the required STI take/give or send/receive events.
-2. Use **Mutex / Semaphore** or **Queue** to check pairing quality before using derived wait values.
-3. Use **Mutex Blocking** to rank likely contention by task and object.
-4. Use **Waiter × Owner** to identify the task pairs involved in repeated handoffs.
-5. Use **Priority Inheritance** to look for priority boosts and possible inversion patterns.
-6. Verify the exact take/give order on the timeline. Heuristic handoffs are not a kernel wait queue.
-
-### Workflow F — validate a change with Trace Compare
-
-1. Select equivalent workload phases in Baseline A and Candidate B.
-2. Confirm compatible instrumentation, task naming, time units, and core configuration.
-3. Compare normalized values such as CPU%, events/s, and migrations/s before totals.
-4. Compare tail values, not only averages.
-5. Return to each trace and inspect the samples responsible for the change.
-6. Treat a difference as a regression only when it exceeds normal run-to-run variation and matters to a requirement.
-
-## Statistic dependency map
-
-The table below identifies the strongest dependencies. “Requires” describes the evidence needed to calculate a statistic. “Confirm with” lists related statistics that usually help explain it.
-
-| Statistic | Requires | Confirm with |
-|---|---|---|
-| Core Utilization | Per-core slices and Scope duration | Core Time Breakdown, Task × Core, Core Time |
-| Trace Health | TICK events | Core Breakdown, Timeline |
-| Task Health | Several timing and scheduling statistics | The component section selected by the score |
-| Anomalies / Worst / Patterns | Derived sample sets | Timeline and the named source statistic |
-| Response Time | Consecutive task slices | Execution, Blocking, Dispatch, Interval |
-| Execution Time | Slice start/end | Distribution, Interval, Tags |
-| Dispatch Latency | Ready STI/create plus switch-in | Preemption, Core Time, Timeline |
-| Blocking Time | Consecutive task slices | Preemption, Mutex Blocking, Period |
-| Critical Path | Response windows and overlapping evidence | Execution, Blocking, Preemption, Migration |
-| Period / Inter-arrival | Consecutive activation starts | Unified Jitter, Deadline, Core Time |
-| Activation Latency | Activation starts plus fitted period T | Period / Jitter, Dispatch Latency, Ready-Gap |
-| Ready-Gap (Starvation) | Off-CPU gaps, same-core overlap, STI take/suspend | Preemption Chain, Priority, Mutex Blocking |
-| Migration statistics | Consecutive slices and core IDs | Affinity, Task × Core, Switch Overhead |
-| Idle Analysis | Per-core IDLE segments clipped to scope | Core Utilization, Ready-Gap, Blocking Time |
-| Queue Backlog / Semaphore Level | STI give/send and take/recv per object | Mutex / Semaphore, Dispatch Latency, Ready-Gap |
-| Preemption statistics | Off-CPU gaps plus same-core overlap | Priority, Core Time, Timeline |
-| Switch Reason Breakdown | Off-CPU gaps, same-core overlap, STI take/suspend | Preemption Matrix, Preemption Chain, Priority |
-| Scheduling Load Over Time | Per-core slice starts and utilisation bins | Core Utilization Over Time, Task × Core, Core Utilization |
-| Mutex statistics | STI synchronization events | Waiter × Owner, Priority, Timeline |
-| Queue statistics | STI queue events | Tags, Intervals, Timeline |
-| Intervals / Tags | Application STI events | Execution, Response, Timeline |
-| Deadline / CPU Budget | Configured thresholds plus slices | Execution, CPU share, Period |
-
-## Advanced analysis tutorials
-
-The following tutorials provide practical investigation sequences that complement the per-section reference below.
-
-### Migration investigation
-
-Before treating migration as a problem, confirm that the RTOS configuration permits load balancing. A task pinned to one core should not migrate; an unpinned task may legitimately move when the scheduler balances ready work.
-
-Use this sequence:
-
-1. Confirm load balance. An SMP scheduler may move tasks to idle cores, so some migration is expected.
-2. Open **Core Migrations** and rank by Rate, Dwell, and Ping rather than Count alone.
-3. Open the **Migration & Corridor Inspector**. The workspace has three columns: **Core path**, **migration heatmap**, and **Topology**, sized **1 : 2 : 1** by default. Drag the pane dividers to resize; Desktop stores the layout in `btf_viewer.rc` and Web stores it in localStorage. Path-table columns are resizable (drag the header dividers); widths stay fixed when you click a header to sort. Topology has Circle and Matrix views (icons stay at the top right). Traces with more than 16 cores open in Matrix. Click a heatmap cell to show **Path info** in the right column. Topology and Path info share that column and are exclusive.
-4. Check ping-pong, median dwell, and short-dwell share on the selected path.
-5. Treat **Handoff** as a synchronization-ownership heuristic, not a measured cache-line transfer.
-6. Inspect the relevant timeline window with **Show events**. **Filter Timeline** is a persistent task filter; Inspector filters stay local.
-
-**Analysis Scope** defaults to **Follow zoom**: Fit (or ≥ 92% of the trace) is **Full Trace**; a zoomed-in window is **Viewport** and follows pan/zoom. Lock **Full Trace** or **Viewport** from the menu, or choose **Cursor C1–Cn** when at least two cursors are placed. If fewer than two cursors are placed, Cursor C1–Cn is disabled.
-
-The Inspector overview shows scope, load-balance status, migration count and rate, the most affected task, the hottest path, and the main concern (None / Burst / Ping-pong / Short dwell / Handoff suspect). Use **Show Top 5 / 10 / 25 / All paths** rather than a percentage cutoff. The Core path table lists Rate, Count, Ping, Dwell, Handoff, Net, and Share (hover a header for the full name). Click a column header to sort the path list and heatmap together; click again to reverse. **Investigate with AI** sends that structured context on the `migrations` template; it does not filter the timeline or move cursors unless you choose a viewer action.
-
-A corridor is evidence of repeated placement, not proof of cache cost. Cache misses, lazy coprocessor context invalidation, and additional register saves require processor-specific evidence.
-
-### Priority inheritance and the L/M/H pattern
-
-Priority Inheritance appears when the trace contains a create priority and later priority events. Supported event meanings are:
-
-| Event | Meaning |
-|---|---|
-| `priority_inherit Name[id] pri:N` | A mutex holder inherited priority `N` |
-| `priority_disinherit Name[id] pri:N` | The holder returned toward its base priority |
-| `set_priority Name[id] pri:N` | The application or RTOS explicitly changed priority |
-
-A boost episode is a continuous interval during which effective priority is above the create priority:
-
-```math
-T_{boosted} = \sum_j (t_{end,j} - t_{start,j})
-```
-
-**Boosts** is the number of episodes, **Peak** is the highest observed priority, and **Boosted** is their total duration.
-
-The classic **L/M/H** pattern contains:
-
-- **L:** a low-priority task holding a mutex;
-- **H:** a high-priority task waiting for that mutex; and
-- **M:** runnable work with priority strictly between L and H.
-
-Without inheritance, M can delay L while H waits. With inheritance, the RTOS raises L toward H so L can release the mutex. In BTFViewer, an orange band means a boost without the L/M/H pattern; a red band means mutex inheritance or an L/M/H-related pattern.
-
-```mermaid
-flowchart TD
-    H["High-priority task waits for the mutex"] --> I["Priority inversion risk"]
-    M["Medium-priority task can preempt the holder"] --> I
-    L["Low-priority task holds the mutex"] --> I
-    I --> B["RTOS boosts the holder"]
-    B --> R["Holder releases the mutex"]
-```
-
-The viewer finds a possible medium blocker by looking for a known base priority strictly between Base and Peak. This is supporting geometry, not proof that the medium task ran during every boost. Confirm the mutex object, task activity, and switch order on the timeline.
-
-### Mutex, semaphore, and queue pairing
-
-Synchronization events are grouped by object pointer so that different objects on the same STI channel remain separate.
-
-| Object pattern | Pairing direction | Typical meaning |
-|---|---|---|
-| Mutex | `take → give` | Ownership / hold duration |
-| Semaphore used as a resource | `take → give` | Resource residency |
-| Semaphore used as a signal | `give → take` | Posted signal consumed later |
-| Queue | `send → receive` | Recorded producer-to-consumer interval |
-
-For completed hold spans `τ_h`, average hold time is:
-
-```math
-AvgHold = \frac{1}{N} \sum_h \tau_h
-```
-
-Review pairing quality before using hold or blocking results. Important issues include orphan give, cross-task give, unmatched take, unmatched signal, deletion while held, and an object still held at the end of the capture. A mutex taken on one core and given on another is reported as a core-boundary bounce. It may imply cache-line movement, but the trace does not measure the hardware cost.
-
-**Waiter × Owner** and **Mutex Blocking** are derived from successful handoffs. They do not reconstruct blocked attempts or the RTOS wait queue. Use them to rank likely contention, then verify the take/give order and task states on the timeline.
-
-### Interval and Tag instrumentation
-
-Use an **Interval** when one task can record a clear start and stop for an operation. Current interval notes include the interval ID and task ID, allowing different tasks to reuse the same numeric ID without cross-pairing. Legacy notes without a task ID can be ambiguous when concurrent tasks use the same ID.
-
-| Trace pattern | Suitable for |
-|---|---|
-| `interval_start` / `interval_stop` on the same task | Loop iteration, handler, critical region, or complete job |
-| Consecutive values on one Tag channel | Timing across tasks or ISRs |
-| Tag value samples | Queue depth, free memory, sensor value, application state |
-
-Completed intervals provide Count, Min, Avg, Max, Jitter, σ, p50, p95, and p99. Unmatched events near the Scope boundary are excluded and may reflect partial capture. Recursive or overlapping use of the same interval ID should be avoided unless the instrumentation contract defines the nesting order.
-
-Tag values have application-defined units. The viewer can summarize and plot the numeric payload, but it cannot infer whether `10` means bytes, messages, degrees, or a state code. Document each channel and correlate value changes with timeline events.
-
-### Reading scatter plots, histograms, and CDFs
-
-All three views use the same selected sample set:
-
-| View | Preserves time order? | Main question |
-|---|---:|---|
-| Scatter | Yes | When did a spike, trend, or mode change occur? |
-| Histogram | No | Which value ranges contain most samples? |
-| CDF | No | What percentage of samples is at or below a value? |
-
-On a CDF, the horizontal axis is the metric value and the vertical axis is cumulative percentage. The curve begins near 0% and rises toward 100%. A steep rise indicates a tight cluster; a gradual rise indicates a wider distribution or long tail.
-
-| Reference | CDF interpretation |
-|---|---|
-| p5 | 5% of observed samples are at or below this value |
-| p50 | Half of the samples are at or below the median |
-| p95 | 95% are at or below this value; 5% are above it |
-| Avg | A mean reference line; it does not correspond to a fixed cumulative percentage |
-
-Use Linear scale for compact distributions, p5–p95 to focus on the main population while retaining edge buckets, and Log duration when short and long samples differ by orders of magnitude. The scale changes only the horizontal mapping; it does not change the samples or percentiles.
-
-For a deadline `D`, read the CDF height at `D` to estimate the observed completion percentage. This is a result for the selected Scope, not a future guarantee or a proof of worst-case timing.
-
-### Trace Compare reading order
-
-Trace Compare is most reliable when read in this order:
-
-1. Confirm file identity, Scope, tick mode, task matching, core count, and validation warnings.
-2. Use span-normalized Summary rows when capture lengths differ.
-3. Review the regression result on the **Summary** tab for differences that exceed both absolute and relative thresholds.
-4. Open the related detail table and compare tail values. Click a column header to sort; click again to reverse.
-5. Return to both timelines and verify the events behind the difference.
-
-Task rows are matched by display name (`Name[id]`). A changed ID can prevent a logical match. A dash means unavailable, not zero. CPU and utilisation differences use percentage points (`pp`).
-
-Useful comparison groups include Summary, Top Tasks, Core Utilization, Core Migrations, Execution, Blocking, Inter-Arrival, Preemption, Sync, Response, Mutex, Shared Patterns, and Trends. Exported reports include the full tables rather than only the dialog preview.
-
-#### Example: fixed tick compared with tickless idle
-
-Capture the same workload once with a fixed tick and once with tickless idle. Keep TICK instrumentation, workload duration, and build options otherwise equivalent.
-
-| Compare item | What to check |
-|---|---|
-| Context switches and `/s` | Whether suppressed idle ticks reduce scheduler activity |
-| Tick mode, count, gaps, and CV | Whether the two policies were actually observed |
-| Core gap, utilisation, and load balance | Whether idle and busy phases are comparable |
-| Migrations and core pairs | Whether wake-up policy changes task placement |
-| Execution, Blocking, Response tails | Whether power savings affect latency budgets |
-| Preemption and Top Tasks | Which work absorbs tick or wake-up overhead |
-
-Tickless behavior is easiest to see in an idle-heavy cursor range. In a fully busy phase, context-switch and tick counts can remain similar. If a supposed tickless capture still shows regular TICK events, investigate kernel eligibility and ready-list behavior before blaming the trace or viewer.
-
-## Stable Help links
-
-Each Statistics section has a stable anchor in this form:
-
-```text
-STATISTICS.md#statistics-<section-id>
-```
-
-The `<section-id>` is the same identifier used by the Statistics panel. English and Traditional Chinese documents use identical anchors, so the application can select the appropriate file without changing the fragment.
-
-| Category | Section IDs in default order |
-|---|---|
-| **OVERVIEW** | `cores`, `health`, `task_health` |
-| **TRIAGE** | `anomalies`, `worst`, `patterns` |
-| **TIMING** | `response`, `exec`, `dispatch`, `block`, `crit_path`, `period`, `jitter`, `inter`, `activation`, `ready_gap` |
-| **SCHED** | `task_core`, `core_time`, `migrations`, `core_pairs`, `affinity`, `preempt_matrix`, `preemption`, `priority`, `concurrency`, `switch_reason`, `sched_load` |
-| **SYNC** | `mutex_block`, `wait_owner`, `sync`, `queue`, `sync_level` |
-| **DETAIL** | `core_breakdown`, `idle`, `switch_overhead`, `tasks`, `distrib`, `intervals`, `tags`, `lifecycle`, `deadline` |
-
-The categories describe an investigation purpose:
-
-- **OVERVIEW** summarizes overall condition.
-- **TRIAGE** identifies where to investigate first.
-- **TIMING** explains task latency, execution, and variation.
-- **SCHED** explains multicore placement and scheduling behavior.
-- **SYNC** explains waits and synchronization objects.
-- **DETAIL** provides supporting measurements and instrumented data.
+<a id="statistics-task_health" name="statistics-task_health"></a>
 
 ## 1. OVERVIEW — overall condition
 
@@ -500,24 +162,6 @@ A large gap can come from tickless idle, a long critical section, CPU pressure, 
 
 ![Tick interval distribution chart — scatter and histogram of consecutive TICK gaps in example-8cores.btf.gz](../images/stats/stats-tick.svg)
 
-<a id="statistics-health-check" name="statistics-health-check"></a>
-### Trace Health Check
-
-**What it tells you**
-
-Deterministic structural checks on the parsed event model, run after parsing and whenever the Scope changes. It answers one question: *is the reconstructed schedule internally consistent enough to trust the statistics below it?* It is independent of AI and separate from **Trace Health (TICK)**, which only measures tick regularity.
-
-| Status | Meaning |
-|---|---|
-| **Pass** | No structural inconsistencies under the current checks |
-| **Caution** | One or more warnings; valid metrics are still calculated, affected ones are marked limited |
-| **Insufficient data** | A blocking error (empty range, unknown timestamp unit, or a schedule with many overlapping slices); dependent values are withheld rather than shown wrong |
-
-**Checks.** Non-monotonic or dropped timestamps; unrecognised timestamp units; task slices that overlap in time on the same core; core identifiers outside the valid 0–31 range; missing task identity (task-table overflow or unnamed tasks); `interval_start` events with no matching `interval_stop`; mutex/semaphore pairing issues; capture truncation and ring-buffer overflow; a long interval with no scheduled task; and metric prerequisites (event types a section needs but the trace does not contain).
-
-**How to use it.** Read the status first. On **Caution** or **Insufficient data**, expand each check for its time range, affected cores or tasks, and the list of metrics it limits — those sections show *Insufficient data* or a limitation notice instead of a number. A warning never suppresses a metric that can still be computed.
-
-<a id="statistics-task_health" name="statistics-task_health"></a>
 ### Task Health
 
 **What it tells you**
@@ -1188,6 +832,337 @@ If no threshold is configured, BTFViewer cannot evaluate compliance. A result of
 
 **How to use it.** Set thresholds from an engineering requirement, not from the same trace being tested. Inspect every violation on the timeline and compare with p95/p99. Use **Interval Analysis** when the deadline applies to a multi-slice operation, and **Period / Jitter** when it applies to activation timing.
 
+## Statistic dependency map
+
+The table below identifies the strongest dependencies. “Requires” describes the evidence needed to calculate a statistic. “Confirm with” lists related statistics that usually help explain it.
+
+| Statistic | Requires | Confirm with |
+|---|---|---|
+| Core Utilization | Per-core slices and Scope duration | Core Time Breakdown, Task × Core, Core Time |
+| Trace Health | TICK events | Core Breakdown, Timeline |
+| Task Health | Several timing and scheduling statistics | The component section selected by the score |
+| Anomalies / Worst / Patterns | Derived sample sets | Timeline and the named source statistic |
+| Response Time | Consecutive task slices | Execution, Blocking, Dispatch, Interval |
+| Execution Time | Slice start/end | Distribution, Interval, Tags |
+| Dispatch Latency | Ready STI/create plus switch-in | Preemption, Core Time, Timeline |
+| Blocking Time | Consecutive task slices | Preemption, Mutex Blocking, Period |
+| Critical Path | Response windows and overlapping evidence | Execution, Blocking, Preemption, Migration |
+| Period / Inter-arrival | Consecutive activation starts | Unified Jitter, Deadline, Core Time |
+| Activation Latency | Activation starts plus fitted period T | Period / Jitter, Dispatch Latency, Ready-Gap |
+| Ready-Gap (Starvation) | Off-CPU gaps, same-core overlap, STI take/suspend | Preemption Chain, Priority, Mutex Blocking |
+| Migration statistics | Consecutive slices and core IDs | Affinity, Task × Core, Switch Overhead |
+| Idle Analysis | Per-core IDLE segments clipped to scope | Core Utilization, Ready-Gap, Blocking Time |
+| Queue Backlog / Semaphore Level | STI give/send and take/recv per object | Mutex / Semaphore, Dispatch Latency, Ready-Gap |
+| Preemption statistics | Off-CPU gaps plus same-core overlap | Priority, Core Time, Timeline |
+| Switch Reason Breakdown | Off-CPU gaps, same-core overlap, STI take/suspend | Preemption Matrix, Preemption Chain, Priority |
+| Scheduling Load Over Time | Per-core slice starts and utilisation bins | Core Utilization Over Time, Task × Core, Core Utilization |
+| Mutex statistics | STI synchronization events | Waiter × Owner, Priority, Timeline |
+| Queue statistics | STI queue events | Tags, Intervals, Timeline |
+| Intervals / Tags | Application STI events | Execution, Response, Timeline |
+| Deadline / CPU Budget | Configured thresholds plus slices | Execution, CPU share, Period |
+
+## Analysis workflows
+
+The following workflows show how statistics should be combined. They are not rigid checklists; begin with the question you need to answer and follow the evidence.
+
+### Statistics panel scope and controls
+
+The Statistics tab is available in the right-side panel. Its header shows **Full Trace** or the active **C1–Cn** cursor range. When a task, core, or migration filter is active, the panel shows a **Filtered** indicator. Scope and filters apply to the calculated samples, so they must be checked before any value is interpreted.
+
+Place at least two cursors and enable **Limit to C1–Cn** to recalculate Statistics and Analysis Findings for that time range. The toolbar **C1–Cn** chip (before the right-hand icons) uses the Statistics Scope colour when Limit is on and the muted Detail colour when it is off. Click it to toggle. Clear the cursor range to return to Full Trace. Restricting the range is useful for separating start-up, steady-state, overload, and recovery phases.
+
+| Control | Action |
+|---|---|
+| **+** | Expand all sections |
+| **−** | Collapse all sections; pinned sections remain open |
+| Reset order | Restore `OVERVIEW → TRIAGE → TIMING → SCHED → SYNC → DETAIL` |
+| Section title / chevron | Expand or collapse one section |
+| **⠿** grip | Drag a section to another position |
+| Pin | Keep a section open when Collapse All is used |
+
+Section order, pins, expanded state, and table heights are retained across launches. Reordering changes presentation only; it does not change a section's category or calculation.
+
+### From a statistic back to evidence
+
+Supported tables and charts provide direct navigation:
+
+- Click a row or task name to highlight the related task or open its scatter/histogram distribution.
+- Click Min, Max, p50, p95, or p99 to jump to the corresponding captured sample.
+- Click an anomaly, worst event, or critical-path episode to zoom and place evidence cursors.
+- Click a synchronization issue to jump to the related STI event.
+- Click a core-time bin, migration pair, or matrix cell to inspect the matching time range.
+
+A navigation action does not make the selected event a root cause. It only connects the summary value to the evidence that produced it.
+
+### Exported statistics reports
+
+**Export HTML** uses the current Scope and creates a self-contained review report with search, sorting, Problems only, and Show all on each statistics table. The report includes:
+
+- Analysis Scope, trace metadata, filters, and timestamp origin;
+- diagnostic KPIs and Analysis Findings;
+- the **Trace Health Check** status and any limited metrics;
+- an **Investigation** section when a saved investigation is attached (GUI) or passed with `--investigation` (headless CLI);
+- the same Statistics tables, grouped table of contents, and section notes;
+- search, sorting, Problems only, and Show all for each statistics table; and
+- an SVG load-balance gauge under Core Utilization.
+
+The HTML report can identify where to investigate, but it cannot preserve every interactive timeline action. Keep the source trace when another reviewer may need to verify an event.
+
+The machine-readable snapshot (`--format json`) uses schema `btf-viewer-stats/2`: each entry in `findings` gains a `rule_id`, and a new `investigation_findings` array carries the full structured finding (id, rule_id, severity, status, observation, category, comparison_basis, affected_range, entities, measured_values, evidence_refs, limitations, rank_score). When an investigation is attached it is echoed back under `investigation` with resolved `chains` and `broken_references`.
+
+### Analysis flow
+
+Use this flow to move from the full trace to a testable explanation. The categories narrow the problem; the timeline confirms the event order.
+
+```mermaid
+flowchart TD
+    A[Set Scope and filters] --> B[Check trace quality and overall load]
+    B --> C[Use triage to select an incident]
+    C --> D{"What evidence dominates?"}
+    D -->|Own CPU time or timing variation| E[TIMING analysis]
+    D -->|Preemption, placement, or migration| F[SCHED analysis]
+    D -->|Mutex, semaphore, or queue wait| G[SYNC analysis]
+    E --> H[Use DETAIL for supporting measurements]
+    F --> H
+    G --> H
+    H --> I[Confirm the event order on the timeline]
+    I --> J{"Enough evidence?"}
+    J -->|No| C
+    J -->|Yes| K[Record the finding and compare the change]
+```
+
+The flow is intentionally iterative. If supporting data does not confirm the first explanation, return to triage and test the next plausible cause.
+
+### Using Analysis Findings
+
+Toolbar **Analysis** provides a heuristic inbox for the current Scope. It stays open while the timeline remains interactive. Each finding separates the measured **Evidence** from the interpretation:
+
+- **Open Statistics** opens the related Statistics section without changing Scope, Filters, or **Limit to C1–Cn**.
+- **Show on timeline** centers the timeline on the supporting timestamp and can highlight the related task. It never changes Scope or Filters.
+- **Apply cursors** optionally places the finding's recommended cursor window; treat it as a proposal and verify it before enabling **Limit to C1–Cn**.
+- Severity ranks attention; it does not assign failure probability.
+- Each finding shows an **evidence-strength** label (Direct / Derived / Estimated / Configured) with tooltips where applicable.
+- Every finding carries a stable **rule id**, and its **measured values** (name, value, unit, sample count) and **comparison basis** are kept separate from the display text, so exported reports and the JSON snapshot stay reproducible and localizable.
+- Findings for the same rule, entity, and overlapping time range are **merged** into one.
+- The list is **ranked** by severity, then magnitude, evidence duration, and evidence quality.
+- When no rule fires the list shows **No findings under the current rules** — this is not a clean bill of health.
+
+<a id="analysis-context-strip" name="analysis-context-strip"></a>
+### Analysis Context strip
+
+Findings, AI, and Compare show the full **Analysis Context** strip (trace name, **Scope**, **Filters**, sample count). The Statistics panel keeps Scope and Filters in its header; when cursors are placed but **Limit to C1–Cn** is off, it shows only a short note: **Not limited to cursors**. **Clear filters** remains available. Selection and Highlight are never listed as analysis constraints.
+
+When Scope or Filters change after results were calculated, Findings and AI may mark content **stale** and offer **Recalculate with current context**. The Statistics panel recalculates automatically when Scope or Filters change (same as Desktop).
+
+<a id="symptom-shortcuts" name="symptom-shortcuts"></a>
+### Symptom shortcuts
+
+**Where should I start?** is an optional guide on the Statistics toolbar (Desktop and Web). It stays closed by default so familiar users see tables immediately. Open it to pick a symptom card (unknown issue, late task, spike, dispatch delay, blocking, jitter, load imbalance, migration, sync, deadline); each jumps to the first recommended metric. **Recommended from Findings** appears when a finding maps to a symptom.
+
+Use a finding to select the next measurement, not as the conclusion. Confirm the sample count, related distribution, and timeline event order before recording a root cause.
+
+### Workflow A — first review of an unfamiliar trace
+
+1. Set the Scope to a meaningful workload phase.
+2. Open **Trace Health** and confirm that the captured TICK pattern and gaps are plausible.
+3. Check **Core Utilization**, **Core Time Breakdown**, and **Concurrent Core Active Distribution** for overall load and missing time.
+4. Use **Timeline Anomalies**, **Worst Events**, and **Task Health** to choose a task or time range.
+5. Inspect the relevant **Execution**, **Blocking**, **Response**, or **Period** distribution.
+6. Return to the timeline and place cursors around the selected sample.
+7. Use scheduling or synchronization statistics to explain what happened inside that range.
+
+### Workflow B — investigate a latency spike
+
+1. Find the task in **Response Time**, **Worst Events**, or **Timeline Anomalies**.
+2. Compare Avg, p95, p99, and Max. A large gap between p95 and Max suggests a rare episode; a high p95 suggests a recurring tail.
+3. Split the episode into own execution and off-CPU time with **Execution Time**, **Blocking Time**, and **Critical Path**.
+4. If own execution grew, inspect **Distribution Explorer**, **Intervals**, and relevant Tags.
+5. If off-CPU time grew, inspect **Dispatch Latency**, **Preemption Matrix**, **Mutex Blocking**, and **Core Migrations**.
+6. Confirm the event order on the timeline. Use an instrumented Interval when an exact end-to-end boundary is required.
+
+### Workflow C — investigate an unstable periodic task
+
+1. Use **Period / Jitter** to find missed, extra, or burst activations.
+2. Open **Inter-Arrival Time** and compare the median, p95, and Max.
+3. Check **Unified Jitter** to determine whether variation comes mainly from execution, off-CPU gaps, response, or dispatch.
+4. Check **Core Utilization Over Time** for load bursts at the same time.
+5. Check **Preemption**, **Mutex Blocking**, and **Migrations** for interference.
+6. If the application defines an explicit period or deadline, compare against that requirement rather than only the observed median.
+
+### Workflow D — investigate multicore load balance or migration
+
+1. Confirm that load balancing and task migration are enabled by the RTOS design. Migration is not expected for pinned tasks.
+2. Use **Core Utilization** and **Core Utilization Over Time** to distinguish a persistent imbalance from a short phase.
+3. Use **Task × Core** to identify which tasks contribute to each core.
+4. Use **Core Migrations** and **Core-Pair Migration Summary** to find frequent moves and bounce paths.
+5. Validate the allowed placement with **Core Affinity**.
+6. Correlate migration with **Execution**, **Response**, **Switch Overhead**, and **Preemption**. A migration count alone does not measure its cost.
+
+### Workflow E — investigate synchronization delay
+
+1. Confirm that the trace contains the required STI take/give or send/receive events.
+2. Use **Mutex / Semaphore** or **Queue** to check pairing quality before using derived wait values.
+3. Use **Mutex Blocking** to rank likely contention by task and object.
+4. Use **Waiter × Owner** to identify the task pairs involved in repeated handoffs.
+5. Use **Priority Inheritance** to look for priority boosts and possible inversion patterns.
+6. Verify the exact take/give order on the timeline. Heuristic handoffs are not a kernel wait queue.
+
+### Workflow F — validate a change with Trace Compare
+
+1. Select equivalent workload phases in Baseline A and Candidate B.
+2. Confirm compatible instrumentation, task naming, time units, and core configuration.
+3. Compare normalized values such as CPU%, events/s, and migrations/s before totals.
+4. Compare tail values, not only averages.
+5. Return to each trace and inspect the samples responsible for the change.
+6. Treat a difference as a regression only when it exceeds normal run-to-run variation and matters to a requirement.
+
+## Advanced analysis tutorials
+
+The following tutorials provide practical investigation sequences that complement the per-section reference below.
+
+### Migration investigation
+
+Before treating migration as a problem, confirm that the RTOS configuration permits load balancing. A task pinned to one core should not migrate; an unpinned task may legitimately move when the scheduler balances ready work.
+
+Use this sequence:
+
+1. Confirm load balance. An SMP scheduler may move tasks to idle cores, so some migration is expected.
+2. Open **Core Migrations** and rank by Rate, Dwell, and Ping rather than Count alone.
+3. Open the **Migration & Corridor Inspector**. The workspace has three columns: **Core path**, **migration heatmap**, and **Topology**, sized **1 : 2 : 1** by default. Drag the pane dividers to resize; Desktop stores the layout in `btf_viewer.rc` and Web stores it in localStorage. Path-table columns are resizable (drag the header dividers); widths stay fixed when you click a header to sort. Topology has Circle and Matrix views (icons stay at the top right). Traces with more than 16 cores open in Matrix. Click a heatmap cell to show **Path info** in the right column. Topology and Path info share that column and are exclusive.
+4. Check ping-pong, median dwell, and short-dwell share on the selected path.
+5. Treat **Handoff** as a synchronization-ownership heuristic, not a measured cache-line transfer.
+6. Inspect the relevant timeline window with **Show events**. **Filter Timeline** is a persistent task filter; Inspector filters stay local.
+
+**Analysis Scope** defaults to **Follow zoom**: Fit (or ≥ 92% of the trace) is **Full Trace**; a zoomed-in window is **Viewport** and follows pan/zoom. Lock **Full Trace** or **Viewport** from the menu, or choose **Cursor C1–Cn** when at least two cursors are placed. If fewer than two cursors are placed, Cursor C1–Cn is disabled.
+
+The Inspector overview shows scope, load-balance status, migration count and rate, the most affected task, the hottest path, and the main concern (None / Burst / Ping-pong / Short dwell / Handoff suspect). Use **Show Top 5 / 10 / 25 / All paths** rather than a percentage cutoff. The Core path table lists Rate, Count, Ping, Dwell, Handoff, Net, and Share (hover a header for the full name). Click a column header to sort the path list and heatmap together; click again to reverse. **Investigate with AI** sends that structured context on the `migrations` template; it does not filter the timeline or move cursors unless you choose a viewer action.
+
+A corridor is evidence of repeated placement, not proof of cache cost. Cache misses, lazy coprocessor context invalidation, and additional register saves require processor-specific evidence.
+
+### Priority inheritance and the L/M/H pattern
+
+Priority Inheritance appears when the trace contains a create priority and later priority events. Supported event meanings are:
+
+| Event | Meaning |
+|---|---|
+| `priority_inherit Name[id] pri:N` | A mutex holder inherited priority `N` |
+| `priority_disinherit Name[id] pri:N` | The holder returned toward its base priority |
+| `set_priority Name[id] pri:N` | The application or RTOS explicitly changed priority |
+
+A boost episode is a continuous interval during which effective priority is above the create priority:
+
+```math
+T_{boosted} = \sum_j (t_{end,j} - t_{start,j})
+```
+
+**Boosts** is the number of episodes, **Peak** is the highest observed priority, and **Boosted** is their total duration.
+
+The classic **L/M/H** pattern contains:
+
+- **L:** a low-priority task holding a mutex;
+- **H:** a high-priority task waiting for that mutex; and
+- **M:** runnable work with priority strictly between L and H.
+
+Without inheritance, M can delay L while H waits. With inheritance, the RTOS raises L toward H so L can release the mutex. In BTFViewer, an orange band means a boost without the L/M/H pattern; a red band means mutex inheritance or an L/M/H-related pattern.
+
+```mermaid
+flowchart TD
+    H["High-priority task waits for the mutex"] --> I["Priority inversion risk"]
+    M["Medium-priority task can preempt the holder"] --> I
+    L["Low-priority task holds the mutex"] --> I
+    I --> B["RTOS boosts the holder"]
+    B --> R["Holder releases the mutex"]
+```
+
+The viewer finds a possible medium blocker by looking for a known base priority strictly between Base and Peak. This is supporting geometry, not proof that the medium task ran during every boost. Confirm the mutex object, task activity, and switch order on the timeline.
+
+### Mutex, semaphore, and queue pairing
+
+Synchronization events are grouped by object pointer so that different objects on the same STI channel remain separate.
+
+| Object pattern | Pairing direction | Typical meaning |
+|---|---|---|
+| Mutex | `take → give` | Ownership / hold duration |
+| Semaphore used as a resource | `take → give` | Resource residency |
+| Semaphore used as a signal | `give → take` | Posted signal consumed later |
+| Queue | `send → receive` | Recorded producer-to-consumer interval |
+
+For completed hold spans `τ_h`, average hold time is:
+
+```math
+AvgHold = \frac{1}{N} \sum_h \tau_h
+```
+
+Review pairing quality before using hold or blocking results. Important issues include orphan give, cross-task give, unmatched take, unmatched signal, deletion while held, and an object still held at the end of the capture. A mutex taken on one core and given on another is reported as a core-boundary bounce. It may imply cache-line movement, but the trace does not measure the hardware cost.
+
+**Waiter × Owner** and **Mutex Blocking** are derived from successful handoffs. They do not reconstruct blocked attempts or the RTOS wait queue. Use them to rank likely contention, then verify the take/give order and task states on the timeline.
+
+### Interval and Tag instrumentation
+
+Use an **Interval** when one task can record a clear start and stop for an operation. Current interval notes include the interval ID and task ID, allowing different tasks to reuse the same numeric ID without cross-pairing. Legacy notes without a task ID can be ambiguous when concurrent tasks use the same ID.
+
+| Trace pattern | Suitable for |
+|---|---|
+| `interval_start` / `interval_stop` on the same task | Loop iteration, handler, critical region, or complete job |
+| Consecutive values on one Tag channel | Timing across tasks or ISRs |
+| Tag value samples | Queue depth, free memory, sensor value, application state |
+
+Completed intervals provide Count, Min, Avg, Max, Jitter, σ, p50, p95, and p99. Unmatched events near the Scope boundary are excluded and may reflect partial capture. Recursive or overlapping use of the same interval ID should be avoided unless the instrumentation contract defines the nesting order.
+
+Tag values have application-defined units. The viewer can summarize and plot the numeric payload, but it cannot infer whether `10` means bytes, messages, degrees, or a state code. Document each channel and correlate value changes with timeline events.
+
+### Reading scatter plots, histograms, and CDFs
+
+All three views use the same selected sample set:
+
+| View | Preserves time order? | Main question |
+|---|---:|---|
+| Scatter | Yes | When did a spike, trend, or mode change occur? |
+| Histogram | No | Which value ranges contain most samples? |
+| CDF | No | What percentage of samples is at or below a value? |
+
+On a CDF, the horizontal axis is the metric value and the vertical axis is cumulative percentage. The curve begins near 0% and rises toward 100%. A steep rise indicates a tight cluster; a gradual rise indicates a wider distribution or long tail.
+
+| Reference | CDF interpretation |
+|---|---|
+| p5 | 5% of observed samples are at or below this value |
+| p50 | Half of the samples are at or below the median |
+| p95 | 95% are at or below this value; 5% are above it |
+| Avg | A mean reference line; it does not correspond to a fixed cumulative percentage |
+
+Use Linear scale for compact distributions, p5–p95 to focus on the main population while retaining edge buckets, and Log duration when short and long samples differ by orders of magnitude. The scale changes only the horizontal mapping; it does not change the samples or percentiles.
+
+For a deadline `D`, read the CDF height at `D` to estimate the observed completion percentage. This is a result for the selected Scope, not a future guarantee or a proof of worst-case timing.
+
+### Trace Compare reading order
+
+Trace Compare is most reliable when read in this order:
+
+1. Confirm file identity, Scope, tick mode, task matching, core count, and validation warnings.
+2. Use span-normalized Summary rows when capture lengths differ.
+3. Review the regression result on the **Summary** tab for differences that exceed both absolute and relative thresholds.
+4. Open the related detail table and compare tail values. Click a column header to sort; click again to reverse.
+5. Return to both timelines and verify the events behind the difference.
+
+Task rows are matched by display name (`Name[id]`). A changed ID can prevent a logical match. A dash means unavailable, not zero. CPU and utilisation differences use percentage points (`pp`).
+
+Useful comparison groups include Summary, Top Tasks, Core Utilization, Core Migrations, Execution, Blocking, Inter-Arrival, Preemption, Sync, Response, Mutex, Shared Patterns, and Trends. Exported reports include the full tables rather than only the dialog preview.
+
+#### Example: fixed tick compared with tickless idle
+
+Capture the same workload once with a fixed tick and once with tickless idle. Keep TICK instrumentation, workload duration, and build options otherwise equivalent.
+
+| Compare item | What to check |
+|---|---|
+| Context switches and `/s` | Whether suppressed idle ticks reduce scheduler activity |
+| Tick mode, count, gaps, and CV | Whether the two policies were actually observed |
+| Core gap, utilisation, and load balance | Whether idle and busy phases are comparable |
+| Migrations and core pairs | Whether wake-up policy changes task placement |
+| Execution, Blocking, Response tails | Whether power savings affect latency budgets |
+| Preemption and Top Tasks | Which work absorbs tick or wake-up overhead |
+
+Tickless behavior is easiest to see in an idle-heavy cursor range. In a fully busy phase, context-switch and tick counts can remain similar. If a supposed tickless capture still shows regular TICK events, investigate kernel eligibility and ready-list behavior before blaming the trace or viewer.
+
 ## Trace comparison
 
 <a id="statistics-trace-compare" name="statistics-trace-compare"></a>
@@ -1223,6 +1198,34 @@ Read the sign together with the metric meaning and the **Improved / Regressed / 
 Start with capture compatibility and workload duration, then compare overall load, top-task CPU share, timing tails, migration rates, and synchronization evidence. A difference in one metric often explains another: higher CPU load can increase dispatch and blocking tails; changed affinity can increase migration; changed instrumentation can alter event counts without changing runtime behavior.
 
 Use several comparable runs when normal run-to-run variation is unknown. **Trace Compare** shows the observed difference between two captures. It does not perform a statistical significance test by itself, and it does not prove that a code change caused the difference.
+
+## Stable Help links
+
+Each Statistics section has a stable anchor in this form:
+
+```text
+STATISTICS.md#statistics-<section-id>
+```
+
+The `<section-id>` is the same identifier used by the Statistics panel. English and Traditional Chinese documents use identical anchors, so the application can select the appropriate file without changing the fragment.
+
+| Category | Section IDs in default order |
+|---|---|
+| **OVERVIEW** | `cores`, `health`, `task_health` |
+| **TRIAGE** | `anomalies`, `worst`, `patterns` |
+| **TIMING** | `response`, `exec`, `dispatch`, `block`, `crit_path`, `period`, `jitter`, `inter`, `activation`, `ready_gap` |
+| **SCHED** | `task_core`, `core_time`, `migrations`, `core_pairs`, `affinity`, `preempt_matrix`, `preemption`, `priority`, `concurrency`, `switch_reason`, `sched_load` |
+| **SYNC** | `mutex_block`, `wait_owner`, `sync`, `queue`, `sync_level` |
+| **DETAIL** | `core_breakdown`, `idle`, `switch_overhead`, `tasks`, `distrib`, `intervals`, `tags`, `lifecycle`, `deadline` |
+
+The categories describe an investigation purpose:
+
+- **OVERVIEW** summarizes overall condition.
+- **TRIAGE** identifies where to investigate first.
+- **TIMING** explains task latency, execution, and variation.
+- **SCHED** explains multicore placement and scheduling behavior.
+- **SYNC** explains waits and synchronization objects.
+- **DETAIL** provides supporting measurements and instrumented data.
 
 ## Documentation navigation
 

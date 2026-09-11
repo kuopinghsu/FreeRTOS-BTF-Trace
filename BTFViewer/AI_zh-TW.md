@@ -37,25 +37,29 @@ AI 是選用功能。即使不使用 AI，也可以透過統計資料、時間�
 4. [從哪裡使用 AI](#choosing-the-right-entry-point)
 5. [分析流程](#investigation-workflows)
 6. [常見使用案例](#common-use-cases)
-7. [如何解讀結果](#understanding-the-result)
-8. [AI 工具說明](#ai-tools)
-9. [設定與隱私](#configuration-and-privacy)
-10. [檢視器行為](#viewer-behavior)
-11. [疑難排解](#troubleshooting)
+7. [實際範例](#workflows-and-use-cases)
+8. [繼續調查](#continue-the-investigation)
+9. [如何解讀結果](#understanding-the-result)
+10. [AI 工具說明](#ai-tools)
+11. [設定與隱私](#configuration-and-privacy)
+12. [檢視器行為](#viewer-behavior)
+13. [疑難排解](#troubleshooting)
 
 ### 工程參考
 
-12. [引擎限制](#engine-limits)
-13. [完整工具參考](#complete-tool-reference)
 14. [調查案例](#investigation-case)
 15. [調查規劃器](#investigation-planner)
 16. [保存結果與報告](#saved-results-and-reports)
-17. [命令列與回歸檢查](#cli-and-regression-checks)
-18. [基準測試結果](#benchmark-results)
-19. [Analysis 與 AI 工具的分工](#analysis-vs-ai-tools)
-20. [實作注意事項](#implementation-notes)
+17. [引擎限制](#engine-limits)
+18. [完整工具名稱](#complete-tool-reference)
+19. [命令列與回歸檢查](#cli-and-regression-checks)
+20. [基準測試結果](#benchmark-results)
+21. [實作注意事項](#implementation-notes)
+
+22. [文件導覽](#documentation-navigation)
 
 ------------------------------------------------------------------------
+
 
 <a id="what-the-ai-assistant-does" name="what-the-ai-assistant-does"></a>
 
@@ -271,7 +275,6 @@ BTFViewer 有多個 AI 入口。這些入口的差別主要是「會帶入哪一
 
 ------------------------------------------------------------------------
 
-
 <a id="investigation-workflows" name="investigation-workflows"></a>
 
 ## 分析流程
@@ -447,7 +450,6 @@ p95、p99、Max。圈出一個較慢的實例，再檢查執行時間、派送�
 
 ------------------------------------------------------------------------
 
-
 <a id="workflows-and-use-cases" name="workflows-and-use-cases"></a>
 
 ## 實際範例
@@ -484,6 +486,8 @@ Worker 在目前工作階段的回應時間 p99 偏高。
 ```
 
 ------------------------------------------------------------------------
+
+<a id="continue-the-investigation" name="continue-the-investigation"></a>
 
 ## 繼續調查
 
@@ -663,81 +667,6 @@ BTFViewer
 -   `interpret_query`：先解讀一般文字問題，再準備適合的調查要求。
 
 ------------------------------------------------------------------------
-
-
-
-<a id="engine-limits" name="engine-limits"></a>
-
-### 引擎限制
-
-部分工具會根據 BTF 證據整理或推定事件關係。工具名稱不代表它能取得追蹤資料沒有記錄的資訊。
-
-| 引擎 | 可以提供什麼 | 重要限制 |
-| --- | --- | --- |
-| `analyze_temporal_causality` | 根據已記錄證據與 `jump:TIME` 建立時間先後關係 | 不是核心事件重播 |
-| `build_task_dependency_graph` | 整理工作附近的同步、搶佔、遷移與優先權繼承關係 | 不是完整 ISR 或核心物件關係圖 |
-| `decompose_response_time` | 依現有分析結果估算各因素的相對占比 | 不是 cycle-accurate 的回應時間重建 |
-| `rank_root_causes` | 排列假設或分析結果群組 | 排名不是機率 |
-| `investigation_memory` | 在本機保存與取回調查內容 | 不是團隊共用知識庫 |
-| `cluster_incidents` | 依時間接近程度整理事件 | 不能證明事件具有共同原因 |
-| `analyze_distribution` | 分析 BTF 實際提供的樣本分布 | 無法產生追蹤資料／解析器沒有提供的序列 |
-| `analyze_periodicity` | 分析事件到達間隔與時間抖動 | 不是核心計時器模型 |
-| `simulate_schedule` | What-if 估算內部使用的輔助功能 | 不是 RTOS 排程器模擬器，也不是使用者工具 |
-
-BTFViewer 不會重建未記錄的核心內部狀態、不會檢查 ELF／原始碼，也不會進行硬體感知的排程器模擬。追蹤資料不足時，正確結果應是**證據不足**。
-
-<a id="complete-tool-reference" name="complete-tool-reference"></a>
-
-## 完整工具名稱
-
-這一節提供給實作與除錯使用。一般使用者讀完上一節即可。
-
-  ---------------------------------------------------------------------------------------------------
-  Tool                            Tool                            Tool
-  ------------------------------- ------------------------------- -----------------------------------
-  `add_annotation`                `analyze_distribution`          `analyze_periodicity`
-
-  `analyze_temporal_causality`    `analyze_traces`                `assess_evidence_sufficiency`
-
-  `baseline_score`                `bookmark_finding`              `build_causal_chain`
-
-  `build_task_dependency_graph`   `challenge_conclusion`          `check_budget`
-
-  `clear_marks`                   `close_investigation`           `cluster_findings`
-
-  `cluster_incidents`             `compare_performance`           `compare_tasks`
-
-  `correlate_events`              `decompose_response_time`       `detect_anomalies`
-
-  `detect_contradictions`         `detect_priority_inversion`     `explain_finding`
-
-  `export_investigation`          `export_report`                 `find_critical_path`
-
-  `find_related_findings`         `find_similar_investigations`   `generate_experiment_plan`
-
-  `generate_fingerprint`          `generate_report`               `highlight_task`
-
-  `interpret_query`               `investigate`                   `investigation_memory`
-
-  `manage_hypotheses`             `open_corridor_inspector`       `open_statistics_section`
-
-  `optimize`                      `optimize_experiment`           `plan_investigation`
-
-  `query_raw_metric`              `rank_root_causes`              `recommend_experiments`
-
-  `record_experiment_outcome`     `regression_explain`            `regression_localize`
-
-  `reset_view`                    `search_timeline`               `set_cursors`
-
-  `set_view_mode`                 `suggest_scope`                 `summarize_investigation_context`
-
-  `trigger_compare`               `validate_experiment`           `verify_claim`
-
-  `what_if`                       `zoom_to_range`                 
-  ---------------------------------------------------------------------------------------------------
-
-如果模型不支援原生工具呼叫，BTFViewer
-可使用相容的備援格式。需要大量工具操作的調查，仍應優先使用工具呼叫較可靠的模型。
 
 <a id="configuration-and-privacy" name="configuration-and-privacy"></a>
 
@@ -1049,6 +978,79 @@ AI 對話適合探索問題，但最後的工程結果應另外保存。
 
 ------------------------------------------------------------------------
 
+<a id="engine-limits" name="engine-limits"></a>
+
+## 引擎限制
+
+部分工具會根據 BTF 證據整理或推定事件關係。工具名稱不代表它能取得追蹤資料沒有記錄的資訊。
+
+| 引擎 | 可以提供什麼 | 重要限制 |
+| --- | --- | --- |
+| `analyze_temporal_causality` | 根據已記錄證據與 `jump:TIME` 建立時間先後關係 | 不是核心事件重播 |
+| `build_task_dependency_graph` | 整理工作附近的同步、搶佔、遷移與優先權繼承關係 | 不是完整 ISR 或核心物件關係圖 |
+| `decompose_response_time` | 依現有分析結果估算各因素的相對占比 | 不是 cycle-accurate 的回應時間重建 |
+| `rank_root_causes` | 排列假設或分析結果群組 | 排名不是機率 |
+| `investigation_memory` | 在本機保存與取回調查內容 | 不是團隊共用知識庫 |
+| `cluster_incidents` | 依時間接近程度整理事件 | 不能證明事件具有共同原因 |
+| `analyze_distribution` | 分析 BTF 實際提供的樣本分布 | 無法產生追蹤資料／解析器沒有提供的序列 |
+| `analyze_periodicity` | 分析事件到達間隔與時間抖動 | 不是核心計時器模型 |
+| `simulate_schedule` | What-if 估算內部使用的輔助功能 | 不是 RTOS 排程器模擬器，也不是使用者工具 |
+
+BTFViewer 不會重建未記錄的核心內部狀態、不會檢查 ELF／原始碼，也不會進行硬體感知的排程器模擬。追蹤資料不足時，正確結果應是**證據不足**。
+
+<a id="complete-tool-reference" name="complete-tool-reference"></a>
+
+## 完整工具名稱
+
+這一節提供給實作與除錯使用。一般使用者讀完上一節即可。
+
+  ---------------------------------------------------------------------------------------------------
+  Tool                            Tool                            Tool
+  ------------------------------- ------------------------------- -----------------------------------
+  `add_annotation`                `analyze_distribution`          `analyze_periodicity`
+
+  `analyze_temporal_causality`    `analyze_traces`                `assess_evidence_sufficiency`
+
+  `baseline_score`                `bookmark_finding`              `build_causal_chain`
+
+  `build_task_dependency_graph`   `challenge_conclusion`          `check_budget`
+
+  `clear_marks`                   `close_investigation`           `cluster_findings`
+
+  `cluster_incidents`             `compare_performance`           `compare_tasks`
+
+  `correlate_events`              `decompose_response_time`       `detect_anomalies`
+
+  `detect_contradictions`         `detect_priority_inversion`     `explain_finding`
+
+  `export_investigation`          `export_report`                 `find_critical_path`
+
+  `find_related_findings`         `find_similar_investigations`   `generate_experiment_plan`
+
+  `generate_fingerprint`          `generate_report`               `highlight_task`
+
+  `interpret_query`               `investigate`                   `investigation_memory`
+
+  `manage_hypotheses`             `open_corridor_inspector`       `open_statistics_section`
+
+  `optimize`                      `optimize_experiment`           `plan_investigation`
+
+  `query_raw_metric`              `rank_root_causes`              `recommend_experiments`
+
+  `record_experiment_outcome`     `regression_explain`            `regression_localize`
+
+  `reset_view`                    `search_timeline`               `set_cursors`
+
+  `set_view_mode`                 `suggest_scope`                 `summarize_investigation_context`
+
+  `trigger_compare`               `validate_experiment`           `verify_claim`
+
+  `what_if`                       `zoom_to_range`                 
+  ---------------------------------------------------------------------------------------------------
+
+如果模型不支援原生工具呼叫，BTFViewer
+可使用相容的備援格式。需要大量工具操作的調查，仍應優先使用工具呼叫較可靠的模型。
+
 <a id="cli-and-regression-checks" name="cli-and-regression-checks"></a>
 
 ## 命令列與回歸檢查
@@ -1190,7 +1192,6 @@ BTFViewer 不只檢查回答是否「看起來合理」，也會檢查回答能�
 5. 本機模型另外考慮記憶體使用量。
 
 需要重新評估模型時，可以使用 BTFViewer 的 `ai-test` 流程；詳細結果會寫入 [AI_BENCHMARK.md](AI_BENCHMARK.md)。本文件不再展開基準測試程式本身的實作細節。
-
 
 <a id="implementation-notes" name="implementation-notes"></a>
 

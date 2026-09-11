@@ -43,25 +43,29 @@ user-facing record; AI suggestions remain opt-in and do not edit it automaticall
 4. [Choosing the right entry point](#choosing-the-right-entry-point)
 5. [Investigation workflows](#investigation-workflows)
 6. [Common use cases](#common-use-cases)
-7. [Understanding the result](#understanding-the-result)
-8. [AI tools](#ai-tools)
-9. [Configuration and privacy](#configuration-and-privacy)
-10. [Viewer behavior](#viewer-behavior)
-11. [Troubleshooting](#troubleshooting)
+7. [Worked example](#workflows-and-use-cases)
+8. [Continue the investigation](#continue-the-investigation)
+9. [Understanding the result](#understanding-the-result)
+10. [AI tools](#ai-tools)
+11. [Configuration and privacy](#configuration-and-privacy)
+12. [Viewer behavior](#viewer-behavior)
+13. [Troubleshooting](#troubleshooting)
 
 ### Engineering reference
 
-12. [Engine limits](#engine-limits)
-13. [Complete tool reference](#complete-tool-reference)
 14. [Investigation Case](#investigation-case)
 15. [Investigation planner](#investigation-planner)
 16. [Saved results and reports](#saved-results-and-reports)
-17. [CLI and regression checks](#cli-and-regression-checks)
-18. [Benchmark results](#benchmark-results)
-19. [Analysis vs AI tools](#analysis-vs-ai-tools)
-20. [Implementation notes](#implementation-notes)
+17. [Engine limits](#engine-limits)
+18. [Complete tool reference](#complete-tool-reference)
+19. [CLI and regression checks](#cli-and-regression-checks)
+20. [Benchmark results](#benchmark-results)
+21. [Implementation notes](#implementation-notes)
+
+22. [Documentation navigation](#documentation-navigation)
 
 ------------------------------------------------------------------------
+
 
 <a id="what-the-ai-assistant-does" name="what-the-ai-assistant-does"></a>
 
@@ -309,7 +313,6 @@ affect the analysis context.
 
 ------------------------------------------------------------------------
 
-
 <a id="investigation-workflows" name="investigation-workflows"></a>
 
 ## Investigation workflows
@@ -506,7 +509,6 @@ another workload phase.
 
 ------------------------------------------------------------------------
 
-
 <a id="workflows-and-use-cases" name="workflows-and-use-cases"></a>
 
 ## Worked example
@@ -551,6 +553,8 @@ One measurable change or one additional evidence check.
 ```
 
 ------------------------------------------------------------------------
+
+<a id="continue-the-investigation" name="continue-the-investigation"></a>
 
 ## Continue the investigation
 
@@ -774,83 +778,6 @@ These tools come after evidence gathering.
     the appropriate investigation request before the main run.
 
 ------------------------------------------------------------------------
-
-
-
-<a id="engine-limits" name="engine-limits"></a>
-
-### Engine limits
-
-Some tools summarize or infer relationships from BTF evidence. Their names should not be interpreted as capabilities beyond the recorded trace.
-
-| Engine | What it provides | Important limit |
-| --- | --- | --- |
-| `analyze_temporal_causality` | Happens-before relationships from recorded evidence and `jump:TIME` | Not kernel event replay |
-| `build_task_dependency_graph` | BTF synchronization, preemption, migration, and PI edges around tasks | Not a complete ISR or kernel-object graph |
-| `decompose_response_time` | Relative contribution derived from available Finding magnitudes | Not cycle-accurate response-time reconstruction |
-| `rank_root_causes` | Ranking of hypotheses or Finding groups | The rank is not a probability |
-| `investigation_memory` | Local investigation storage and recall | Not a shared team knowledge base |
-| `cluster_incidents` | Groups incidents by time proximity | Does not prove a shared cause |
-| `analyze_distribution` | Distribution analysis from available BTF samples | Cannot create a series the trace/parser does not provide |
-| `analyze_periodicity` | Inter-arrival period and jitter analysis | Not a kernel timer model |
-| `simulate_schedule` | Internal helper used by What-if estimation | Not an RTOS scheduler simulator or user-facing tool |
-
-BTFViewer does not reconstruct unrecorded kernel state, inspect ELF/source code, or perform hardware-aware scheduler simulation. If the trace does not contain enough evidence, the correct result is **insufficient evidence**.
-
-<a id="complete-tool-reference" name="complete-tool-reference"></a>
-
-## Complete tool reference
-
-This section is intended for implementation and debugging. Normal users
-can stop at [AI tools](#ai-tools).
-
-  ---------------------------------------------------------------------------------------------------
-  Tool                            Tool                            Tool
-  ------------------------------- ------------------------------- -----------------------------------
-  `add_annotation`                `analyze_distribution`          `analyze_periodicity`
-
-  `analyze_temporal_causality`    `analyze_traces`                `assess_evidence_sufficiency`
-
-  `baseline_score`                `bookmark_finding`              `build_causal_chain`
-
-  `build_task_dependency_graph`   `challenge_conclusion`          `check_budget`
-
-  `clear_marks`                   `close_investigation`           `cluster_findings`
-
-  `cluster_incidents`             `compare_performance`           `compare_tasks`
-
-  `correlate_events`              `decompose_response_time`       `detect_anomalies`
-
-  `detect_contradictions`         `detect_priority_inversion`     `explain_finding`
-
-  `export_investigation`          `export_report`                 `find_critical_path`
-
-  `find_related_findings`         `find_similar_investigations`   `generate_experiment_plan`
-
-  `generate_fingerprint`          `generate_report`               `highlight_task`
-
-  `interpret_query`               `investigate`                   `investigation_memory`
-
-  `manage_hypotheses`             `open_corridor_inspector`       `open_statistics_section`
-
-  `optimize`                      `optimize_experiment`           `plan_investigation`
-
-  `query_raw_metric`              `rank_root_causes`              `recommend_experiments`
-
-  `record_experiment_outcome`     `regression_explain`            `regression_localize`
-
-  `reset_view`                    `search_timeline`               `set_cursors`
-
-  `set_view_mode`                 `suggest_scope`                 `summarize_investigation_context`
-
-  `trigger_compare`               `validate_experiment`           `verify_claim`
-
-  `what_if`                       `zoom_to_range`                 
-  ---------------------------------------------------------------------------------------------------
-
-Models without native tool calling may use BTFViewer's fallback
-tool-call format. For investigation-heavy work, a model with reliable
-native tool calling is preferred.
 
 <a id="configuration-and-privacy" name="configuration-and-privacy"></a>
 
@@ -1181,6 +1108,81 @@ raw tool logs the main report.
 
 ------------------------------------------------------------------------
 
+<a id="engine-limits" name="engine-limits"></a>
+
+## Engine limits
+
+Some tools summarize or infer relationships from BTF evidence. Their names should not be interpreted as capabilities beyond the recorded trace.
+
+| Engine | What it provides | Important limit |
+| --- | --- | --- |
+| `analyze_temporal_causality` | Happens-before relationships from recorded evidence and `jump:TIME` | Not kernel event replay |
+| `build_task_dependency_graph` | BTF synchronization, preemption, migration, and PI edges around tasks | Not a complete ISR or kernel-object graph |
+| `decompose_response_time` | Relative contribution derived from available Finding magnitudes | Not cycle-accurate response-time reconstruction |
+| `rank_root_causes` | Ranking of hypotheses or Finding groups | The rank is not a probability |
+| `investigation_memory` | Local investigation storage and recall | Not a shared team knowledge base |
+| `cluster_incidents` | Groups incidents by time proximity | Does not prove a shared cause |
+| `analyze_distribution` | Distribution analysis from available BTF samples | Cannot create a series the trace/parser does not provide |
+| `analyze_periodicity` | Inter-arrival period and jitter analysis | Not a kernel timer model |
+| `simulate_schedule` | Internal helper used by What-if estimation | Not an RTOS scheduler simulator or user-facing tool |
+
+BTFViewer does not reconstruct unrecorded kernel state, inspect ELF/source code, or perform hardware-aware scheduler simulation. If the trace does not contain enough evidence, the correct result is **insufficient evidence**.
+
+<a id="complete-tool-reference" name="complete-tool-reference"></a>
+
+## Complete tool reference
+
+This section is intended for implementation and debugging. Normal users
+can stop at [AI tools](#ai-tools).
+
+  ---------------------------------------------------------------------------------------------------
+  Tool                            Tool                            Tool
+  ------------------------------- ------------------------------- -----------------------------------
+  `add_annotation`                `analyze_distribution`          `analyze_periodicity`
+
+  `analyze_temporal_causality`    `analyze_traces`                `assess_evidence_sufficiency`
+
+  `baseline_score`                `bookmark_finding`              `build_causal_chain`
+
+  `build_task_dependency_graph`   `challenge_conclusion`          `check_budget`
+
+  `clear_marks`                   `close_investigation`           `cluster_findings`
+
+  `cluster_incidents`             `compare_performance`           `compare_tasks`
+
+  `correlate_events`              `decompose_response_time`       `detect_anomalies`
+
+  `detect_contradictions`         `detect_priority_inversion`     `explain_finding`
+
+  `export_investigation`          `export_report`                 `find_critical_path`
+
+  `find_related_findings`         `find_similar_investigations`   `generate_experiment_plan`
+
+  `generate_fingerprint`          `generate_report`               `highlight_task`
+
+  `interpret_query`               `investigate`                   `investigation_memory`
+
+  `manage_hypotheses`             `open_corridor_inspector`       `open_statistics_section`
+
+  `optimize`                      `optimize_experiment`           `plan_investigation`
+
+  `query_raw_metric`              `rank_root_causes`              `recommend_experiments`
+
+  `record_experiment_outcome`     `regression_explain`            `regression_localize`
+
+  `reset_view`                    `search_timeline`               `set_cursors`
+
+  `set_view_mode`                 `suggest_scope`                 `summarize_investigation_context`
+
+  `trigger_compare`               `validate_experiment`           `verify_claim`
+
+  `what_if`                       `zoom_to_range`                 
+  ---------------------------------------------------------------------------------------------------
+
+Models without native tool calling may use BTFViewer's fallback
+tool-call format. For investigation-heavy work, a model with reliable
+native tool calling is preferred.
+
 <a id="cli-and-regression-checks" name="cli-and-regression-checks"></a>
 
 ## CLI and regression checks
@@ -1204,6 +1206,8 @@ available.
 <a id="benchmark-results" name="benchmark-results"></a>
 
 <a id="benchmark-suite" name="benchmark-suite"></a>
+<a id="benchmark-results" name="benchmark-results"></a>
+
 ## Benchmark results
 
 BTFViewer's benchmark suite checks whether an AI model can investigate known BTF trace problems reliably. It is designed for **BTFViewer use**, not as a general-purpose LLM ranking.
@@ -1327,7 +1331,6 @@ For a new model or endpoint, compare:
 5. for local models, memory use.
 
 The benchmark can be rerun with the BTFViewer `ai-test` workflow and the detailed report is written to [AI_BENCHMARK.md](AI_BENCHMARK.md). The implementation details of the benchmark runner are intentionally kept out of this guide.
-
 
 <a id="implementation-notes" name="implementation-notes"></a>
 

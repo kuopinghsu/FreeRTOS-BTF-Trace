@@ -87,6 +87,32 @@ describe('analyzeTickHealth — tick vs tickless', () => {
     assert.equal(report.isTickless, false)
   })
 
+  it('ignores xTaskResumeAll() catch-up replays of the same tick count', () => {
+    // While the scheduler is suspended, xTaskIncrementTick() can be replayed
+    // for a tick already recorded (see FreeRTOS-Trace/btf_trace.c), producing
+    // a duplicate xTickCount a few microseconds after the real 1000us tick —
+    // regression test for a bug where this inflated CV enough to misclassify
+    // a real tick-full trace as TICKLESS.
+    const times = []
+    const counts = []
+    for (let i = 0; i < 40; i++) {
+      times.push(i * 1000)
+      counts.push(i)
+      if (i % 13 === 0 && i > 0) {
+        // Catch-up replay: same count, ~15us later.
+        times.push(i * 1000 + 15)
+        counts.push(i)
+      }
+    }
+    const withoutCounts = analyzeTickHealth(times)
+    assert.equal(withoutCounts.isTickless, true, 'no counts: replays look like real gaps')
+
+    const withCounts = analyzeTickHealth(times, counts)
+    assert.equal(withCounts.isTickless, false)
+    assert.ok(withCounts.tickCv <= TICKLESS_CV_THRESHOLD)
+    assert.ok(Math.abs(withCounts.avgPeriod - 1000) <= 2)
+  })
+
   it('busy-window scope can look tickful on a tickless trace', () => {
     const times = [0, 1000, 2000, 8000, 9000, 10000, 11000, 12000]
     const full = analyzeTickHealth(times)

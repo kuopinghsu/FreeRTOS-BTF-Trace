@@ -95,6 +95,11 @@ Selection and Highlight never silently become Filters. Always check the status b
 
 Do not describe an estimated value as a directly recorded kernel event.
 
+<a id="guided-first-review" name="guided-first-review"></a>
+### Guided first review
+
+The guided demo (toolbar or Help) walks a sample trace end-to-end.
+
 <a id="workflow-step-1" name="workflow-step-1"></a>
 ## Step 1 — Open and orient the trace
 
@@ -182,6 +187,8 @@ Check whether the trace contains the STI data needed for the question. For examp
 
 If a required event is missing, record the limitation. Do not replace missing evidence with a precise explanation.
 
+<a id="trace-quality" name="trace-quality"></a>
+
 When capture metadata reports overflow, truncation, or missing instrumentation, the **trace-quality banner** offers **Review details**, **Continue with limitations**, and **Open capture guidance**. Review the affected Statistics and AI conclusions before continuing.
 
 ### Continue when
@@ -260,15 +267,6 @@ Interpret common patterns cautiously:
 
 You have selected one measured sample or recurring pattern that deserves timeline inspection.
 
-<a id="trace-quality" name="trace-quality"></a>
-## Trace quality banner
-
-When capture metadata reports overflow, truncation, or missing instrumentation, a **trace-quality banner** appears with **Review details**, **Continue with limitations**, and **Open capture guidance** (WORKFLOWS). Grouped details list affected Statistics and AI conclusions.
-
-<a id="guided-first-review" name="guided-first-review"></a>
-## Guided first review
-
-The guided demo (toolbar or Help) walks a sample trace end-to-end.
 
 <a id="workflow-step-6" name="workflow-step-6"></a>
 ## Step 6 — Use Analysis Findings for triage
@@ -587,6 +585,8 @@ Useful outputs include:
 Keep the source trace. An exported report summarizes evidence but cannot preserve every interactive timeline action.
 
 **Trace Health pill** — the status bar shows a compact structural-health status (Pass / Caution / Insufficient data); click it for the per-check detail. It reports whether the parsed event model is internally consistent enough to trust the derived statistics — independent of AI and of *Trace Health (TICK)*.
+
+## Advanced reference: investigation storage, automation, and headless use
 
 <a id="investigation-notebook" name="investigation-notebook"></a>
 ### Investigation notebook

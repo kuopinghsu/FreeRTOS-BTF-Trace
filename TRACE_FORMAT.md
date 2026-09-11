@@ -1,6 +1,6 @@
 # FreeRTOS-BTF-Trace Format Reference
 
-This document defines the `trace.bin` file layout, event encoding, BTF mapping, and trace-quality metadata.
+This document describes the `trace.bin` layout, event encoding, BTF mapping, and trace-quality metadata.
 
 | Document | Purpose |
 |---|---|
@@ -59,6 +59,7 @@ Each slot stores one NUL-terminated task name.
 - `traceTASK_CREATE` writes the task name.
 - If `task_id == 0` or `task_id >= configMAX_TRACE_TASKS`, the event is retained without a task name.
 - Export reports an unavailable task-name slot as `#taskTableOverflow true`.
+- A name longer than `configMAX_TRACE_TASK_NAME_LEN - 1` bytes is silently truncated when it is copied into its slot; no truncation marker is recorded, and neither BTFViewer parser adds one when displaying the name.
 
 ## 4. Event record
 
@@ -89,7 +90,7 @@ Events are written at `current_index % max_events`.
 - If `event_count == max_events`, `current_index` identifies the oldest event.
 - For a full ring, replay `current_index` through the end, then record 0 through `current_index - 1`.
 
-After the ring wraps, each new event overwrites the oldest event. `event_count` remains equal to `max_events`, and the BTF export contains `#ringOverflow true`.
+After the ring wraps, each new event overwrites the oldest event. `event_count` stays equal to `max_events`. The BTF export then contains `#ringOverflow true`.
 
 ## 6. Timestamp reconstruction
 
@@ -110,11 +111,11 @@ A BTF export starts with the standard BTF metadata and may include these quality
 | `#taskTableOverflow true` | At least one task ID had no task-name slot |
 | `#truncated true` | `traceEND()` was not called, or `trace.bin` is shorter than a complete blob |
 
-A clean trace omits these lines. The exporter infers the flags; they are not stored in the 44-byte binary header. BTFViewer displays a warning when any flag is present.
+A clean trace does not contain these lines. The exporter infers the flags; they are not stored in the 44-byte binary header. BTFViewer displays a warning when any flag is present.
 
 ## 8. Convert binary data to BTF
 
-`tools/gentrace` and live `btf_dump()` convert each binary event to one BTF 2.2.0 CSV line.
+`tools/gentrace` and live `btf_dump()` convert each binary event to one BTF 2.2.0 CSV line. Both use the label formats described in §10. Their handling of IDLE names and whitespace differs; see §10.2.
 
 ### 8.1 BTF file header
 
@@ -143,19 +144,19 @@ Examples:
 
 ```text
 214276,Core_0,0,STI,interval_start,0,trigger,0 tid:1
-215514,Core_0,0,T,[0/0007]CS,0,resume,
+215514,Core_0,0,T,CS[7],0,resume,
 217432,Core_1,0,STI,task,0,trigger,suspend SR0[271]
 ```
 
-On SMP targets, the core ID comes from `types[30:24]`. It appears as `Core_N`, or as part of `[N/id]Name` for task-switch events.
+On SMP targets, the core ID comes from `types[30:24]`. It appears as `Core_N` in the `source` field; the `target` field never repeats it (see §10).
 
 ## 9. Event mapping
 
 | Event (`event_t`) | Hook or API | `param1` | `param2` | BTF type | Target | Action | Note |
 |---|---|---|---|---|---|---|---|
-| `TASK_SWITCHED_IN` (1) | `traceTASK_SWITCHED_IN` | task ID | 0 | `T` | `[core/id]Name` | `resume` | Empty; source is the previous task |
-| `TASK_SWITCHED_OUT` (2) | `traceTASK_SWITCHED_OUT` | task ID | 0 | `T` | `[core/id]Name` | `preempt` | Empty |
-| `TASK_CREATE` (3) | `traceTASK_CREATE` | task ID | priority | `T` | `[core/id]Name` | `preempt` | `create pri:N` |
+| `TASK_SWITCHED_IN` (1) | `traceTASK_SWITCHED_IN` | task ID | 0 | `T` | `Name[id]` | `resume` | Empty; source is `Core_N` (BTF 2.3) |
+| `TASK_SWITCHED_OUT` (2) | `traceTASK_SWITCHED_OUT` | task ID | 0 | `T` | `Name[id]` | `preempt` | Empty |
+| `TASK_CREATE` (3) | `traceTASK_CREATE` | task ID | priority | `T` | `Name[id]` | `preempt` | `create pri:N` |
 | `TASK_DELETE` (4) | `traceTASK_DELETE` | task ID | 0 | `STI` | `task` | `trigger` | `delete Name[id]` |
 | `TASK_SUSPEND` (5) | `traceTASK_SUSPEND` | task ID | 0 | `STI` | `task` | `trigger` | `suspend Name[id]` |
 | `TASK_RESUME` (6) | `traceTASK_RESUME` | task ID | 0 | `STI` | `task` | `trigger` | `resume Name[id]` |
@@ -189,17 +190,33 @@ On SMP targets, the core ID comes from `types[30:24]`. It appears as `Core_N`, o
 
 `TASK_CREATE` writes the task name to the task table. Task IDs in BTF rows use `uxTCBNumber`. Interval `param2` uses the same ID.
 
-Task-switch labels use this format:
+`tools/gentrace` and live `btf_dump()` both use `Name[id]` — the task name, then a plain, unpadded decimal task ID in brackets — as the one default task-label format, for both the task-switch target (`T` rows: `TASK_SWITCHED_IN`/`_OUT`/`TASK_CREATE`) and the STI note suffix (`delete`/`suspend`/`resume`/`set_priority`/`priority_inherit`/`priority_disinherit`/`affinity_set` — see §9):
 
 ```text
-[core/id]Name
+CS[7]
+delete CS[7]
 ```
 
-The task ID is padded to four digits:
+The core is never repeated in the target/note label — it is already carried by the row's own `source` field (`Core_N`).
 
-```text
-[0/0007]CS
-```
+### 10.1 Legacy label forms
+
+The BTFViewer Desktop and Web parsers also accept two older label formats. This keeps compatibility with traces created before `Name[id]` became the default:
+
+| Form | Example | Where it was used |
+|---|---|---|
+| `[core_id/task_id]Name` | `[0/0007]CS` | Task-switch target, zero-padded to four digits, before this change |
+| `Name(task_id)` | `CS(7)` | Never emitted by this project's own exporters; accepted for non-native BTF files |
+
+`task_id` (and `core_id` in the bracket form) may be decimal or `0x`-prefixed hexadecimal in any of the three forms. Neither exporter emits these legacy formats. A decoder needs them only for older captures or BTF files from other tools. Both BTFViewer parsers always display `Name[id]`, regardless of the label format in the input file.
+
+### 10.2 Special names and normalization
+
+- **IDLE tasks.** FreeRTOS SMP names its per-core idle tasks `IDLE0`…`IDLE9`, then `IDLE:`, `IDLE;`, … for core IDs ≥ 10 — the kernel appends the single character `(char)('0' + coreID)` (`prvCreateIdleTasks`), so above core 9 the suffix is no longer a digit even though the arithmetic (`suffix - '0'`) still recovers the right core number.
+  `tools/gentrace` recognizes any `IDLE<char>` raw name and re-emits it as the canonical `IDLE<N>` (decimal core number). The live `btf_dump()` path does **not** do this normalization — it prints the raw task name from the table as-is. A trace converted offline and a trace dumped live from the same run can therefore render idle-task labels differently once `configNUMBER_OF_CORES > 10`.
+- **Whitespace sanitization.** `tools/gentrace` also replaces ` `, `\t`, `\r`, and `\n` in every task name with `_` before writing it (originally for VCD `$var` identifiers, applied to BTF output too). `btf_dump()` does not sanitize task names at all.
+- **BTFViewer's IDLE recognition.** Both the desktop and web parsers treat any task name matching `idle` (case-insensitive), optionally followed by digits and/or a `(0x..)`/`(dec)` suffix — e.g. `idle`, `idle0`, `IDLE 2(0x1)` — as a reserved pseudo-task: excluded from CPU-utilization and per-task statistics, sorted after regular tasks, and shown in grayscale (shaded by IDLE index) instead of the regular task-color palette. A task literally named `TICK` (the `TASK_INCREMENT_TICK` target) is likewise excluded and sorted last. This recognition is independent of whether the name was normalized by `gentrace` or left raw by `btf_dump()` — `idle:` (core 10, un-normalized) still matches.
+- **No name-based merging.** Tasks are merged across cores by numeric task ID only; two tasks that happen to share a display name but have different IDs are never combined into one row.
 
 ## 11. Limits and failure modes
 

@@ -95,6 +95,11 @@ flowchart TD
 
 不要把估計值描述成核心直接記錄的事件。
 
+<a id="guided-first-review" name="guided-first-review"></a>
+### 引導式首次檢視（Guided first review）
+
+導覽示範（工具列或 Help）會帶你完整走一遍範例追蹤資料。
+
 <a id="workflow-step-1" name="workflow-step-1"></a>
 ## 步驟 1 — 開啟並認識追蹤資料
 
@@ -182,6 +187,8 @@ flowchart TD
 
 若缺少必要事件，請記錄這項限制。不要用精確的解釋取代缺失的證據。
 
+<a id="trace-quality" name="trace-quality"></a>
+
 ### 繼續條件
 
 追蹤資料包含相關工作負載階段，工作與核心資料合理，而且追蹤事件足以支持預定分析。否則應先修正擷取設定並重新記錄。
@@ -258,15 +265,6 @@ flowchart TD
 
 你已選出一個需要回到時間軸檢查的量測樣本或重複型態。
 
-<a id="trace-quality" name="trace-quality"></a>
-## 追蹤品質橫幅（Trace quality banner）
-
-當擷取中繼資料回報溢位、截斷或缺少追蹤事件時，會出現 **trace-quality banner**，並提供 **Review details**、**Continue with limitations** 與 **Open capture guidance**（WORKFLOWS）。分組細節會列出受影響的 Statistics 與 AI 結論。
-
-<a id="guided-first-review" name="guided-first-review"></a>
-## 引導式首次檢視（Guided first review）
-
-導覽示範（工具列或 Help）會帶你完整走一遍範例追蹤資料。
 
 <a id="workflow-step-6" name="workflow-step-6"></a>
 ## 步驟 6 — 使用 **Analysis Findings** 進行初步判斷
@@ -585,6 +583,8 @@ Baseline 與 Candidate 代表等效條件，目標指標已重新量測，而且
 請保留原始追蹤資料。匯出報告可以摘要證據，但無法保留所有互動式時間軸操作。
 
 **Trace Health 標記**——狀態列會顯示精簡的結構健康狀態（Pass / Caution / Insufficient data）；點擊可展開每項檢查的細節。它回報已解析的事件模型是否夠一致，足以信任由此衍生的統計——與 AI 及 *Trace Health (TICK)* 無關。
+
+## 進階參考：調查保存、自動化與無介面操作
 
 <a id="investigation-notebook" name="investigation-notebook"></a>
 ### 調查筆記（Investigation notebook）

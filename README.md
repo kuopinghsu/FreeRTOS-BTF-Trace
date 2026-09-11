@@ -34,20 +34,9 @@ FreeRTOS-BTF-Trace records scheduling and synchronization events in a compact RA
 
 [Open the BTFViewer live demo](https://apps.kuoping.com/btf_viewer.html?demo)
 
-## Repository layout
-
-| Path | Contents |
-|---|---|
-| `FreeRTOS-Trace/` | FreeRTOS hooks, ring buffer, and trace dump support |
-| `tools/` | `gentrace` converter for BTF and VCD output |
-| `sim/` | RISC-V RV64 SMP simulator |
-| `Demo/` | FreeRTOS SMP demo workloads |
-| `BTFViewer/` | Desktop and Web trace-analysis applications |
-| `tracedata/` | Sample BTF and VCD traces |
-
 ## Quick start
 
-The bundled demo runs on the RISC-V RV64 simulator in `sim/`.
+The included demo runs on the RISC-V RV64 simulator in `sim/`.
 
 ### 1. Install the toolchain
 
@@ -71,7 +60,7 @@ make CORES=2 run    # 2-core SMP
 make CORES=8 run    # 8-core SMP
 ```
 
-On the first run, the build clones **FreeRTOS-Kernel V11.3.0**. When the simulator exits, `gentrace` creates:
+On the first run, the build clones **FreeRTOS-Kernel V11.3.0**. After the simulator exits, `gentrace` creates:
 
 ```text
 tracedata/trace.btf
@@ -101,7 +90,7 @@ example-16cores.btf.gz
 
 ## Demo workload
 
-`Demo/examples/freertos_test/` contains 11 tests. Tests 1–10 use yields to keep the workload active. Test 11 uses `vTaskDelay` to compare normal ticks with tickless idle.
+`Demo/examples/freertos_test/` contains 11 tests. Tests 1–10 use task yields to keep the workload active. Test 11 uses `vTaskDelay` to compare normal tick operation with tickless idle.
 
 Enable tickless idle with:
 
@@ -129,7 +118,7 @@ Interval ID **0** covers each complete test. IDs **1–11** identify individual 
 
 ### BTFViewer
 
-BTFViewer provides task and core timelines, measurement cursors, Statistics, Analysis Findings, migration inspection, trace comparison, AI-assisted investigation, and export.
+BTFViewer provides task and core timelines, measurement cursors, Statistics, Analysis Findings, migration inspection, trace comparison, optional AI-assisted investigation, and export.
 
 ```bash
 python BTFViewer/builds/btf_viewer.py tracedata/example-8cores.btf.gz
@@ -140,20 +129,6 @@ For the Web application, open `BTFViewer/builds/btf_viewer.html` in a browser.
 Desktop requirements: Python 3.8+ and PySide6 6.4 or later.
 
 See **[BTFViewer/WORKFLOWS.md](BTFViewer/WORKFLOWS.md)** for analysis procedures.
-
-### Eclipse Trace Compass
-
-Open `tracedata/trace.btf` directly.
-
-![Trace Compass](images/trace-compass.png)
-
-### GTKWave
-
-```bash
-gtkwave tracedata/trace.vcd
-```
-
-![GTKWave VCD view](images/vcd.png)
 
 ## Custom instrumentation
 
@@ -185,6 +160,17 @@ See **[PORTING.md](PORTING.md)** for configuration, time-source requirements, du
 
 See **[TRACE_FORMAT.md](TRACE_FORMAT.md)** for the binary layout, event encoding, BTF mapping, and trace-quality flags.
 
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `FreeRTOS-Trace/` | FreeRTOS hooks, ring buffer, and trace dump support |
+| `tools/` | `gentrace` converter for BTF and VCD output |
+| `sim/` | RISC-V RV64 SMP simulator |
+| `Demo/` | FreeRTOS SMP demo workloads |
+| `BTFViewer/` | Desktop and Web trace-analysis applications |
+| `tracedata/` | Sample BTF and VCD traces |
+
 ## Related project
 
 [freertos-barectf](https://github.com/gpollo/freertos-barectf) provides a related BareCTF and Trace Compass implementation.
@@ -192,3 +178,4 @@ See **[TRACE_FORMAT.md](TRACE_FORMAT.md)** for the binary layout, event encoding
 ## License
 
 MIT
+

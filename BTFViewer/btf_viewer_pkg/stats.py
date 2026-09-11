@@ -16912,8 +16912,8 @@ class _StatsPanel(QWidget):
             colors = {"good": "#5FCF6F", "warning": "#E8C84A", "critical": "#E85D5D"}
 
             # --- health summary (full width; wraps in narrow stats dock) ---
-            mode_label = "TICKLESS" if _tick["is_tickless"] else "TICK"
             cv_pct = _tick["tick_cv"] * 100.0
+            mode_label = f"{'TICKLESS' if _tick['is_tickless'] else 'TICK'} · CV {cv_pct:.1f}%"
             health_lbl = self._lbl(
                 f"{_tick['health'].upper()}  ·  {_tick['tick_count']:,} ticks  ·  "
                 f"avg {_format_time(_tick['avg_period'], trace.time_scale)}  ·  "

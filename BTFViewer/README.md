@@ -1,6 +1,6 @@
 # BTF Trace Viewer
 
-**Version 1.5.0 — Desktop and Web**
+**Version 1.0.0 — Desktop and Web**
 
 ![BTFViewer AI-assisted analysis](../images/btfviewer-ai.png)
 
@@ -142,6 +142,25 @@ The generated `builds/demo_8cores.btfw` contains the script, trace, and selected
 
 <a id="viewer-controls" name="viewer-controls">&#x200B;</a>
 
+## Basic analysis workflow
+
+For an initial review, use the following sequence:
+
+1. Open the trace and select **Fit Trace** to view its complete duration.
+2. Select **Load** and check whether all cores carry a reasonable share of the work.
+3. Open **Analysis** and review the highest-severity findings (Triage).
+4. Select **Open Statistics** on a finding to open the relevant Statistics section. This does not change the Scope, Filters, or **Limit to C1–Cn**; use **Apply cursors** if you want to place the finding’s recommended window (C1–C2).
+5. Select **Show on timeline** to center the timeline on the relevant event. This action does not change the Scope or Filters.
+6. Use **Back** / **Forward** in the evidence inspector to revisit prior timeline jumps without changing Scope or Filters.
+7. Select a high value or outlier to jump to the corresponding timeline event.
+8. Place cursors around the affected period, confirm **Scope: C1–Cn** in the status bar, and enable **Limit to C1–Cn**.
+9. Inspect the task, core, preemption, blocking, synchronization, or migration details.
+10. If needed, ask the AI Assistant to explain or verify the measured evidence.
+
+Start with measured evidence instead of an assumed cause. Confirm the behavior in the timeline and Statistics before drawing a conclusion. See [WORKFLOWS.md](WORKFLOWS.md) for detailed procedures.
+
+<a id="analysis-and-statistics" name="analysis-and-statistics">&#x200B;</a>
+
 ## Viewer controls
 
 The viewer uses one interface, one set of controls, and one analysis workflow. During an investigation, check the active trace, **Scope**, **Filters**, View Mode, **Selection**, and **Highlight** before interpreting a result.
@@ -270,25 +289,6 @@ Desktop can reopen files from their original paths. Web restoration depends on b
 
 <a id="basic-analysis-workflow" name="basic-analysis-workflow">&#x200B;</a>
 
-## Basic analysis workflow
-
-For an initial review, use the following sequence:
-
-1. Open the trace and select **Fit Trace** to view its complete duration.
-2. Select **Load** and check whether all cores carry a reasonable share of the work.
-3. Open **Analysis** and review the highest-severity findings (Triage).
-4. Select **Open Statistics** on a finding to open the relevant Statistics section. This does not change the Scope, Filters, or **Limit to C1–Cn**; use **Apply cursors** if you want to place the finding’s recommended window (C1–C2).
-5. Select **Show on timeline** to center the timeline on the relevant event. This action does not change the Scope or Filters.
-6. Use **Back** / **Forward** in the evidence inspector to revisit prior timeline jumps without changing Scope or Filters.
-7. Select a high value or outlier to jump to the corresponding timeline event.
-8. Place cursors around the affected period, confirm **Scope: C1–Cn** in the status bar, and enable **Limit to C1–Cn**.
-9. Inspect the task, core, preemption, blocking, synchronization, or migration details.
-10. If needed, ask the AI Assistant to explain or verify the measured evidence.
-
-Start with measured evidence instead of an assumed cause. Confirm the behavior in the timeline and Statistics before drawing a conclusion. See [WORKFLOWS.md](WORKFLOWS.md) for detailed procedures.
-
-<a id="analysis-and-statistics" name="analysis-and-statistics">&#x200B;</a>
-
 ## Analysis and Statistics
 
 BTFViewer calculates all results from recorded BTF events. It does not inspect source code or ELF files, simulate an RTOS scheduler, or estimate data that is not present in the trace.
@@ -375,30 +375,7 @@ Open the Inspector from the toolbar **Investigation** group or the activity rail
 | 6 | **Topology / Path info** | A chord view of core-to-core flow; the **Path info** tab shows the selected corridor's detail. The buttons at the top right switch the layout. |
 | 7 | **AI actions** | **Investigate with AI**, plus one-click prompts — Investigate this path, Explain this migration burst, Verify possible ping-pong, and Compare with another trace. |
 
-### Comparing open traces
-
-**Compare** is available when two or more traces are open. It summarizes differences in utilization, migrations, execution, blocking, response time, synchronization activity, and deadline misses.
-
-The **Summary** tab identifies the **Baseline** (reference trace) and **Candidate** (new trace), counts regressions and improvements, and explains the overall result. Small changes without practical engineering significance are omitted. Click a column header to sort any compare table; click again to reverse the order.
-
-![Trace Compare](../images/btfviewer-web-compare.png)
-
-| # | Region | What it does |
-|---|---|---|
-| 1 | **Trace A / Trace B selectors** | Choose which open trace is the **Baseline (A)** and which is the **Candidate (B)**. |
-| 2 | **Scope and Δ convention** | Optionally limit the comparison to each tab's cursor range; the note states that **Δ = Baseline A − Candidate B** (`—` means unavailable, `pp` = percentage points). |
-| 3 | **Section rail** | Jump between compared areas — Summary, Top Tasks, Core Utilization, Migrations, Execution, Blocking, Inter-Arrival, Response, Preemption, Sync, Mutex, and cross-trace Trends. |
-| 4 | **Comparability check** | Warns when the traces are not directly comparable — different core counts, or task sets that barely overlap — so per-core and load-balance deltas are read with care. |
-| 5 | **Verdict banner** | The overall call (Improved / Regressed / Mixed / Unchanged) with the regression and improvement counts behind it. |
-| 6 | **Summary cards** | Regressions, Improvements, Warnings, and the single **Biggest mover**. |
-| 7 | **Change chart and metrics table** | Engineering-significant deltas as a diverging bar chart (improved ↔ regressed), with the full **All summary metrics** table (Metric / Baseline A / Candidate B / Change) below it. |
-| 8 | **Footer** | **Export HTML**, **Save baseline** / **Score vs baseline**, **Validate experiment…**, or **Ask AI about this**. |
-
-This is an optional comparison tool. It is not required by the basic investigation workflow. When you use it, compare equivalent workload phases and measurement ranges. To keep the same relative phase in view while flipping between Baseline and Candidate timeline tabs, enable **Settings → Display → Link A/B timeline zoom when switching compare tabs** (see [Multiple traces](#multiple-traces)).
-
-<a id="investigation-notebook" name="investigation-notebook">&#x200B;</a>
-
-### Investigation Notebook
+## Investigation Notebook
 
 The Notebook is a written, four-step record of one investigation — **Question → Evidence → Verify → Conclusion** — kept alongside the trace. It works with or without AI: every AI action is optional, scoped to the current step, and never changes the Notebook by itself (see **Cowork with AI** below). The Notebook is the user-facing investigation record. The AI Assistant keeps its own internal **Investigation Case** ([AI.md → Investigation Case](AI.md#investigation-case)) for context, but users do not need to manage it.
 
@@ -477,6 +454,29 @@ API keys: enter a key per preset in **Settings → AI**, or rely on `OPENAI_API_
 See [AI.md](AI.md) for setup, privacy, model options, tools, troubleshooting, CLI testing, and evaluation details.
 
 <a id="export" name="export">&#x200B;</a>
+
+## Trace comparison
+
+**Compare** is available when two or more traces are open. It summarizes differences in utilization, migrations, execution, blocking, response time, synchronization activity, and deadline misses.
+
+The **Summary** tab identifies the **Baseline** (reference trace) and **Candidate** (new trace), counts regressions and improvements, and explains the overall result. Small changes without practical engineering significance are omitted. Click a column header to sort any compare table; click again to reverse the order.
+
+![Trace Compare](../images/btfviewer-web-compare.png)
+
+| # | Region | What it does |
+|---|---|---|
+| 1 | **Trace A / Trace B selectors** | Choose which open trace is the **Baseline (A)** and which is the **Candidate (B)**. |
+| 2 | **Scope and Δ convention** | Optionally limit the comparison to each tab's cursor range; the note states that **Δ = Baseline A − Candidate B** (`—` means unavailable, `pp` = percentage points). |
+| 3 | **Section rail** | Jump between compared areas — Summary, Top Tasks, Core Utilization, Migrations, Execution, Blocking, Inter-Arrival, Response, Preemption, Sync, Mutex, and cross-trace Trends. |
+| 4 | **Comparability check** | Warns when the traces are not directly comparable — different core counts, or task sets that barely overlap — so per-core and load-balance deltas are read with care. |
+| 5 | **Verdict banner** | The overall call (Improved / Regressed / Mixed / Unchanged) with the regression and improvement counts behind it. |
+| 6 | **Summary cards** | Regressions, Improvements, Warnings, and the single **Biggest mover**. |
+| 7 | **Change chart and metrics table** | Engineering-significant deltas as a diverging bar chart (improved ↔ regressed), with the full **All summary metrics** table (Metric / Baseline A / Candidate B / Change) below it. |
+| 8 | **Footer** | **Export HTML**, **Save baseline** / **Score vs baseline**, **Validate experiment…**, or **Ask AI about this**. |
+
+This is an optional comparison tool. It is not required by the basic investigation workflow. When you use it, compare equivalent workload phases and measurement ranges. To keep the same relative phase in view while flipping between Baseline and Candidate timeline tabs, enable **Settings → Display → Link A/B timeline zoom when switching compare tabs** (see [Multiple traces](#multiple-traces)).
+
+<a id="investigation-notebook" name="investigation-notebook">&#x200B;</a>
 
 ## Export
 
@@ -627,3 +627,4 @@ Thanks to everyone who has contributed to this project.
 | Contributor | Contribution |
 |---|---|
 | [DiogoRoseira](https://github.com/DiogoRoseira) | CPU Load Graph and metric-distribution charts |
+

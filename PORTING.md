@@ -1,6 +1,6 @@
 # FreeRTOS-BTF-Trace Porting Guide
 
-This guide explains how to integrate the trace library with an existing FreeRTOS target.
+This guide explains how to integrate the trace library into an existing FreeRTOS target.
 
 | Document | Purpose |
 |---|---|
@@ -82,7 +82,7 @@ Other targets stop at `#error` until this port hook is implemented.
 
 ## 3. Select an output mode
 
-Configure the mode in `btf_port.h`, or define it before including the trace header.
+Select the output mode in `btf_port.h`, or define the option before including the trace header.
 
 | Mode | Configuration | Result |
 |---|---|---|
@@ -133,7 +133,7 @@ When the ring is full:
 2. `event_count` remains equal to `max_events`.
 3. The BTF export contains `#ringOverflow true`.
 
-Choose a capacity large enough for the workload period that you need to analyze.
+Choose a capacity large enough to retain the workload period that you need to analyze.
 
 ## 5. Add application instrumentation
 
@@ -154,7 +154,7 @@ traceTAG(0, (int)allocated);
 
 ### Intervals
 
-Use an interval to mark the start and end of an application phase:
+Use an interval to mark the start and end of an application phase or operation:
 
 ```c
 traceINTERVAL_START(1);
@@ -168,9 +168,9 @@ traceINTERVAL_STOP(1);
 | `traceINTERVAL_STOP(id)` | The same interval and task IDs |
 | BTF note | `{id} tid:{task_id}` |
 
-Use `traceTAG()` and `traceINTERVAL_*()` in normal task code because these wrappers acquire the trace lock.
+In normal task code, use `traceTAG()` and `traceINTERVAL_*()`. These wrappers acquire the trace lock.
 
-Use `btf_traceTAG()` or `btf_traceINTERVAL_*()` only when the caller already holds the required lock or cannot use the wrappers.
+Use `btf_traceTAG()` or `btf_traceINTERVAL_*()` only when the caller already holds the required lock, or when the wrappers cannot be used.
 
 The demo uses tag 0 for heap bytes and interval IDs 0–11 for its test regions.
 

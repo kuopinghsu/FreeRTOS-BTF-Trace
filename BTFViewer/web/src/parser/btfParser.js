@@ -139,6 +139,7 @@ export async function parseBtf(text, progressCallback) {
   const tEventsByTime = new Map()
   const stiEvents = []
   const tickStiTimes = []  // timestamps from STI TICK events → drawn on ruler
+  const tickStiCounts = []  // (time, xTickCount) pairs, same order as tickStiTimes
 
   let timeMin = 0
   let timeMax = 0
@@ -233,6 +234,9 @@ export async function parseBtf(text, progressCallback) {
               if (stiTarget === 'TICK') {
                 // STI TICK events are rendered as ruler marks, not as STI channel rows.
                 tickStiTimes.push(t)
+                const tickNote = parts.length > 7 ? parts[7].trim() : ''
+                const tickCount = parseInt(tickNote, 10)
+                tickStiCounts.push([t, Number.isSafeInteger(tickCount) ? tickCount : null])
               } else {
                 stiEvents.push({
                   time:   t,
@@ -620,11 +624,15 @@ export async function parseBtf(text, progressCallback) {
 
   progress(97, 'Finalising…')
   await yieldToHost()
-  const sortedTickStiTimes = tickStiTimes.sort((a, b) => a - b)
+  // Stable-sort by time so tickStiTimes/tickStiCounts stay paired (matches
+  // the plain `tickStiTimes.sort()` this replaces).
+  tickStiCounts.sort((a, b) => a[0] - b[0])
+  const sortedTickStiTimes = tickStiCounts.map(p => p[0])
+  const sortedTickStiCounts = tickStiCounts.map(p => p[1])
   const stiEventTimes = stiEvents.map(e => e.time).sort((a, b) => a - b)
   progress(98, 'Analysing tick health…')
   await yieldToHost()
-  const tickHealth = analyzeTickHealth(sortedTickStiTimes)
+  const tickHealth = analyzeTickHealth(sortedTickStiTimes, sortedTickStiCounts)
 
   applyBtfVersionWarning(meta)
 
@@ -653,6 +661,7 @@ export async function parseBtf(text, progressCallback) {
     stiStartsByTarget,
     stiValRange,
     tickStiTimes: sortedTickStiTimes,
+    tickStiCounts: sortedTickStiCounts,
     stiEventTimes,
     tickHealth,
 

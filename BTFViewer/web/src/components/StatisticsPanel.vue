@@ -1017,7 +1017,7 @@
                 :title="tickHealth.isTickless
                   ? `Tickless mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals vary because the scheduler suppresses ticks during idle periods.`
                   : `Tick mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals are constant.`"
-              >{{ tickHealth.isTickless ? 'TICKLESS' : 'TICK' }}</span>
+              >{{ tickHealth.isTickless ? 'TICKLESS' : 'TICK' }} · CV {{ (tickHealth.tickCv * 100).toFixed(1) }}%</span>
               · {{ tickHealth.tickCount.toLocaleString() }} ticks
               · avg {{ fmtTime(tickHealth.avgPeriod) }}
               · max gap {{ fmtTime(tickHealth.maxGap) }}

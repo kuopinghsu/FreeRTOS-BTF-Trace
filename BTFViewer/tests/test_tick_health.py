@@ -26,7 +26,7 @@ from btf_viewer_pkg.parser import (  # noqa: E402
 )
 
 
-def _trace_with_ticks(tick_times, *, time_max=None):
+def _trace_with_ticks(tick_times, *, time_max=None, tick_counts=None):
     times = list(tick_times)
     tmax = time_max if time_max is not None else (times[-1] if times else 0)
     sti = [StiEvent(t, "Core_0", "TICK", "trigger", "") for t in times]
@@ -45,6 +45,7 @@ def _trace_with_ticks(tick_times, *, time_max=None):
         core_segs={"Core_0": segs},
         task_repr={"Worker[1]": "Worker[1]"},
         tick_sti_times=times,
+        tick_sti_counts=tick_counts or [],
     )
 
 
@@ -74,6 +75,32 @@ class TickHealthTests(unittest.TestCase):
         self.assertEqual(report["tick_count"], 0)
         self.assertEqual(report["health"], "unknown")
         self.assertFalse(report["is_tickless"])
+
+    def test_ignores_catch_up_replays_of_the_same_tick_count(self):
+        """xTaskResumeAll() replays a pended tick's traceTASK_INCREMENT_TICK
+        call while the scheduler is suspended (FreeRTOS-Trace/btf_trace.c),
+        producing a duplicate xTickCount ~microseconds after the real 1 ms
+        tick. Regression test for a bug where this inflated CV enough to
+        misclassify a real tick-full trace as tickless."""
+        times = []
+        counts = []
+        for i in range(40):
+            times.append(i * 1000)
+            counts.append(i)
+            if i % 13 == 0 and i > 0:
+                # Catch-up replay: same count, ~15us later.
+                times.append(i * 1000 + 15)
+                counts.append(i)
+
+        without_counts = _tick_health_report(_trace_with_ticks(times))
+        self.assertTrue(without_counts["is_tickless"],
+                         "no counts: replays look like real gaps")
+
+        with_counts = _tick_health_report(
+            _trace_with_ticks(times, tick_counts=counts))
+        self.assertFalse(with_counts["is_tickless"])
+        self.assertLessEqual(with_counts["tick_cv"], _TICK_HEALTH_TICKLESS_CV)
+        self.assertAlmostEqual(with_counts["avg_period"], 1000, delta=2)
 
     def test_scope_busy_window_can_look_tickful(self):
         # Full trace is tickless; a busy sub-window with only 1× gaps is TICK

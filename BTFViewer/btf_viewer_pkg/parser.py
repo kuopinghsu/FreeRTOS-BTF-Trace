@@ -2597,6 +2597,11 @@ class BtfTrace:
     task_create_repr: Dict[str, str]                                        = field(default_factory=dict)
     # Sorted timestamps from STI TICK events - rendered as ruler marks.
     tick_sti_times: List[int]                                               = field(default_factory=list)
+    # xTickCount note value for each tick_sti_times entry, same order/length.
+    # A repeated count marks a scheduler catch-up replay (xTaskResumeAll()
+    # re-firing traceTASK_INCREMENT_TICK for a tick already recorded), not a
+    # second real timer IRQ - see _tick_health_report.
+    tick_sti_counts: List[Optional[int]]                                    = field(default_factory=list)
     # All STI event times sorted once at parse — used by migration stats.
     sti_event_times: List[int]                                              = field(default_factory=list)
     # Core migrations: consecutive slices of the same merge-key on different cores.
@@ -3594,6 +3599,22 @@ _TICK_HEALTH_GAP_FACTOR = 2.0
 # Coefficient-of-variation threshold for tickless-mode detection.
 # In tick mode CV is near 0; tickless idle suppresses ticks during sleep
 # so the interval distribution widens (CV grows above this threshold).
+#
+# Caveat for a busy many-core SMP build with configUSE_TICKLESS_IDLE=0:
+# this CV can legitimately cross the threshold even though tickless idle was
+# never compiled in. On FreeRTOS SMP the tick timestamp is stamped inside
+# xTaskIncrementTick(), which the port may only call while holding the task
+# lock and the ISR lock (see Demo/port/RISC-V/port.c's xPortTimerTickHandler
+# for the concrete lock-ordering contract and measured numbers). The
+# underlying timer interrupt still fires exactly on schedule; what varies is
+# how long the tick-owning core has to wait for those two locks, since any
+# other core's critical section can be holding one when the tick lands. It's
+# inherent to FreeRTOS SMP's lock-serialized tick handling, and it gets
+# worse the more cores are contending for the same two spinlocks - measured
+# at ~0.4% CV on 1 core rising to ~23% on 8 cores for the same workload. So
+# the tick doesn't actually go tickless; SMP lock-wait jitter on a busy,
+# many-core build can just look like it did, by the same CV yardstick that
+# correctly flags genuine tickless idle elsewhere.
 _TICK_HEALTH_TICKLESS_CV = 0.05
 PREEMPTION_CHAIN_MAX_ROWS = 2000
 
@@ -4294,10 +4315,24 @@ def _tick_health_report(trace: "BtfTrace",
     tick intervals.  In tick mode all intervals are nearly constant (low CV);
     in tickless mode idle periods suppress ticks so the interval distribution
     widens (high CV).
+
+    While the scheduler is suspended, xTaskResumeAll() replays pended ticks by
+    calling xTaskIncrementTick() again for a count already recorded, so the
+    same xTickCount can appear at two nearby, non-periodic timestamps (see the
+    catch-up-replay comment in FreeRTOS-Trace/btf_trace.c). Two consecutive
+    STI TICK rows sharing that count are the same logical tick, not a second
+    timer IRQ - excluded here so a handful of catch-up replays cannot inflate
+    the CV enough to misclassify a real tick-full trace as tickless.
     """
     times = trace.tick_sti_times
+    counts = trace.tick_sti_counts or []
     if lo is not None and hi is not None:
-        times = [t for t in times if lo <= t <= hi]
+        pairs = [
+            (t, counts[i] if i < len(counts) else None)
+            for i, t in enumerate(times) if lo <= t <= hi
+        ]
+        times = [p[0] for p in pairs]
+        counts = [p[1] for p in pairs]
     if not times:
         return {"tick_count": 0, "health": "unknown", "large_gaps": [],
                 "avg_period": 0, "max_gap": 0, "missed_estimate": 0,
@@ -4310,6 +4345,10 @@ def _tick_health_report(trace: "BtfTrace",
     max_gap = 0
     missed_total = 0
     for i in range(1, len(times)):
+        prev_count = counts[i - 1] if i - 1 < len(counts) else None
+        cur_count = counts[i] if i < len(counts) else None
+        if prev_count is not None and cur_count is not None and prev_count == cur_count:
+            continue  # catch-up replay of the same tick, not a real interval
         delta = times[i] - times[i - 1]
         tick_deltas.append(delta)
         sum_delta += delta
@@ -7606,6 +7645,7 @@ def _parse_btf(filepath: str,
     t_events_by_time: Dict[int, List[Tuple]] = defaultdict(list)
     sti_events: List[StiEvent] = []
     tick_sti_times: List[int] = []  # timestamps from STI TICK events -> rendered on ruler
+    tick_sti_notes: List[Tuple[int, Optional[int]]] = []  # (time, tick count) pairs, same order
     time_min = 0
     time_max = 0
     first_event = True
@@ -7696,6 +7736,11 @@ def _parse_btf(filepath: str,
                 if _sti_target == "TICK":
                     # STI TICK events are rendered as ruler marks, not STI channel rows.
                     tick_sti_times.append(t)
+                    _tick_note = parts[7].strip() if len(parts) > 7 else ""
+                    try:
+                        tick_sti_notes.append((t, _int(_tick_note)))
+                    except ValueError:
+                        tick_sti_notes.append((t, None))
                 else:
                     sti_events.append(StiEvent(
                         time=t,
@@ -7708,6 +7753,9 @@ def _parse_btf(filepath: str,
     open_seg: Dict[str, Tuple[int, str]] = {}
     last_core: Dict[str, str] = {}
     segments: List[TaskSegment] = []
+    # Stable-sort by time so tick_sti_times/tick_sti_counts stay paired
+    # (matches the plain `sorted(tick_sti_times)` this replaces).
+    _tick_sti_notes_sorted = sorted(tick_sti_notes, key=lambda p: p[0])
 
     if progress_callback:
         progress_callback(25, "Reconstructing segments…")
@@ -8093,7 +8141,8 @@ def _parse_btf(filepath: str,
         core_task_seg_lod_ultra_starts=dict(_core_task_lod_ultra_starts),
         task_create_times=_task_create_times,
         task_create_repr=_task_create_repr,
-        tick_sti_times=sorted(tick_sti_times),
+        tick_sti_times=[p[0] for p in _tick_sti_notes_sorted],
+        tick_sti_counts=[p[1] for p in _tick_sti_notes_sorted],
         sti_event_times=sorted(e.time for e in sti_events),
         migrations=_migrations,
         migrations_by_mk=dict(_migrations_by_mk),

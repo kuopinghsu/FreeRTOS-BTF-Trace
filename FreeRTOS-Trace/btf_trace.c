@@ -344,30 +344,27 @@ void btf_dump(
         switch(event->types & EVENT_MASK) {
             case TRACE_EVENT_TASK_SWITCHED_IN:
                 /* BTF 2.3: resume source must be the Core (not the previous task). */
-                printf( "%" PRIu64 ",Core_%d,0,T,[%d/%04" PRIu32 "]%s,0,%s,%s\n",
+                printf( "%" PRIu64 ",Core_%d,0,T,%s[%d],0,%s,%s\n",
                         current_time,
                         coreid,
-                        coreid,
-                        event->param1, get_taskname(trace_data, event->param1),
+                        get_taskname(trace_data, event->param1), (int)event->param1,
                         "resume",
                         "");
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
-                printf( "%" PRIu64 ",Core_%d,0,T,[%d/%04" PRIu32 "]%s,0,%s,%s\n",
+                printf( "%" PRIu64 ",Core_%d,0,T,%s[%d],0,%s,%s\n",
                         current_time,
                         coreid,
-                        coreid,
-                        event->param1, get_taskname(trace_data, event->param1),
+                        get_taskname(trace_data, event->param1), (int)event->param1,
                         "preempt",
                         "");
                 current_task[coreid] = (int)event->param1;
                 break;
             case TRACE_EVENT_TASK_CREATE:
-                printf( "%" PRIu64 ",Core_%d,0,T,[%d/%04" PRIu32 "]%s,0,%s,%s pri:%d\n",
+                printf( "%" PRIu64 ",Core_%d,0,T,%s[%d],0,%s,%s pri:%d\n",
                         current_time,
                         coreid,
-                        coreid,
-                        event->param1, get_taskname(trace_data, event->param1),
+                        get_taskname(trace_data, event->param1), (int)event->param1,
                         "preempt",
                         "create",
                         event->param2);

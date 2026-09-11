@@ -365,6 +365,31 @@ void vPortReleaseISRLock( void )
  *
  * Calling xTaskIncrementTick() raw from assembly violates (b) and (c),
  * causing a configASSERT spin when a delayed task's timeout expires.
+ *
+ * Trace-timing note: the BTF STI TICK timestamp is stamped inside
+ * xTaskIncrementTick() (via traceTASK_INCREMENT_TICK), i.e. AFTER both
+ * vPortGetTaskLock() and vTaskEnterCriticalFromISR() above have returned —
+ * not at the moment the MTIP interrupt actually landed. The underlying
+ * mtimecmp re-arm (portSMPupdateMtimerCompareRegister) is unconditional and
+ * drift-free for every core, so the real hardware interrupt IS exactly
+ * periodic; what's visible in the trace is how long core 0 had to wait for
+ * these two locks before it could log the tick. That wait is not a bug —
+ * it's inherent to FreeRTOS SMP's lock-serialized tick handling, and it
+ * gets worse the more cores are contending for the same two spinlocks (task
+ * lock + ISR lock), since any core's critical section anywhere in the
+ * kernel can hold one of them when core 0's tick fires. Measured on this
+ * demo (context-switch-stress workload, TICKLESS=0): tick-interval CV rises
+ * from ~0.4% at 1 core to ~23% at 8 cores as contention increases — high
+ * enough, at 8 cores, to cross BTFViewer's coefficient-of-variation
+ * tickless-mode threshold (_TICK_HEALTH_TICKLESS_CV / TICKLESS_CV_THRESHOLD
+ * = 0.05) and have a genuinely tick-full trace misreported as "(TICKLESS)"
+ * in the viewer's Trace Health panel, even though configUSE_TICKLESS_IDLE
+ * is 0 and vPortSuppressTicksAndSleep() was never compiled in. In short:
+ * the tick doesn't actually go tickless — SMP lock-wait jitter on a busy,
+ * many-core build can just look like it did, by the same yardstick that
+ * correctly flags genuine tickless idle. A single- or dual-core comparison
+ * (e.g. many Xtensa/ESP32 configs) won't show this, simply because it isn't
+ * contending for the same locks across as many cores.
  * -------------------------------------------------------------------- */
 BaseType_t xPortTimerTickHandler( void )
 {
