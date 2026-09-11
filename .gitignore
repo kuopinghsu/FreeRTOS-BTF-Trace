@@ -95,3 +95,5 @@ BTFViewer/builds/mermaid-cache/
 # Noto CJK OTF fetched on demand for *_zh-TW.pdf (see scripts/fonts/README.md)
 BTFViewer/scripts/fonts/*.otf
 
+/BTFViewer/dist
+

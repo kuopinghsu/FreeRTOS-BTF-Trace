@@ -253,7 +253,14 @@ function supportsDirectoryPicker() {
     && typeof window.showDirectoryPicker === 'function'
 }
 
-export const FILE_OPEN_PICKER_ID = 'btf-trace-open-v3'
+// Bump this id whenever OPEN_FILE_PICKER_TYPES' accept/extension shape
+// changes (as it did for the .xtf -> .btfw rename): the browser persists
+// per-id native-dialog state (including the last accept-type filter) across
+// showOpenFilePicker({ id }) calls, independent of the `types` passed on a
+// given call. Reusing a stale id makes the new extension show up grayed out
+// on the first Open after the change, self-correcting after one open/close
+// cycle once the browser resyncs its cached state — so a fresh id is the fix.
+export const FILE_OPEN_PICKER_ID = 'btf-trace-open-v4'
 
 let lastFileOpenHandle = null
 

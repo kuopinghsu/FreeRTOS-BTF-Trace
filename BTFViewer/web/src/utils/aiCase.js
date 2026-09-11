@@ -907,6 +907,22 @@ export function formatInvestigationIssueCard(card) {
 export const AI_SESSION_MAX_MESSAGES = 40
 export const AI_SESSION_MAX_CHARS = 80000
 
+/** Shrink a live `tools` list to what the Tool Usage fold needs to re-render
+ *  after restore: name, status, result. Keep in sync with `_dump_session_tools`
+ *  in ai_case.py. */
+function dumpSessionTools(raw) {
+  const tools = Array.isArray(raw?.tools) ? raw.tools : null
+  if (!tools) return null
+  const out = tools
+    .filter(t => t && t.name)
+    .map(t => ({
+      name: String(t.name || ''),
+      status: String(t.status || ''),
+      result: typeof t.result === 'string' ? t.result : null,
+    }))
+  return out.length ? out : null
+}
+
 export function dumpInvestigationSession({ payload = null, plan = null, messages = [] } = {}) {
   const msgs = []
   let total = 0
@@ -917,7 +933,22 @@ export function dumpInvestigationSession({ payload = null, plan = null, messages
     if (!['user', 'assistant', 'evidence'].includes(role)) continue
     if (total + text.length > AI_SESSION_MAX_CHARS) break
     total += text.length
-    msgs.push({ role, content: text.slice(0, 8000) })
+    const msg = { role, content: text.slice(0, 8000) }
+    // Tool Usage fold metadata: `tools` rides on the assistant turn(s),
+    // `turn_complete`/`analysis_elapsed_s` on the user turn that started the
+    // query. Both are needed for planQueryBlocks() to reproduce the fold
+    // after a .btfw restore. Wire keys are snake_case to match what
+    // dump_investigation_session in ai_case.py writes — this file is shared
+    // between a desktop- and a web-produced .btfw, so both sides must agree
+    // on the on-disk spelling even though the live JS message objects
+    // (`raw.turnComplete`/`raw.analysisElapsedS`) stay camelCase.
+    const tools = dumpSessionTools(raw)
+    if (tools) msg.tools = tools
+    if (raw?.turnComplete) {
+      msg.turn_complete = true
+      msg.analysis_elapsed_s = Number(raw.analysisElapsedS) || 0
+    }
+    msgs.push(msg)
   }
   return JSON.stringify({
     v: 1,
@@ -940,7 +971,16 @@ export function parseInvestigationSession(raw) {
     if (!m || typeof m !== 'object') continue
     const role = String(m.role || '')
     if (!['user', 'assistant', 'evidence'].includes(role)) continue
-    messages.push({ role, content: String(m.content || '').slice(0, 8000) })
+    const msg = { role, content: String(m.content || '').slice(0, 8000) }
+    const tools = dumpSessionTools(m)
+    if (tools) msg.tools = tools
+    // Wire keys are snake_case (see dumpInvestigationSession); translate to
+    // the camelCase shape the live component/planQueryBlocks expect.
+    if (m.turn_complete) {
+      msg.turnComplete = true
+      msg.analysisElapsedS = Number(m.analysis_elapsed_s) || 0
+    }
+    messages.push(msg)
   }
   return {
     payload: data.payload && typeof data.payload === 'object' ? data.payload : null,

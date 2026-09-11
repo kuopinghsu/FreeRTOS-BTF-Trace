@@ -6,6 +6,6 @@ Open Settings, then AI, enable the assistant, choose the model, enter any requir
 
 Choose the context level that fits the investigation. Compact reduces context, Balanced is the normal default, and Full Evidence provides more detail for difficult cases.
 
-The AI tab follows six stages: Triage, Scope, Investigate, Verify, Experiment, and Compare. Start Investigation provides the guided entry point. AI can organize and test explanations, but Statistics and the timeline remain the measurement reference.
+Start Investigation provides the guided entry point. AI can organize and test explanations, but Statistics and the timeline remain the measurement reference.
 
 This demo opens with a recorded investigation, produced with gemini-3.5-flash-lite, already in the AI log. The next three steps read that recorded Start Investigation, Verify finding, and Explain region result before you run your own.

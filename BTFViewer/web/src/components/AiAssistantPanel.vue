@@ -1929,7 +1929,11 @@ function investigationSnapshot() {
   }))
 }
 
-function restoreInvestigation(raw) {
+// `replace: false` (app-boot restore of the user's own last session) won't
+// clobber a chat already in the panel. `replace: true` (explicit .btfw/demo
+// open) always shows the incoming case, since the user just asked to open
+// that file.
+function restoreInvestigation(raw, { replace = false } = {}) {
   const parsed = parseInvestigationSession(raw)
   const msgs = parsed.messages || []
   if (!investigationSessionHasChat(msgs)) {
@@ -1938,11 +1942,25 @@ function restoreInvestigation(raw) {
   }
   if (parsed.payload) evidencePayload = parsed.payload
   if (parsed.plan) investigationPlan.value = parsed.plan
-  if (msgs.length && !messages.value.length) {
-    messages.value = msgs.map(m => ({
-      role: m.role,
-      content: m.content,
-    }))
+  if (msgs.length && (replace || !messages.value.length)) {
+    // Dict shape matches what a live turn produces (AiAssistantPanel.vue's own
+    // `.tools`/`turnComplete`/`analysisElapsedS` pushes), so planQueryBlocks()
+    // can rebuild the Tool Usage fold for a restored turn, not just a live one.
+    // A bare placeholder — no text and no tools — never becomes a chat entry
+    // (mirrors `_apply_investigation_session`'s filter in ai_assistant.py):
+    // without this, an intermediate tool-round turn whose `tools` metadata
+    // planQueryBlocks doesn't recognize would render as an empty bubble.
+    messages.value = msgs
+      .filter(m => m.role && (String(m.content || '').trim() || m.tools?.length))
+      .map(m => {
+        const out = { role: m.role, content: m.content }
+        if (m.tools?.length) out.tools = m.tools
+        if (m.turnComplete) {
+          out.turnComplete = true
+          out.analysisElapsedS = m.analysisElapsedS || 0
+        }
+        return out
+      })
   }
   bumpEvidence()
 }

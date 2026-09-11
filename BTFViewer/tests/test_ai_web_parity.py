@@ -2566,6 +2566,82 @@ console.log(JSON.stringify({
                     f"{theme}.{py_key}",
                 )
 
+    def test_session_tool_usage_wire_format_cross_language(self) -> None:
+        """A .btfw's ai_case.json is written by whichever app ran the
+        investigation and restored by either app, so the on-disk `tools` /
+        `turn_complete` / `analysis_elapsed_s` keys must mean the same thing
+        on both sides — not just round-trip within one language. Regression
+        test for a bug where dump_investigation_session wrote snake_case
+        keys but dumpInvestigationSession wrote camelCase into the same
+        ai_case.json shape, so a desktop-produced session silently lost its
+        Tool Usage fold (and left raw empty placeholder bubbles) when opened
+        on web, while a self-consistent round trip on either language alone
+        looked fine."""
+        from btf_viewer_pkg.ai_case import dump_investigation_session
+        from btf_viewer_pkg.ai_response_flow import plan_query_blocks
+
+        messages = [
+            {"role": "user", "content": "investigate", "turn_complete": True,
+             "analysis_elapsed_s": 12.3},
+            {"role": "assistant", "content": ""},
+            {"role": "assistant", "content": "",
+             "tools": [{"name": "query_raw_metric", "status": "done", "result": "ok"}]},
+            {"role": "assistant", "content": "Verdict: Confirmed"},
+        ]
+        # A desktop-produced .btfw: Python writes, JS (web) must read it back
+        # with the Tool Usage fold intact and the bare placeholder dropped.
+        blob_py = dump_investigation_session(messages=messages)
+        js_src = """
+import { parseInvestigationSession } from './src/utils/aiCase.js'
+import { planQueryBlocks } from './src/utils/aiResponseFlow.js'
+const parsed = parseInvestigationSession(%s)
+const { hidden, meta } = planQueryBlocks(parsed.messages)
+console.log(JSON.stringify({
+  messages: parsed.messages,
+  hidden: [...hidden],
+  meta: [...meta.entries()],
+}))
+""" % json.dumps(blob_py)
+        js = self._node_json(js_src)
+        self.assertEqual(len(js["messages"]), 4)
+        self.assertTrue(js["messages"][0]["turnComplete"])
+        self.assertAlmostEqual(js["messages"][0]["analysisElapsedS"], 12.3, places=3)
+        js_meta = dict(js["meta"])
+        self.assertEqual(list(js_meta.keys()), [3])
+        self.assertEqual(js_meta[3]["tools"][0]["name"], "query_raw_metric")
+
+        # A web-produced .btfw: JS writes, Python (desktop) must read it back
+        # the same way.
+        js_dump_src = """
+import { dumpInvestigationSession } from './src/utils/aiCase.js'
+console.log(dumpInvestigationSession({ messages: %s.map(m => ({
+  role: m.role,
+  content: m.content,
+  tools: m.tools,
+  turnComplete: m.turn_complete,
+  analysisElapsedS: m.analysis_elapsed_s,
+})) }))
+""" % json.dumps(messages)
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required for Desktop/Web runtime parity")
+        proc = subprocess.run(
+            [node, "--input-type=module", "-e", js_dump_src],
+            cwd=BTF_ROOT / "web", capture_output=True, text=True, timeout=60,
+            check=False,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stderr.strip() or proc.stdout.strip() or "node failed")
+        blob_js = proc.stdout.strip().splitlines()[-1]
+        from btf_viewer_pkg.ai_case import parse_investigation_session
+        py_parsed = parse_investigation_session(blob_js)
+        self.assertTrue(py_parsed["messages"][0].get("turn_complete"))
+        self.assertAlmostEqual(
+            py_parsed["messages"][0].get("analysis_elapsed_s"), 12.3, places=3)
+        hidden, meta = plan_query_blocks(py_parsed["messages"])
+        self.assertEqual(list(meta.keys()), [3])
+        self.assertEqual(meta[3]["tools"][0]["name"], "query_raw_metric")
+
     def test_session_overlay_inspector_parity(self) -> None:
         """Investigation restore, finding overlays, and task inspector stay lockstep."""
         assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(

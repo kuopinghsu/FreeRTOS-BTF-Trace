@@ -24544,6 +24544,25 @@ AI_SESSION_MAX_MESSAGES = 40
 AI_SESSION_MAX_CHARS = 80000
 
 
+def _dump_session_tools(raw: Any) -> List[Dict[str, Any]]:
+    """Shrink a live ``tools`` list to what the Tool Usage fold needs to
+    re-render after restore: name, status, result. Keep in sync with
+    ``_dumpSessionTools`` in ``aiCase.js``."""
+    tools = raw.get("tools") if isinstance(raw, dict) else None
+    if not isinstance(tools, list):
+        return []
+    out = []
+    for t in tools:
+        if not isinstance(t, dict) or not t.get("name"):
+            continue
+        out.append({
+            "name": str(t.get("name") or ""),
+            "status": str(t.get("status") or ""),
+            "result": t.get("result") if isinstance(t.get("result"), str) else None,
+        })
+    return out
+
+
 def dump_investigation_session(
     *,
     payload: Optional[dict] = None,
@@ -24551,7 +24570,7 @@ def dump_investigation_session(
     messages: Optional[Sequence[Any]] = None,
 ) -> str:
     """JSON for session restore (evidence + plan + recent chat)."""
-    msgs: List[Dict[str, str]] = []
+    msgs: List[Dict[str, Any]] = []
     total = 0
     for raw in list(messages or [])[-AI_SESSION_MAX_MESSAGES:]:
         if isinstance(raw, dict):
@@ -24567,7 +24586,22 @@ def dump_investigation_session(
         if total + len(text) > AI_SESSION_MAX_CHARS:
             break
         total += len(text)
-        msgs.append({"role": role, "content": text[:8000]})
+        msg: Dict[str, Any] = {"role": role, "content": text[:8000]}
+        # Tool Usage fold metadata: `tools` rides on the assistant turn(s),
+        # `turn_complete`/`analysis_elapsed_s` on the user turn that started
+        # the query. Both are needed for plan_query_blocks() to reproduce the
+        # fold after a .btfw restore. Keep in sync with dumpInvestigationSession
+        # in aiCase.js.
+        tools = _dump_session_tools(raw)
+        if tools:
+            msg["tools"] = tools
+        if isinstance(raw, dict) and raw.get("turn_complete"):
+            msg["turn_complete"] = True
+            try:
+                msg["analysis_elapsed_s"] = float(raw.get("analysis_elapsed_s") or 0.0)
+            except (TypeError, ValueError):
+                msg["analysis_elapsed_s"] = 0.0
+        msgs.append(msg)
     blob = {
         "v": 1,
         "payload": payload if isinstance(payload, dict) else None,
@@ -24597,7 +24631,17 @@ def parse_investigation_session(raw: Any) -> Dict[str, Any]:
         role = str(m.get("role") or "")
         if role not in ("user", "assistant", "evidence"):
             continue
-        msgs.append({"role": role, "content": str(m.get("content") or "")[:8000]})
+        parsed: Dict[str, Any] = {"role": role, "content": str(m.get("content") or "")[:8000]}
+        tools = _dump_session_tools(m)
+        if tools:
+            parsed["tools"] = tools
+        if m.get("turn_complete"):
+            parsed["turn_complete"] = True
+            try:
+                parsed["analysis_elapsed_s"] = float(m.get("analysis_elapsed_s") or 0.0)
+            except (TypeError, ValueError):
+                parsed["analysis_elapsed_s"] = 0.0
+        msgs.append(parsed)
     payload = data.get("payload") if isinstance(data.get("payload"), dict) else None
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
     return {"payload": payload, "plan": plan, "messages": msgs}
@@ -51120,10 +51164,16 @@ def create_ai_assistant_panel(
             msgs = []
             for e in self._entries:
                 if isinstance(e, dict):
-                    msgs.append({
+                    msg: Dict[str, Any] = {
                         "role": str(e.get("role") or ""),
                         "content": str(e.get("content") or e.get("text") or ""),
-                    })
+                    }
+                    if e.get("tools"):
+                        msg["tools"] = e["tools"]
+                    if e.get("turn_complete"):
+                        msg["turn_complete"] = True
+                        msg["analysis_elapsed_s"] = e.get("analysis_elapsed_s") or 0.0
+                    msgs.append(msg)
                 elif isinstance(e, (list, tuple)) and len(e) >= 2:
                     msgs.append({"role": str(e[0] or ""), "content": str(e[1] or "")})
             return dump_investigation_session(
@@ -51142,10 +51192,15 @@ def create_ai_assistant_panel(
             except Exception:
                 pass
 
-        def _apply_investigation_session(self, parsed: Dict[str, Any]) -> bool:
+        def _apply_investigation_session(self, parsed: Dict[str, Any], replace: bool = False) -> bool:
             """Apply a parsed investigation session (payload + plan + chat).
             Returns True if it carried a real chat. Shared by localStorage
-            restore and .btfw workspace restore."""
+            restore and .btfw workspace restore.
+
+            ``replace=False`` (app-boot restore of the user's own last
+            session) refuses to clobber a chat already in the panel.
+            ``replace=True`` (explicit .btfw/demo open) always shows the
+            incoming case, since the user just asked to open that file."""
             msgs = (parsed or {}).get("messages") or []
             if not investigation_session_has_chat(msgs):
                 self._refresh_guide_ui()
@@ -51155,11 +51210,27 @@ def create_ai_assistant_panel(
             if parsed.get("plan"):
                 self._investigation_plan = parsed["plan"]
                 self._set_investigation_plan(parsed["plan"])
-            if msgs and not self._entries:
+            if msgs and (replace or not self._entries):
+                if replace:
+                    self._entries.clear()
                 for m in msgs:
                     role = str(m.get("role") or "")
                     text = str(m.get("content") or "")
-                    if role and text:
+                    tools = m.get("tools") if isinstance(m.get("tools"), list) else None
+                    if not role or not (text or tools):
+                        continue
+                    if tools or m.get("turn_complete"):
+                        # Dict shape (matches live _append()/_stamp_query_complete())
+                        # so plan_query_blocks() can rebuild the Tool Usage fold
+                        # for a restored turn, not just a live one.
+                        entry: Dict[str, Any] = {"role": role, "text": text}
+                        if tools:
+                            entry["tools"] = tools
+                        if m.get("turn_complete"):
+                            entry["turn_complete"] = True
+                            entry["analysis_elapsed_s"] = m.get("analysis_elapsed_s") or 0.0
+                        self._entries.append(entry)
+                    else:
                         self._entries.append((role, text))
                 if self._entries:
                     self._refresh_log()
@@ -51194,7 +51265,7 @@ def create_ai_assistant_panel(
             try:
                 blob = data if isinstance(data, str) else json.dumps(data)
                 return self._apply_investigation_session(
-                    parse_investigation_session(blob))
+                    parse_investigation_session(blob), replace=True)
             except Exception:
                 return False
 

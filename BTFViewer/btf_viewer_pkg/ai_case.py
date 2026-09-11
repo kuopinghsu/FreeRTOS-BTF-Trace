@@ -1050,6 +1050,25 @@ AI_SESSION_MAX_MESSAGES = 40
 AI_SESSION_MAX_CHARS = 80000
 
 
+def _dump_session_tools(raw: Any) -> List[Dict[str, Any]]:
+    """Shrink a live ``tools`` list to what the Tool Usage fold needs to
+    re-render after restore: name, status, result. Keep in sync with
+    ``_dumpSessionTools`` in ``aiCase.js``."""
+    tools = raw.get("tools") if isinstance(raw, dict) else None
+    if not isinstance(tools, list):
+        return []
+    out = []
+    for t in tools:
+        if not isinstance(t, dict) or not t.get("name"):
+            continue
+        out.append({
+            "name": str(t.get("name") or ""),
+            "status": str(t.get("status") or ""),
+            "result": t.get("result") if isinstance(t.get("result"), str) else None,
+        })
+    return out
+
+
 def dump_investigation_session(
     *,
     payload: Optional[dict] = None,
@@ -1057,7 +1076,7 @@ def dump_investigation_session(
     messages: Optional[Sequence[Any]] = None,
 ) -> str:
     """JSON for session restore (evidence + plan + recent chat)."""
-    msgs: List[Dict[str, str]] = []
+    msgs: List[Dict[str, Any]] = []
     total = 0
     for raw in list(messages or [])[-AI_SESSION_MAX_MESSAGES:]:
         if isinstance(raw, dict):
@@ -1073,7 +1092,22 @@ def dump_investigation_session(
         if total + len(text) > AI_SESSION_MAX_CHARS:
             break
         total += len(text)
-        msgs.append({"role": role, "content": text[:8000]})
+        msg: Dict[str, Any] = {"role": role, "content": text[:8000]}
+        # Tool Usage fold metadata: `tools` rides on the assistant turn(s),
+        # `turn_complete`/`analysis_elapsed_s` on the user turn that started
+        # the query. Both are needed for plan_query_blocks() to reproduce the
+        # fold after a .btfw restore. Keep in sync with dumpInvestigationSession
+        # in aiCase.js.
+        tools = _dump_session_tools(raw)
+        if tools:
+            msg["tools"] = tools
+        if isinstance(raw, dict) and raw.get("turn_complete"):
+            msg["turn_complete"] = True
+            try:
+                msg["analysis_elapsed_s"] = float(raw.get("analysis_elapsed_s") or 0.0)
+            except (TypeError, ValueError):
+                msg["analysis_elapsed_s"] = 0.0
+        msgs.append(msg)
     blob = {
         "v": 1,
         "payload": payload if isinstance(payload, dict) else None,
@@ -1103,7 +1137,17 @@ def parse_investigation_session(raw: Any) -> Dict[str, Any]:
         role = str(m.get("role") or "")
         if role not in ("user", "assistant", "evidence"):
             continue
-        msgs.append({"role": role, "content": str(m.get("content") or "")[:8000]})
+        parsed: Dict[str, Any] = {"role": role, "content": str(m.get("content") or "")[:8000]}
+        tools = _dump_session_tools(m)
+        if tools:
+            parsed["tools"] = tools
+        if m.get("turn_complete"):
+            parsed["turn_complete"] = True
+            try:
+                parsed["analysis_elapsed_s"] = float(m.get("analysis_elapsed_s") or 0.0)
+            except (TypeError, ValueError):
+                parsed["analysis_elapsed_s"] = 0.0
+        msgs.append(parsed)
     payload = data.get("payload") if isinstance(data.get("payload"), dict) else None
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
     return {"payload": payload, "plan": plan, "messages": msgs}

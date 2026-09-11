@@ -2872,13 +2872,21 @@ async function startDemoPack(pack) {
   // Pre-seed the AI panel with the demo's investigation case, if it ships one
   // (packed investigation/ai_case.json, or next to a loose demo folder).
   if (pack.aiCase) {
-    nextTick(() => {
-      try {
-        aiPanelRef.value?.restoreInvestigation?.(pack.aiCase)
-      } catch (err) {
-        console.error('demo AI-case restore failed:', err)
-      }
-    })
+    // The AI panel only mounts once `trace` is set (right-panel `v-if`), and
+    // the demo's own trace load happens later inside runner.run() — so a
+    // single nextTick here is too early the first time a trace is opened.
+    // Wait for the panel to actually exist before restoring into it.
+    const stopAiCaseWatch = watch(aiPanelRef, (panel) => {
+      if (!panel) return
+      stopAiCaseWatch()
+      nextTick(() => {
+        try {
+          panel.restoreInvestigation?.(pack.aiCase, { replace: true })
+        } catch (err) {
+          console.error('demo AI-case restore failed:', err)
+        }
+      })
+    }, { immediate: true })
   }
   const runner = createDemoRunner(demoHost(), pack, { aiWaitCapSec: 4, voiceLang: picked })
   _demoRunner = runner
@@ -6209,7 +6217,7 @@ function applyWorkspaceRestore(ws) {
     notes.push('AI investigation')
     nextTick(() => {
       try {
-        aiPanelRef.value?.restoreInvestigation?.(ws.ai_case)
+        aiPanelRef.value?.restoreInvestigation?.(ws.ai_case, { replace: true })
       } catch (err) {
         console.error('workspace AI-case restore failed:', err)
       }
