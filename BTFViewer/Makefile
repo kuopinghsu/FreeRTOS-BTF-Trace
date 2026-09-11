@@ -255,7 +255,14 @@ $(DOCS_HTML): $(BUILDS)/.docs-html-stamp
 # (override font with CJK_MAINFONT=…). Otherwise fontspec + ucharclasses
 # (scripts/cjk-fallback.tex) — this machine often has Droid Sans Fallback
 # without texlive-xecjk. Required for *_zh-TW.md PDFs.
-CJK_MAINFONT ?= $(shell fc-list :lang=zh family 2>/dev/null | head -1 | cut -d',' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$$//')
+# fc-list's family aliases can list the CJK-localized name before the
+# Latin one when the shell locale is CJK (e.g. zh_TW.UTF-8), and escapes
+# hyphens in CJK aliases as `\-`; passing that escaped name straight to
+# XeLaTeX's \setCJKmainfont breaks (`\-` reads as a control sequence).
+# Prefer the first pure-ASCII alias regardless of field order/locale;
+# fall back to the first alias with fontconfig's backslash-escaping
+# stripped only if no ASCII alias exists.
+CJK_MAINFONT ?= $(shell fc-list :lang=zh family 2>/dev/null | head -1 | awk -F',' '{for(i=1;i<=NF;i++){f=$$i;gsub(/^[ \t]+|[ \t]+$$/,"",f);if(f !~ /[^ -~]/){print f;found=1;exit}}if(!found){f=$$1;gsub(/\\\\/,"",f);gsub(/^[ \t]+|[ \t]+$$/,"",f);print f}}')
 HAS_XECJK := $(shell kpsewhich xeCJK.sty 2>/dev/null)
 CJK_HEADER := $(if $(and $(CJK_MAINFONT),$(if $(HAS_XECJK),,1)),$(BUILDS)/cjk-fallback.tex,)
 PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
