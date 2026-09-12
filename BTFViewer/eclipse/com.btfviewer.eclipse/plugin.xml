@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+  <extension point="org.eclipse.ui.editors">
+    <editor
+        id="com.btfviewer.eclipse.editor"
+        name="BTFViewer Editor"
+        icon="icons/btfviewer.svg"
+        class="com.btfviewer.eclipse.editor.BTFEditor"
+        default="true"
+        extensions="btf">
+    </editor>
+  </extension>
+</plugin>
+
