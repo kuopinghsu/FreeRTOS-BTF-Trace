@@ -3,7 +3,7 @@
 Status: Phase-0 feasibility POC (`0.1.0`).
 
 The optional Eclipse integration embeds the existing BTFViewer HTML/JavaScript
-application in an SWT `Browser`. Eclipse supplies workspace-file access,
+application in an SWT `Browser`. Eclipse supplies workspace and local-file access,
 editor lifecycle, initial/live theme synchronization, status reporting, and a
 small validated bridge. All trace parsing, Timeline, Statistics, Trace Compare,
 Investigation, and report behavior stays in the shared viewer.
@@ -12,7 +12,7 @@ Investigation, and report behavior stays in the shared viewer.
 
 - Eclipse IDE with PDE and Java 17 or later
 - An SWT Browser backend with modern JavaScript enabled
-- A workspace `.btf` file
+- A workspace or local `.btf` file
 
 ## Build and install
 
@@ -20,16 +20,13 @@ Investigation, and report behavior stays in the shared viewer.
 make -C BTFViewer eclipse-package
 ```
 
-This produces two artifacts in `BTFViewer/builds`:
+This produces one artifact in `BTFViewer/builds`:
 
 - `com.btfviewer.eclipse_0.1.0.jar` — the compiled OSGi plug-in bundle.
-- `com.btfviewer.eclipse_0.1.0-dropins.zip` — an installation archive containing
-  the bundle under `dropins/`.
 
-To install, close Eclipse and extract the dropins ZIP into the Eclipse install
-directory (the directory containing `plugins/` and `dropins/`). Restart Eclipse
-with `-clean` once, then import or open a workspace `.btf` file. Alternatively,
-copy the plug-in JAR directly into Eclipse's `dropins/` directory.
+To install, close Eclipse, remove any older `com.btfviewer.eclipse_*.jar` from
+Eclipse's `dropins/` directory, and copy the plug-in JAR into that directory.
+Restart Eclipse with `-clean` once so its bundle cache is refreshed.
 
 The build defaults to `/Applications/Eclipse.app/Contents/Eclipse` on macOS.
 For another installation, pass its root explicitly:
@@ -43,15 +40,15 @@ Eclipse workspace and launch an Eclipse Application.
 
 ## Open a trace
 
-Import a `.btf` file into a project and double-click it. The read-only editor is
-named `BTF: <filename>`. Multiple workspace files can be opened in separate
-editor tabs. Reload, native commands, preferences, and external-file editor
-inputs belong to later milestones after the feasibility gate.
+Double-click a workspace `.btf` file, or use **File > Open File...** for a local
+file outside the workspace. The read-only editor is named `BTF: <filename>`.
+Multiple files can be opened in separate editor tabs. Reload, native commands,
+and preferences belong to later milestones after the feasibility gate.
 
 ## Browser and data path
 
 Each editor owns a tokenized HTTP server bound only to `127.0.0.1`. It streams
-the selected `IFile` directly to the shared JavaScript loader, avoiding a full
+the selected workspace or local file directly to the shared JavaScript loader, avoiding a full
 `Java String -> JSON -> browser.execute` trace copy. Closing the editor closes
 the server. The bundled viewer is generated from the normal web build and must
 remain byte-for-byte identical to `BTFViewer/builds/btf_viewer.html`.
@@ -74,7 +71,6 @@ viewer but cannot certify the unavailable operating systems or SWT backends.
 
 ## Known limitations
 
-- Only workspace `.btf` inputs are registered.
 - AI network access depends on the SWT browser's networking/CORS behavior and
   is not part of the initial gate.
 - Export downloads and platform-specific SWT Browser behavior require manual

@@ -2,8 +2,18 @@
  * Load BTF text from a plain .btf file or a gz / bz2 / zip container.
  */
 
-import { gunzipSync, unzipSync } from 'fflate'
+import { Gunzip } from 'fflate'
 import bz2 from 'bz2'
+import { readZipContainer } from './zipContainer.js'
+
+export const BTF_MAX_INPUT_BYTES = 256 * 1024 * 1024
+export const BTF_MAX_EXPANDED_BYTES = 256 * 1024 * 1024
+export const BTF_MAX_ARCHIVE_ENTRIES = 256
+export const BTF_MAX_COMPRESSION_RATIO = 250
+export const BTF_BOMB_MIN_SIZE = 64 * 1024
+
+const GZIP_INPUT_CHUNK_BYTES = 16 * 1024
+const BZ2_BLOCK_MAGIC = [0x31, 0x41, 0x59, 0x26, 0x53, 0x59]
 
 const BTF_NAME_RE = /\.btf(\.(gz|bz2|zip))?$/i
 const ARCHIVE_RE = /\.(gz|bz2|zip)$/i
@@ -136,6 +146,119 @@ function utf8Decode(bytes) {
   return new TextDecoder('utf-8', { fatal: false }).decode(bytes)
 }
 
+function assertByteLimit(size, limit, description) {
+  if (!Number.isSafeInteger(size) || size < 0 || size > limit) {
+    throw new Error(`${description} exceeds the ${Math.floor(limit / (1024 * 1024))} MB limit`)
+  }
+}
+
+function assertCompressionRatio(inputSize, outputSize, maxRatio, bombMinSize, description) {
+  if (outputSize > bombMinSize && inputSize > 0 && outputSize / inputSize > maxRatio) {
+    throw new Error(`${description} looks like a compression bomb`)
+  }
+}
+
+function concatChunks(chunks, total) {
+  const output = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    output.set(chunk, offset)
+    offset += chunk.length
+  }
+  return output
+}
+
+function gunzipBounded(bytes, { maxExpanded, maxRatio, bombMinSize }) {
+  const chunks = []
+  let total = 0
+  const stream = new Gunzip((chunk) => {
+    total += chunk.length
+    assertByteLimit(total, maxExpanded, 'GZIP decompressed size')
+    chunks.push(chunk)
+  })
+  for (let offset = 0; offset < bytes.length; offset += GZIP_INPUT_CHUNK_BYTES) {
+    const end = Math.min(bytes.length, offset + GZIP_INPUT_CHUNK_BYTES)
+    stream.push(bytes.subarray(offset, end), end === bytes.length)
+  }
+  assertCompressionRatio(bytes.length, total, maxRatio, bombMinSize, 'GZIP data')
+  return concatChunks(chunks, total)
+}
+
+function matchesBz2BlockMagic(bytes, byteIndex, shift) {
+  for (let i = 0; i < BZ2_BLOCK_MAGIC.length; i += 1) {
+    const pair = (bytes[byteIndex + i] << 8) | (bytes[byteIndex + i + 1] || 0)
+    if (((pair >>> (8 - shift)) & 0xff) !== BZ2_BLOCK_MAGIC[i]) return false
+  }
+  return true
+}
+
+/** Count bit-aligned bzip2 block headers without expanding the stream. */
+export function bzip2BlockCount(bytes) {
+  let count = 0
+  for (let shift = 0; shift < 8; shift += 1) {
+    for (let i = 4; i + BZ2_BLOCK_MAGIC.length < bytes.length; i += 1) {
+      if (matchesBz2BlockMagic(bytes, i, shift)) count += 1
+    }
+  }
+  return count
+}
+
+function bunzipBounded(bytes, { maxExpanded, maxRatio, bombMinSize }) {
+  const blockSizeDigit = bytes[3]
+  if (blockSizeDigit < 0x31 || blockSizeDigit > 0x39) {
+    throw new Error('Invalid bzip2 block size')
+  }
+  const blocks = bzip2BlockCount(bytes)
+  const maxBlockBytes = (blockSizeDigit - 0x30) * 100_000
+  assertByteLimit(blocks * maxBlockBytes, maxExpanded, 'Bzip2 decompressed size')
+  const output = bz2.decompress(bytes)
+  assertByteLimit(output.length, maxExpanded, 'Bzip2 decompressed size')
+  assertCompressionRatio(bytes.length, output.length, maxRatio, bombMinSize, 'Bzip2 data')
+  return output
+}
+
+/** Read a fetch response without ever buffering more than the configured cap. */
+export async function readResponseBytes(response, maxBytes = BTF_MAX_INPUT_BYTES) {
+  const rawLength = response?.headers?.get?.('content-length')
+  let contentLength = null
+  if (rawLength != null && rawLength !== '') {
+    contentLength = Number(rawLength)
+    assertByteLimit(contentLength, maxBytes, 'Trace response')
+  }
+  if (!response?.body?.getReader) {
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    assertByteLimit(bytes.length, maxBytes, 'Trace response')
+    return bytes
+  }
+  const reader = response.body.getReader()
+  const output = contentLength == null ? null : new Uint8Array(contentLength)
+  const chunks = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const chunkLength = value?.byteLength || 0
+      const offset = total
+      total += chunkLength
+      assertByteLimit(total, maxBytes, 'Trace response')
+      if (output && total > output.length) throw new Error('Trace response exceeds Content-Length')
+      if (chunkLength) {
+        if (output) output.set(value, offset)
+        else chunks.push(value)
+      }
+    }
+  } catch (error) {
+    await reader.cancel(error).catch(() => {})
+    throw error
+  }
+  if (output) {
+    if (total !== output.length) throw new Error('Trace response ended before Content-Length')
+    return output
+  }
+  return concatChunks(chunks, total)
+}
+
 /**
  * @typedef {{ name: string, text: string }} BtfEntry
  */
@@ -146,7 +269,14 @@ function utf8Decode(bytes) {
  * @param {string} [name]
  * @returns {BtfEntry[]}
  */
-export function decompressBtfEntries(bytes, name = '') {
+export function decompressBtfEntries(bytes, name = '', {
+  maxInput = BTF_MAX_INPUT_BYTES,
+  maxExpanded = BTF_MAX_EXPANDED_BYTES,
+  maxEntries = BTF_MAX_ARCHIVE_ENTRIES,
+  maxRatio = BTF_MAX_COMPRESSION_RATIO,
+  bombMinSize = BTF_BOMB_MIN_SIZE,
+} = {}) {
+  assertByteLimit(bytes?.length, maxInput, 'Trace input')
   const kind = sniffCompression(bytes) || compressionFromName(name)
   if (!kind) {
     return [{ name: name || 'trace.btf', text: utf8Decode(bytes) }]
@@ -154,14 +284,22 @@ export function decompressBtfEntries(bytes, name = '') {
 
   if (kind === 'gzip') {
     const outName = (name && name.replace(/\.gz$/i, '')) || 'trace.btf'
-    return [{ name: outName.endsWith('.btf') ? outName : `${outName}.btf`, text: utf8Decode(gunzipSync(bytes)) }]
+    const output = gunzipBounded(bytes, { maxExpanded, maxRatio, bombMinSize })
+    return [{ name: outName.endsWith('.btf') ? outName : `${outName}.btf`, text: utf8Decode(output) }]
   }
   if (kind === 'bz2') {
     const outName = (name && name.replace(/\.bz2$/i, '')) || 'trace.btf'
-    return [{ name: outName.endsWith('.btf') ? outName : `${outName}.btf`, text: utf8Decode(bz2.decompress(bytes)) }]
+    const output = bunzipBounded(bytes, { maxExpanded, maxRatio, bombMinSize })
+    return [{ name: outName.endsWith('.btf') ? outName : `${outName}.btf`, text: utf8Decode(output) }]
   }
   if (kind === 'zip') {
-    const files = unzipSync(bytes)
+    const { members: files } = readZipContainer(bytes, {
+      containerDesc: 'BTF ZIP',
+      maxEntries,
+      maxUncompressed: maxExpanded,
+      maxRatio,
+      bombMinSize,
+    })
     const members = listZipBtfMembers(Object.keys(files))
     if (!members.length) throw new Error(zipNoBtfMessage(Object.keys(files)))
     const labels = zipMemberDisplayNames(members, name)
@@ -190,6 +328,7 @@ export function decompressBtfBytes(bytes, name = '') {
  */
 export async function loadBtfEntriesFromFile(file, name) {
   const label = name || (file && 'name' in file ? file.name : '') || ''
+  if (Number.isFinite(file?.size)) assertByteLimit(file.size, BTF_MAX_INPUT_BYTES, 'Trace input')
   const buf = await file.arrayBuffer()
   return decompressBtfEntries(new Uint8Array(buf), label)
 }

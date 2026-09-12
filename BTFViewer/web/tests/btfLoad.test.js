@@ -5,12 +5,14 @@ import { gzipSync, zipSync } from 'fflate'
 import bz2 from 'bz2'
 
 import {
+  bzip2BlockCount,
   compressionFromName,
   decompressBtfBytes,
   decompressBtfEntries,
   isBtfOpenName,
   listZipBtfMembers,
   pickZipBtfMember,
+  readResponseBytes,
   sniffCompression,
   zipMemberDisplayNames,
   zipNoBtfMessage,
@@ -52,6 +54,17 @@ describe('decompressBtfBytes', () => {
     assert.match(decompressBtfBytes(gz, 't.btf.gz'), /timeScale/)
   })
 
+  it('caps gzip expansion before collecting an oversized result', () => {
+    const gz = gzipSync(new Uint8Array(256 * 1024))
+    assert.throws(
+      () => decompressBtfEntries(gz, 'bomb.btf.gz', {
+        maxExpanded: 64 * 1024,
+        bombMinSize: Number.MAX_SAFE_INTEGER,
+      }),
+      /decompressed size exceeds/,
+    )
+  })
+
   it('inflates bz2', () => {
     const bzBytes = execFileSync('python3', ['-c',
       'import bz2,sys; sys.stdout.buffer.write(bz2.compress(sys.stdin.buffer.read()))'],
@@ -60,7 +73,18 @@ describe('decompressBtfBytes', () => {
     assert.equal(sniffCompression(bytes), 'bz2')
     assert.equal(compressionFromName('t.btf.bz2'), 'bz2')
     assert.equal(typeof bz2.decompress, 'function')
+    assert.equal(bzip2BlockCount(bytes), 1)
     assert.match(decompressBtfBytes(bytes, 't.btf.bz2'), /resume/)
+  })
+
+  it('uses bzip2 block bounds before decompression', () => {
+    const bzBytes = execFileSync('python3', ['-c',
+      'import bz2,sys; sys.stdout.buffer.write(bz2.compress(sys.stdin.buffer.read()))'],
+      { input: MINI })
+    assert.throws(
+      () => decompressBtfEntries(new Uint8Array(bzBytes), 't.btf.bz2', { maxExpanded: 1024 }),
+      /decompressed size exceeds/,
+    )
   })
 
   it('extracts .btf from zip', () => {
@@ -113,5 +137,47 @@ describe('decompressBtfBytes', () => {
       zipMemberDisplayNames(['x/a.btf', 'y/a.btf'], 'pack.zip'),
       ['pack.zip::x/a.btf', 'pack.zip::y/a.btf'],
     )
+  })
+
+  it('caps ZIP members and aggregate expansion', () => {
+    const zipped = zipSync({
+      'a.btf': new TextEncoder().encode(MINI),
+      'b.btf': new TextEncoder().encode(MINI_B),
+    })
+    assert.throws(
+      () => decompressBtfEntries(zipped, 'pack.zip', { maxEntries: 1 }),
+      /too many entries/,
+    )
+    assert.throws(
+      () => decompressBtfEntries(zipped, 'pack.zip', { maxExpanded: 10 }),
+      /decompressed size exceeds/,
+    )
+  })
+
+  it('rejects oversized raw input before decoding', () => {
+    assert.throws(
+      () => decompressBtfEntries(new Uint8Array(11), 'large.btf', { maxInput: 10 }),
+      /Trace input exceeds/,
+    )
+  })
+})
+
+describe('readResponseBytes', () => {
+  it('uses Content-Length for an early rejection', async () => {
+    const response = new Response(new Uint8Array([1]), {
+      headers: { 'content-length': '11' },
+    })
+    await assert.rejects(readResponseBytes(response, 10), /Trace response exceeds/)
+  })
+
+  it('caps a chunked response while streaming', async () => {
+    const response = new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(6))
+        controller.enqueue(new Uint8Array(6))
+        controller.close()
+      },
+    }))
+    await assert.rejects(readResponseBytes(response, 10), /Trace response exceeds/)
   })
 })

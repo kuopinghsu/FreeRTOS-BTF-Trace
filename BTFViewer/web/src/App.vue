@@ -1748,6 +1748,7 @@ import {
 } from './utils/loadingState.js'
 import { formatErrorToast, formatParseError } from './utils/errorFormat.js'
 import { checkPrerequisite, buildPrerequisiteContext } from './utils/disabledReason.js'
+import { installViewerHostApi, notifyViewerHost } from './utils/viewerHost.js'
 import { experimentPercentsFromCompare, newUserInvestigationTemplate } from './utils/aiCase.js'
 import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
 import {
@@ -1852,7 +1853,13 @@ import {
   buildAnalysisContext,
   isContextStale,
 } from './utils/analysisContext.js'
-import { isBtfOpenName, loadBtfEntriesFromFile, decompressBtfEntries } from './utils/btfLoad.js'
+import {
+  BTF_MAX_EXPANDED_BYTES,
+  isBtfOpenName,
+  loadBtfEntriesFromFile,
+  decompressBtfEntries,
+  readResponseBytes,
+} from './utils/btfLoad.js'
 import {
   classifyOpenFiles,
   classifyPickedOpen,
@@ -3870,7 +3877,7 @@ const zoomStatus = computed(() => zoomStatusFromViewport(
 let _parseWorker = null
 /** @type {{ text: string, name: string }[]} */
 const _pendingTraceLoads = []
-/** @type {Promise<void>|null} */
+/** @type {Promise<boolean>|null} */
 let _drainPromise = null
 
 function onTraceReading({ name }) {
@@ -4008,7 +4015,7 @@ async function parseTraceOnMainThread(text, name) {
 
 async function onUserTracesLoaded(payload) {
   stopDemo()
-  await onTracesLoaded(payload)
+  return onTracesLoaded(payload)
 }
 
 async function onTracesLoaded({ entries, sourceName }) {
@@ -4016,7 +4023,7 @@ async function onTracesLoaded({ entries, sourceName }) {
     onFileError(
       `Failed to read "${sourceName || 'archive'}": ZIP archive has no .btf member`,
     )
-    return
+    return false
   }
   if (entries.length > 1) {
     showToast(`Opening ${entries.length} traces from ZIP…`, 'info')
@@ -4024,7 +4031,7 @@ async function onTracesLoaded({ entries, sourceName }) {
   for (const entry of entries) {
     _pendingTraceLoads.push({ text: entry.text, name: entry.name })
   }
-  await drainPendingTraceLoads()
+  return drainPendingTraceLoads()
 }
 
 async function onTraceLoaded({ text, name }) {
@@ -4032,14 +4039,48 @@ async function onTraceLoaded({ text, name }) {
   await drainPendingTraceLoads()
 }
 
+async function openHostTraceUrl(traceRef, requestedName = '') {
+  const url = String(traceRef || '')
+  const name = String(requestedName || '').trim() || 'trace.btf'
+  if (!url) throw new Error('Trace URL is required')
+  onTraceReading({ name })
+  try {
+    const response = await fetch(url, { cache: 'no-store', credentials: 'same-origin' })
+    if (!response.ok) throw new Error(`Trace request failed: HTTP ${response.status}`)
+    const bytes = await readResponseBytes(response)
+    const entries = decompressBtfEntries(bytes, name)
+    const loadedSuccessfully = await onUserTracesLoaded({ entries, sourceName: name })
+    if (!loadedSuccessfully) {
+      const error = new Error(`Failed to load "${name}"`)
+      error.viewerReported = true
+      throw error
+    }
+    const loaded = trace.value
+    notifyViewerHost('traceLoaded', {
+      name,
+      start: loaded?.timeMin ?? null,
+      end: loaded?.timeMax ?? null,
+      tasks: loaded?.taskNames?.length ?? 0,
+      cores: loaded?.coreNames?.length ?? 0,
+    })
+  } catch (err) {
+    const message = err?.message || `Failed to load ${name}`
+    if (!err?.viewerReported) onFileError(message)
+    notifyViewerHost('traceLoadFailed', { name, message })
+    throw err
+  }
+}
+
 async function drainPendingTraceLoads() {
   if (_drainPromise) return _drainPromise
   _drainPromise = (async () => {
+    let allSucceeded = true
     try {
       while (_pendingTraceLoads.length) {
         const next = _pendingTraceLoads.shift()
-        await loadOneTrace(next)
+        if (!await loadOneTrace(next)) allSucceeded = false
       }
+      return allSucceeded
     } finally {
       _drainPromise = null
       // Items may have been queued while we were clearing the promise.
@@ -4052,13 +4093,13 @@ async function drainPendingTraceLoads() {
 async function loadOneTrace({ text, name }) {
   // Guard against exhausting tab memory on a huge/adversarial file; real
   // traces are typically tens of MB, this leaves generous headroom.
-  const MAX_TRACE_FILE_BYTES = 500 * 1024 * 1024
+  const MAX_TRACE_FILE_BYTES = BTF_MAX_EXPANDED_BYTES
   if (typeof text === 'string' && text.length > MAX_TRACE_FILE_BYTES) {
     showToast(
       `Trace file too large (${(text.length / (1024 * 1024)).toFixed(0)} MB, max ${MAX_TRACE_FILE_BYTES / (1024 * 1024)} MB)`,
       'error',
     )
-    return
+    return false
   }
   // Terminate any in-progress parse
   if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
@@ -4094,15 +4135,16 @@ async function loadOneTrace({ text, name }) {
     } catch (err) {
       showParseError(err, name)
       loading.value = false
+      return false
     }
-    return
+    return true
   }
 
   const Worker = (await import('./parser/btfWorker.js?worker&inline')).default
   const worker = new Worker()
   _parseWorker = worker
 
-  await new Promise((resolve) => {
+  return new Promise((resolve) => {
     worker.onmessage = ({ data }) => {
       if (data.type === 'progress') {
         loadingPhase.value = 'parse'
@@ -4111,20 +4153,20 @@ async function loadOneTrace({ text, name }) {
       } else if (data.type === 'done') {
         _parseWorker = null
         worker.terminate()
-        attachParsedTrace(name, data.packed, { sourceText: text }).then(() => resolve()).catch((err) => {
+        attachParsedTrace(name, data.packed, { sourceText: text }).then(() => resolve(true)).catch((err) => {
           showParseError(err, name)
           loading.value = false
-          resolve()
+          resolve(false)
         })
       } else if (data.type === 'error') {
         _parseWorker = null
         worker.terminate()
         loadingPct.value = 1
         loadingMsg.value = LOADING_STAGES.parsing
-        parseTraceOnMainThread(text, name).then(() => resolve()).catch((err) => {
+        parseTraceOnMainThread(text, name).then(() => resolve(true)).catch((err) => {
           showParseError(err, name)
           loading.value = false
-          resolve()
+          resolve(false)
         })
       }
     }
@@ -4134,10 +4176,10 @@ async function loadOneTrace({ text, name }) {
       worker.terminate()
       loadingPct.value = 1
       loadingMsg.value = LOADING_STAGES.parsing
-      parseTraceOnMainThread(text, name).then(() => resolve()).catch((err) => {
+      parseTraceOnMainThread(text, name).then(() => resolve(true)).catch((err) => {
         showParseError(err, name)
         loading.value = false
-        resolve()
+        resolve(false)
       })
     }
 
@@ -7151,6 +7193,8 @@ async function restoreSessionTabs(saved) {
   }
 }
 
+let uninstallViewerHost = null
+
 onMounted(async () => {
   applyAppSettings(loadSettings(), { silent: true })
   let saved = loadSession()
@@ -7176,6 +7220,21 @@ onMounted(async () => {
   })
   rightPanelTab.value = firstVisibleRightPanelTab(appSettings)
   window.addEventListener('keydown', onGlobalKeydown)
+  uninstallViewerHost = installViewerHostApi({
+    openTraceUrl: openHostTraceUrl,
+    setTheme(theme) {
+      const value = String(theme || '').toLowerCase()
+      if (value !== 'light' && value !== 'dark') throw new Error(`Unsupported theme: ${theme}`)
+      timelineOptions.darkMode = value === 'dark'
+      persistTimelineViewPrefs()
+    },
+    openStatistics() {
+      focusStatisticsPanel(true)
+    },
+    openTraceCompare() {
+      onOpenTraceCompare()
+    },
+  })
   await restoreSessionTabs(saved)
   if (saved?.aiCase) {
     await nextTick()
@@ -7188,9 +7247,14 @@ onMounted(async () => {
   if (new URLSearchParams(window.location.search).has('demo')) {
     onLoadDemo()
   }
+  notifyViewerHost('viewerReady', {
+    capabilities: ['openTraceUrl', 'setTheme', 'openStatistics', 'openTraceCompare'],
+  })
 })
 
 onBeforeUnmount(() => {
+  uninstallViewerHost?.()
+  uninstallViewerHost = null
   if (_statusBarFlashTimer) {
     clearTimeout(_statusBarFlashTimer)
     _statusBarFlashTimer = 0

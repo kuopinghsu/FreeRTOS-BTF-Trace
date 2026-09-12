@@ -48,7 +48,7 @@ AI_CASES ?=
 AI_CONTEXT ?=
 AI_REPLACE ?=
 
-.PHONY: all help web bundle check-bundle check-web check-docs check-builds \
+.PHONY: all help web bundle eclipse-poc eclipse-package check-bundle check-web check-docs check-builds \
 	test test-web test-all ai-test ai-test-live ai-test-context ai-prompts \
 	ci ci-gate doc docs-html update-images demo demo-voice demo-pack
 
@@ -57,6 +57,7 @@ help:
 	@echo ""
 	@echo "  make              Build web + desktop (default)"
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
+	@echo "  make eclipse-package  Installable Eclipse plug-in JAR"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Fail if builds/btf_viewer.py ≠ fresh bundle from sources"
 	@echo "  make check-web    Rebuild web HTML (local: fail if artifact drifts; CI: build only)"
@@ -92,6 +93,12 @@ all: web bundle
 
 web:
 	$(MAKE) -C web
+
+eclipse-poc: web
+	$(MAKE) -C eclipse sync-viewer check-viewer
+
+eclipse-package: web
+	$(MAKE) -C eclipse package
 
 bundle:
 	mkdir -p $(BUILDS)
@@ -446,4 +453,3 @@ update-images: bundle
 		-o $(MIGRATION_IMG) --view chord \
 		--width 1000 --height 720 --drill-row 0
 	@echo "Updated $(MIGRATION_IMG)"
-

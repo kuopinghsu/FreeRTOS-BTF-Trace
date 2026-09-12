@@ -29,5 +29,12 @@ public record BTFBrowserMessage(String type, String json) {
         }
         return new BTFBrowserMessage(type, trimmed);
     }
-}
 
+    public String stringValue(String key) {
+        if (key == null || key.isEmpty()) return null;
+        Pattern valuePattern = Pattern.compile(
+                "\\\"" + Pattern.quote(key) + "\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"\\\\])*)\\\"");
+        Matcher matcher = valuePattern.matcher(json);
+        return matcher.find() ? JsonUtil.unescapeJsonString(matcher.group(1)) : null;
+    }
+}
