@@ -178,10 +178,8 @@ function _gaugeSvgBody({
   const bg = semicirclePath(cx, cy, r)
   const fill = valueArcPath(value, max, cx, cy, r)
   const tip = needleTipPoint(value, max, cx, cy, needleLen)
-  const track = '#D8DCE4'
-  const fg = '#1A2030'
-  const muted = '#6A7388'
   const redFill = zone === 'red'
+  const valueCls = zone === 'red' ? 'lb-value-red' : (zone === 'amber' ? 'lb-value-amber' : 'lb-value-ok')
   const valueY = cy - Math.round(r * 0.28)
   return `
   <defs>
@@ -191,13 +189,13 @@ function _gaugeSvgBody({
       <stop offset="100%" stop-color="${colors.fillEnd}"/>
     </linearGradient>
   </defs>
-  <text x="${cx}" y="18" text-anchor="middle" fill="${fg}" font-family="sans-serif" font-size="10" font-weight="600">${title}</text>
-  <path d="${bg}" fill="none" stroke="${track}" stroke-width="${strokeW}" stroke-linecap="round"/>
+  <text x="${cx}" y="18" text-anchor="middle" class="lb-title" font-family="sans-serif" font-size="10" font-weight="600">${title}</text>
+  <path d="${bg}" fill="none" class="lb-track" stroke-width="${strokeW}" stroke-linecap="round"/>
   <path d="${fill}" fill="none" stroke="url(#${uid})" stroke-width="${strokeW}" stroke-linecap="round"/>
-  <line x1="${cx}" y1="${cy}" x2="${tip.x.toFixed(2)}" y2="${tip.y.toFixed(2)}" stroke="${fg}" stroke-width="2" stroke-linecap="round"/>
-  <circle cx="${cx}" cy="${cy}" r="3.5" fill="#FFFFFF" stroke="${fg}" stroke-width="1.75"/>
-  <text x="${cx}" y="${valueY}" text-anchor="middle" fill="${colors.accent}" font-family="sans-serif" font-size="12" font-weight="700">${valueLabel}</text>
-  <text x="${cx}" y="${cy + 16}" text-anchor="middle" fill="${muted}" font-family="sans-serif" font-size="9">${legend}</text>`
+  <line x1="${cx}" y1="${cy}" x2="${tip.x.toFixed(2)}" y2="${tip.y.toFixed(2)}" class="lb-needle" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="${cx}" cy="${cy}" r="3.5" class="lb-hub" stroke-width="1.75"/>
+  <text x="${cx}" y="${valueY}" text-anchor="middle" class="${valueCls}" font-family="sans-serif" font-size="12" font-weight="700">${valueLabel}</text>
+  <text x="${cx}" y="${cy + 16}" text-anchor="middle" class="lb-muted" font-family="sans-serif" font-size="9">${legend}</text>`
 }
 
 /**
@@ -217,8 +215,7 @@ export function loadBalanceGaugeSvg(metrics, opts = {}) {
   const h = Math.round(width * d.viewH / d.viewW)
   const uid = `lb${Math.abs(Math.round(score * 17 + stddev * 13))}`
   const sigmaMax = LB_SIGMA_SCALE
-  const border = overall === 'red' ? LB_ZONE_COLORS.red.chipBd
-    : (overall === 'amber' ? LB_ZONE_COLORS.amber.chipBd : '#E2E5EC')
+  const bgCls = ('lb-bg ' + (overall === 'red' ? 'lb-bg-red' : (overall === 'amber' ? 'lb-bg-amber' : ''))).trim()
 
   const left = _gaugeSvgBody({
     uid: `${uid}S`,
@@ -245,40 +242,30 @@ export function loadBalanceGaugeSvg(metrics, opts = {}) {
 
   let chip = ''
   if (overall === 'red') {
-    chip = `<rect x="210" y="6" width="80" height="16" rx="8" fill="${LB_ZONE_COLORS.red.chipBg}" stroke="${LB_ZONE_COLORS.red.chipBd}"/>
-  <text x="250" y="17" text-anchor="middle" fill="${LB_ZONE_COLORS.red.chipFg}" font-family="sans-serif" font-size="9" font-weight="700">Unbalanced</text>`
+    chip = `<rect x="210" y="6" width="80" height="16" rx="8" class="lb-chip-red"/>
+  <text x="250" y="17" text-anchor="middle" class="lb-chip-text-red" font-family="sans-serif" font-size="9" font-weight="700">Unbalanced</text>`
   } else if (overall === 'amber') {
-    chip = `<rect x="228" y="6" width="62" height="16" rx="8" fill="${LB_ZONE_COLORS.amber.chipBg}" stroke="${LB_ZONE_COLORS.amber.chipBd}"/>
-  <text x="259" y="17" text-anchor="middle" fill="${LB_ZONE_COLORS.amber.chipFg}" font-family="sans-serif" font-size="9" font-weight="700">σ &gt; 30%</text>`
+    chip = `<rect x="228" y="6" width="62" height="16" rx="8" class="lb-chip-amber"/>
+  <text x="259" y="17" text-anchor="middle" class="lb-chip-text-amber" font-family="sans-serif" font-size="9" font-weight="700">σ &gt; 30%</text>`
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${d.viewW} ${d.viewH}" width="${width}" height="${h}" role="img" aria-label="Load Balance Score ${score.toFixed(0)} percent, sigma ${stddev.toFixed(1)} percent">
-  <rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="${border}"/>
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${d.viewW} ${d.viewH}" width="${width}" height="${h}" role="img" class="lb-gauge-svg theme-aware-svg" aria-label="Load Balance Score ${score.toFixed(0)} percent, sigma ${stddev.toFixed(1)} percent">
+  <rect width="100%" height="100%" rx="8" class="${bgCls}"/>
   ${left}
   ${right}
-  <text x="${d.viewW / 2}" y="${d.viewH - 8}" text-anchor="middle" fill="#6A7388" font-family="monospace" font-size="9">G=${gini.toFixed(3)} · Score = 100 × (1 − Gini)</text>
+  <text x="${d.viewW / 2}" y="${d.viewH - 8}" text-anchor="middle" class="lb-muted" font-family="monospace" font-size="9">G=${gini.toFixed(3)} · Score = 100 × (1 − Gini)</text>
   ${chip}
 </svg>`
 }
 
 /**
- * HTML snippet with dual gauges as an embedded SVG data-URI &lt;img&gt;.
+ * HTML snippet with dual gauges as theme-aware inline SVG (not a data-URI
+ * &lt;img&gt; — external report CSS cannot style SVG elements inside an image).
  * @param {{ score: number, gini: number, stddev: number, zone?: string }} metrics
  * @param {{ width?: number }} [opts]
  */
-export function loadBalanceGaugeImgHtml(metrics, opts = {}) {
+export function loadBalanceGaugeHtml(metrics, opts = {}) {
   const width = Math.max(220, Number(opts.width) || 300)
   const svg = loadBalanceGaugeSvg(metrics, { width })
-  const score = Math.max(0, Math.min(100, Number(metrics?.score) || 0))
-  const stddev = Number(metrics?.stddev) || 0
-  const zone = metrics?.zone || classifyLoadBalance(score, stddev)
-  const dataUri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-  const h = Math.round(width * LB_DUAL.viewH / LB_DUAL.viewW)
-  return (
-    `<div class="lb-gauge-embed" style="margin:8px 0 12px;">`
-    + `<img src="${dataUri}" width="${width}" height="${h}" `
-    + `alt="Load Balance Score ${score.toFixed(0)}%, σ=${stddev.toFixed(1)}% (${zone})" `
-    + `style="display:block;max-width:100%;height:auto;border:0;"/>`
-    + `</div>`
-  )
+  return `<div class="lb-gauge-embed">${svg}</div>`
 }

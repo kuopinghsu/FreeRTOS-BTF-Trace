@@ -60,7 +60,7 @@ class HtmlReportTocTests(unittest.TestCase):
             '<section class="report-card"><h2>Analysis Scope</h2><p>s</p></section>\n'
             '<section class="report-card analysis-findings">'
             "<h2>Analysis Findings</h2><p>x</p></section>\n"
-            '<section class="report-card"><h2>Core Migrations</h2><p>z</p></section>\n'
+            '<section class="report-card"><h2>Core Migration Count</h2><p>z</p></section>\n'
             + HTML_REPORT_TOC_SCRIPT
         )
         html = html_apply_collapsible_toc(
@@ -72,7 +72,7 @@ class HtmlReportTocTests(unittest.TestCase):
         self.assertIn("Migrations and Core Affinity", html)
         self.assertIn("toc-groups", html)
         self.assertIn('id="sec-analysis-findings" open', html)
-        self.assertIn('href="#sec-core-migrations"', html)
+        self.assertIn('href="#sec-core-migration-count"', html)
 
 
 if __name__ == "__main__":

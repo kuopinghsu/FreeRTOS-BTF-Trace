@@ -188,6 +188,7 @@ Check whether the trace contains the STI data needed for the question. For examp
 If a required event is missing, record the limitation. Do not replace missing evidence with a precise explanation.
 
 <a id="trace-quality" name="trace-quality"></a>
+### Trace quality banner
 
 When capture metadata reports overflow, truncation, or missing instrumentation, the **trace-quality banner** offers **Review details**, **Continue with limitations**, and **Open capture guidance**. Review the affected Statistics and AI conclusions before continuing.
 

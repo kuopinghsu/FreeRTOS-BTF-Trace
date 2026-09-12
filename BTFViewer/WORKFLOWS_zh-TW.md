@@ -188,6 +188,9 @@ flowchart TD
 若缺少必要事件，請記錄這項限制。不要用精確的解釋取代缺失的證據。
 
 <a id="trace-quality" name="trace-quality"></a>
+### 追蹤品質橫幅
+
+當擷取中繼資料回報溢位、截斷，或缺少追蹤儀器時，**追蹤品質橫幅**會提供 **Review details**、**Continue with limitations** 與 **Open capture guidance**。請先檢視受影響的 Statistics 與 AI 結論，再繼續操作。
 
 ### 繼續條件
 

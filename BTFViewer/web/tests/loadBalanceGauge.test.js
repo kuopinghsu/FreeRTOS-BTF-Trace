@@ -6,7 +6,7 @@ import {
   LB_SIGMA_SCALE,
   classifyLoadBalance,
   classifySigma,
-  loadBalanceGaugeImgHtml,
+  loadBalanceGaugeHtml,
   loadBalanceGaugeSvg,
   needleTipPoint,
   scoreArcPath,
@@ -75,7 +75,8 @@ describe('loadBalanceGauge', () => {
       zone: 'red',
     })
     assert.match(svg, /Unbalanced/)
-    assert.match(svg, /#C62828/)
+    assert.match(svg, /class="lb-chip-text-red"/)
+    assert.match(svg, /class="lb-value-red"/)
     assert.doesNotMatch(svg, /σ &gt; 30%/)
   })
 
@@ -90,16 +91,17 @@ describe('loadBalanceGauge', () => {
     assert.doesNotMatch(svg, /Unbalanced/)
   })
 
-  it('embeds dual gauges as SVG data-URI img for HTML export', () => {
-    const html = loadBalanceGaugeImgHtml({
+  it('embeds dual gauges as theme-aware inline SVG for HTML export, not a data-URI img', () => {
+    const html = loadBalanceGaugeHtml({
       score: 82,
       gini: 0.18,
       stddev: 12,
       zone: 'ok',
     }, { width: 300 })
-    assert.match(html, /<img /)
-    assert.match(html, /src="data:image\/svg\+xml/)
-    assert.match(html, /alt="Load Balance Score 82%, σ=12\.0%/)
-    assert.doesNotMatch(html, /<svg /)
+    assert.doesNotMatch(html, /<img /)
+    assert.doesNotMatch(html, /data:image\/svg/)
+    assert.match(html, /<svg /)
+    assert.match(html, /class="lb-gauge-svg theme-aware-svg"/)
+    assert.match(html, /class="lb-value-ok"/)
   })
 })

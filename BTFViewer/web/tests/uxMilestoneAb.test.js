@@ -58,7 +58,7 @@ describe('UX Milestone A+B', () => {
   })
 
   it('HTML report script has a per-table CSV download button', () => {
-    assert.match(HTML_REPORT_INTERACTIVE_SCRIPT, /class="table-csv"/)
+    assert.match(HTML_REPORT_INTERACTIVE_SCRIPT, /class="table-csv[ "]/)
     assert.match(HTML_REPORT_INTERACTIVE_SCRIPT, /text\/csv/)
     assert.match(HTML_REPORT_INTERACTIVE_SCRIPT, /lastFiltered/)
   })

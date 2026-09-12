@@ -57,14 +57,22 @@ from .stats_html import (
     html_evidence_refs_card,
     html_glossary,
     html_health_bars,
+    html_heat_legend,
     html_investigate_anomalies,
     html_investigation_section,
+    html_kpi,
     html_matrix_heatmap,
     html_percentile_bars,
+    html_rank_bars,
+    html_report_verdict,
+    html_response_p99_chart,
+    html_scheduling_balance_chart,
     html_scope_identity_card,
     html_tag_overview,
     html_trace_health_card,
     html_trace_metadata_card,
+    html_util_bar_row,
+    html_util_section,
 )
 from .trace_health import build_trace_health_result, trace_health_status_label
 from .investigation_findings import (
@@ -7786,7 +7794,8 @@ def _lb_gauge_svg_body(
     needle_len: float = 32.0,
     stroke_w: float = 8.0,
 ) -> str:
-    accent, end_color, grad0, grad1 = _lb_zone_palette(zone)
+    _, end_color, grad0, grad1 = _lb_zone_palette(zone)
+    value_cls = {"red": "lb-value-red", "amber": "lb-value-amber"}.get(zone, "lb-value-ok")
     bg = _lb_semicircle(cx, cy, r)
     fill = _lb_value_arc(value, max_v, cx, cy, r)
     end_deg = 180.0 - (max(0.0, min(max_v, value)) / max(1e-9, max_v)) * 180.0
@@ -7802,26 +7811,25 @@ def _lb_gauge_svg_body(
         f'<stop offset="55%" stop-color="{grad1}"/>'
         f'<stop offset="100%" stop-color="{end_color}"/>'
         "</linearGradient></defs>"
-        f'<text x="{cx}" y="18" text-anchor="middle" fill="#1A2030" '
+        f'<text x="{cx}" y="18" text-anchor="middle" class="lb-title" '
         f'font-family="{sans}" font-size="10" font-weight="600">{title}</text>'
-        f'<path d="{bg}" fill="none" stroke="#D8DCE4" stroke-width="{stroke_w:.0f}" '
+        f'<path d="{bg}" fill="none" class="lb-track" stroke-width="{stroke_w:.0f}" '
         f'stroke-linecap="round"/>'
         f'<path d="{fill}" fill="none" stroke="url(#{uid})" stroke-width="{stroke_w:.0f}" '
         f'stroke-linecap="round"/>'
         f'<line x1="{cx}" y1="{cy}" x2="{tip_x:.2f}" y2="{tip_y:.2f}" '
-        f'stroke="#1A2030" stroke-width="2" stroke-linecap="round"/>'
-        f'<circle cx="{cx}" cy="{cy}" r="3.5" fill="#FFFFFF" stroke="#1A2030" stroke-width="1.75"/>'
-        f'<text x="{cx}" y="{value_y:.0f}" text-anchor="middle" fill="{accent}" '
+        f'class="lb-needle" stroke-width="2" stroke-linecap="round"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="3.5" class="lb-hub" stroke-width="1.75"/>'
+        f'<text x="{cx}" y="{value_y:.0f}" text-anchor="middle" class="{value_cls}" '
         f'font-family="{sans}" font-size="12" font-weight="700">'
         f"{value_label}</text>"
-        f'<text x="{cx}" y="{cy + 16:.0f}" text-anchor="middle" fill="#6A7388" '
+        f'<text x="{cx}" y="{cy + 16:.0f}" text-anchor="middle" class="lb-muted" '
         f'font-family="{sans}" font-size="9">{legend}</text>'
     )
 
 
-def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = False) -> str:
-    """Dual Score + σ gauges SVG for HTML export (parity with web)."""
-    del dark  # export is always light/print-friendly
+def _load_balance_gauge_svg(metrics: dict, *, width: int = 300) -> str:
+    """Dual Score + σ gauges SVG for HTML export (theme-aware, parity with web)."""
     score = max(0.0, min(100.0, float(metrics.get("score", 0.0))))
     gini = float(metrics.get("gini", 0.0))
     stddev = float(metrics.get("stddev", 0.0))
@@ -7843,12 +7851,7 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
     minus = "\u2212"
     sans = _get_sans_font_family()
     mono = _get_fixed_font_family()
-    if zone == "red":
-        card_stroke = "#E57373"
-    elif zone == "amber":
-        card_stroke = "#E0A020"
-    else:
-        card_stroke = "#E2E5EC"
+    bg_cls = ("lb-bg " + {"red": "lb-bg-red", "amber": "lb-bg-amber"}.get(zone, "")).strip()
     left = _lb_gauge_svg_body(
         uid=f"{uid}S",
         cx=left_cx,
@@ -7874,47 +7877,36 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
     chip = ""
     if zone == "red":
         chip = (
-            '<rect x="210" y="8" width="80" height="18" rx="5" fill="#FDECEA" stroke="#E57373"/>'
-            f'<text x="250" y="21" text-anchor="middle" fill="#C62828" '
+            '<rect x="210" y="8" width="80" height="18" rx="5" class="lb-chip-red"/>'
+            f'<text x="250" y="21" text-anchor="middle" class="lb-chip-text-red" '
             f'font-family="{sans}" font-size="10" font-weight="700">'
             "Unbalanced</text>"
         )
     elif zone == "amber":
         chip = (
-            '<rect x="228" y="8" width="62" height="18" rx="5" fill="#FFF6E5" stroke="#E0A020"/>'
-            f'<text x="259" y="21" text-anchor="middle" fill="#C47F00" '
+            '<rect x="228" y="8" width="62" height="18" rx="5" class="lb-chip-amber"/>'
+            f'<text x="259" y="21" text-anchor="middle" class="lb-chip-text-amber" '
             f'font-family="{sans}" font-size="10" font-weight="700">'
             "σ &gt; 30%</text>"
         )
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}" '
-        f'width="{width}" height="{h}" role="img" '
+        f'width="{width}" height="{h}" role="img" class="lb-gauge-svg theme-aware-svg" '
         f'aria-label="Load Balance Score {score:.0f} percent, sigma {stddev:.1f} percent">'
-        f'<rect width="{view_w}" height="{view_h}" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
+        f'<rect width="{view_w}" height="{view_h}" rx="8" class="{bg_cls}"/>'
         f"{left}{right}"
-        f'<text x="{view_w / 2}" y="{view_h - 8}" text-anchor="middle" fill="#6A7388" '
+        f'<text x="{view_w / 2}" y="{view_h - 8}" text-anchor="middle" class="lb-muted" '
         f'font-family="{mono}" font-size="9">'
         f"G={gini:.3f} · Score=100{times}(1{minus}Gini)</text>"
         f"{chip}</svg>"
     )
 
 
-def _load_balance_gauge_img_html(metrics: dict, *, width: int = 300) -> str:
-    """HTML snippet with dual gauges as an embedded SVG data-URI <img>."""
+def _load_balance_gauge_html(metrics: dict, *, width: int = 300) -> str:
+    """HTML snippet with dual gauges as theme-aware inline SVG (not a data-URI
+    <img> — external report CSS cannot style SVG elements inside an image)."""
     svg = _load_balance_gauge_svg(metrics, width=width)
-    score = max(0.0, min(100.0, float(metrics.get("score", 0.0))))
-    stddev = float(metrics.get("stddev", 0.0))
-    zone = str(metrics.get("zone") or "ok")
-    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    data_uri = f"data:image/svg+xml;base64,{b64}"
-    h = int(round(width * 150 / 300))
-    return (
-        f'<div class="lb-gauge-embed" style="margin:8px 0 12px;">'
-        f'<img src="{data_uri}" width="{width}" height="{h}" '
-        f'alt="Load Balance Score {score:.0f}%, σ={stddev:.1f}% ({zone})" '
-        f'style="display:block;max-width:100%;height:auto;border:0;"/>'
-        f"</div>"
-    )
+    return f'<div class="lb-gauge-embed">{svg}</div>'
 
 
 class _LoadBalanceGaugeWidget(QWidget):
@@ -9789,6 +9781,223 @@ def _parse_task_deadlines_text(text: str) -> Dict[str, int]:
     return out
 
 
+def _migration_count_html(mig_rows: list, mig_total: int, scope_title: str) -> str:
+    """Core Migration Count: KPI summary + Top-12 bar chart + raw table +
+    interpretation note. *mig_rows* is already sorted by count desc (see
+    _migration_rows); reuses that one data source for every visual form."""
+    n = len(mig_rows)
+    counts = [int(r[2]) for r in mig_rows]
+    kpis = []
+    if n:
+        top_name, top_count = mig_rows[0][1], counts[0]
+        avg = mig_total / n
+        sorted_counts = sorted(counts)
+        mid = n // 2
+        median = (
+            sorted_counts[mid] if n % 2
+            else (sorted_counts[mid - 1] + sorted_counts[mid]) / 2.0
+        )
+        top5_share = 100.0 * sum(counts[:5]) / mig_total if mig_total else 0.0
+        kpis = [
+            {"label": "Total migrations", "value": f"{mig_total:,}"},
+            {"label": "Highest task", "value": str(top_name), "hint": f"{top_count:,} migrations"},
+            {"label": "Average / task", "value": f"{avg:,.1f}"},
+            {"label": "Median", "value": f"{median:,.1f}"},
+            {"label": "Top 5 share", "value": f"{top5_share:.0f}%"},
+        ]
+    top12 = [(str(r[1]), int(r[2]), f"{int(r[2]):,}") for r in mig_rows[:12]]
+    note = (
+        '<p class="detail-note">A high migration count alone is not '
+        "necessarily a problem. Check migration rate, dwell time, "
+        "ping-pong count, and the Core-Pair Migration Summary.</p>"
+    )
+    rows_html = "".join(_migration_row_html(r) for r in mig_rows) or (
+        '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'
+    )
+    body = f"<tbody>{rows_html}</tbody>"
+    return (
+        f'<section class="report-card" id="sec-core-migrations">'
+        f"<h2>Core Migration Count{html.escape(str(scope_title or ''))}</h2>"
+        f"{html_diagnostic_kpi_grid(kpis)}"
+        f"{html_rank_bars(top12, fill_kind='accent')}"
+        "<table>"
+        "<thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th>"
+        "<th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead>"
+        f"{body}"
+        "</table>"
+        f"{note}"
+        "</section>"
+    )
+
+
+def _core_pair_migration_summary_html(pair_rows: list, scope_title: str, time_scale=None) -> str:
+    """Core-Pair Migration Summary: KPI summary + Top-8 routes bar chart +
+    heat matrix + raw table, in that reading order. *pair_rows* is already
+    sorted by count desc (see _core_pair_rows) and reused as the one data
+    source for every visual form."""
+    total = sum(int(r[2]) for r in pair_rows)
+    kpis = []
+    if pair_rows:
+        busiest = pair_rows[0]
+        src_totals: dict = {}
+        dst_totals: dict = {}
+        for fc, tc, cnt, _bnc, _gap in pair_rows:
+            src_totals[fc] = src_totals.get(fc, 0) + int(cnt)
+            dst_totals[tc] = dst_totals.get(tc, 0) + int(cnt)
+        top_src = max(src_totals.items(), key=lambda kv: kv[1])
+        top_dst = max(dst_totals.items(), key=lambda kv: kv[1])
+        kpis = [
+            {"label": "Total migrations", "value": f"{total:,}"},
+            {
+                "label": "Busiest route",
+                "value": f"{busiest[0]} → {busiest[1]}",
+                "hint": f"{int(busiest[2]):,} transitions",
+            },
+            {
+                "label": "Most active source",
+                "value": str(top_src[0]),
+                "hint": f"{top_src[1]:,} outgoing migrations",
+            },
+            {
+                "label": "Most active destination",
+                "value": str(top_dst[0]),
+                "hint": f"{top_dst[1]:,} incoming migrations",
+            },
+        ]
+    top8 = [
+        (f"{fc} → {tc}", int(cnt), f"{int(cnt):,}")
+        for fc, tc, cnt, *_r in pair_rows[:8]
+    ]
+    pair_body = "".join(
+        f"<tr><td>{html.escape(str(fc))}</td><td>{html.escape(str(tc))}</td><td>{cnt}</td><td>{bnc}</td>"
+        f"<td>{100.0*bnc/cnt:.1f}%</td><td>{html.escape(str(_format_time_trim(avg_gap, time_scale)))}</td></tr>"
+        for fc, tc, cnt, bnc, avg_gap in pair_rows
+    ) or '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
+    pair_cores = []
+    for fc, tc, *_rest in pair_rows:
+        if fc not in pair_cores:
+            pair_cores.append(fc)
+        if tc not in pair_cores:
+            pair_cores.append(tc)
+    pair_idx = {c: i for i, c in enumerate(pair_cores)}
+    pair_cells = [[0.0] * len(pair_cores) for _ in pair_cores]
+    for fc, tc, cnt, *_r in pair_rows:
+        if fc in pair_idx and tc in pair_idx:
+            pair_cells[pair_idx[fc]][pair_idx[tc]] = float(cnt)
+    pair_heat = html_matrix_heatmap(
+        pair_cores, pair_cores, pair_cells,
+        title="Core migration count",
+        subtitle="source → destination · darker cells indicate more migrations",
+        unit="",
+        diagonal_dash=True,
+    ) if pair_cores else ""
+    return (
+        f'<section class="report-card" id="sec-core-pair-migration-summary">'
+        f"<h2>Core-Pair Migration Summary{html.escape(str(scope_title or ''))}</h2>"
+        f"{html_diagnostic_kpi_grid(kpis)}"
+        f"{html_rank_bars(top8, fill_kind='accent')}"
+        f"{pair_heat}"
+        "<table><thead><tr><th>From</th><th>To</th><th>Count</th>"
+        "<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>"
+        f"<tbody>{pair_body}</tbody></table></section>"
+    )
+
+
+def _core_utilization_over_time_html(ct: dict, cores: list, time_scale, scope_title: str) -> str:
+    """Core Utilization Over Time: KPI summary + heat matrix (with a
+    trailing Spread column) + gradient legend + raw table, in that reading
+    order. *ct* is core_util_over_time()'s already-computed per-sample
+    bins, reused as the one data source for every visual form."""
+    bins = ct.get("bins") or []
+    all_vals: list = []
+    spreads: list = []
+    for r in bins:
+        cells = r.get("cells") or {}
+        vals = [float((cells.get(c) or {}).get("pct") or 0) for c in cores]
+        all_vals.extend(vals)
+        spreads.append(max(vals) - min(vals) if vals else 0.0)
+    kpis = []
+    if bins:
+        avg_util = sum(all_vals) / len(all_vals) if all_vals else 0.0
+        peak_util = max(all_vals) if all_vals else 0.0
+        max_spread_idx = max(range(len(spreads)), key=lambda i: spreads[i]) if spreads else 0
+        max_spread = spreads[max_spread_idx] if spreads else 0.0
+        max_spread_ts = (
+            _format_time_trim(int(bins[max_spread_idx].get("start") or 0), time_scale)
+            if bins else ""
+        )
+        kpis = [
+            {"label": "Average utilization", "value": f"{avg_util:.1f}%"},
+            {"label": "Peak utilization", "value": f"{peak_util:.0f}%"},
+            {"label": "Max core spread", "value": f"{max_spread:.0f}%", "hint": f"At {max_spread_ts}"},
+            {"label": "Samples", "value": str(len(bins)), "hint": f"{len(cores)} cores"},
+        ]
+    head = "<th>Time</th>" + "".join(f"<th>{html.escape(str(c))}</th>" for c in cores) + "<th>Spread</th>"
+    body = "".join(
+        "<tr><td>" + html.escape(str(_format_time_trim(int(r.get("start") or 0), time_scale))) + "</td>"
+        + "".join(
+            f"<td>{float(((r.get('cells') or {}).get(c) or {}).get('pct') or 0):.1f}%</td>"
+            for c in cores
+        )
+        + f"<td>{spreads[i]:.1f}%</td></tr>"
+        for i, r in enumerate(bins)
+    ) or f'<tr><td colspan="{len(cores) + 2}" class="empty">No on-CPU slices</td></tr>'
+    heat = html_matrix_heatmap(
+        [_format_time_trim(int(r.get("start") or 0), time_scale) for r in bins],
+        cores,
+        [[float(((r.get("cells") or {}).get(c) or {}).get("pct") or 0) for c in cores] for r in bins],
+        title="Core Utilization Over Time",
+        unit="%",
+        extra_col=("Spread", spreads, "%"),
+    )
+    return (
+        f'<section class="report-card" id="sec-core-utilization-over-time">'
+        f"<h2>Core Utilization Over Time{html.escape(str(scope_title or ''))}</h2>"
+        f"{html_diagnostic_kpi_grid(kpis)}"
+        f"{heat}"
+        f"{html_heat_legend()}"
+        f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+        "</section>"
+    )
+
+
+def _performance_overview_html(
+    core_rows: list,
+    cc_rows: list,
+    task_rows: list,
+    scope_title: str,
+) -> str:
+    """Performance Overview: 3 compact panels reusing already-computed data
+    (Core Time Breakdown, Concurrent Core Active Distribution, Top Tasks by
+    CPU) with no new stats logic — a visual summary only, not a duplicate
+    of the detailed sections below."""
+    core_items = "".join(html_util_bar_row(core, pct, "core") for core, pct in core_rows)
+    core_panel = (
+        '<div class="perf-panel"><h3 class="sub">Core utilization</h3>'
+        f'<div class="util-list">{core_items or "<p class=\"empty\">No data</p>"}</div></div>'
+    )
+    cc_items = "".join(
+        html_util_bar_row(f"{n} core{'s' if n != 1 else ''}", pct, "core")
+        for n, _dur, pct in cc_rows
+    )
+    parallel_panel = (
+        '<div class="perf-panel"><h3 class="sub">Parallel activity</h3>'
+        f'<div class="util-list">{cc_items or "<p class=\"empty\">No data</p>"}</div></div>'
+    )
+    top_tasks = [(name, pct, f"{pct:.1f}%") for _mk, name, pct in task_rows[:5]]
+    cpu_panel = (
+        '<div class="perf-panel"><h3 class="sub">Highest CPU consumers</h3>'
+        f'{html_rank_bars(top_tasks, fill_kind="accent")}</div>'
+    )
+    return (
+        f'<section class="report-card" id="sec-performance-overview">'
+        f"<h2>Performance Overview{html.escape(str(scope_title or ''))}</h2>"
+        '<div class="perf-overview-grid">'
+        f"{core_panel}{parallel_panel}{cpu_panel}"
+        "</div></section>"
+    )
+
+
 class _StatsPanel(QWidget):
     """Dock panel showing trace statistics (span, core utilization, top tasks)."""
 
@@ -10956,80 +11165,6 @@ class _StatsPanel(QWidget):
         btn.clicked.connect(lambda: self._open_tick_dist_plot(self._trace))
         self._btn_tick_dist = btn
         return btn
-
-    @staticmethod
-    def _html_export_util_css() -> str:
-        """CSS for CPU utilisation bars in statistics HTML export."""
-        return """
-        .util-list { display: flex; flex-direction: column; gap: 4px; }
-        .util-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            min-height: 18px;
-        }
-        .util-label {
-            flex: 0 0 128px;
-            max-width: 128px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            text-align: left;
-            font-size: 13px;
-            color: var(--ink);
-        }
-        .util-bar {
-            flex: 1 1 auto;
-            height: 8px;
-            min-width: 24px;
-            border-radius: 4px;
-            background: var(--line);
-            overflow: hidden;
-        }
-        .util-bar-fill {
-            height: 100%;
-            border-radius: 4px;
-            background: #5FCF6F;
-        }
-        .util-row-task .util-bar-fill { background: #5B9BD5; }
-        .util-pct {
-            flex: 0 0 44px;
-            text-align: left;
-            font-size: 13px;
-        }
-        .util-pct-core { color: #77BB77; }
-        .util-pct-task { color: #6AAADD; }
-        """
-
-    @staticmethod
-    def _html_export_util_bar_row(label: str, pct: float, kind: str) -> str:
-        """One label + progress bar + % row for HTML export."""
-        pct_v = max(0.0, min(100.0, float(pct)))
-        esc = html.escape(str(label), quote=True)
-        row_cls = "util-row util-row-core" if kind == "core" else "util-row util-row-task"
-        pct_cls = "util-pct util-pct-core" if kind == "core" else "util-pct util-pct-task"
-        return (
-            f'<div class="{row_cls}">'
-            f'<span class="util-label">{esc}</span>'
-            f'<div class="util-bar"><div class="util-bar-fill" '
-            f'style="width:{pct_v:.1f}%"></div></div>'
-            f'<span class="{pct_cls}">{pct_v:.1f}%</span>'
-            f"</div>"
-        )
-
-    @classmethod
-    def _html_export_util_section(cls, title: str, rows: list, kind: str) -> str:
-        """Report card with utilisation bar rows (core or task)."""
-        esc_title = html.escape(title, quote=True)
-        if not rows:
-            body = '<p class="empty">No data</p>'
-        else:
-            items = "".join(
-                cls._html_export_util_bar_row(label, pct, kind)
-                for label, pct in rows
-            )
-            body = f'<div class="util-list">{items}</div>'
-        return f'<section class="report-card"><h2>{esc_title}</h2>{body}</section>'
 
     @staticmethod
     def _html_make_collapsible_sections(doc_html: str) -> Tuple[str, str]:
@@ -14248,15 +14383,14 @@ class _StatsPanel(QWidget):
         _lb_badge_html = ""
         _lb = _load_balance_metrics(_core_util_pcts)
         if _lb is not None:
-            _lb_badge_html = _load_balance_gauge_img_html(_lb, width=300)
-        core_util_html = (
-            self._html_export_util_section(
-                f"Core Utilization (excl. IDLE/TICK){scope_title}",
-                [(core, pct) for core, pct in core_rows],
-                "core",
-            ).replace("<div class=\"util-list\">", _lb_badge_html + "<div class=\"util-list\">", 1)
+            _lb_badge_html = _load_balance_gauge_html(_lb, width=600)
+        core_util_html = html_util_section(
+            f"Core Utilization (excl. IDLE/TICK){scope_title}",
+            [(core, pct) for core, pct in core_rows],
+            "core",
+            lead_html=_lb_badge_html,
         )
-        task_util_html = self._html_export_util_section(
+        task_util_html = html_util_section(
             f"Top Tasks by CPU (excl. IDLE/TICK){scope_title}",
             [(name, pct) for _, name, pct in task_rows],
             "task",
@@ -14478,34 +14612,7 @@ class _StatsPanel(QWidget):
         )
 
         pair_rows_html = _core_pair_rows(trace, lo, hi)
-        pair_body = "".join(
-            f"<tr><td>{_esc(fc)}</td><td>{_esc(tc)}</td><td>{cnt}</td><td>{bnc}</td>"
-            f"<td>{100.0*bnc/cnt:.1f}%</td><td>{_esc(_format_time_trim(avg_gap, ts))}</td></tr>"
-            for fc, tc, cnt, bnc, avg_gap in pair_rows_html
-        ) or '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
-        _pair_cores = []
-        for fc, tc, *_rest in pair_rows_html:
-            if fc not in _pair_cores:
-                _pair_cores.append(fc)
-            if tc not in _pair_cores:
-                _pair_cores.append(tc)
-        _pair_idx = {c: i for i, c in enumerate(_pair_cores)}
-        _pair_cells = [[0.0] * len(_pair_cores) for _ in _pair_cores]
-        for fc, tc, cnt, *_r in pair_rows_html:
-            if fc in _pair_idx and tc in _pair_idx:
-                _pair_cells[_pair_idx[fc]][_pair_idx[tc]] = float(cnt)
-        _pair_heat = html_matrix_heatmap(
-            _pair_cores, _pair_cores, _pair_cells,
-            title="Core migration count (source → destination)",
-            unit="",
-        ) if _pair_cores else ""
-        core_pair_html = (
-            f'<section class="report-card"><h2>Core-Pair Migration Summary{_esc(scope_title)}</h2>'
-            f'{_pair_heat}'
-            '<table><thead><tr><th>From</th><th>To</th><th>Count</th>'
-            '<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>'
-            f'<tbody>{pair_body}</tbody></table></section>'
-        )
+        core_pair_html = _core_pair_migration_summary_html(pair_rows_html, scope_title, ts)
 
         bd_rows_html = _core_time_breakdown(trace, lo, hi)
         bd_body = "".join(
@@ -14587,8 +14694,17 @@ class _StatsPanel(QWidget):
             f"<td>{'—' if r.get('lb_score') is None else format(float(r.get('lb_score') or 0), '.0f')}</td></tr>"
             for r in sl_rows_html
         ) or '<tr><td colspan="6" class="empty">No on-CPU slices in scope</td></tr>'
+        sl_chart = html_scheduling_balance_chart([
+            {
+                "time": _format_time_trim(int(r.get("start") or 0), ts),
+                "score": r.get("lb_score"),
+                "sigma": r.get("sigma_pct"),
+            }
+            for r in sl_rows_html
+        ])
         sched_load_html = (
             f'<section class="report-card"><h2>Scheduling Load Over Time{_esc(scope_title)}</h2>'
+            f"{sl_chart}"
             '<table><thead><tr><th>Time</th><th>Ctx sw</th><th>Ctx sw/s</th>'
             '<th>Busiest core</th><th>Util &#963;</th><th>LB score</th></tr></thead>'
             f'<tbody>{sl_body}</tbody></table></section>'
@@ -14730,18 +14846,37 @@ class _StatsPanel(QWidget):
             ) + "</tr>"
             for r in _tc.get("rows") or []
         ) or f'<tr><td colspan="{len(_tc_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
-        _tc_heat = html_matrix_heatmap(
-            [r.get("task") or "" for r in (_tc.get("rows") or [])][:24],
-            _tc_cores,
+        _tc_matrix_rows = (_tc.get("rows") or [])[:24]
+        _tc_matrix_cells = [
             [
-                [
+                (
                     float((r.get("cells") or {}).get(c, {}).get("pct_span") or 0)
-                    for c in _tc_cores
-                ]
-                for r in (_tc.get("rows") or [])[:24]
-            ],
+                    if (r.get("cells") or {}).get(c, {}).get("ns")
+                    else None
+                )
+                for c in _tc_cores
+            ]
+            for r in _tc_matrix_rows
+        ]
+        _tc_nonzero = sorted(
+            v for line in _tc_matrix_cells for v in line if v)
+        # A single hot task/core pair would otherwise flatten every other
+        # cell to the same faint shade; cap the color scale at the 90th
+        # percentile so normal task variation stays distinguishable, and
+        # say so under the matrix (values above the cap still show their
+        # real number, only the color saturates).
+        _tc_cap = _hist_percentile(_tc_nonzero, 0.90) if _tc_nonzero else 0.0
+        _tc_heat = html_matrix_heatmap(
+            [r.get("task") or "" for r in _tc_matrix_rows],
+            _tc_cores,
+            _tc_matrix_cells,
             title="Task × Core Utilization (% of span)",
+            subtitle=(
+                f"Scale emphasizes normal task variation; values above "
+                f"{_tc_cap:.1f}% use the maximum color."
+            ) if _tc_cap > 0 else "",
             unit="%",
+            max_value_override=_tc_cap,
         )
         task_core_html = (
             f'<section class="report-card"><h2>Task × Core{_esc(scope_title)}</h2>'
@@ -14910,6 +15045,7 @@ class _StatsPanel(QWidget):
             '<p class="detail-note">Heuristic ready→completion from adjacent slices, '
             'not an explicit BTF release/completion pair.</p>'
             f'{html_percentile_bars(_rt_rows, title="Response P50–P99")}'
+            f'{html_response_p99_chart(_rt_rows, format_p99=lambda ns: _format_time_trim(int(ns), trace.time_scale))}'
             '<table><thead><tr><th>Task</th><th>N</th><th>Min</th><th>Avg</th><th>Max</th>'
             '<th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>p99.9</th>'
             '<th>Jitter</th><th>CV</th></tr></thead>'
@@ -15015,31 +15151,7 @@ class _StatsPanel(QWidget):
         )
         _ct = core_util_over_time(_ux_evs, list(trace.core_names or []), lo, hi)
         _ct_cores = _ct.get("cores") or []
-        _ct_head = "<th>Time</th>" + "".join(f"<th>{_esc(c)}</th>" for c in _ct_cores)
-        _ct_body = "".join(
-            "<tr><td>" + _esc(_format_time_trim(int(r.get("start") or 0), trace.time_scale)) + "</td>"
-            + "".join(
-                f"<td>{float(((r.get('cells') or {}).get(c) or {}).get('pct') or 0):.1f}%</td>"
-                for c in _ct_cores
-            ) + "</tr>"
-            for r in (_ct.get("bins") or [])
-        ) or f'<tr><td colspan="{len(_ct_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
-        _ct_heat = html_matrix_heatmap(
-            [_format_time_trim(int(r.get("start") or 0), trace.time_scale) for r in (_ct.get("bins") or [])],
-            _ct_cores,
-            [
-                [float(((r.get("cells") or {}).get(c) or {}).get("pct") or 0) for c in _ct_cores]
-                for r in (_ct.get("bins") or [])
-            ],
-            title="Core Utilization Over Time",
-            unit="%",
-        )
-        core_time_html = (
-            f'<section class="report-card"><h2>Core Utilization Over Time{_esc(scope_title)}</h2>'
-            f'{_ct_heat}'
-            f'<table><thead><tr>{_ct_head}</tr></thead>'
-            f'<tbody>{_ct_body}</tbody></table></section>'
-        )
+        core_time_html = _core_utilization_over_time_html(_ct, _ct_cores, trace.time_scale, scope_title)
 
         analysis_findings = _build_workflow_analysis_findings(
             core_rows=core_rows,
@@ -15139,13 +15251,16 @@ class _StatsPanel(QWidget):
              "kind": "warn" if _lb and (_lb["score"] < 70 or _lb["stddev"] > 30) else "ok"},
             {"label": "Core Utilization range",
              "value": f"{util_lo:.1f}–{util_hi:.1f}%",
-             "hint": "Wall-clock span, one-core = 100%"},
+             "hint": "Wall-clock span, one-core = 100%",
+             "kind": "metric-util"},
             {"label": "Worst response P99",
              "value": (_format_time_trim(int(worst_rt.get("p99_ns") or 0), trace.time_scale)
                        if worst_rt else "—"),
-             "hint": str(worst_rt.get("task") or "") if worst_rt else ""},
+             "hint": str(worst_rt.get("task") or "") if worst_rt else "",
+             "kind": "metric-latency"},
             {"label": "Migration activity", "value": f"{mig_total:,}",
-             "hint": "Total core hops in scope"},
+             "hint": "Total core hops in scope",
+             "kind": "metric-migration"},
             {"label": "Tick health", "value": tick_label, "kind": tick_kind},
             {"label": "Synchronization issues", "value": f"{len(sync_issues_scoped):,}",
              "kind": "warn" if sync_issues_scoped else "ok"},
@@ -15175,15 +15290,9 @@ class _StatsPanel(QWidget):
             else " — no triage flags."
         )
         _v_kind = "error" if err_n else ("warn" if (warn_n or tick_kind == "warn") else "ok")
-        _v_col = {"error": "#c0392b", "warn": "#9a4d00", "ok": "#166534"}[_v_kind]
-        _v_bg = {"error": "#fdecec", "warn": "#fdf3e3", "ok": "#eaf6ee"}[_v_kind]
-        verdict_html = (
-            f'<p class="report-verdict {_v_kind}" '
-            f'style="margin:0 0 14px;padding:10px 14px;border-radius:10px;'
-            f'border-left:4px solid {_v_col};background:{_v_bg};color:#182230;'
-            f'font-size:14px;">'
-            f'<strong style="color:{_v_col};">Verdict:</strong> '
-            f'{_esc(" · ".join(_v_bits))}{_v_tail}</p>'
+        verdict_html = html_report_verdict(
+            _v_kind,
+            f'{_esc(" · ".join(_v_bits))}{_v_tail}',
         )
 
         start_s = _format_time_trim(lo if lo is not None else trace.time_min, trace.time_scale)
@@ -15233,15 +15342,16 @@ class _StatsPanel(QWidget):
         glossary_html = html_glossary(range_note=range_note)
 
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        stats_extra_css = (
-            f"{STATS_HTML_EXTRA_CSS}\n{HTML_REPORT_TOC_CSS}\n"
-            f"{self._html_export_util_css()}"
-        ).strip()
+        stats_extra_css = f"{STATS_HTML_EXTRA_CSS}\n{HTML_REPORT_TOC_CSS}".strip()
 
+        performance_overview_html = _performance_overview_html(
+            core_rows, cc_rows_html, task_rows, scope_title,
+        )
         body = f"""
         {verdict_html}
         {html_diagnostic_kpi_grid(kpis)}
         <!--TOC-->
+        {performance_overview_html}
         {scope_html}
         {evidence_refs_html}
         {analysis_html}
@@ -15257,13 +15367,7 @@ class _StatsPanel(QWidget):
     {switch_overhead_html}
     {idle_html}
     {task_util_html}
-    <section class=\"report-card\">
-    <h2>Core Migrations{_esc(scope_title)}</h2>
-    <table>
-      <thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th><th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead>
-      <tbody>{"".join(_migration_row_html(r) for r in mig_rows) or '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'}</tbody>
-    </table>
-  </section>
+    {_migration_count_html(mig_rows, mig_total, scope_title)}
     {core_pair_html}
     {affinity_html}
     {task_core_html}

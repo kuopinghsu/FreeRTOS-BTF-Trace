@@ -41,7 +41,7 @@ describe('htmlReport TOC', () => {
       '<!--TOC-->',
       '<section class="report-card"><h2>Analysis Scope</h2><p>s</p></section>',
       '<section class="report-card analysis-findings"><h2>Analysis Findings</h2><p>x</p></section>',
-      '<section class="report-card"><h2>Core Migrations</h2><p>z</p></section>',
+      '<section class="report-card"><h2>Core Migration Count</h2><p>z</p></section>',
       HTML_REPORT_TOC_SCRIPT,
     ].join('\n')
     const html = htmlApplyCollapsibleToc(body, ['Analysis Findings'], STATS_TOC_GROUPS)
@@ -49,6 +49,6 @@ describe('htmlReport TOC', () => {
     assert.match(html, /Migrations and Core Affinity/)
     assert.match(html, /toc-groups/)
     assert.match(html, /id="sec-analysis-findings" open/)
-    assert.match(html, /href="#sec-core-migrations"/)
+    assert.match(html, /href="#sec-core-migration-count"/)
   })
 })

@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import html
-from typing import Sequence
+import math
+from typing import Optional, Sequence
 
 from .html_report import html_section_slug
 
 STATS_TOC_GROUPS = (
     ("Overview and Findings", (
-        "Analysis Scope", "Evidence Refs", "Analysis Findings",
+        "Performance Overview", "Analysis Scope", "Evidence Refs", "Analysis Findings",
         "Trace Health Check", "Investigation", "Trace Metadata",
     )),
     ("CPU and Scheduling", (
@@ -18,7 +19,7 @@ STATS_TOC_GROUPS = (
         "Top Tasks by CPU",
     )),
     ("Migrations and Core Affinity", (
-        "Core Migrations", "Core-Pair Migration Summary", "Core Affinity",
+        "Core Migration Count", "Core-Pair Migration Summary", "Core Affinity",
         "Task × Core", "Core Utilization Over Time", "Task Lifecycle",
         "Deadlines / CPU budget", "Task Health",
     )),
@@ -46,7 +47,161 @@ STATS_DEFAULT_EXPANDED = (
 )
 
 STATS_HTML_EXTRA_CSS = """
-:root { --line-strong: #c8d2e0; --stripe: #f7f9fc; }
+:root {
+  --bg: #F8FAFC;
+  --bg-elev: #F1F5F9;
+  --paper: #FFFFFF;
+  --paper-2: #F1F5F9;
+  --surface: #FFFFFF;
+  --ink: #0F172A;
+  --muted: #475569;
+  --line: #E2E8F0;
+  --line-strong: #E2E8F0;
+  --stripe: #F8FAFC;
+  --accent: #0284C7;
+  --accent-2: #0284C7;
+  --accent-soft: #E0F2FE;
+  --success: #10B981;
+  --success-soft: #D1FAE5;
+  --warning: #D97706;
+  --warning-soft: #FEF3C7;
+  --danger: #E11D48;
+  --danger-soft: #FFE4E6;
+  --violet: #0284C7;
+  --ok-border: #6EE7B7;
+  --warn-border: #FBBF24;
+  --error-border: #FB7185;
+  --accent-border: #7DD3FC;
+  --canvas-top: #FFFFFF;
+  --canvas-edge: #E4EAF2;
+  --bar-track-bg: #F1F5F9;
+  --bar-track-border: #E2E8F0;
+  --data-bar: #0284C7;
+  --data-bar-soft: #BAE6FD;
+  --data-0-bg: #F8FAFC; --data-0-ink: #64748B;
+  --data-1-bg: #E0F2FE; --data-1-ink: #075985;
+  --data-2-bg: #BAE6FD; --data-2-ink: #075985;
+  --data-3-bg: #7DD3FC; --data-3-ink: #0C4A6E;
+  --data-4-bg: #38BDF8; --data-4-ink: #082F49;
+  --data-5-bg: #0284C7; --data-5-ink: #FFFFFF;
+  --matrix-bg: #FFFFFF;
+  --matrix-border: #E2E8F0;
+  --matrix-label: #475569;
+  --matrix-diag-bg: #F1F5F9;
+  --matrix-diag-ink: #64748B;
+  --chart-grid: #E2E8F0;
+  --chart-axis: #475569;
+}
+html[data-theme="dark"] {
+  --bg: #0B0F19;
+  --bg-elev: #101827;
+  --paper: #151D2E;
+  --paper-2: #101827;
+  --surface: #151D2E;
+  --ink: #F1F5F9;
+  --muted: #94A3B8;
+  --line: #1E293B;
+  --line-strong: #1E293B;
+  --stripe: #111827;
+  --accent: #38BDF8;
+  --accent-2: #38BDF8;
+  --accent-soft: #102A3A;
+  --success: #10B981;
+  --success-soft: #123024;
+  --warning: #FB923C;
+  --warning-soft: #332417;
+  --danger: #E11D48;
+  --danger-soft: #3F1D29;
+  --violet: #38BDF8;
+  --ok-border: #065F46;
+  --warn-border: #9A3412;
+  --error-border: #9F1239;
+  --accent-border: #15506C;
+  --canvas-top: #151D2E;
+  --canvas-edge: #0D1218;
+  --bar-track-bg: #101827;
+  --bar-track-border: #1E293B;
+  --data-bar: #38BDF8;
+  --data-bar-soft: #15506C;
+  --data-0-bg: #111827; --data-0-ink: #94A3B8;
+  --data-1-bg: #102A3A; --data-1-ink: #7DD3FC;
+  --data-2-bg: #123B52; --data-2-ink: #BAE6FD;
+  --data-3-bg: #15506C; --data-3-ink: #E0F2FE;
+  --data-4-bg: #1679A3; --data-4-ink: #FFFFFF;
+  --data-5-bg: #38BDF8; --data-5-ink: #082F49;
+  --matrix-bg: #151D2E;
+  --matrix-border: #1E293B;
+  --matrix-label: #94A3B8;
+  --matrix-diag-bg: #101827;
+  --matrix-diag-ink: #94A3B8;
+  --chart-grid: #1E293B;
+  --chart-axis: #94A3B8;
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    --bg: #0B0F19;
+    --bg-elev: #101827;
+    --paper: #151D2E;
+    --paper-2: #101827;
+    --surface: #151D2E;
+    --ink: #F1F5F9;
+    --muted: #94A3B8;
+    --line: #1E293B;
+    --line-strong: #1E293B;
+    --stripe: #111827;
+    --accent: #38BDF8;
+    --accent-2: #38BDF8;
+    --accent-soft: #102A3A;
+    --success: #10B981;
+    --success-soft: #123024;
+    --warning: #FB923C;
+    --warning-soft: #332417;
+    --danger: #E11D48;
+    --danger-soft: #3F1D29;
+    --violet: #38BDF8;
+    --ok-border: #065F46;
+    --warn-border: #9A3412;
+    --error-border: #9F1239;
+    --accent-border: #15506C;
+    --canvas-top: #151D2E;
+    --canvas-edge: #0D1218;
+    --bar-track-bg: #101827;
+    --bar-track-border: #1E293B;
+    --data-bar: #38BDF8;
+    --data-bar-soft: #15506C;
+    --data-0-bg: #111827; --data-0-ink: #94A3B8;
+    --data-1-bg: #102A3A; --data-1-ink: #7DD3FC;
+    --data-2-bg: #123B52; --data-2-ink: #BAE6FD;
+    --data-3-bg: #15506C; --data-3-ink: #E0F2FE;
+    --data-4-bg: #1679A3; --data-4-ink: #FFFFFF;
+    --data-5-bg: #38BDF8; --data-5-ink: #082F49;
+    --matrix-bg: #151D2E;
+    --matrix-border: #1E293B;
+    --matrix-label: #94A3B8;
+    --matrix-diag-bg: #101827;
+    --matrix-diag-ink: #94A3B8;
+    --chart-grid: #1E293B;
+    --chart-axis: #94A3B8;
+  }
+}
+body,
+html[data-theme="dark"] body {
+  background: radial-gradient(circle at 88% -10%, var(--canvas-top) 0%, var(--bg) 48%, var(--canvas-edge) 100%);
+  color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) body {
+    background: radial-gradient(circle at 88% -10%, var(--canvas-top) 0%, var(--bg) 48%, var(--canvas-edge) 100%);
+    color: var(--ink);
+  }
+}
+h2, h3.sub,
+html[data-theme="dark"] h2,
+html[data-theme="dark"] h3.sub { color: var(--ink); }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) h2,
+  html:not([data-theme="light"]) h3.sub { color: var(--ink); }
+}
 .report.report-wide { max-width: 1160px; }
 .kpi-grid {
   display: grid;
@@ -54,19 +209,69 @@ STATS_HTML_EXTRA_CSS = """
   gap: 10px;
   margin-bottom: 16px;
 }
+/* A KPI with no status kind is a normal measurement, so it carries the primary
+   accent outline; only ok/warn/error and migration override it. */
 .kpi {
+  position: relative;
+  overflow: hidden;
   background: var(--paper);
-  border: 1px solid var(--line);
+  border: 1px solid var(--accent-border);
   border-radius: 12px;
-  padding: 12px 14px;
-  box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
+  padding: 12px 14px 12px 16px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+.kpi::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent);
 }
 .kpi .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
-.kpi .v { margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }
+.kpi .v { margin-top: 4px; font-size: 20px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
 .kpi .s { margin-top: 2px; font-size: 12px; color: var(--muted); }
-.kpi.warn { border-color: #e0a020; }
-.kpi.error { border-color: #c0392b; }
-.kpi.ok { border-color: #5FCF6F; }
+.kpi.metric-util, .kpi.metric-latency {
+  border-color: var(--accent-border);
+}
+.kpi.metric-util::before, .kpi.metric-latency::before { background: var(--accent); }
+.kpi.metric-migration {
+  border-color: var(--warn-border);
+}
+.kpi.metric-migration::before { background: var(--warning); }
+.kpi.ok { border-color: var(--ok-border); }
+.kpi.ok::before { background: var(--success); }
+.kpi.warn { border-color: var(--warn-border); }
+.kpi.warn::before { background: var(--warning); }
+.kpi.error { border-color: var(--error-border); }
+.kpi.error::before { background: var(--danger); }
+.report-verdict {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+}
+.report-verdict.ok {
+  background: var(--success-soft);
+  border-color: var(--ok-border);
+  border-left-color: var(--success);
+}
+.report-verdict.ok strong { color: var(--success); }
+.report-verdict.warn {
+  background: var(--warning-soft);
+  border-color: var(--warn-border);
+  border-left-color: var(--warning);
+}
+.report-verdict.warn strong { color: var(--warning); }
+.report-verdict.error {
+  background: var(--danger-soft);
+  border-color: var(--error-border);
+  border-left-color: var(--danger);
+}
+.report-verdict.error strong { color: var(--danger); }
 .notes { border-left: 4px solid var(--accent); }
 .notes ul { margin: 8px 0 0 18px; padding: 0; }
 .notes li { margin: 6px 0; line-height: 1.45; }
@@ -74,8 +279,8 @@ table { border-collapse: separate; border-spacing: 0; width: 100%; }
 th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }
 th:first-child, td:first-child { text-align: left; }
 thead th {
-  background: #f1f5fb;
-  color: #284563;
+  background: var(--paper-2);
+  color: var(--ink);
   font-weight: 600;
   border-top: 1px solid var(--line-strong);
   border-bottom: 1px solid var(--line-strong);
@@ -83,21 +288,21 @@ thead th {
 tbody tr:nth-child(even) td { background: var(--stripe); }
 .empty { text-align: center !important; color: var(--muted); }
 .detail-note { margin: 6px 0 8px; font-size: 12px; color: var(--muted); }
-h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
-.sev-error { color: #c0392b; font-weight: 600; }
-.sev-warning { color: #9a4d00; font-weight: 600; }
-.finding-info { color: var(--ink, var(--fg, #182230)); }
-.finding-ok { color: #166534; font-weight: 600; }
+h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 600; }
+.sev-error { color: var(--danger); font-weight: 600; }
+.sev-warning { color: var(--warning); font-weight: 600; }
+.finding-info { color: var(--ink); }
+.finding-ok { color: var(--success); font-weight: 600; }
 .findings-list { margin: 8px 0 0 18px; padding: 0; }
 .findings-list li { margin: 8px 0; line-height: 1.45; }
-.analysis-findings { border-left: 4px solid #c0392b; }
+.analysis-findings { border-left: 4px solid var(--danger); }
 .trace-health { border-left: 4px solid var(--accent); }
 .trace-health-status { font-size: 14px; font-weight: 600; margin: 6px 0 10px; }
 .trace-health-check { margin: 6px 0; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .trace-health-check:last-of-type { border-bottom: 0; }
 .trace-health-check > summary { cursor: pointer; line-height: 1.45; }
 .trace-health-check .finding-meta { margin-left: 16px; }
-.investigation { border-left: 4px solid #7a5cc0; }
+.investigation { border-left: 4px solid var(--accent); }
 .investigation .finding-meta ul { margin: 4px 0 0 16px; padding: 0; }
 .investigation h3.sub { margin-top: 16px; }
 .finding-cards { display: grid; gap: 10px; }
@@ -106,64 +311,248 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; 
   border-left-width: 4px;
   border-radius: 10px;
   padding: 10px 12px;
-  background: #fff;
+  background: var(--paper);
 }
-.finding-card.sev-error { border-left-color: #c0392b; }
-.finding-card.sev-warning { border-left-color: #e0a020; }
+.finding-card.sev-error { border-left-color: var(--danger); }
+.finding-card.sev-warning { border-left-color: var(--warning); }
 .finding-card.finding-info { border-left-color: var(--accent); }
-.finding-card.finding-ok { border-left-color: #5FCF6F; }
-.finding-card h3 { margin: 0 0 6px; font-size: 14px; color: #123355; }
+.finding-card.finding-ok { border-left-color: var(--success); }
+.finding-card h3 { margin: 0 0 6px; font-size: 14px; color: var(--ink); }
 .finding-meta { font-size: 12px; color: var(--muted); margin: 4px 0; }
 .finding-card a { color: var(--accent); }
 .scope-table th { width: 28%; }
-.heat-wrap { overflow-x: auto; margin: 8px 0 12px; }
+.heat-wrap { overflow-x: auto; margin: 8px 0 12px; background: var(--matrix-bg); }
 .heat-cell { font-size: 10px; text-anchor: middle; }
+.heat-matrix-head { margin: 4px 0 8px; }
+.heat-matrix-title { font-size: 13px; font-weight: 650; color: var(--ink); }
+.heat-matrix-subtitle { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.heat-grid {
+  display: grid;
+  grid-template-columns: minmax(90px, 130px) repeat(var(--col-count), minmax(44px, 1fr));
+  gap: 2px;
+  font-size: 11px;
+  min-width: 480px;
+}
+.heat-grid-corner, .heat-grid-collabel, .heat-grid-rowlabel {
+  display: flex; align-items: center;
+  padding: 4px 6px;
+  color: var(--matrix-label);
+  font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.heat-grid-collabel { justify-content: center; }
+.heat-grid-cell {
+  display: flex; align-items: center; justify-content: center;
+  padding: 4px 2px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+  min-height: 22px;
+}
+.heat-grid-diagonal, .heat-grid-nodata {
+  background: var(--matrix-diag-bg); color: var(--matrix-diag-ink); border: 1px dashed var(--matrix-border);
+}
+.heat-grid-extra {
+  background: var(--paper-2); color: var(--ink); border: 1px solid var(--line);
+  font-weight: 600;
+}
+/* Six fixed bins (predictable in Qt WebEngine, no color-mix) reading the one
+   quantitative scale that also drives every bar. */
+.heat-0 { background: var(--data-0-bg); color: var(--data-0-ink); }
+.heat-1 { background: var(--data-1-bg); color: var(--data-1-ink); }
+.heat-2 { background: var(--data-2-bg); color: var(--data-2-ink); }
+.heat-3 { background: var(--data-3-bg); color: var(--data-3-ink); }
+.heat-4 { background: var(--data-4-bg); color: var(--data-4-ink); }
+.heat-5 { background: var(--data-5-bg); color: var(--data-5-ink); }
+/* Outline, not a fill change: the cell keeps its place on the quantitative
+   scale while the pointer marks which row/column pair is being read. */
+.heat-grid-cell:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+.heat-legend { margin: 6px 0 10px; font-size: 11px; color: var(--muted); }
+.heat-legend-grid {
+  display: grid; grid-template-columns: auto minmax(120px, 220px) auto;
+  align-items: center; gap: 2px 8px; max-width: 260px;
+}
+.heat-legend-bar {
+  height: 12px; border-radius: 999px;
+  background: linear-gradient(to right,
+    var(--data-0-bg), var(--data-1-bg), var(--data-2-bg),
+    var(--data-3-bg), var(--data-4-bg), var(--data-5-bg));
+}
 .table-tools { margin: 8px 0 12px; }
 .table-toolbar {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px;
 }
 .table-search {
   font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line);
-  border-radius: 6px; min-width: 160px;
+  border-radius: 6px; min-width: 160px; background: var(--paper); color: var(--ink);
+}
+.table-search::placeholder { color: var(--muted); }
+.table-search:hover { border-color: var(--accent); }
+.table-search:focus-visible {
+  border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px;
 }
 .table-check { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+.table-check:hover { color: var(--accent); cursor: pointer; }
+.table-check input[type="checkbox"] { accent-color: var(--accent); }
+.table-action {
+  font: inherit; font-size: 12px; padding: 2px 9px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--paper-2); color: var(--ink); cursor: pointer;
+}
+.table-action:hover { border-color: var(--accent); color: var(--accent); }
+.table-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.table-action:disabled { opacity: 0.55; cursor: default; }
+.table-action:disabled:hover { border-color: var(--line); color: var(--ink); }
+.table-pager { display: none; gap: 8px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.lb-gauge-embed { margin: 8px 0 12px; }
+.lb-gauge-svg { display: block; max-width: 100%; height: auto; }
+.lb-gauge-svg .lb-bg { fill: var(--paper-2); stroke: var(--line); }
+.lb-gauge-svg .lb-bg-amber { stroke: var(--warning); }
+.lb-gauge-svg .lb-bg-red { stroke: var(--danger); }
+.lb-gauge-svg .lb-title { fill: var(--ink); }
+.lb-gauge-svg .lb-muted { fill: var(--muted); }
+.lb-gauge-svg .lb-track { stroke: var(--line); }
+.lb-gauge-svg .lb-needle { stroke: var(--ink); }
+.lb-gauge-svg .lb-hub { fill: var(--paper); stroke: var(--ink); }
+.lb-gauge-svg .lb-value-ok { fill: var(--success); }
+.lb-gauge-svg .lb-value-amber { fill: var(--warning); }
+.lb-gauge-svg .lb-value-red { fill: var(--danger); }
+.lb-gauge-svg .lb-chip-amber { fill: var(--warning-soft); stroke: var(--warning); }
+.lb-gauge-svg .lb-chip-red { fill: var(--danger-soft); stroke: var(--danger); }
+.lb-gauge-svg .lb-chip-text-amber { fill: var(--warning); }
+.lb-gauge-svg .lb-chip-text-red { fill: var(--danger); }
+.pctile-svg { display: block; max-width: 100%; height: auto; }
+.pctile-title { fill: var(--ink); }
+.pctile-sub { fill: var(--muted); }
+.pctile-label { fill: var(--ink); }
+.pctile-bar { fill: var(--accent-soft); }
+.pctile-marker { stroke: var(--accent); }
+.sparkline-line { stroke: var(--accent); }
 .table-count { font-size: 12px; color: var(--muted); margin-left: auto; }
 .table-scroll { overflow-x: auto; max-width: 100%; }
 .table-scroll table { min-width: 100%; }
 .table-scroll thead th { position: sticky; top: 0; z-index: 2; }
 .table-scroll td:first-child, .table-scroll th:first-child {
-  position: sticky; left: 0; z-index: 1; background: #fff;
+  position: sticky; left: 0; z-index: 1; background: var(--paper);
 }
 .table-scroll tbody tr:nth-child(even) td:first-child { background: var(--stripe); }
+/* Row hover. Declared after the stripe and sticky-column rules so the whole
+   row tracks the pointer, including a sticky first cell and meta-table <th>. */
+tbody tr:hover td,
+tbody tr:hover th,
+.table-scroll tbody tr:hover td:first-child,
+.table-scroll tbody tr:hover th:first-child { background: var(--accent-soft); }
 .sortable { cursor: pointer; }
 .sortable:hover { color: var(--accent); }
+thead th.sortable:hover { background: var(--accent-soft); }
 .report-tabs .tab-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .report-tabs .tab-btn {
   font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--line);
-  border-radius: 999px; background: #f1f5fb; color: var(--accent); cursor: pointer;
+  border-radius: 999px; background: var(--paper-2); color: var(--accent); cursor: pointer;
 }
-.report-tabs .tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.report-tabs .tab-btn.active { background: var(--accent); color: var(--paper); border-color: var(--accent); }
 .pct-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
-.pct-bar .lab { flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pct-bar .track { flex: 1; height: 10px; background: #eef2f7; border-radius: 6px; overflow: hidden; }
-.pct-bar .fill { height: 100%; border-radius: 6px; }
-@media (prefers-color-scheme: dark) {
-  :root { --line-strong: #3a4048; --stripe: #191d23; }
-  .kpi { background: var(--paper); }
-  .kpi .v { color: #dbe6f2; }
-  thead th { background: #232830; color: #b6c2cf; }
-  .finding-card, .finding-card.sev-error, .finding-card.sev-warning { background: var(--paper); }
-  .finding-card h3 { color: #cfe1f7; }
-  h3.sub { color: #b6c2cf; }
-  .sev-warning { color: #e0a44a; }
-  .sev-error { color: #e5776a; }
-  .finding-ok { color: #57c191; }
-  .table-search { background: var(--paper); color: var(--ink); }
-  .table-scroll td:first-child, .table-scroll th:first-child { background: var(--paper); }
-  .table-scroll tbody tr:nth-child(even) td:first-child { background: var(--stripe); }
-  .report-tabs .tab-btn { background: #232830; }
-  .pct-bar .track { background: #232830; }
-  .heat-cell { fill: var(--ink); }
+.pct-bar .lab {
+  flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
+}
+.pct-bar .track {
+  flex: 1; height: 12px; background: var(--bar-track-bg);
+  border: 1px solid var(--bar-track-border); border-radius: 999px; overflow: hidden;
+}
+.pct-bar .fill { height: 100%; border-radius: 999px; background: var(--data-bar); }
+.rank-bars { margin: 8px 0 4px; }
+.rank-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+.rank-bar-num { flex: 0 0 18px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.rank-bar-label {
+  flex: 0 0 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
+}
+.rank-bar-track {
+  flex: 1; height: 12px; background: var(--bar-track-bg);
+  border: 1px solid var(--bar-track-border); border-radius: 999px; overflow: hidden;
+}
+.rank-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--data-bar); }
+.rank-bar-fill.accent { background: var(--data-bar); }
+.rank-bar-fill.warning { background: var(--warning); }
+.rank-bar-fill.danger { background: var(--danger); }
+.rank-bar-fill.success { background: var(--success); }
+.rank-bar-value {
+  flex: 0 0 88px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.perf-overview-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 4px;
+}
+.perf-panel h3.sub { margin: 0 0 8px; }
+.util-list { display: flex; flex-direction: column; gap: 4px; }
+.util-row { display: flex; align-items: center; gap: 8px; min-height: 18px; }
+.util-label {
+  flex: 0 0 128px; max-width: 128px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; text-align: left; font-size: 13px; color: var(--ink);
+}
+.util-bar {
+  flex: 1 1 auto; height: 12px; min-width: 24px; border-radius: 999px;
+  background: var(--bar-track-bg); border: 1px solid var(--bar-track-border); overflow: hidden;
+}
+.util-bar-fill, .util-row-task .util-bar-fill {
+  height: 100%; border-radius: 999px; background: var(--data-bar);
+}
+.util-pct { flex: 0 0 44px; text-align: left; font-size: 13px; }
+.util-pct-core, .util-pct-task { color: var(--data-bar); }
+.util-row .util-bar, .rank-bar .rank-bar-track, .pct-bar .track,
+.util-row .util-label, .rank-bar .rank-bar-label, .pct-bar .lab {
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.util-row:hover .util-bar,
+.rank-bar:hover .rank-bar-track,
+.pct-bar:hover .track { border-color: var(--accent); }
+.util-row:hover .util-label,
+.rank-bar:hover .rank-bar-label,
+.pct-bar:hover .lab { color: var(--accent); }
+.util-row:hover .util-bar-fill,
+.rank-bar:hover .rank-bar-fill,
+.pct-bar:hover .fill { filter: brightness(1.08); }
+.metric-chart {
+  margin: 12px 0 16px; padding: 14px 16px 16px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--paper);
+}
+.metric-chart-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; margin-bottom: 12px;
+}
+.metric-chart-title { color: var(--ink); font-size: 13px; font-weight: 700; }
+.metric-chart-subtitle {
+  margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.45;
+}
+.chart-callout {
+  flex: 0 0 auto; min-width: 82px; padding: 7px 10px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--paper-2); text-align: right;
+}
+.chart-callout-label, .chart-callout-note { display: block; color: var(--muted); font-size: 10px; }
+.chart-callout strong {
+  display: block; color: var(--ink); font-size: 18px; line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.trend-svg { display: block; width: 100%; height: auto; min-height: 180px; }
+.chart-gridline { stroke: var(--chart-grid); stroke-width: 1; }
+.chart-axis-label {
+  fill: var(--chart-axis); font-size: 10px;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+.chart-line {
+  stroke: var(--data-bar); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round;
+}
+.chart-point { stroke: var(--paper); stroke-width: 2; }
+.chart-point-normal { fill: var(--data-bar); }
+.chart-point-low { fill: var(--warning); }
+.heat-cell { fill: var(--ink); }
+@media (max-width: 680px) {
+  .metric-chart-head { flex-direction: column; }
+  .chart-callout { text-align: left; }
+  .rank-bar-label { flex-basis: 82px; }
+  .rank-bar-value { flex-basis: 72px; }
+}
+@media print {
+  body, html[data-theme="dark"] body { background: #fff !important; }
+  .metric-chart, .kpi, .report-card { box-shadow: none; }
+  .theme-toggle { display: none !important; }
+  .metric-chart, .kpi { break-inside: avoid; }
 }
 """.strip()
 
@@ -177,7 +566,7 @@ def html_inspect_href(section_title: str) -> str:
 
 
 def html_kpi(label: str, value: str, *, hint: str = "", kind: str = "") -> str:
-    cls = f" kpi {kind}".rstrip() if kind else "kpi"
+    cls = f"kpi {kind}" if kind else "kpi"
     extra = f'<div class="s">{_esc(hint)}</div>' if hint else ""
     return (
         f'<article class="{cls}"><div class="k">{_esc(label)}</div>'
@@ -334,7 +723,214 @@ def html_diagnostic_kpi_grid(kpis: Sequence[dict]) -> str:
             hint=k.get("hint") or "",
             kind=k.get("kind") or "",
         ))
-    return f'<section class="kpi-grid">{"".join(parts)}</section>' if parts else ""
+    return f'<div class="kpi-grid">{"".join(parts)}</div>' if parts else ""
+
+
+def html_rank_bars(
+    items: Sequence[tuple],
+    *,
+    fill_kind: str = "accent",
+    max_v: Optional[float] = None,
+) -> str:
+    """Ranked HTML/CSS bar list (not canvas/SVG): ``[(label, value, display), ...]``,
+    already in display order. The largest value in *items* (or ``max_v``, if
+    a caller wants a scale independent of this particular slice) is 100% bar
+    width. ``fill_kind`` selects the semantic color family (accent/warning/
+    danger/success). Quantitative magnitude uses ``accent`` / ``--data-bar``."""
+    rows = [it for it in (items or []) if it]
+    if not rows:
+        return ""
+    peak = float(max_v) if max_v else max((float(v) for _l, v, _d in rows), default=1.0)
+    peak = max(peak, 1.0)
+    cls = f" {fill_kind}" if fill_kind else ""
+    parts = ['<div class="rank-bars">']
+    for i, (label, value, display) in enumerate(rows, start=1):
+        pct = max(0.0, min(100.0, 100.0 * float(value) / peak))
+        parts.append(
+            f'<div class="rank-bar" title="{_esc(str(label))}: {_esc(str(display))}">'
+            f'<span class="rank-bar-num">{i}</span>'
+            f'<span class="rank-bar-label">{_esc(str(label))}</span>'
+            f'<span class="rank-bar-track"><span class="rank-bar-fill{cls}" '
+            f'style="width:{pct:.1f}%"></span></span>'
+            f'<span class="rank-bar-value">{_esc(str(display))}</span>'
+            "</div>"
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def html_util_bar_row(label: str, pct: float, kind: str) -> str:
+    """One ``label + progress bar + %`` row, for Core Utilization / Top Tasks
+    by CPU and the Performance Overview panels. *kind* is ``core`` or ``task``."""
+    pct_v = max(0.0, min(100.0, float(pct)))
+    lab = _esc(str(label))
+    row_cls = "util-row util-row-core" if kind == "core" else "util-row util-row-task"
+    pct_cls = "util-pct util-pct-core" if kind == "core" else "util-pct util-pct-task"
+    return (
+        f'<div class="{row_cls}" title="{lab}: {pct_v:.1f}%">'
+        f'<span class="util-label">{lab}</span>'
+        f'<div class="util-bar"><div class="util-bar-fill" '
+        f'style="width:{pct_v:.1f}%"></div></div>'
+        f'<span class="{pct_cls}">{pct_v:.1f}%</span>'
+        "</div>"
+    )
+
+
+def html_util_section(
+    title: str,
+    rows: Sequence[tuple],
+    kind: str,
+    *,
+    lead_html: str = "",
+) -> str:
+    """Report card of utilisation bar rows: ``[(label, pct), ...]``.
+
+    *lead_html* is placed between the heading and the bars (the Core
+    Utilization card uses it for the load-balance gauge).
+    """
+    if not rows:
+        body = '<p class="empty">No data</p>'
+    else:
+        items = "".join(html_util_bar_row(label, pct, kind) for label, pct in rows)
+        body = f'<div class="util-list">{items}</div>'
+    return (
+        f'<section class="report-card"><h2>{_esc(title)}</h2>'
+        f"{lead_html}{body}</section>"
+    )
+
+
+def html_report_verdict(kind: str, body_html: str) -> str:
+    """Theme-aware verdict banner. *body_html* is already escaped by the caller."""
+    k = kind if kind in ("ok", "warn", "error") else "ok"
+    return (
+        f'<p class="report-verdict {k}">'
+        f"<strong>Verdict:</strong> {body_html}</p>"
+    )
+
+
+def html_response_p99_chart(
+    rows: Sequence[dict],
+    *,
+    format_p99,
+    limit: int = 8,
+) -> str:
+    """Top-N horizontal P99 bars from the same response-time rows as the table."""
+    items = [r for r in (rows or []) if isinstance(r, dict)]
+    items.sort(key=lambda r: int(r.get("p99_ns") or 0), reverse=True)
+    items = items[: max(0, int(limit))]
+    if not items:
+        return ""
+    bars = html_rank_bars(
+        [
+            (
+                str(r.get("task") or ""),
+                float(r.get("p99_ns") or 0),
+                format_p99(int(r.get("p99_ns") or 0)) if callable(format_p99)
+                else str(r.get("p99_ns") or 0),
+            )
+            for r in items
+        ],
+        fill_kind="accent",
+    )
+    return (
+        '<div class="metric-chart p99-chart">'
+        '<div class="metric-chart-head"><div>'
+        '<div class="metric-chart-title">Highest response P99</div>'
+        '<div class="metric-chart-subtitle">Top observed tasks by P99 response time. '
+        "Full percentile data remains in the table below.</div>"
+        f"</div></div>{bars}</div>"
+    )
+
+
+def html_scheduling_balance_chart(samples: Sequence[dict]) -> str:
+    """Inline SVG of Load Balance Score over time.
+
+    *samples* is ``[{time, score, sigma}, ...]`` already formatted and in
+    trace-time order. Every numeric score is plotted; Y is 0–100.
+    """
+    pts = []
+    for s in samples or []:
+        if not isinstance(s, dict):
+            continue
+        raw = s.get("score")
+        if raw is None:
+            continue
+        try:
+            score = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if score != score:
+            continue
+        score = max(0.0, min(100.0, score))
+        try:
+            sigma = float(s.get("sigma") or 0.0)
+        except (TypeError, ValueError):
+            sigma = 0.0
+        pts.append((str(s.get("time") or ""), score, sigma))
+    if not pts:
+        return ""
+    width, height = 760, 230
+    pad_l, pad_r, pad_t, pad_b = 52, 20, 24, 38
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+    n = len(pts)
+
+    def _x(i: int) -> float:
+        return pad_l if n == 1 else pad_l + plot_w * i / (n - 1)
+
+    def _y(score: float) -> float:
+        return pad_t + plot_h * (1.0 - score / 100.0)
+
+    low_i = min(range(n), key=lambda i: (pts[i][1], i))
+    grid = []
+    for mark in (0, 25, 50, 75, 100):
+        gy = _y(float(mark))
+        grid.append(
+            f'<line class="chart-gridline" x1="{pad_l}" x2="{width - pad_r}" '
+            f'y1="{gy:.1f}" y2="{gy:.1f}"/>'
+            f'<text class="chart-axis-label" text-anchor="end" '
+            f'x="{pad_l - 9}" y="{gy + 4:.1f}">{mark}</text>'
+        )
+    label_idx = [0] if n == 1 else [0, n // 2, n - 1]
+    seen = set()
+    axis_x = []
+    for i in label_idx:
+        if i in seen:
+            continue
+        seen.add(i)
+        axis_x.append(
+            f'<text class="chart-axis-label" text-anchor="middle" '
+            f'x="{_x(i):.1f}" y="{height - 12}">{_esc(pts[i][0])}</text>'
+        )
+    poly = " ".join(f"{_x(i):.1f},{_y(score):.1f}" for i, (_t, score, _s) in enumerate(pts))
+    dots = []
+    for i, (time_txt, score, sigma) in enumerate(pts):
+        kind = "chart-point-low" if i == low_i else "chart-point-normal"
+        title = (
+            f"{_esc(time_txt)} · Load balance {score:.0f} · "
+            f"Util σ {sigma:.1f}%"
+        )
+        dots.append(
+            f'<circle class="chart-point {kind}" cx="{_x(i):.1f}" '
+            f'cy="{_y(score):.1f}" r="4"><title>{title}</title></circle>'
+        )
+    low_time, low_score, _sig = pts[low_i]
+    return (
+        '<div class="metric-chart scheduling-chart">'
+        '<div class="metric-chart-head"><div>'
+        '<div class="metric-chart-title">Load balance over time</div>'
+        '<div class="metric-chart-subtitle">Lower scores indicate more uneven '
+        "core utilization during that sample window.</div></div>"
+        '<div class="chart-callout"><span class="chart-callout-label">Lowest</span>'
+        f"<strong>{low_score:.0f}</strong>"
+        f'<span class="chart-callout-note">at {_esc(low_time)}</span></div></div>'
+        f'<svg class="trend-svg" xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {width} {height}" role="img" '
+        'aria-label="Load balance score over time">'
+        f"{''.join(grid)}{''.join(axis_x)}"
+        f'<polyline class="chart-line" fill="none" points="{poly}"/>'
+        f"{''.join(dots)}</svg></div>"
+    )
 
 
 def _format_measured_values(values) -> str:
@@ -512,81 +1108,136 @@ def html_trace_health_card(
     )
 
 
-def _heat_color(frac: float) -> str:
-    f = max(0.0, min(1.0, float(frac)))
-    r = int(241 + (192 - 241) * f)
-    g = int(245 + (57 - 245) * f)
-    b = int(251 + (43 - 251) * f)
-    return f"rgb({r},{g},{b})"
+def _heat_bin(value: float, max_v: float) -> int:
+    """Fixed heat-0..heat-5 bin index (not a continuous color) - a Chromium /
+    Qt WebEngine runtime theme switch cannot be relied on to re-evaluate
+    color-mix()/computed colors, but a plain class swap always repaints."""
+    if value <= 0:
+        return 0
+    normalized = value / max(1.0, max_v)
+    return max(1, min(5, math.ceil(normalized * 5)))
 
 
 def html_matrix_heatmap(
     row_labels: Sequence[str],
     col_labels: Sequence[str],
-    cells: Sequence[Sequence[float]],
+    cells: Sequence[Sequence[Optional[float]]],
     *,
     title: str,
+    subtitle: str = "",
     unit: str = "%",
     width: int = 640,
+    diagonal_dash: bool = False,
+    tooltip_sep: str = "→",
+    max_value_override: Optional[float] = None,
+    extra_col: Optional[tuple] = None,
 ) -> str:
+    """CSS-grid heat matrix with fixed heat-0..heat-5 classes (not inline
+    SVG rgb() fills - see _heat_bin). A cell value of ``None`` renders as a
+    dashed no-data cell, distinct from a real 0. ``diagonal_dash=True``
+    treats a cell whose row/col label match (self-pair) as a dashed
+    diagonal cell instead of a heat cell, e.g. Core_5 vs. Core_5.
+    ``extra_col``, if given, is ``(label, values, unit)``: one additional
+    trailing column rendered as a plain (non heat-colored) value per row —
+    e.g. a derived per-sample "Spread" figure that shouldn't be confused
+    with the matrix's own heat-scaled readings."""
     rows = list(row_labels or [])
     cols = list(col_labels or [])
     if not rows or not cols:
         return ""
+    extra_label, extra_values, extra_unit = extra_col if extra_col else (None, [], "%")
     max_v = 0.0
     for line in cells or []:
         for v in line:
+            if v is None:
+                continue
             try:
-                max_v = max(max_v, float(v or 0))
+                max_v = max(max_v, float(v))
             except (TypeError, ValueError):
                 pass
-    max_v = max(max_v, 1.0)
-    label_w = 88
-    head_h = 36
-    cell = 22
-    w = max(width, label_w + 12 + len(cols) * cell)
-    h = head_h + 8 + len(rows) * cell + 8
+    if max_value_override is not None and max_value_override > 0:
+        max_v = float(max_value_override)
+    else:
+        max_v = max(max_v, 1.0)
+    head = (
+        '<div class="heat-matrix-head">'
+        f'<div class="heat-matrix-title">{_esc(title)}</div>'
+        + (f'<div class="heat-matrix-subtitle">{_esc(subtitle)}</div>' if subtitle else "")
+        + "</div>"
+    )
+    col_count = len(cols) + (1 if extra_label else 0)
     parts = [
-        f'<div class="heat-wrap"><svg xmlns="http://www.w3.org/2000/svg" '
-        f'viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img" '
-        f'aria-label="{_esc(title)}">',
-        f'<text x="8" y="16" font-size="12" fill="#123355" font-weight="600">'
-        f"{_esc(title)}</text>",
+        '<div class="heat-wrap">',
+        head,
+        f'<div class="heat-grid" style="--col-count:{col_count}">',
+        '<div class="heat-grid-corner"></div>',
     ]
-    for j, col in enumerate(cols):
-        x = label_w + j * cell + cell / 2
-        lab = _esc(str(col)[:10])
+    for col in cols:
+        col_s = str(col)
         parts.append(
-            f'<text x="{x:.1f}" y="{head_h - 4}" font-size="9" fill="#5f6f82" '
-            f'text-anchor="middle">{lab}</text>'
+            f'<div class="heat-grid-collabel" title="{_esc(col_s)}">{_esc(col_s[:6])}</div>'
+        )
+    if extra_label:
+        parts.append(
+            f'<div class="heat-grid-collabel" title="{_esc(extra_label)}">{_esc(str(extra_label)[:8])}</div>'
         )
     for i, row in enumerate(rows):
-        y = head_h + i * cell
+        row_s = str(row)
         parts.append(
-            f'<text x="8" y="{y + 15}" font-size="10" fill="#182230">'
-            f"{_esc(str(row)[:14])}</text>"
+            f'<div class="heat-grid-rowlabel" title="{_esc(row_s)}">{_esc(row_s[:16])}</div>'
         )
         line = cells[i] if i < len(cells) else []
-        for j, _col in enumerate(cols):
-            raw = line[j] if j < len(line) else 0
+        for j, col in enumerate(cols):
+            col_s = str(col)
+            if diagonal_dash and row_s == col_s:
+                parts.append(
+                    f'<div class="heat-grid-cell heat-grid-diagonal" '
+                    f'title="{_esc(row_s)}">—</div>'
+                )
+                continue
+            raw = line[j] if j < len(line) else None
+            if raw is None:
+                parts.append(
+                    '<div class="heat-grid-cell heat-grid-nodata" title="No data">—</div>'
+                )
+                continue
             try:
-                val = float(raw or 0)
+                val = float(raw)
             except (TypeError, ValueError):
                 val = 0.0
-            x = label_w + j * cell
-            color = _heat_color(val / max_v) if val > 0 else "#f7f9fc"
+            label = f"{val:.0f}{unit}" if unit == "%" else f"{val:.0f}"
+            tip = f"{_esc(row_s)} {tooltip_sep} {_esc(col_s)}: {_esc(label)}"
             parts.append(
-                f'<rect x="{x:.1f}" y="{y:.1f}" width="{cell - 2}" height="{cell - 2}" '
-                f'rx="3" fill="{color}"/>'
+                f'<div class="heat-grid-cell heat-{_heat_bin(val, max_v)}" '
+                f'title="{tip}">{_esc(label)}</div>'
             )
-            if val > 0:
-                label = f"{val:.0f}{unit}" if unit == "%" else f"{val:.0f}"
+        if extra_label:
+            extra_raw = extra_values[i] if i < len(extra_values) else None
+            if extra_raw is None:
                 parts.append(
-                    f'<text class="heat-cell" x="{x + (cell - 2) / 2:.1f}" y="{y + 14:.1f}" '
-                    f'fill="#123355">{_esc(label)}</text>'
+                    '<div class="heat-grid-cell heat-grid-nodata" title="No data">—</div>'
                 )
-    parts.append("</svg></div>")
+            else:
+                extra_val = float(extra_raw)
+                extra_disp = f"{extra_val:.0f}{extra_unit}" if extra_unit == "%" else f"{extra_val:.0f}"
+                parts.append(
+                    f'<div class="heat-grid-cell heat-grid-extra" '
+                    f'title="{_esc(row_s)}: {_esc(extra_label)} {_esc(extra_disp)}">{_esc(extra_disp)}</div>'
+                )
+    parts.append("</div></div>")
     return "".join(parts)
+
+
+def html_heat_legend() -> str:
+    """0% -> 100% gradient key for the heat-0..heat-5 color scale, for a
+    matrix where the reader benefits from an explicit low/high reference
+    (e.g. Core Utilization Over Time)."""
+    return (
+        '<div class="heat-legend"><div class="heat-legend-grid">'
+        "<span>0%</span><div class=\"heat-legend-bar\"></div><span>100%</span>"
+        "<span>Lower</span><span></span><span>Higher</span>"
+        "</div></div>"
+    )
 
 
 def html_percentile_bars(
@@ -608,12 +1259,12 @@ def html_percentile_bars(
     h = header + len(items) * row_h + 10
     plot_w = max(80.0, width - label_w - pad - 80)
     parts = [
-        f'<div class="heat-wrap"><svg xmlns="http://www.w3.org/2000/svg" '
+        f'<div class="heat-wrap"><svg class="pctile-svg" xmlns="http://www.w3.org/2000/svg" '
         f'viewBox="0 0 {width} {h}" width="{width}" height="{h}" role="img" '
         f'aria-label="{_esc(title)}">',
-        f'<text x="{pad}" y="16" font-size="12" fill="#123355" font-weight="600">'
+        f'<text class="pctile-title" x="{pad}" y="16" font-size="12" font-weight="600">'
         f"{_esc(title)}</text>",
-        f'<text x="{width - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
+        f'<text class="pctile-sub" x="{width - pad}" y="16" text-anchor="end" font-size="11">'
         "interval = P50–P99</text>",
     ]
     for i, r in enumerate(items):
@@ -625,35 +1276,39 @@ def html_percentile_bars(
         x0 = label_w + plot_w * p50 / max_v
         x1 = label_w + plot_w * max(p99, p50) / max_v
         x95 = label_w + plot_w * p95 / max_v
-        parts.append(f'<text x="8" y="{y + 14}" font-size="11" fill="#182230">{lab}</text>')
+        parts.append(f'<text class="pctile-label" x="8" y="{y + 14}" font-size="11">{lab}</text>')
         parts.append(
-            f'<rect x="{x0:.1f}" y="{y + 6}" width="{max(x1 - x0, 2):.1f}" height="8" '
-            f'rx="3" fill="#9ec5e8"/>'
+            f'<rect class="pctile-bar" x="{x0:.1f}" y="{y + 6}" '
+            f'width="{max(x1 - x0, 2):.1f}" height="8" rx="3"/>'
         )
         parts.append(
-            f'<line x1="{x95:.1f}" y1="{y + 4}" x2="{x95:.1f}" y2="{y + 16}" '
-            f'stroke="#2a6fb2" stroke-width="2"/>'
+            f'<line class="pctile-marker" x1="{x95:.1f}" y1="{y + 4}" '
+            f'x2="{x95:.1f}" y2="{y + 16}" stroke-width="2"/>'
         )
     parts.append("</svg></div>")
     return "".join(parts)
 
 
 def html_health_bars(rows: Sequence[dict], *, width: int = 640) -> str:
+    """Task Health score bars. The score is a 0-100 magnitude, so it uses the
+    shared quantitative bar component (``--data-bar``) like every other bar in
+    the report; the per-metric deductions stay in the trailing text and the
+    table below."""
     items = [r for r in (rows or []) if isinstance(r, dict)]
     items = sorted(items, key=lambda r: int(r.get("score") or 0))[:16]
     if not items:
         return ""
     parts = ['<div class="health-bars">']
     for r in items:
-        score = int(r.get("score") or 0)
+        score = max(0, min(100, int(r.get("score") or 0)))
         marks = r.get("marks") or {}
         reasons = [k for k, v in marks.items() if v]
         reason = ", ".join(reasons) if reasons else "no deductions"
-        color = "#c0392b" if score < 50 else "#e0a020" if score < 80 else "#1a8a2a"
+        task = str(r.get("task") or "")
         parts.append(
-            f'<div class="pct-bar"><span class="lab" title="{_esc(r.get("task") or "")}">'
-            f'{_esc(str(r.get("task") or "")[:18])}</span>'
-            f'<div class="track"><div class="fill" style="width:{score}%;background:{color}"></div></div>'
+            f'<div class="pct-bar" title="{_esc(task)}: score {score}/100 · {_esc(reason)}">'
+            f'<span class="lab">{_esc(task[:18])}</span>'
+            f'<div class="track"><div class="fill" style="width:{score}%"></div></div>'
             f'<span>{score} · {_esc(reason)}</span></div>'
         )
     parts.append("</div>")
@@ -737,9 +1392,9 @@ def _sparkline(vals: Sequence[float], *, width: int = 420, height: int = 48) -> 
         y = height - 6 - (height - 12) * ((v - mn) / span)
         pts.append(f"{x:.1f},{y:.1f}")
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+        f'<svg class="pctile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
         f'width="{width}" height="{height}" role="img" aria-label="Tag time series">'
-        f'<polyline fill="none" stroke="#2a6fb2" stroke-width="1.5" '
+        f'<polyline class="sparkline-line" fill="none" stroke-width="1.5" '
         f'points="{" ".join(pts)}"/></svg>'
     )
 

@@ -2651,17 +2651,84 @@ def app_icon_svg_markup(size: int = 48) -> str:
 
 _BTF_HTML_REPORT_CSS = """
 :root {
+  color-scheme: light dark;
   --bg: #e9edf3;
+  --bg-elev: #f3f6fa;
   --paper: #ffffff;
+  --paper-2: #f1f5fb;
   --ink: #182230;
   --muted: #5f6f82;
   --line: #d9e0ea;
+  --line-strong: #c3cee0;
   --header: #16324f;
+  --header-2: #21496f;
   --accent: #2a6fb2;
+  --accent-soft: #eaf2ff;
+  --accent-2: #0f766e;
+  --success: #1f6b45;
+  --success-soft: #d9f0e3;
+  --warning: #8a4b00;
+  --warning-soft: #fce8c8;
+  --danger: #b3261e;
+  --danger-soft: #fdecec;
+  --violet: #7357c7;
+  --stripe: #f7f9fc;
   --user-bar: #5b9bd5;
   --asst-bar: #3d9a72;
   --user-bg: #eef5fc;
   --asst-bg: #eef7f2;
+}
+html[data-theme="dark"] {
+  --bg: #14181e;
+  --bg-elev: #181d24;
+  --paper: #1c2128;
+  --paper-2: #20262e;
+  --ink: #d6dde6;
+  --muted: #9aa7b4;
+  --line: #2d333b;
+  --line-strong: #3a4149;
+  --header: #16324f;
+  --header-2: #21496f;
+  --accent: #6cb0e6;
+  --accent-soft: #1d3348;
+  --accent-2: #4ec6bb;
+  --success: #57c191;
+  --success-soft: #123024;
+  --warning: #f0b35c;
+  --warning-soft: #302410;
+  --danger: #ff8585;
+  --danger-soft: #33191a;
+  --violet: #b3a0ff;
+  --stripe: #171c22;
+  --user-bg: #182634;
+  --asst-bg: #17251d;
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    --bg: #14181e;
+    --bg-elev: #181d24;
+    --paper: #1c2128;
+    --paper-2: #20262e;
+    --ink: #d6dde6;
+    --muted: #9aa7b4;
+    --line: #2d333b;
+    --line-strong: #3a4149;
+    --header: #16324f;
+    --header-2: #21496f;
+    --accent: #6cb0e6;
+    --accent-soft: #1d3348;
+    --accent-2: #4ec6bb;
+    --success: #57c191;
+    --success-soft: #123024;
+    --warning: #f0b35c;
+    --warning-soft: #302410;
+    --danger: #ff8585;
+    --danger-soft: #33191a;
+    --violet: #b3a0ff;
+    --stripe: #171c22;
+    --user-bg: #182634;
+    --asst-bg: #17251d;
+  }
 }
 * { box-sizing: border-box; }
 body {
@@ -2720,7 +2787,7 @@ body {
   margin: 14px 0;
   background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 16px;
   padding: 14px 16px 16px;
   box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
 }
@@ -2750,7 +2817,7 @@ h2 {
   width: 22%;
 }
 pre {
-  background: #f1f5fb;
+  background: var(--paper-2);
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 10px 12px;
@@ -2794,8 +2861,8 @@ a { color: var(--accent); }
   padding: 1px 7px;
   border: 1px solid var(--line);
   border-radius: 4px;
-  background: #fff;
-  color: #5a6a7c;
+  background: var(--paper);
+  color: var(--muted);
   font-size: 10px;
   font-weight: 600;
   line-height: 1.3;
@@ -2810,7 +2877,7 @@ details.ai-ev-fold {
   border-radius: 6px;
   padding: 2px 8px 4px;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--paper);
 }
 details.ai-ev-fold-l1,
 details.ai-ev-fold:not(.ai-ev-fold-l2) {
@@ -2821,22 +2888,22 @@ details.ai-ev-fold:not(.ai-ev-fold-l2) > summary {
   cursor: pointer;
   font-weight: 600;
   font-size: 12px;
-  color: #284563;
+  color: var(--ink);
   padding: 5px 0;
   list-style: none;
 }
 details.ai-ev-fold-l2 {
   margin: 4px 0 4px 10px;
-  border-color: #e2e8f0;
+  border-color: var(--line);
   border-radius: 4px;
   padding: 1px 6px 3px;
-  background: #f8fafc;
+  background: var(--paper-2);
 }
 details.ai-ev-fold-l2 > summary {
   cursor: pointer;
   font-weight: 600;
   font-size: 11px;
-  color: #5f6f82;
+  color: var(--muted);
   padding: 3px 0;
   list-style: none;
 }
@@ -2882,11 +2949,11 @@ table.ai-md-table th, table.ai-md-table td {
   padding: 4px 8px;
 }
 table.ai-md-table th {
-  background: #f1f5fb;
-  color: #284563;
+  background: var(--paper-2);
+  color: var(--ink);
 }
 table.ai-md-table td {
-  background: #fff;
+  background: var(--paper);
   color: var(--ink);
 }
 
@@ -2894,18 +2961,18 @@ table.ai-md-table td {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 999px;
-  background: #e8eef7;
-  color: #123355;
+  background: var(--accent-soft);
+  color: var(--header);
   font-size: 12px;
   font-weight: 650;
   margin-right: 6px;
 }
-.badge-status { background: #dfe9f8; }
-.badge-ok { background: #d9f0e3; color: #1f6b45; }
-.badge-warn { background: #fce8c8; color: #8a4b00; }
+.badge-status { background: var(--accent-soft); }
+.badge-ok { background: var(--success-soft); color: var(--success); }
+.badge-warn { background: var(--warning-soft); color: var(--warning); }
 .warn-banner {
-  background: #fff6e8;
-  border: 1px solid #f0d2a0;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
   border-radius: 8px;
   padding: 8px 10px;
 }
@@ -2916,12 +2983,12 @@ details.report-appendix {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 6px 10px;
-  background: #f8fafc;
+  background: var(--paper-2);
 }
 details.report-appendix > summary {
   cursor: pointer;
   font-weight: 650;
-  color: #123355;
+  color: var(--ink);
 }
 .appendix-body { margin-top: 8px; }
 .export-note { color: var(--muted); font-size: 12px; margin-top: 12px; }
@@ -2936,9 +3003,12 @@ details.report-appendix > summary {
   tr { break-inside: avoid; }
   details.report-card:not([open]) > *:not(summary) { display: revert; }
   details[open] > summary { list-style: none; }
-  /* Interactive chrome has no place on paper. */
+  /* Interactive chrome has no place on paper. The sortable class sits on the
+     <th> itself, so only its affordance is dropped — never the header cell. */
   .table-toolbar, .table-pager, .report-toc [data-toc],
-  .ai-ev-panel-toggle, .sortable { display: none !important; }
+  .ai-ev-panel-toggle { display: none !important; }
+  .sortable { cursor: default; }
+  thead th.sortable:hover { background: var(--paper-2); }
   .table-scroll { overflow: visible !important; }
   a { color: inherit; text-decoration: none; }
 }
@@ -2950,31 +3020,51 @@ details.report-appendix > summary {
   font-size: 11px;
   text-align: center;
 }
+.theme-toggle {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f3f7fd;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.theme-toggle:hover { background: rgba(255, 255, 255, 0.22); }
+@media print {
+  .theme-toggle { display: none !important; }
+}
+html[data-theme="dark"] body { background: #12161b; }
+html[data-theme="dark"] h2 { color: #cfe1f7; }
+html[data-theme="dark"] pre { background: #12161b; border-color: var(--line); color: var(--ink); }
+html[data-theme="dark"] .msg.user h3 { color: #6cb0e6; }
+html[data-theme="dark"] .msg.assistant h3 { color: #57c191; }
+html[data-theme="dark"] .msg.evidence h3 { color: #9aa7b4; }
+html[data-theme="dark"] .msg.evidence .body { background: #171b21; border-left-color: #5a6a7c; }
+html[data-theme="dark"] .ai-ev-panel-toggle { background: var(--paper); color: var(--muted); }
+html[data-theme="dark"] details.ai-ev-fold { background: var(--paper); }
+html[data-theme="dark"] details.ai-ev-fold-l1 > summary,
+html[data-theme="dark"] details.ai-ev-fold:not(.ai-ev-fold-l2) > summary { color: #b6c2cf; }
+html[data-theme="dark"] details.ai-ev-fold-l2 { background: #171b21; border-color: var(--line); }
+html[data-theme="dark"] details.ai-ev-fold-l2 > summary { color: var(--muted); }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14181e;
-    --paper: #1c2128;
-    --ink: #d6dde6;
-    --muted: #9aa7b4;
-    --line: #2d333b;
-    --header: #16324f;
-    --accent: #6cb0e6;
-    --user-bg: #182634;
-    --asst-bg: #17251d;
-  }
-  body { background: #12161b; }
-  h2 { color: #cfe1f7; }
-  pre { background: #12161b; border-color: var(--line); color: var(--ink); }
-  .msg.user h3 { color: #6cb0e6; }
-  .msg.assistant h3 { color: #57c191; }
-  .msg.evidence h3 { color: #9aa7b4; }
-  .msg.evidence .body { background: #171b21; border-left-color: #5a6a7c; }
-  .ai-ev-panel-toggle { background: var(--paper); color: var(--muted); }
-  details.ai-ev-fold { background: var(--paper); }
-  details.ai-ev-fold-l1 > summary,
-  details.ai-ev-fold:not(.ai-ev-fold-l2) > summary { color: #b6c2cf; }
-  details.ai-ev-fold-l2 { background: #171b21; border-color: var(--line); }
-  details.ai-ev-fold-l2 > summary { color: var(--muted); }
+  html:not([data-theme="light"]) body { background: #12161b; }
+  html:not([data-theme="light"]) h2 { color: #cfe1f7; }
+  html:not([data-theme="light"]) pre { background: #12161b; border-color: var(--line); color: var(--ink); }
+  html:not([data-theme="light"]) .msg.user h3 { color: #6cb0e6; }
+  html:not([data-theme="light"]) .msg.assistant h3 { color: #57c191; }
+  html:not([data-theme="light"]) .msg.evidence h3 { color: #9aa7b4; }
+  html:not([data-theme="light"]) .msg.evidence .body { background: #171b21; border-left-color: #5a6a7c; }
+  html:not([data-theme="light"]) .ai-ev-panel-toggle { background: var(--paper); color: var(--muted); }
+  html:not([data-theme="light"]) details.ai-ev-fold { background: var(--paper); }
+  html:not([data-theme="light"]) details.ai-ev-fold-l1 > summary,
+  html:not([data-theme="light"]) details.ai-ev-fold:not(.ai-ev-fold-l2) > summary { color: #b6c2cf; }
+  html:not([data-theme="light"]) details.ai-ev-fold-l2 { background: #171b21; border-color: var(--line); }
+  html:not([data-theme="light"]) details.ai-ev-fold-l2 > summary { color: var(--muted); }
 }
 """.strip()
 
@@ -3011,6 +3101,12 @@ def btf_html_report_document(
         f"<meta name=\"generator\" content=\"{html.escape(PRODUCT_NAME)} {html.escape(APP_VERSION)}\">\n"
         f"<title>{html.escape(page_title)}</title>\n"
         f"<style>\n{css}\n</style>\n"
+        # Apply a saved theme before first paint so there is no flash of the
+        # wrong theme; no saved value leaves data-theme unset so the
+        # prefers-color-scheme CSS above decides.
+        "<script>(function(){try{var t=localStorage.getItem('btfviewer-report-theme');"
+        "if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}"
+        "}catch(e){}})();</script>\n"
         "</head>\n"
         "<body>\n"
         f"<div class=\"{cls}\">\n"
@@ -3021,6 +3117,8 @@ def btf_html_report_document(
         f"<h1>{html.escape(title)}</h1>\n"
         f"<div class=\"sub\">{sub}</div>\n"
         "</div>\n"
+        "<button class=\"theme-toggle\" type=\"button\" aria-label=\"Toggle report theme\" "
+        "onclick=\"btfToggleReportTheme()\">☾ Dark</button>\n"
         "</header>\n"
         f"{body_html}\n"
         "<footer class=\"report-foot\">\n"
@@ -3028,14 +3126,48 @@ def btf_html_report_document(
         f"{html.escape(PRODUCT_TAGLINE)}\n"
         "</footer>\n"
         "</div>\n"
+        f"<script>\n{_BTF_THEME_TOGGLE_JS}\n</script>\n"
         "</body>\n"
         "</html>\n"
     )
 
 
+_BTF_THEME_TOGGLE_JS = """
+function btfToggleReportTheme() {
+  var root = document.documentElement;
+  var cur = root.getAttribute('data-theme');
+  if (!cur) {
+    cur = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      ? 'dark' : 'light';
+  }
+  var next = cur === 'dark' ? 'light' : 'dark';
+  root.setAttribute('data-theme', next);
+  try { localStorage.setItem('btfviewer-report-theme', next); } catch (e) {}
+  btfSyncThemeToggleLabel();
+}
+function btfSyncThemeToggleLabel() {
+  var root = document.documentElement;
+  var explicit = root.getAttribute('data-theme');
+  var dark = explicit
+    ? explicit === 'dark'
+    : !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  var btn = document.querySelector('.theme-toggle');
+  if (btn) btn.textContent = dark ? '☀ Light' : '☾ Dark';
+}
+document.addEventListener('DOMContentLoaded', btfSyncThemeToggleLabel);
+if (window.matchMedia) {
+  try {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+      if (!document.documentElement.getAttribute('data-theme')) btfSyncThemeToggleLabel();
+    });
+  } catch (e) {}
+}
+""".strip()
+
+
 HTML_REPORT_TOC_CSS = """
 .report-toc {
-  background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-2) 100%);
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 16px 18px 18px;
@@ -3069,7 +3201,7 @@ HTML_REPORT_TOC_CSS = """
   font-size: 11px;
   font-weight: 650;
   color: var(--muted);
-  background: #eef3f9;
+  background: var(--paper-2);
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 2px 8px;
@@ -3088,12 +3220,12 @@ HTML_REPORT_TOC_CSS = """
   padding: 5px 11px;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: #fff;
+  background: var(--paper);
   color: var(--accent);
   cursor: pointer;
   box-shadow: 0 1px 2px rgba(30, 60, 90, 0.04);
 }
-.toc-btn:hover { background: #eef4fb; border-color: #c5d4e6; }
+.toc-btn:hover { background: var(--paper-2); border-color: var(--accent); }
 .report-toc ul {
   margin: 0;
   padding: 0;
@@ -3120,7 +3252,7 @@ HTML_REPORT_TOC_CSS = """
   color: var(--muted);
 }
 .report-toc a {
-  color: #1a4f80;
+  color: var(--accent);
   text-decoration: none;
   font-size: 13px;
   line-height: 1.35;
@@ -3128,7 +3260,7 @@ HTML_REPORT_TOC_CSS = """
 .report-toc a:hover { color: var(--accent); text-decoration: underline; }
 .toc-groups { display: grid; gap: 12px; }
 .toc-group {
-  background: #fff;
+  background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 10px 12px 12px;
@@ -3137,12 +3269,12 @@ HTML_REPORT_TOC_CSS = """
 .toc-group h3 {
   margin: 0 0 8px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #e8eef5;
+  border-bottom: 1px solid var(--line);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #5f6f82;
+  color: var(--muted);
 }
 .toc-group ul { columns: 1; }
 @media (min-width: 720px) {
@@ -3234,22 +3366,17 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
       + (hasProblems ? '<label class="table-check"><input type="checkbox" data-problems> Problems only</label>' : '')
       + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
       + '<span class="table-count"></span>'
-      + '<button type="button" class="table-csv">CSV</button>';
+      + '<button type="button" class="table-csv table-action">CSV</button>';
     wrap.insertBefore(bar, scroll);
-    var PGBTN = 'font:inherit;font-size:12px;padding:2px 9px;border:1px solid var(--line,#d9e0ea);'
-      + 'border-radius:6px;background:#f1f5fb;color:inherit;cursor:pointer;';
     var csvBtn = bar.querySelector('.table-csv');
     if (csvBtn) {
-      csvBtn.style.cssText = PGBTN;
       csvBtn.title = 'Download the filtered rows as a CSV file';
     }
     var pager = document.createElement('div');
     pager.className = 'table-pager';
-    pager.style.cssText = 'display:none;gap:8px;align-items:center;margin-top:6px;'
-      + 'font-size:12px;color:var(--muted,#5f6f82);';
-    pager.innerHTML = '<button type="button" data-pg="prev" style="' + PGBTN + '">\\u2039 Prev</button>'
+    pager.innerHTML = '<button type="button" data-pg="prev" class="table-action">\\u2039 Prev</button>'
       + '<span data-pg="label"></span>'
-      + '<button type="button" data-pg="next" style="' + PGBTN + '">Next \\u203a</button>';
+      + '<button type="button" data-pg="next" class="table-action">Next \\u203a</button>';
     wrap.appendChild(pager);
     var pgPrev = pager.querySelector('[data-pg="prev"]');
     var pgNext = pager.querySelector('[data-pg="next"]');
@@ -3512,7 +3639,7 @@ def html_apply_collapsible_toc(
 
 STATS_TOC_GROUPS = (
     ("Overview and Findings", (
-        "Analysis Scope", "Evidence Refs", "Analysis Findings",
+        "Performance Overview", "Analysis Scope", "Evidence Refs", "Analysis Findings",
         "Trace Health Check", "Investigation", "Trace Metadata",
     )),
     ("CPU and Scheduling", (
@@ -3522,7 +3649,7 @@ STATS_TOC_GROUPS = (
         "Top Tasks by CPU",
     )),
     ("Migrations and Core Affinity", (
-        "Core Migrations", "Core-Pair Migration Summary", "Core Affinity",
+        "Core Migration Count", "Core-Pair Migration Summary", "Core Affinity",
         "Task × Core", "Core Utilization Over Time", "Task Lifecycle",
         "Deadlines / CPU budget", "Task Health",
     )),
@@ -3550,7 +3677,161 @@ STATS_DEFAULT_EXPANDED = (
 )
 
 STATS_HTML_EXTRA_CSS = """
-:root { --line-strong: #c8d2e0; --stripe: #f7f9fc; }
+:root {
+  --bg: #F8FAFC;
+  --bg-elev: #F1F5F9;
+  --paper: #FFFFFF;
+  --paper-2: #F1F5F9;
+  --surface: #FFFFFF;
+  --ink: #0F172A;
+  --muted: #475569;
+  --line: #E2E8F0;
+  --line-strong: #E2E8F0;
+  --stripe: #F8FAFC;
+  --accent: #0284C7;
+  --accent-2: #0284C7;
+  --accent-soft: #E0F2FE;
+  --success: #10B981;
+  --success-soft: #D1FAE5;
+  --warning: #D97706;
+  --warning-soft: #FEF3C7;
+  --danger: #E11D48;
+  --danger-soft: #FFE4E6;
+  --violet: #0284C7;
+  --ok-border: #6EE7B7;
+  --warn-border: #FBBF24;
+  --error-border: #FB7185;
+  --accent-border: #7DD3FC;
+  --canvas-top: #FFFFFF;
+  --canvas-edge: #E4EAF2;
+  --bar-track-bg: #F1F5F9;
+  --bar-track-border: #E2E8F0;
+  --data-bar: #0284C7;
+  --data-bar-soft: #BAE6FD;
+  --data-0-bg: #F8FAFC; --data-0-ink: #64748B;
+  --data-1-bg: #E0F2FE; --data-1-ink: #075985;
+  --data-2-bg: #BAE6FD; --data-2-ink: #075985;
+  --data-3-bg: #7DD3FC; --data-3-ink: #0C4A6E;
+  --data-4-bg: #38BDF8; --data-4-ink: #082F49;
+  --data-5-bg: #0284C7; --data-5-ink: #FFFFFF;
+  --matrix-bg: #FFFFFF;
+  --matrix-border: #E2E8F0;
+  --matrix-label: #475569;
+  --matrix-diag-bg: #F1F5F9;
+  --matrix-diag-ink: #64748B;
+  --chart-grid: #E2E8F0;
+  --chart-axis: #475569;
+}
+html[data-theme="dark"] {
+  --bg: #0B0F19;
+  --bg-elev: #101827;
+  --paper: #151D2E;
+  --paper-2: #101827;
+  --surface: #151D2E;
+  --ink: #F1F5F9;
+  --muted: #94A3B8;
+  --line: #1E293B;
+  --line-strong: #1E293B;
+  --stripe: #111827;
+  --accent: #38BDF8;
+  --accent-2: #38BDF8;
+  --accent-soft: #102A3A;
+  --success: #10B981;
+  --success-soft: #123024;
+  --warning: #FB923C;
+  --warning-soft: #332417;
+  --danger: #E11D48;
+  --danger-soft: #3F1D29;
+  --violet: #38BDF8;
+  --ok-border: #065F46;
+  --warn-border: #9A3412;
+  --error-border: #9F1239;
+  --accent-border: #15506C;
+  --canvas-top: #151D2E;
+  --canvas-edge: #0D1218;
+  --bar-track-bg: #101827;
+  --bar-track-border: #1E293B;
+  --data-bar: #38BDF8;
+  --data-bar-soft: #15506C;
+  --data-0-bg: #111827; --data-0-ink: #94A3B8;
+  --data-1-bg: #102A3A; --data-1-ink: #7DD3FC;
+  --data-2-bg: #123B52; --data-2-ink: #BAE6FD;
+  --data-3-bg: #15506C; --data-3-ink: #E0F2FE;
+  --data-4-bg: #1679A3; --data-4-ink: #FFFFFF;
+  --data-5-bg: #38BDF8; --data-5-ink: #082F49;
+  --matrix-bg: #151D2E;
+  --matrix-border: #1E293B;
+  --matrix-label: #94A3B8;
+  --matrix-diag-bg: #101827;
+  --matrix-diag-ink: #94A3B8;
+  --chart-grid: #1E293B;
+  --chart-axis: #94A3B8;
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    --bg: #0B0F19;
+    --bg-elev: #101827;
+    --paper: #151D2E;
+    --paper-2: #101827;
+    --surface: #151D2E;
+    --ink: #F1F5F9;
+    --muted: #94A3B8;
+    --line: #1E293B;
+    --line-strong: #1E293B;
+    --stripe: #111827;
+    --accent: #38BDF8;
+    --accent-2: #38BDF8;
+    --accent-soft: #102A3A;
+    --success: #10B981;
+    --success-soft: #123024;
+    --warning: #FB923C;
+    --warning-soft: #332417;
+    --danger: #E11D48;
+    --danger-soft: #3F1D29;
+    --violet: #38BDF8;
+    --ok-border: #065F46;
+    --warn-border: #9A3412;
+    --error-border: #9F1239;
+    --accent-border: #15506C;
+    --canvas-top: #151D2E;
+    --canvas-edge: #0D1218;
+    --bar-track-bg: #101827;
+    --bar-track-border: #1E293B;
+    --data-bar: #38BDF8;
+    --data-bar-soft: #15506C;
+    --data-0-bg: #111827; --data-0-ink: #94A3B8;
+    --data-1-bg: #102A3A; --data-1-ink: #7DD3FC;
+    --data-2-bg: #123B52; --data-2-ink: #BAE6FD;
+    --data-3-bg: #15506C; --data-3-ink: #E0F2FE;
+    --data-4-bg: #1679A3; --data-4-ink: #FFFFFF;
+    --data-5-bg: #38BDF8; --data-5-ink: #082F49;
+    --matrix-bg: #151D2E;
+    --matrix-border: #1E293B;
+    --matrix-label: #94A3B8;
+    --matrix-diag-bg: #101827;
+    --matrix-diag-ink: #94A3B8;
+    --chart-grid: #1E293B;
+    --chart-axis: #94A3B8;
+  }
+}
+body,
+html[data-theme="dark"] body {
+  background: radial-gradient(circle at 88% -10%, var(--canvas-top) 0%, var(--bg) 48%, var(--canvas-edge) 100%);
+  color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) body {
+    background: radial-gradient(circle at 88% -10%, var(--canvas-top) 0%, var(--bg) 48%, var(--canvas-edge) 100%);
+    color: var(--ink);
+  }
+}
+h2, h3.sub,
+html[data-theme="dark"] h2,
+html[data-theme="dark"] h3.sub { color: var(--ink); }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) h2,
+  html:not([data-theme="light"]) h3.sub { color: var(--ink); }
+}
 .report.report-wide { max-width: 1160px; }
 .kpi-grid {
   display: grid;
@@ -3558,19 +3839,69 @@ STATS_HTML_EXTRA_CSS = """
   gap: 10px;
   margin-bottom: 16px;
 }
+/* A KPI with no status kind is a normal measurement, so it carries the primary
+   accent outline; only ok/warn/error and migration override it. */
 .kpi {
+  position: relative;
+  overflow: hidden;
   background: var(--paper);
-  border: 1px solid var(--line);
+  border: 1px solid var(--accent-border);
   border-radius: 12px;
-  padding: 12px 14px;
-  box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
+  padding: 12px 14px 12px 16px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+.kpi::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent);
 }
 .kpi .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
-.kpi .v { margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }
+.kpi .v { margin-top: 4px; font-size: 20px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
 .kpi .s { margin-top: 2px; font-size: 12px; color: var(--muted); }
-.kpi.warn { border-color: #e0a020; }
-.kpi.error { border-color: #c0392b; }
-.kpi.ok { border-color: #5FCF6F; }
+.kpi.metric-util, .kpi.metric-latency {
+  border-color: var(--accent-border);
+}
+.kpi.metric-util::before, .kpi.metric-latency::before { background: var(--accent); }
+.kpi.metric-migration {
+  border-color: var(--warn-border);
+}
+.kpi.metric-migration::before { background: var(--warning); }
+.kpi.ok { border-color: var(--ok-border); }
+.kpi.ok::before { background: var(--success); }
+.kpi.warn { border-color: var(--warn-border); }
+.kpi.warn::before { background: var(--warning); }
+.kpi.error { border-color: var(--error-border); }
+.kpi.error::before { background: var(--danger); }
+.report-verdict {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+}
+.report-verdict.ok {
+  background: var(--success-soft);
+  border-color: var(--ok-border);
+  border-left-color: var(--success);
+}
+.report-verdict.ok strong { color: var(--success); }
+.report-verdict.warn {
+  background: var(--warning-soft);
+  border-color: var(--warn-border);
+  border-left-color: var(--warning);
+}
+.report-verdict.warn strong { color: var(--warning); }
+.report-verdict.error {
+  background: var(--danger-soft);
+  border-color: var(--error-border);
+  border-left-color: var(--danger);
+}
+.report-verdict.error strong { color: var(--danger); }
 .notes { border-left: 4px solid var(--accent); }
 .notes ul { margin: 8px 0 0 18px; padding: 0; }
 .notes li { margin: 6px 0; line-height: 1.45; }
@@ -3578,8 +3909,8 @@ table { border-collapse: separate; border-spacing: 0; width: 100%; }
 th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }
 th:first-child, td:first-child { text-align: left; }
 thead th {
-  background: #f1f5fb;
-  color: #284563;
+  background: var(--paper-2);
+  color: var(--ink);
   font-weight: 600;
   border-top: 1px solid var(--line-strong);
   border-bottom: 1px solid var(--line-strong);
@@ -3587,21 +3918,21 @@ thead th {
 tbody tr:nth-child(even) td { background: var(--stripe); }
 .empty { text-align: center !important; color: var(--muted); }
 .detail-note { margin: 6px 0 8px; font-size: 12px; color: var(--muted); }
-h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
-.sev-error { color: #c0392b; font-weight: 600; }
-.sev-warning { color: #9a4d00; font-weight: 600; }
-.finding-info { color: var(--ink, var(--fg, #182230)); }
-.finding-ok { color: #166534; font-weight: 600; }
+h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 600; }
+.sev-error { color: var(--danger); font-weight: 600; }
+.sev-warning { color: var(--warning); font-weight: 600; }
+.finding-info { color: var(--ink); }
+.finding-ok { color: var(--success); font-weight: 600; }
 .findings-list { margin: 8px 0 0 18px; padding: 0; }
 .findings-list li { margin: 8px 0; line-height: 1.45; }
-.analysis-findings { border-left: 4px solid #c0392b; }
+.analysis-findings { border-left: 4px solid var(--danger); }
 .trace-health { border-left: 4px solid var(--accent); }
 .trace-health-status { font-size: 14px; font-weight: 600; margin: 6px 0 10px; }
 .trace-health-check { margin: 6px 0; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .trace-health-check:last-of-type { border-bottom: 0; }
 .trace-health-check > summary { cursor: pointer; line-height: 1.45; }
 .trace-health-check .finding-meta { margin-left: 16px; }
-.investigation { border-left: 4px solid #7a5cc0; }
+.investigation { border-left: 4px solid var(--accent); }
 .investigation .finding-meta ul { margin: 4px 0 0 16px; padding: 0; }
 .investigation h3.sub { margin-top: 16px; }
 .finding-cards { display: grid; gap: 10px; }
@@ -3610,64 +3941,248 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; 
   border-left-width: 4px;
   border-radius: 10px;
   padding: 10px 12px;
-  background: #fff;
+  background: var(--paper);
 }
-.finding-card.sev-error { border-left-color: #c0392b; }
-.finding-card.sev-warning { border-left-color: #e0a020; }
+.finding-card.sev-error { border-left-color: var(--danger); }
+.finding-card.sev-warning { border-left-color: var(--warning); }
 .finding-card.finding-info { border-left-color: var(--accent); }
-.finding-card.finding-ok { border-left-color: #5FCF6F; }
-.finding-card h3 { margin: 0 0 6px; font-size: 14px; color: #123355; }
+.finding-card.finding-ok { border-left-color: var(--success); }
+.finding-card h3 { margin: 0 0 6px; font-size: 14px; color: var(--ink); }
 .finding-meta { font-size: 12px; color: var(--muted); margin: 4px 0; }
 .finding-card a { color: var(--accent); }
 .scope-table th { width: 28%; }
-.heat-wrap { overflow-x: auto; margin: 8px 0 12px; }
+.heat-wrap { overflow-x: auto; margin: 8px 0 12px; background: var(--matrix-bg); }
 .heat-cell { font-size: 10px; text-anchor: middle; }
+.heat-matrix-head { margin: 4px 0 8px; }
+.heat-matrix-title { font-size: 13px; font-weight: 650; color: var(--ink); }
+.heat-matrix-subtitle { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.heat-grid {
+  display: grid;
+  grid-template-columns: minmax(90px, 130px) repeat(var(--col-count), minmax(44px, 1fr));
+  gap: 2px;
+  font-size: 11px;
+  min-width: 480px;
+}
+.heat-grid-corner, .heat-grid-collabel, .heat-grid-rowlabel {
+  display: flex; align-items: center;
+  padding: 4px 6px;
+  color: var(--matrix-label);
+  font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.heat-grid-collabel { justify-content: center; }
+.heat-grid-cell {
+  display: flex; align-items: center; justify-content: center;
+  padding: 4px 2px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+  min-height: 22px;
+}
+.heat-grid-diagonal, .heat-grid-nodata {
+  background: var(--matrix-diag-bg); color: var(--matrix-diag-ink); border: 1px dashed var(--matrix-border);
+}
+.heat-grid-extra {
+  background: var(--paper-2); color: var(--ink); border: 1px solid var(--line);
+  font-weight: 600;
+}
+/* Six fixed bins (predictable in Qt WebEngine, no color-mix) reading the one
+   quantitative scale that also drives every bar. */
+.heat-0 { background: var(--data-0-bg); color: var(--data-0-ink); }
+.heat-1 { background: var(--data-1-bg); color: var(--data-1-ink); }
+.heat-2 { background: var(--data-2-bg); color: var(--data-2-ink); }
+.heat-3 { background: var(--data-3-bg); color: var(--data-3-ink); }
+.heat-4 { background: var(--data-4-bg); color: var(--data-4-ink); }
+.heat-5 { background: var(--data-5-bg); color: var(--data-5-ink); }
+/* Outline, not a fill change: the cell keeps its place on the quantitative
+   scale while the pointer marks which row/column pair is being read. */
+.heat-grid-cell:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+.heat-legend { margin: 6px 0 10px; font-size: 11px; color: var(--muted); }
+.heat-legend-grid {
+  display: grid; grid-template-columns: auto minmax(120px, 220px) auto;
+  align-items: center; gap: 2px 8px; max-width: 260px;
+}
+.heat-legend-bar {
+  height: 12px; border-radius: 999px;
+  background: linear-gradient(to right,
+    var(--data-0-bg), var(--data-1-bg), var(--data-2-bg),
+    var(--data-3-bg), var(--data-4-bg), var(--data-5-bg));
+}
 .table-tools { margin: 8px 0 12px; }
 .table-toolbar {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px;
 }
 .table-search {
   font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line);
-  border-radius: 6px; min-width: 160px;
+  border-radius: 6px; min-width: 160px; background: var(--paper); color: var(--ink);
+}
+.table-search::placeholder { color: var(--muted); }
+.table-search:hover { border-color: var(--accent); }
+.table-search:focus-visible {
+  border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px;
 }
 .table-check { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+.table-check:hover { color: var(--accent); cursor: pointer; }
+.table-check input[type="checkbox"] { accent-color: var(--accent); }
+.table-action {
+  font: inherit; font-size: 12px; padding: 2px 9px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--paper-2); color: var(--ink); cursor: pointer;
+}
+.table-action:hover { border-color: var(--accent); color: var(--accent); }
+.table-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.table-action:disabled { opacity: 0.55; cursor: default; }
+.table-action:disabled:hover { border-color: var(--line); color: var(--ink); }
+.table-pager { display: none; gap: 8px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.lb-gauge-embed { margin: 8px 0 12px; }
+.lb-gauge-svg { display: block; max-width: 100%; height: auto; }
+.lb-gauge-svg .lb-bg { fill: var(--paper-2); stroke: var(--line); }
+.lb-gauge-svg .lb-bg-amber { stroke: var(--warning); }
+.lb-gauge-svg .lb-bg-red { stroke: var(--danger); }
+.lb-gauge-svg .lb-title { fill: var(--ink); }
+.lb-gauge-svg .lb-muted { fill: var(--muted); }
+.lb-gauge-svg .lb-track { stroke: var(--line); }
+.lb-gauge-svg .lb-needle { stroke: var(--ink); }
+.lb-gauge-svg .lb-hub { fill: var(--paper); stroke: var(--ink); }
+.lb-gauge-svg .lb-value-ok { fill: var(--success); }
+.lb-gauge-svg .lb-value-amber { fill: var(--warning); }
+.lb-gauge-svg .lb-value-red { fill: var(--danger); }
+.lb-gauge-svg .lb-chip-amber { fill: var(--warning-soft); stroke: var(--warning); }
+.lb-gauge-svg .lb-chip-red { fill: var(--danger-soft); stroke: var(--danger); }
+.lb-gauge-svg .lb-chip-text-amber { fill: var(--warning); }
+.lb-gauge-svg .lb-chip-text-red { fill: var(--danger); }
+.pctile-svg { display: block; max-width: 100%; height: auto; }
+.pctile-title { fill: var(--ink); }
+.pctile-sub { fill: var(--muted); }
+.pctile-label { fill: var(--ink); }
+.pctile-bar { fill: var(--accent-soft); }
+.pctile-marker { stroke: var(--accent); }
+.sparkline-line { stroke: var(--accent); }
 .table-count { font-size: 12px; color: var(--muted); margin-left: auto; }
 .table-scroll { overflow-x: auto; max-width: 100%; }
 .table-scroll table { min-width: 100%; }
 .table-scroll thead th { position: sticky; top: 0; z-index: 2; }
 .table-scroll td:first-child, .table-scroll th:first-child {
-  position: sticky; left: 0; z-index: 1; background: #fff;
+  position: sticky; left: 0; z-index: 1; background: var(--paper);
 }
 .table-scroll tbody tr:nth-child(even) td:first-child { background: var(--stripe); }
+/* Row hover. Declared after the stripe and sticky-column rules so the whole
+   row tracks the pointer, including a sticky first cell and meta-table <th>. */
+tbody tr:hover td,
+tbody tr:hover th,
+.table-scroll tbody tr:hover td:first-child,
+.table-scroll tbody tr:hover th:first-child { background: var(--accent-soft); }
 .sortable { cursor: pointer; }
 .sortable:hover { color: var(--accent); }
+thead th.sortable:hover { background: var(--accent-soft); }
 .report-tabs .tab-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .report-tabs .tab-btn {
   font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--line);
-  border-radius: 999px; background: #f1f5fb; color: var(--accent); cursor: pointer;
+  border-radius: 999px; background: var(--paper-2); color: var(--accent); cursor: pointer;
 }
-.report-tabs .tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.report-tabs .tab-btn.active { background: var(--accent); color: var(--paper); border-color: var(--accent); }
 .pct-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
-.pct-bar .lab { flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pct-bar .track { flex: 1; height: 10px; background: #eef2f7; border-radius: 6px; overflow: hidden; }
-.pct-bar .fill { height: 100%; border-radius: 6px; }
-@media (prefers-color-scheme: dark) {
-  :root { --line-strong: #3a4048; --stripe: #191d23; }
-  .kpi { background: var(--paper); }
-  .kpi .v { color: #dbe6f2; }
-  thead th { background: #232830; color: #b6c2cf; }
-  .finding-card, .finding-card.sev-error, .finding-card.sev-warning { background: var(--paper); }
-  .finding-card h3 { color: #cfe1f7; }
-  h3.sub { color: #b6c2cf; }
-  .sev-warning { color: #e0a44a; }
-  .sev-error { color: #e5776a; }
-  .finding-ok { color: #57c191; }
-  .table-search { background: var(--paper); color: var(--ink); }
-  .table-scroll td:first-child, .table-scroll th:first-child { background: var(--paper); }
-  .table-scroll tbody tr:nth-child(even) td:first-child { background: var(--stripe); }
-  .report-tabs .tab-btn { background: #232830; }
-  .pct-bar .track { background: #232830; }
-  .heat-cell { fill: var(--ink); }
+.pct-bar .lab {
+  flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
+}
+.pct-bar .track {
+  flex: 1; height: 12px; background: var(--bar-track-bg);
+  border: 1px solid var(--bar-track-border); border-radius: 999px; overflow: hidden;
+}
+.pct-bar .fill { height: 100%; border-radius: 999px; background: var(--data-bar); }
+.rank-bars { margin: 8px 0 4px; }
+.rank-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+.rank-bar-num { flex: 0 0 18px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.rank-bar-label {
+  flex: 0 0 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
+}
+.rank-bar-track {
+  flex: 1; height: 12px; background: var(--bar-track-bg);
+  border: 1px solid var(--bar-track-border); border-radius: 999px; overflow: hidden;
+}
+.rank-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--data-bar); }
+.rank-bar-fill.accent { background: var(--data-bar); }
+.rank-bar-fill.warning { background: var(--warning); }
+.rank-bar-fill.danger { background: var(--danger); }
+.rank-bar-fill.success { background: var(--success); }
+.rank-bar-value {
+  flex: 0 0 88px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.perf-overview-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 4px;
+}
+.perf-panel h3.sub { margin: 0 0 8px; }
+.util-list { display: flex; flex-direction: column; gap: 4px; }
+.util-row { display: flex; align-items: center; gap: 8px; min-height: 18px; }
+.util-label {
+  flex: 0 0 128px; max-width: 128px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; text-align: left; font-size: 13px; color: var(--ink);
+}
+.util-bar {
+  flex: 1 1 auto; height: 12px; min-width: 24px; border-radius: 999px;
+  background: var(--bar-track-bg); border: 1px solid var(--bar-track-border); overflow: hidden;
+}
+.util-bar-fill, .util-row-task .util-bar-fill {
+  height: 100%; border-radius: 999px; background: var(--data-bar);
+}
+.util-pct { flex: 0 0 44px; text-align: left; font-size: 13px; }
+.util-pct-core, .util-pct-task { color: var(--data-bar); }
+.util-row .util-bar, .rank-bar .rank-bar-track, .pct-bar .track,
+.util-row .util-label, .rank-bar .rank-bar-label, .pct-bar .lab {
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.util-row:hover .util-bar,
+.rank-bar:hover .rank-bar-track,
+.pct-bar:hover .track { border-color: var(--accent); }
+.util-row:hover .util-label,
+.rank-bar:hover .rank-bar-label,
+.pct-bar:hover .lab { color: var(--accent); }
+.util-row:hover .util-bar-fill,
+.rank-bar:hover .rank-bar-fill,
+.pct-bar:hover .fill { filter: brightness(1.08); }
+.metric-chart {
+  margin: 12px 0 16px; padding: 14px 16px 16px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--paper);
+}
+.metric-chart-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; margin-bottom: 12px;
+}
+.metric-chart-title { color: var(--ink); font-size: 13px; font-weight: 700; }
+.metric-chart-subtitle {
+  margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.45;
+}
+.chart-callout {
+  flex: 0 0 auto; min-width: 82px; padding: 7px 10px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--paper-2); text-align: right;
+}
+.chart-callout-label, .chart-callout-note { display: block; color: var(--muted); font-size: 10px; }
+.chart-callout strong {
+  display: block; color: var(--ink); font-size: 18px; line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.trend-svg { display: block; width: 100%; height: auto; min-height: 180px; }
+.chart-gridline { stroke: var(--chart-grid); stroke-width: 1; }
+.chart-axis-label {
+  fill: var(--chart-axis); font-size: 10px;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+.chart-line {
+  stroke: var(--data-bar); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round;
+}
+.chart-point { stroke: var(--paper); stroke-width: 2; }
+.chart-point-normal { fill: var(--data-bar); }
+.chart-point-low { fill: var(--warning); }
+.heat-cell { fill: var(--ink); }
+@media (max-width: 680px) {
+  .metric-chart-head { flex-direction: column; }
+  .chart-callout { text-align: left; }
+  .rank-bar-label { flex-basis: 82px; }
+  .rank-bar-value { flex-basis: 72px; }
+}
+@media print {
+  body, html[data-theme="dark"] body { background: #fff !important; }
+  .metric-chart, .kpi, .report-card { box-shadow: none; }
+  .theme-toggle { display: none !important; }
+  .metric-chart, .kpi { break-inside: avoid; }
 }
 """.strip()
 
@@ -3681,7 +4196,7 @@ def html_inspect_href(section_title: str) -> str:
 
 
 def html_kpi(label: str, value: str, *, hint: str = "", kind: str = "") -> str:
-    cls = f" kpi {kind}".rstrip() if kind else "kpi"
+    cls = f"kpi {kind}" if kind else "kpi"
     extra = f'<div class="s">{_esc(hint)}</div>' if hint else ""
     return (
         f'<article class="{cls}"><div class="k">{_esc(label)}</div>'
@@ -3838,7 +4353,214 @@ def html_diagnostic_kpi_grid(kpis: Sequence[dict]) -> str:
             hint=k.get("hint") or "",
             kind=k.get("kind") or "",
         ))
-    return f'<section class="kpi-grid">{"".join(parts)}</section>' if parts else ""
+    return f'<div class="kpi-grid">{"".join(parts)}</div>' if parts else ""
+
+
+def html_rank_bars(
+    items: Sequence[tuple],
+    *,
+    fill_kind: str = "accent",
+    max_v: Optional[float] = None,
+) -> str:
+    """Ranked HTML/CSS bar list (not canvas/SVG): ``[(label, value, display), ...]``,
+    already in display order. The largest value in *items* (or ``max_v``, if
+    a caller wants a scale independent of this particular slice) is 100% bar
+    width. ``fill_kind`` selects the semantic color family (accent/warning/
+    danger/success). Quantitative magnitude uses ``accent`` / ``--data-bar``."""
+    rows = [it for it in (items or []) if it]
+    if not rows:
+        return ""
+    peak = float(max_v) if max_v else max((float(v) for _l, v, _d in rows), default=1.0)
+    peak = max(peak, 1.0)
+    cls = f" {fill_kind}" if fill_kind else ""
+    parts = ['<div class="rank-bars">']
+    for i, (label, value, display) in enumerate(rows, start=1):
+        pct = max(0.0, min(100.0, 100.0 * float(value) / peak))
+        parts.append(
+            f'<div class="rank-bar" title="{_esc(str(label))}: {_esc(str(display))}">'
+            f'<span class="rank-bar-num">{i}</span>'
+            f'<span class="rank-bar-label">{_esc(str(label))}</span>'
+            f'<span class="rank-bar-track"><span class="rank-bar-fill{cls}" '
+            f'style="width:{pct:.1f}%"></span></span>'
+            f'<span class="rank-bar-value">{_esc(str(display))}</span>'
+            "</div>"
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def html_util_bar_row(label: str, pct: float, kind: str) -> str:
+    """One ``label + progress bar + %`` row, for Core Utilization / Top Tasks
+    by CPU and the Performance Overview panels. *kind* is ``core`` or ``task``."""
+    pct_v = max(0.0, min(100.0, float(pct)))
+    lab = _esc(str(label))
+    row_cls = "util-row util-row-core" if kind == "core" else "util-row util-row-task"
+    pct_cls = "util-pct util-pct-core" if kind == "core" else "util-pct util-pct-task"
+    return (
+        f'<div class="{row_cls}" title="{lab}: {pct_v:.1f}%">'
+        f'<span class="util-label">{lab}</span>'
+        f'<div class="util-bar"><div class="util-bar-fill" '
+        f'style="width:{pct_v:.1f}%"></div></div>'
+        f'<span class="{pct_cls}">{pct_v:.1f}%</span>'
+        "</div>"
+    )
+
+
+def html_util_section(
+    title: str,
+    rows: Sequence[tuple],
+    kind: str,
+    *,
+    lead_html: str = "",
+) -> str:
+    """Report card of utilisation bar rows: ``[(label, pct), ...]``.
+
+    *lead_html* is placed between the heading and the bars (the Core
+    Utilization card uses it for the load-balance gauge).
+    """
+    if not rows:
+        body = '<p class="empty">No data</p>'
+    else:
+        items = "".join(html_util_bar_row(label, pct, kind) for label, pct in rows)
+        body = f'<div class="util-list">{items}</div>'
+    return (
+        f'<section class="report-card"><h2>{_esc(title)}</h2>'
+        f"{lead_html}{body}</section>"
+    )
+
+
+def html_report_verdict(kind: str, body_html: str) -> str:
+    """Theme-aware verdict banner. *body_html* is already escaped by the caller."""
+    k = kind if kind in ("ok", "warn", "error") else "ok"
+    return (
+        f'<p class="report-verdict {k}">'
+        f"<strong>Verdict:</strong> {body_html}</p>"
+    )
+
+
+def html_response_p99_chart(
+    rows: Sequence[dict],
+    *,
+    format_p99,
+    limit: int = 8,
+) -> str:
+    """Top-N horizontal P99 bars from the same response-time rows as the table."""
+    items = [r for r in (rows or []) if isinstance(r, dict)]
+    items.sort(key=lambda r: int(r.get("p99_ns") or 0), reverse=True)
+    items = items[: max(0, int(limit))]
+    if not items:
+        return ""
+    bars = html_rank_bars(
+        [
+            (
+                str(r.get("task") or ""),
+                float(r.get("p99_ns") or 0),
+                format_p99(int(r.get("p99_ns") or 0)) if callable(format_p99)
+                else str(r.get("p99_ns") or 0),
+            )
+            for r in items
+        ],
+        fill_kind="accent",
+    )
+    return (
+        '<div class="metric-chart p99-chart">'
+        '<div class="metric-chart-head"><div>'
+        '<div class="metric-chart-title">Highest response P99</div>'
+        '<div class="metric-chart-subtitle">Top observed tasks by P99 response time. '
+        "Full percentile data remains in the table below.</div>"
+        f"</div></div>{bars}</div>"
+    )
+
+
+def html_scheduling_balance_chart(samples: Sequence[dict]) -> str:
+    """Inline SVG of Load Balance Score over time.
+
+    *samples* is ``[{time, score, sigma}, ...]`` already formatted and in
+    trace-time order. Every numeric score is plotted; Y is 0–100.
+    """
+    pts = []
+    for s in samples or []:
+        if not isinstance(s, dict):
+            continue
+        raw = s.get("score")
+        if raw is None:
+            continue
+        try:
+            score = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if score != score:
+            continue
+        score = max(0.0, min(100.0, score))
+        try:
+            sigma = float(s.get("sigma") or 0.0)
+        except (TypeError, ValueError):
+            sigma = 0.0
+        pts.append((str(s.get("time") or ""), score, sigma))
+    if not pts:
+        return ""
+    width, height = 760, 230
+    pad_l, pad_r, pad_t, pad_b = 52, 20, 24, 38
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+    n = len(pts)
+
+    def _x(i: int) -> float:
+        return pad_l if n == 1 else pad_l + plot_w * i / (n - 1)
+
+    def _y(score: float) -> float:
+        return pad_t + plot_h * (1.0 - score / 100.0)
+
+    low_i = min(range(n), key=lambda i: (pts[i][1], i))
+    grid = []
+    for mark in (0, 25, 50, 75, 100):
+        gy = _y(float(mark))
+        grid.append(
+            f'<line class="chart-gridline" x1="{pad_l}" x2="{width - pad_r}" '
+            f'y1="{gy:.1f}" y2="{gy:.1f}"/>'
+            f'<text class="chart-axis-label" text-anchor="end" '
+            f'x="{pad_l - 9}" y="{gy + 4:.1f}">{mark}</text>'
+        )
+    label_idx = [0] if n == 1 else [0, n // 2, n - 1]
+    seen = set()
+    axis_x = []
+    for i in label_idx:
+        if i in seen:
+            continue
+        seen.add(i)
+        axis_x.append(
+            f'<text class="chart-axis-label" text-anchor="middle" '
+            f'x="{_x(i):.1f}" y="{height - 12}">{_esc(pts[i][0])}</text>'
+        )
+    poly = " ".join(f"{_x(i):.1f},{_y(score):.1f}" for i, (_t, score, _s) in enumerate(pts))
+    dots = []
+    for i, (time_txt, score, sigma) in enumerate(pts):
+        kind = "chart-point-low" if i == low_i else "chart-point-normal"
+        title = (
+            f"{_esc(time_txt)} · Load balance {score:.0f} · "
+            f"Util σ {sigma:.1f}%"
+        )
+        dots.append(
+            f'<circle class="chart-point {kind}" cx="{_x(i):.1f}" '
+            f'cy="{_y(score):.1f}" r="4"><title>{title}</title></circle>'
+        )
+    low_time, low_score, _sig = pts[low_i]
+    return (
+        '<div class="metric-chart scheduling-chart">'
+        '<div class="metric-chart-head"><div>'
+        '<div class="metric-chart-title">Load balance over time</div>'
+        '<div class="metric-chart-subtitle">Lower scores indicate more uneven '
+        "core utilization during that sample window.</div></div>"
+        '<div class="chart-callout"><span class="chart-callout-label">Lowest</span>'
+        f"<strong>{low_score:.0f}</strong>"
+        f'<span class="chart-callout-note">at {_esc(low_time)}</span></div></div>'
+        f'<svg class="trend-svg" xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {width} {height}" role="img" '
+        'aria-label="Load balance score over time">'
+        f"{''.join(grid)}{''.join(axis_x)}"
+        f'<polyline class="chart-line" fill="none" points="{poly}"/>'
+        f"{''.join(dots)}</svg></div>"
+    )
 
 
 def _format_measured_values(values) -> str:
@@ -4016,81 +4738,136 @@ def html_trace_health_card(
     )
 
 
-def _heat_color(frac: float) -> str:
-    f = max(0.0, min(1.0, float(frac)))
-    r = int(241 + (192 - 241) * f)
-    g = int(245 + (57 - 245) * f)
-    b = int(251 + (43 - 251) * f)
-    return f"rgb({r},{g},{b})"
+def _heat_bin(value: float, max_v: float) -> int:
+    """Fixed heat-0..heat-5 bin index (not a continuous color) - a Chromium /
+    Qt WebEngine runtime theme switch cannot be relied on to re-evaluate
+    color-mix()/computed colors, but a plain class swap always repaints."""
+    if value <= 0:
+        return 0
+    normalized = value / max(1.0, max_v)
+    return max(1, min(5, math.ceil(normalized * 5)))
 
 
 def html_matrix_heatmap(
     row_labels: Sequence[str],
     col_labels: Sequence[str],
-    cells: Sequence[Sequence[float]],
+    cells: Sequence[Sequence[Optional[float]]],
     *,
     title: str,
+    subtitle: str = "",
     unit: str = "%",
     width: int = 640,
+    diagonal_dash: bool = False,
+    tooltip_sep: str = "→",
+    max_value_override: Optional[float] = None,
+    extra_col: Optional[tuple] = None,
 ) -> str:
+    """CSS-grid heat matrix with fixed heat-0..heat-5 classes (not inline
+    SVG rgb() fills - see _heat_bin). A cell value of ``None`` renders as a
+    dashed no-data cell, distinct from a real 0. ``diagonal_dash=True``
+    treats a cell whose row/col label match (self-pair) as a dashed
+    diagonal cell instead of a heat cell, e.g. Core_5 vs. Core_5.
+    ``extra_col``, if given, is ``(label, values, unit)``: one additional
+    trailing column rendered as a plain (non heat-colored) value per row —
+    e.g. a derived per-sample "Spread" figure that shouldn't be confused
+    with the matrix's own heat-scaled readings."""
     rows = list(row_labels or [])
     cols = list(col_labels or [])
     if not rows or not cols:
         return ""
+    extra_label, extra_values, extra_unit = extra_col if extra_col else (None, [], "%")
     max_v = 0.0
     for line in cells or []:
         for v in line:
+            if v is None:
+                continue
             try:
-                max_v = max(max_v, float(v or 0))
+                max_v = max(max_v, float(v))
             except (TypeError, ValueError):
                 pass
-    max_v = max(max_v, 1.0)
-    label_w = 88
-    head_h = 36
-    cell = 22
-    w = max(width, label_w + 12 + len(cols) * cell)
-    h = head_h + 8 + len(rows) * cell + 8
+    if max_value_override is not None and max_value_override > 0:
+        max_v = float(max_value_override)
+    else:
+        max_v = max(max_v, 1.0)
+    head = (
+        '<div class="heat-matrix-head">'
+        f'<div class="heat-matrix-title">{_esc(title)}</div>'
+        + (f'<div class="heat-matrix-subtitle">{_esc(subtitle)}</div>' if subtitle else "")
+        + "</div>"
+    )
+    col_count = len(cols) + (1 if extra_label else 0)
     parts = [
-        f'<div class="heat-wrap"><svg xmlns="http://www.w3.org/2000/svg" '
-        f'viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img" '
-        f'aria-label="{_esc(title)}">',
-        f'<text x="8" y="16" font-size="12" fill="#123355" font-weight="600">'
-        f"{_esc(title)}</text>",
+        '<div class="heat-wrap">',
+        head,
+        f'<div class="heat-grid" style="--col-count:{col_count}">',
+        '<div class="heat-grid-corner"></div>',
     ]
-    for j, col in enumerate(cols):
-        x = label_w + j * cell + cell / 2
-        lab = _esc(str(col)[:10])
+    for col in cols:
+        col_s = str(col)
         parts.append(
-            f'<text x="{x:.1f}" y="{head_h - 4}" font-size="9" fill="#5f6f82" '
-            f'text-anchor="middle">{lab}</text>'
+            f'<div class="heat-grid-collabel" title="{_esc(col_s)}">{_esc(col_s[:6])}</div>'
+        )
+    if extra_label:
+        parts.append(
+            f'<div class="heat-grid-collabel" title="{_esc(extra_label)}">{_esc(str(extra_label)[:8])}</div>'
         )
     for i, row in enumerate(rows):
-        y = head_h + i * cell
+        row_s = str(row)
         parts.append(
-            f'<text x="8" y="{y + 15}" font-size="10" fill="#182230">'
-            f"{_esc(str(row)[:14])}</text>"
+            f'<div class="heat-grid-rowlabel" title="{_esc(row_s)}">{_esc(row_s[:16])}</div>'
         )
         line = cells[i] if i < len(cells) else []
-        for j, _col in enumerate(cols):
-            raw = line[j] if j < len(line) else 0
+        for j, col in enumerate(cols):
+            col_s = str(col)
+            if diagonal_dash and row_s == col_s:
+                parts.append(
+                    f'<div class="heat-grid-cell heat-grid-diagonal" '
+                    f'title="{_esc(row_s)}">—</div>'
+                )
+                continue
+            raw = line[j] if j < len(line) else None
+            if raw is None:
+                parts.append(
+                    '<div class="heat-grid-cell heat-grid-nodata" title="No data">—</div>'
+                )
+                continue
             try:
-                val = float(raw or 0)
+                val = float(raw)
             except (TypeError, ValueError):
                 val = 0.0
-            x = label_w + j * cell
-            color = _heat_color(val / max_v) if val > 0 else "#f7f9fc"
+            label = f"{val:.0f}{unit}" if unit == "%" else f"{val:.0f}"
+            tip = f"{_esc(row_s)} {tooltip_sep} {_esc(col_s)}: {_esc(label)}"
             parts.append(
-                f'<rect x="{x:.1f}" y="{y:.1f}" width="{cell - 2}" height="{cell - 2}" '
-                f'rx="3" fill="{color}"/>'
+                f'<div class="heat-grid-cell heat-{_heat_bin(val, max_v)}" '
+                f'title="{tip}">{_esc(label)}</div>'
             )
-            if val > 0:
-                label = f"{val:.0f}{unit}" if unit == "%" else f"{val:.0f}"
+        if extra_label:
+            extra_raw = extra_values[i] if i < len(extra_values) else None
+            if extra_raw is None:
                 parts.append(
-                    f'<text class="heat-cell" x="{x + (cell - 2) / 2:.1f}" y="{y + 14:.1f}" '
-                    f'fill="#123355">{_esc(label)}</text>'
+                    '<div class="heat-grid-cell heat-grid-nodata" title="No data">—</div>'
                 )
-    parts.append("</svg></div>")
+            else:
+                extra_val = float(extra_raw)
+                extra_disp = f"{extra_val:.0f}{extra_unit}" if extra_unit == "%" else f"{extra_val:.0f}"
+                parts.append(
+                    f'<div class="heat-grid-cell heat-grid-extra" '
+                    f'title="{_esc(row_s)}: {_esc(extra_label)} {_esc(extra_disp)}">{_esc(extra_disp)}</div>'
+                )
+    parts.append("</div></div>")
     return "".join(parts)
+
+
+def html_heat_legend() -> str:
+    """0% -> 100% gradient key for the heat-0..heat-5 color scale, for a
+    matrix where the reader benefits from an explicit low/high reference
+    (e.g. Core Utilization Over Time)."""
+    return (
+        '<div class="heat-legend"><div class="heat-legend-grid">'
+        "<span>0%</span><div class=\"heat-legend-bar\"></div><span>100%</span>"
+        "<span>Lower</span><span></span><span>Higher</span>"
+        "</div></div>"
+    )
 
 
 def html_percentile_bars(
@@ -4112,12 +4889,12 @@ def html_percentile_bars(
     h = header + len(items) * row_h + 10
     plot_w = max(80.0, width - label_w - pad - 80)
     parts = [
-        f'<div class="heat-wrap"><svg xmlns="http://www.w3.org/2000/svg" '
+        f'<div class="heat-wrap"><svg class="pctile-svg" xmlns="http://www.w3.org/2000/svg" '
         f'viewBox="0 0 {width} {h}" width="{width}" height="{h}" role="img" '
         f'aria-label="{_esc(title)}">',
-        f'<text x="{pad}" y="16" font-size="12" fill="#123355" font-weight="600">'
+        f'<text class="pctile-title" x="{pad}" y="16" font-size="12" font-weight="600">'
         f"{_esc(title)}</text>",
-        f'<text x="{width - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
+        f'<text class="pctile-sub" x="{width - pad}" y="16" text-anchor="end" font-size="11">'
         "interval = P50–P99</text>",
     ]
     for i, r in enumerate(items):
@@ -4129,35 +4906,39 @@ def html_percentile_bars(
         x0 = label_w + plot_w * p50 / max_v
         x1 = label_w + plot_w * max(p99, p50) / max_v
         x95 = label_w + plot_w * p95 / max_v
-        parts.append(f'<text x="8" y="{y + 14}" font-size="11" fill="#182230">{lab}</text>')
+        parts.append(f'<text class="pctile-label" x="8" y="{y + 14}" font-size="11">{lab}</text>')
         parts.append(
-            f'<rect x="{x0:.1f}" y="{y + 6}" width="{max(x1 - x0, 2):.1f}" height="8" '
-            f'rx="3" fill="#9ec5e8"/>'
+            f'<rect class="pctile-bar" x="{x0:.1f}" y="{y + 6}" '
+            f'width="{max(x1 - x0, 2):.1f}" height="8" rx="3"/>'
         )
         parts.append(
-            f'<line x1="{x95:.1f}" y1="{y + 4}" x2="{x95:.1f}" y2="{y + 16}" '
-            f'stroke="#2a6fb2" stroke-width="2"/>'
+            f'<line class="pctile-marker" x1="{x95:.1f}" y1="{y + 4}" '
+            f'x2="{x95:.1f}" y2="{y + 16}" stroke-width="2"/>'
         )
     parts.append("</svg></div>")
     return "".join(parts)
 
 
 def html_health_bars(rows: Sequence[dict], *, width: int = 640) -> str:
+    """Task Health score bars. The score is a 0-100 magnitude, so it uses the
+    shared quantitative bar component (``--data-bar``) like every other bar in
+    the report; the per-metric deductions stay in the trailing text and the
+    table below."""
     items = [r for r in (rows or []) if isinstance(r, dict)]
     items = sorted(items, key=lambda r: int(r.get("score") or 0))[:16]
     if not items:
         return ""
     parts = ['<div class="health-bars">']
     for r in items:
-        score = int(r.get("score") or 0)
+        score = max(0, min(100, int(r.get("score") or 0)))
         marks = r.get("marks") or {}
         reasons = [k for k, v in marks.items() if v]
         reason = ", ".join(reasons) if reasons else "no deductions"
-        color = "#c0392b" if score < 50 else "#e0a020" if score < 80 else "#1a8a2a"
+        task = str(r.get("task") or "")
         parts.append(
-            f'<div class="pct-bar"><span class="lab" title="{_esc(r.get("task") or "")}">'
-            f'{_esc(str(r.get("task") or "")[:18])}</span>'
-            f'<div class="track"><div class="fill" style="width:{score}%;background:{color}"></div></div>'
+            f'<div class="pct-bar" title="{_esc(task)}: score {score}/100 · {_esc(reason)}">'
+            f'<span class="lab">{_esc(task[:18])}</span>'
+            f'<div class="track"><div class="fill" style="width:{score}%"></div></div>'
             f'<span>{score} · {_esc(reason)}</span></div>'
         )
     parts.append("</div>")
@@ -4241,9 +5022,9 @@ def _sparkline(vals: Sequence[float], *, width: int = 420, height: int = 48) -> 
         y = height - 6 - (height - 12) * ((v - mn) / span)
         pts.append(f"{x:.1f},{y:.1f}")
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+        f'<svg class="pctile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
         f'width="{width}" height="{height}" role="img" aria-label="Tag time series">'
-        f'<polyline fill="none" stroke="#2a6fb2" stroke-width="1.5" '
+        f'<polyline class="sparkline-line" fill="none" stroke-width="1.5" '
         f'points="{" ".join(pts)}"/></svg>'
     )
 
@@ -68536,7 +69317,8 @@ def _lb_gauge_svg_body(
     needle_len: float = 32.0,
     stroke_w: float = 8.0,
 ) -> str:
-    accent, end_color, grad0, grad1 = _lb_zone_palette(zone)
+    _, end_color, grad0, grad1 = _lb_zone_palette(zone)
+    value_cls = {"red": "lb-value-red", "amber": "lb-value-amber"}.get(zone, "lb-value-ok")
     bg = _lb_semicircle(cx, cy, r)
     fill = _lb_value_arc(value, max_v, cx, cy, r)
     end_deg = 180.0 - (max(0.0, min(max_v, value)) / max(1e-9, max_v)) * 180.0
@@ -68552,26 +69334,25 @@ def _lb_gauge_svg_body(
         f'<stop offset="55%" stop-color="{grad1}"/>'
         f'<stop offset="100%" stop-color="{end_color}"/>'
         "</linearGradient></defs>"
-        f'<text x="{cx}" y="18" text-anchor="middle" fill="#1A2030" '
+        f'<text x="{cx}" y="18" text-anchor="middle" class="lb-title" '
         f'font-family="{sans}" font-size="10" font-weight="600">{title}</text>'
-        f'<path d="{bg}" fill="none" stroke="#D8DCE4" stroke-width="{stroke_w:.0f}" '
+        f'<path d="{bg}" fill="none" class="lb-track" stroke-width="{stroke_w:.0f}" '
         f'stroke-linecap="round"/>'
         f'<path d="{fill}" fill="none" stroke="url(#{uid})" stroke-width="{stroke_w:.0f}" '
         f'stroke-linecap="round"/>'
         f'<line x1="{cx}" y1="{cy}" x2="{tip_x:.2f}" y2="{tip_y:.2f}" '
-        f'stroke="#1A2030" stroke-width="2" stroke-linecap="round"/>'
-        f'<circle cx="{cx}" cy="{cy}" r="3.5" fill="#FFFFFF" stroke="#1A2030" stroke-width="1.75"/>'
-        f'<text x="{cx}" y="{value_y:.0f}" text-anchor="middle" fill="{accent}" '
+        f'class="lb-needle" stroke-width="2" stroke-linecap="round"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="3.5" class="lb-hub" stroke-width="1.75"/>'
+        f'<text x="{cx}" y="{value_y:.0f}" text-anchor="middle" class="{value_cls}" '
         f'font-family="{sans}" font-size="12" font-weight="700">'
         f"{value_label}</text>"
-        f'<text x="{cx}" y="{cy + 16:.0f}" text-anchor="middle" fill="#6A7388" '
+        f'<text x="{cx}" y="{cy + 16:.0f}" text-anchor="middle" class="lb-muted" '
         f'font-family="{sans}" font-size="9">{legend}</text>'
     )
 
 
-def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = False) -> str:
-    """Dual Score + σ gauges SVG for HTML export (parity with web)."""
-    del dark  # export is always light/print-friendly
+def _load_balance_gauge_svg(metrics: dict, *, width: int = 300) -> str:
+    """Dual Score + σ gauges SVG for HTML export (theme-aware, parity with web)."""
     score = max(0.0, min(100.0, float(metrics.get("score", 0.0))))
     gini = float(metrics.get("gini", 0.0))
     stddev = float(metrics.get("stddev", 0.0))
@@ -68593,12 +69374,7 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
     minus = "\u2212"
     sans = _get_sans_font_family()
     mono = _get_fixed_font_family()
-    if zone == "red":
-        card_stroke = "#E57373"
-    elif zone == "amber":
-        card_stroke = "#E0A020"
-    else:
-        card_stroke = "#E2E5EC"
+    bg_cls = ("lb-bg " + {"red": "lb-bg-red", "amber": "lb-bg-amber"}.get(zone, "")).strip()
     left = _lb_gauge_svg_body(
         uid=f"{uid}S",
         cx=left_cx,
@@ -68624,47 +69400,36 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
     chip = ""
     if zone == "red":
         chip = (
-            '<rect x="210" y="8" width="80" height="18" rx="5" fill="#FDECEA" stroke="#E57373"/>'
-            f'<text x="250" y="21" text-anchor="middle" fill="#C62828" '
+            '<rect x="210" y="8" width="80" height="18" rx="5" class="lb-chip-red"/>'
+            f'<text x="250" y="21" text-anchor="middle" class="lb-chip-text-red" '
             f'font-family="{sans}" font-size="10" font-weight="700">'
             "Unbalanced</text>"
         )
     elif zone == "amber":
         chip = (
-            '<rect x="228" y="8" width="62" height="18" rx="5" fill="#FFF6E5" stroke="#E0A020"/>'
-            f'<text x="259" y="21" text-anchor="middle" fill="#C47F00" '
+            '<rect x="228" y="8" width="62" height="18" rx="5" class="lb-chip-amber"/>'
+            f'<text x="259" y="21" text-anchor="middle" class="lb-chip-text-amber" '
             f'font-family="{sans}" font-size="10" font-weight="700">'
             "σ &gt; 30%</text>"
         )
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}" '
-        f'width="{width}" height="{h}" role="img" '
+        f'width="{width}" height="{h}" role="img" class="lb-gauge-svg theme-aware-svg" '
         f'aria-label="Load Balance Score {score:.0f} percent, sigma {stddev:.1f} percent">'
-        f'<rect width="{view_w}" height="{view_h}" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
+        f'<rect width="{view_w}" height="{view_h}" rx="8" class="{bg_cls}"/>'
         f"{left}{right}"
-        f'<text x="{view_w / 2}" y="{view_h - 8}" text-anchor="middle" fill="#6A7388" '
+        f'<text x="{view_w / 2}" y="{view_h - 8}" text-anchor="middle" class="lb-muted" '
         f'font-family="{mono}" font-size="9">'
         f"G={gini:.3f} · Score=100{times}(1{minus}Gini)</text>"
         f"{chip}</svg>"
     )
 
 
-def _load_balance_gauge_img_html(metrics: dict, *, width: int = 300) -> str:
-    """HTML snippet with dual gauges as an embedded SVG data-URI <img>."""
+def _load_balance_gauge_html(metrics: dict, *, width: int = 300) -> str:
+    """HTML snippet with dual gauges as theme-aware inline SVG (not a data-URI
+    <img> — external report CSS cannot style SVG elements inside an image)."""
     svg = _load_balance_gauge_svg(metrics, width=width)
-    score = max(0.0, min(100.0, float(metrics.get("score", 0.0))))
-    stddev = float(metrics.get("stddev", 0.0))
-    zone = str(metrics.get("zone") or "ok")
-    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    data_uri = f"data:image/svg+xml;base64,{b64}"
-    h = int(round(width * 150 / 300))
-    return (
-        f'<div class="lb-gauge-embed" style="margin:8px 0 12px;">'
-        f'<img src="{data_uri}" width="{width}" height="{h}" '
-        f'alt="Load Balance Score {score:.0f}%, σ={stddev:.1f}% ({zone})" '
-        f'style="display:block;max-width:100%;height:auto;border:0;"/>'
-        f"</div>"
-    )
+    return f'<div class="lb-gauge-embed">{svg}</div>'
 
 
 class _LoadBalanceGaugeWidget(QWidget):
@@ -70545,6 +71310,223 @@ def _parse_task_deadlines_text(text: str) -> Dict[str, int]:
     return out
 
 
+def _migration_count_html(mig_rows: list, mig_total: int, scope_title: str) -> str:
+    """Core Migration Count: KPI summary + Top-12 bar chart + raw table +
+    interpretation note. *mig_rows* is already sorted by count desc (see
+    _migration_rows); reuses that one data source for every visual form."""
+    n = len(mig_rows)
+    counts = [int(r[2]) for r in mig_rows]
+    kpis = []
+    if n:
+        top_name, top_count = mig_rows[0][1], counts[0]
+        avg = mig_total / n
+        sorted_counts = sorted(counts)
+        mid = n // 2
+        median = (
+            sorted_counts[mid] if n % 2
+            else (sorted_counts[mid - 1] + sorted_counts[mid]) / 2.0
+        )
+        top5_share = 100.0 * sum(counts[:5]) / mig_total if mig_total else 0.0
+        kpis = [
+            {"label": "Total migrations", "value": f"{mig_total:,}"},
+            {"label": "Highest task", "value": str(top_name), "hint": f"{top_count:,} migrations"},
+            {"label": "Average / task", "value": f"{avg:,.1f}"},
+            {"label": "Median", "value": f"{median:,.1f}"},
+            {"label": "Top 5 share", "value": f"{top5_share:.0f}%"},
+        ]
+    top12 = [(str(r[1]), int(r[2]), f"{int(r[2]):,}") for r in mig_rows[:12]]
+    note = (
+        '<p class="detail-note">A high migration count alone is not '
+        "necessarily a problem. Check migration rate, dwell time, "
+        "ping-pong count, and the Core-Pair Migration Summary.</p>"
+    )
+    rows_html = "".join(_migration_row_html(r) for r in mig_rows) or (
+        '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'
+    )
+    body = f"<tbody>{rows_html}</tbody>"
+    return (
+        f'<section class="report-card" id="sec-core-migrations">'
+        f"<h2>Core Migration Count{html.escape(str(scope_title or ''))}</h2>"
+        f"{html_diagnostic_kpi_grid(kpis)}"
+        f"{html_rank_bars(top12, fill_kind='accent')}"
+        "<table>"
+        "<thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th>"
+        "<th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead>"
+        f"{body}"
+        "</table>"
+        f"{note}"
+        "</section>"
+    )
+
+
+def _core_pair_migration_summary_html(pair_rows: list, scope_title: str, time_scale=None) -> str:
+    """Core-Pair Migration Summary: KPI summary + Top-8 routes bar chart +
+    heat matrix + raw table, in that reading order. *pair_rows* is already
+    sorted by count desc (see _core_pair_rows) and reused as the one data
+    source for every visual form."""
+    total = sum(int(r[2]) for r in pair_rows)
+    kpis = []
+    if pair_rows:
+        busiest = pair_rows[0]
+        src_totals: dict = {}
+        dst_totals: dict = {}
+        for fc, tc, cnt, _bnc, _gap in pair_rows:
+            src_totals[fc] = src_totals.get(fc, 0) + int(cnt)
+            dst_totals[tc] = dst_totals.get(tc, 0) + int(cnt)
+        top_src = max(src_totals.items(), key=lambda kv: kv[1])
+        top_dst = max(dst_totals.items(), key=lambda kv: kv[1])
+        kpis = [
+            {"label": "Total migrations", "value": f"{total:,}"},
+            {
+                "label": "Busiest route",
+                "value": f"{busiest[0]} → {busiest[1]}",
+                "hint": f"{int(busiest[2]):,} transitions",
+            },
+            {
+                "label": "Most active source",
+                "value": str(top_src[0]),
+                "hint": f"{top_src[1]:,} outgoing migrations",
+            },
+            {
+                "label": "Most active destination",
+                "value": str(top_dst[0]),
+                "hint": f"{top_dst[1]:,} incoming migrations",
+            },
+        ]
+    top8 = [
+        (f"{fc} → {tc}", int(cnt), f"{int(cnt):,}")
+        for fc, tc, cnt, *_r in pair_rows[:8]
+    ]
+    pair_body = "".join(
+        f"<tr><td>{html.escape(str(fc))}</td><td>{html.escape(str(tc))}</td><td>{cnt}</td><td>{bnc}</td>"
+        f"<td>{100.0*bnc/cnt:.1f}%</td><td>{html.escape(str(_format_time_trim(avg_gap, time_scale)))}</td></tr>"
+        for fc, tc, cnt, bnc, avg_gap in pair_rows
+    ) or '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
+    pair_cores = []
+    for fc, tc, *_rest in pair_rows:
+        if fc not in pair_cores:
+            pair_cores.append(fc)
+        if tc not in pair_cores:
+            pair_cores.append(tc)
+    pair_idx = {c: i for i, c in enumerate(pair_cores)}
+    pair_cells = [[0.0] * len(pair_cores) for _ in pair_cores]
+    for fc, tc, cnt, *_r in pair_rows:
+        if fc in pair_idx and tc in pair_idx:
+            pair_cells[pair_idx[fc]][pair_idx[tc]] = float(cnt)
+    pair_heat = html_matrix_heatmap(
+        pair_cores, pair_cores, pair_cells,
+        title="Core migration count",
+        subtitle="source → destination · darker cells indicate more migrations",
+        unit="",
+        diagonal_dash=True,
+    ) if pair_cores else ""
+    return (
+        f'<section class="report-card" id="sec-core-pair-migration-summary">'
+        f"<h2>Core-Pair Migration Summary{html.escape(str(scope_title or ''))}</h2>"
+        f"{html_diagnostic_kpi_grid(kpis)}"
+        f"{html_rank_bars(top8, fill_kind='accent')}"
+        f"{pair_heat}"
+        "<table><thead><tr><th>From</th><th>To</th><th>Count</th>"
+        "<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>"
+        f"<tbody>{pair_body}</tbody></table></section>"
+    )
+
+
+def _core_utilization_over_time_html(ct: dict, cores: list, time_scale, scope_title: str) -> str:
+    """Core Utilization Over Time: KPI summary + heat matrix (with a
+    trailing Spread column) + gradient legend + raw table, in that reading
+    order. *ct* is core_util_over_time()'s already-computed per-sample
+    bins, reused as the one data source for every visual form."""
+    bins = ct.get("bins") or []
+    all_vals: list = []
+    spreads: list = []
+    for r in bins:
+        cells = r.get("cells") or {}
+        vals = [float((cells.get(c) or {}).get("pct") or 0) for c in cores]
+        all_vals.extend(vals)
+        spreads.append(max(vals) - min(vals) if vals else 0.0)
+    kpis = []
+    if bins:
+        avg_util = sum(all_vals) / len(all_vals) if all_vals else 0.0
+        peak_util = max(all_vals) if all_vals else 0.0
+        max_spread_idx = max(range(len(spreads)), key=lambda i: spreads[i]) if spreads else 0
+        max_spread = spreads[max_spread_idx] if spreads else 0.0
+        max_spread_ts = (
+            _format_time_trim(int(bins[max_spread_idx].get("start") or 0), time_scale)
+            if bins else ""
+        )
+        kpis = [
+            {"label": "Average utilization", "value": f"{avg_util:.1f}%"},
+            {"label": "Peak utilization", "value": f"{peak_util:.0f}%"},
+            {"label": "Max core spread", "value": f"{max_spread:.0f}%", "hint": f"At {max_spread_ts}"},
+            {"label": "Samples", "value": str(len(bins)), "hint": f"{len(cores)} cores"},
+        ]
+    head = "<th>Time</th>" + "".join(f"<th>{html.escape(str(c))}</th>" for c in cores) + "<th>Spread</th>"
+    body = "".join(
+        "<tr><td>" + html.escape(str(_format_time_trim(int(r.get("start") or 0), time_scale))) + "</td>"
+        + "".join(
+            f"<td>{float(((r.get('cells') or {}).get(c) or {}).get('pct') or 0):.1f}%</td>"
+            for c in cores
+        )
+        + f"<td>{spreads[i]:.1f}%</td></tr>"
+        for i, r in enumerate(bins)
+    ) or f'<tr><td colspan="{len(cores) + 2}" class="empty">No on-CPU slices</td></tr>'
+    heat = html_matrix_heatmap(
+        [_format_time_trim(int(r.get("start") or 0), time_scale) for r in bins],
+        cores,
+        [[float(((r.get("cells") or {}).get(c) or {}).get("pct") or 0) for c in cores] for r in bins],
+        title="Core Utilization Over Time",
+        unit="%",
+        extra_col=("Spread", spreads, "%"),
+    )
+    return (
+        f'<section class="report-card" id="sec-core-utilization-over-time">'
+        f"<h2>Core Utilization Over Time{html.escape(str(scope_title or ''))}</h2>"
+        f"{html_diagnostic_kpi_grid(kpis)}"
+        f"{heat}"
+        f"{html_heat_legend()}"
+        f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+        "</section>"
+    )
+
+
+def _performance_overview_html(
+    core_rows: list,
+    cc_rows: list,
+    task_rows: list,
+    scope_title: str,
+) -> str:
+    """Performance Overview: 3 compact panels reusing already-computed data
+    (Core Time Breakdown, Concurrent Core Active Distribution, Top Tasks by
+    CPU) with no new stats logic — a visual summary only, not a duplicate
+    of the detailed sections below."""
+    core_items = "".join(html_util_bar_row(core, pct, "core") for core, pct in core_rows)
+    core_panel = (
+        '<div class="perf-panel"><h3 class="sub">Core utilization</h3>'
+        f'<div class="util-list">{core_items or "<p class=\"empty\">No data</p>"}</div></div>'
+    )
+    cc_items = "".join(
+        html_util_bar_row(f"{n} core{'s' if n != 1 else ''}", pct, "core")
+        for n, _dur, pct in cc_rows
+    )
+    parallel_panel = (
+        '<div class="perf-panel"><h3 class="sub">Parallel activity</h3>'
+        f'<div class="util-list">{cc_items or "<p class=\"empty\">No data</p>"}</div></div>'
+    )
+    top_tasks = [(name, pct, f"{pct:.1f}%") for _mk, name, pct in task_rows[:5]]
+    cpu_panel = (
+        '<div class="perf-panel"><h3 class="sub">Highest CPU consumers</h3>'
+        f'{html_rank_bars(top_tasks, fill_kind="accent")}</div>'
+    )
+    return (
+        f'<section class="report-card" id="sec-performance-overview">'
+        f"<h2>Performance Overview{html.escape(str(scope_title or ''))}</h2>"
+        '<div class="perf-overview-grid">'
+        f"{core_panel}{parallel_panel}{cpu_panel}"
+        "</div></section>"
+    )
+
+
 class _StatsPanel(QWidget):
     """Dock panel showing trace statistics (span, core utilization, top tasks)."""
 
@@ -71712,80 +72694,6 @@ class _StatsPanel(QWidget):
         btn.clicked.connect(lambda: self._open_tick_dist_plot(self._trace))
         self._btn_tick_dist = btn
         return btn
-
-    @staticmethod
-    def _html_export_util_css() -> str:
-        """CSS for CPU utilisation bars in statistics HTML export."""
-        return """
-        .util-list { display: flex; flex-direction: column; gap: 4px; }
-        .util-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            min-height: 18px;
-        }
-        .util-label {
-            flex: 0 0 128px;
-            max-width: 128px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            text-align: left;
-            font-size: 13px;
-            color: var(--ink);
-        }
-        .util-bar {
-            flex: 1 1 auto;
-            height: 8px;
-            min-width: 24px;
-            border-radius: 4px;
-            background: var(--line);
-            overflow: hidden;
-        }
-        .util-bar-fill {
-            height: 100%;
-            border-radius: 4px;
-            background: #5FCF6F;
-        }
-        .util-row-task .util-bar-fill { background: #5B9BD5; }
-        .util-pct {
-            flex: 0 0 44px;
-            text-align: left;
-            font-size: 13px;
-        }
-        .util-pct-core { color: #77BB77; }
-        .util-pct-task { color: #6AAADD; }
-        """
-
-    @staticmethod
-    def _html_export_util_bar_row(label: str, pct: float, kind: str) -> str:
-        """One label + progress bar + % row for HTML export."""
-        pct_v = max(0.0, min(100.0, float(pct)))
-        esc = html.escape(str(label), quote=True)
-        row_cls = "util-row util-row-core" if kind == "core" else "util-row util-row-task"
-        pct_cls = "util-pct util-pct-core" if kind == "core" else "util-pct util-pct-task"
-        return (
-            f'<div class="{row_cls}">'
-            f'<span class="util-label">{esc}</span>'
-            f'<div class="util-bar"><div class="util-bar-fill" '
-            f'style="width:{pct_v:.1f}%"></div></div>'
-            f'<span class="{pct_cls}">{pct_v:.1f}%</span>'
-            f"</div>"
-        )
-
-    @classmethod
-    def _html_export_util_section(cls, title: str, rows: list, kind: str) -> str:
-        """Report card with utilisation bar rows (core or task)."""
-        esc_title = html.escape(title, quote=True)
-        if not rows:
-            body = '<p class="empty">No data</p>'
-        else:
-            items = "".join(
-                cls._html_export_util_bar_row(label, pct, kind)
-                for label, pct in rows
-            )
-            body = f'<div class="util-list">{items}</div>'
-        return f'<section class="report-card"><h2>{esc_title}</h2>{body}</section>'
 
     @staticmethod
     def _html_make_collapsible_sections(doc_html: str) -> Tuple[str, str]:
@@ -75002,15 +75910,14 @@ class _StatsPanel(QWidget):
         _lb_badge_html = ""
         _lb = _load_balance_metrics(_core_util_pcts)
         if _lb is not None:
-            _lb_badge_html = _load_balance_gauge_img_html(_lb, width=300)
-        core_util_html = (
-            self._html_export_util_section(
-                f"Core Utilization (excl. IDLE/TICK){scope_title}",
-                [(core, pct) for core, pct in core_rows],
-                "core",
-            ).replace("<div class=\"util-list\">", _lb_badge_html + "<div class=\"util-list\">", 1)
+            _lb_badge_html = _load_balance_gauge_html(_lb, width=600)
+        core_util_html = html_util_section(
+            f"Core Utilization (excl. IDLE/TICK){scope_title}",
+            [(core, pct) for core, pct in core_rows],
+            "core",
+            lead_html=_lb_badge_html,
         )
-        task_util_html = self._html_export_util_section(
+        task_util_html = html_util_section(
             f"Top Tasks by CPU (excl. IDLE/TICK){scope_title}",
             [(name, pct) for _, name, pct in task_rows],
             "task",
@@ -75232,34 +76139,7 @@ class _StatsPanel(QWidget):
         )
 
         pair_rows_html = _core_pair_rows(trace, lo, hi)
-        pair_body = "".join(
-            f"<tr><td>{_esc(fc)}</td><td>{_esc(tc)}</td><td>{cnt}</td><td>{bnc}</td>"
-            f"<td>{100.0*bnc/cnt:.1f}%</td><td>{_esc(_format_time_trim(avg_gap, ts))}</td></tr>"
-            for fc, tc, cnt, bnc, avg_gap in pair_rows_html
-        ) or '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
-        _pair_cores = []
-        for fc, tc, *_rest in pair_rows_html:
-            if fc not in _pair_cores:
-                _pair_cores.append(fc)
-            if tc not in _pair_cores:
-                _pair_cores.append(tc)
-        _pair_idx = {c: i for i, c in enumerate(_pair_cores)}
-        _pair_cells = [[0.0] * len(_pair_cores) for _ in _pair_cores]
-        for fc, tc, cnt, *_r in pair_rows_html:
-            if fc in _pair_idx and tc in _pair_idx:
-                _pair_cells[_pair_idx[fc]][_pair_idx[tc]] = float(cnt)
-        _pair_heat = html_matrix_heatmap(
-            _pair_cores, _pair_cores, _pair_cells,
-            title="Core migration count (source → destination)",
-            unit="",
-        ) if _pair_cores else ""
-        core_pair_html = (
-            f'<section class="report-card"><h2>Core-Pair Migration Summary{_esc(scope_title)}</h2>'
-            f'{_pair_heat}'
-            '<table><thead><tr><th>From</th><th>To</th><th>Count</th>'
-            '<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>'
-            f'<tbody>{pair_body}</tbody></table></section>'
-        )
+        core_pair_html = _core_pair_migration_summary_html(pair_rows_html, scope_title, ts)
 
         bd_rows_html = _core_time_breakdown(trace, lo, hi)
         bd_body = "".join(
@@ -75341,8 +76221,17 @@ class _StatsPanel(QWidget):
             f"<td>{'—' if r.get('lb_score') is None else format(float(r.get('lb_score') or 0), '.0f')}</td></tr>"
             for r in sl_rows_html
         ) or '<tr><td colspan="6" class="empty">No on-CPU slices in scope</td></tr>'
+        sl_chart = html_scheduling_balance_chart([
+            {
+                "time": _format_time_trim(int(r.get("start") or 0), ts),
+                "score": r.get("lb_score"),
+                "sigma": r.get("sigma_pct"),
+            }
+            for r in sl_rows_html
+        ])
         sched_load_html = (
             f'<section class="report-card"><h2>Scheduling Load Over Time{_esc(scope_title)}</h2>'
+            f"{sl_chart}"
             '<table><thead><tr><th>Time</th><th>Ctx sw</th><th>Ctx sw/s</th>'
             '<th>Busiest core</th><th>Util &#963;</th><th>LB score</th></tr></thead>'
             f'<tbody>{sl_body}</tbody></table></section>'
@@ -75484,18 +76373,37 @@ class _StatsPanel(QWidget):
             ) + "</tr>"
             for r in _tc.get("rows") or []
         ) or f'<tr><td colspan="{len(_tc_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
-        _tc_heat = html_matrix_heatmap(
-            [r.get("task") or "" for r in (_tc.get("rows") or [])][:24],
-            _tc_cores,
+        _tc_matrix_rows = (_tc.get("rows") or [])[:24]
+        _tc_matrix_cells = [
             [
-                [
+                (
                     float((r.get("cells") or {}).get(c, {}).get("pct_span") or 0)
-                    for c in _tc_cores
-                ]
-                for r in (_tc.get("rows") or [])[:24]
-            ],
+                    if (r.get("cells") or {}).get(c, {}).get("ns")
+                    else None
+                )
+                for c in _tc_cores
+            ]
+            for r in _tc_matrix_rows
+        ]
+        _tc_nonzero = sorted(
+            v for line in _tc_matrix_cells for v in line if v)
+        # A single hot task/core pair would otherwise flatten every other
+        # cell to the same faint shade; cap the color scale at the 90th
+        # percentile so normal task variation stays distinguishable, and
+        # say so under the matrix (values above the cap still show their
+        # real number, only the color saturates).
+        _tc_cap = _hist_percentile(_tc_nonzero, 0.90) if _tc_nonzero else 0.0
+        _tc_heat = html_matrix_heatmap(
+            [r.get("task") or "" for r in _tc_matrix_rows],
+            _tc_cores,
+            _tc_matrix_cells,
             title="Task × Core Utilization (% of span)",
+            subtitle=(
+                f"Scale emphasizes normal task variation; values above "
+                f"{_tc_cap:.1f}% use the maximum color."
+            ) if _tc_cap > 0 else "",
             unit="%",
+            max_value_override=_tc_cap,
         )
         task_core_html = (
             f'<section class="report-card"><h2>Task × Core{_esc(scope_title)}</h2>'
@@ -75664,6 +76572,7 @@ class _StatsPanel(QWidget):
             '<p class="detail-note">Heuristic ready→completion from adjacent slices, '
             'not an explicit BTF release/completion pair.</p>'
             f'{html_percentile_bars(_rt_rows, title="Response P50–P99")}'
+            f'{html_response_p99_chart(_rt_rows, format_p99=lambda ns: _format_time_trim(int(ns), trace.time_scale))}'
             '<table><thead><tr><th>Task</th><th>N</th><th>Min</th><th>Avg</th><th>Max</th>'
             '<th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>p99.9</th>'
             '<th>Jitter</th><th>CV</th></tr></thead>'
@@ -75769,31 +76678,7 @@ class _StatsPanel(QWidget):
         )
         _ct = core_util_over_time(_ux_evs, list(trace.core_names or []), lo, hi)
         _ct_cores = _ct.get("cores") or []
-        _ct_head = "<th>Time</th>" + "".join(f"<th>{_esc(c)}</th>" for c in _ct_cores)
-        _ct_body = "".join(
-            "<tr><td>" + _esc(_format_time_trim(int(r.get("start") or 0), trace.time_scale)) + "</td>"
-            + "".join(
-                f"<td>{float(((r.get('cells') or {}).get(c) or {}).get('pct') or 0):.1f}%</td>"
-                for c in _ct_cores
-            ) + "</tr>"
-            for r in (_ct.get("bins") or [])
-        ) or f'<tr><td colspan="{len(_ct_cores) + 1}" class="empty">No on-CPU slices</td></tr>'
-        _ct_heat = html_matrix_heatmap(
-            [_format_time_trim(int(r.get("start") or 0), trace.time_scale) for r in (_ct.get("bins") or [])],
-            _ct_cores,
-            [
-                [float(((r.get("cells") or {}).get(c) or {}).get("pct") or 0) for c in _ct_cores]
-                for r in (_ct.get("bins") or [])
-            ],
-            title="Core Utilization Over Time",
-            unit="%",
-        )
-        core_time_html = (
-            f'<section class="report-card"><h2>Core Utilization Over Time{_esc(scope_title)}</h2>'
-            f'{_ct_heat}'
-            f'<table><thead><tr>{_ct_head}</tr></thead>'
-            f'<tbody>{_ct_body}</tbody></table></section>'
-        )
+        core_time_html = _core_utilization_over_time_html(_ct, _ct_cores, trace.time_scale, scope_title)
 
         analysis_findings = _build_workflow_analysis_findings(
             core_rows=core_rows,
@@ -75893,13 +76778,16 @@ class _StatsPanel(QWidget):
              "kind": "warn" if _lb and (_lb["score"] < 70 or _lb["stddev"] > 30) else "ok"},
             {"label": "Core Utilization range",
              "value": f"{util_lo:.1f}–{util_hi:.1f}%",
-             "hint": "Wall-clock span, one-core = 100%"},
+             "hint": "Wall-clock span, one-core = 100%",
+             "kind": "metric-util"},
             {"label": "Worst response P99",
              "value": (_format_time_trim(int(worst_rt.get("p99_ns") or 0), trace.time_scale)
                        if worst_rt else "—"),
-             "hint": str(worst_rt.get("task") or "") if worst_rt else ""},
+             "hint": str(worst_rt.get("task") or "") if worst_rt else "",
+             "kind": "metric-latency"},
             {"label": "Migration activity", "value": f"{mig_total:,}",
-             "hint": "Total core hops in scope"},
+             "hint": "Total core hops in scope",
+             "kind": "metric-migration"},
             {"label": "Tick health", "value": tick_label, "kind": tick_kind},
             {"label": "Synchronization issues", "value": f"{len(sync_issues_scoped):,}",
              "kind": "warn" if sync_issues_scoped else "ok"},
@@ -75929,15 +76817,9 @@ class _StatsPanel(QWidget):
             else " — no triage flags."
         )
         _v_kind = "error" if err_n else ("warn" if (warn_n or tick_kind == "warn") else "ok")
-        _v_col = {"error": "#c0392b", "warn": "#9a4d00", "ok": "#166534"}[_v_kind]
-        _v_bg = {"error": "#fdecec", "warn": "#fdf3e3", "ok": "#eaf6ee"}[_v_kind]
-        verdict_html = (
-            f'<p class="report-verdict {_v_kind}" '
-            f'style="margin:0 0 14px;padding:10px 14px;border-radius:10px;'
-            f'border-left:4px solid {_v_col};background:{_v_bg};color:#182230;'
-            f'font-size:14px;">'
-            f'<strong style="color:{_v_col};">Verdict:</strong> '
-            f'{_esc(" · ".join(_v_bits))}{_v_tail}</p>'
+        verdict_html = html_report_verdict(
+            _v_kind,
+            f'{_esc(" · ".join(_v_bits))}{_v_tail}',
         )
 
         start_s = _format_time_trim(lo if lo is not None else trace.time_min, trace.time_scale)
@@ -75987,15 +76869,16 @@ class _StatsPanel(QWidget):
         glossary_html = html_glossary(range_note=range_note)
 
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        stats_extra_css = (
-            f"{STATS_HTML_EXTRA_CSS}\n{HTML_REPORT_TOC_CSS}\n"
-            f"{self._html_export_util_css()}"
-        ).strip()
+        stats_extra_css = f"{STATS_HTML_EXTRA_CSS}\n{HTML_REPORT_TOC_CSS}".strip()
 
+        performance_overview_html = _performance_overview_html(
+            core_rows, cc_rows_html, task_rows, scope_title,
+        )
         body = f"""
         {verdict_html}
         {html_diagnostic_kpi_grid(kpis)}
         <!--TOC-->
+        {performance_overview_html}
         {scope_html}
         {evidence_refs_html}
         {analysis_html}
@@ -76011,13 +76894,7 @@ class _StatsPanel(QWidget):
     {switch_overhead_html}
     {idle_html}
     {task_util_html}
-    <section class=\"report-card\">
-    <h2>Core Migrations{_esc(scope_title)}</h2>
-    <table>
-      <thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th><th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead>
-      <tbody>{"".join(_migration_row_html(r) for r in mig_rows) or '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'}</tbody>
-    </table>
-  </section>
+    {_migration_count_html(mig_rows, mig_total, scope_title)}
     {core_pair_html}
     {affinity_html}
     {task_core_html}

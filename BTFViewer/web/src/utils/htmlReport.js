@@ -43,17 +43,84 @@ function escapeHtml(s) {
 
 export const BTF_HTML_REPORT_CSS = `
 :root {
+  color-scheme: light dark;
   --bg: #e9edf3;
+  --bg-elev: #f3f6fa;
   --paper: #ffffff;
+  --paper-2: #f1f5fb;
   --ink: #182230;
   --muted: #5f6f82;
   --line: #d9e0ea;
+  --line-strong: #c3cee0;
   --header: #16324f;
+  --header-2: #21496f;
   --accent: #2a6fb2;
+  --accent-soft: #eaf2ff;
+  --accent-2: #0f766e;
+  --success: #1f6b45;
+  --success-soft: #d9f0e3;
+  --warning: #8a4b00;
+  --warning-soft: #fce8c8;
+  --danger: #b3261e;
+  --danger-soft: #fdecec;
+  --violet: #7357c7;
+  --stripe: #f7f9fc;
   --user-bar: #5b9bd5;
   --asst-bar: #3d9a72;
   --user-bg: #eef5fc;
   --asst-bg: #eef7f2;
+}
+html[data-theme="dark"] {
+  --bg: #14181e;
+  --bg-elev: #181d24;
+  --paper: #1c2128;
+  --paper-2: #20262e;
+  --ink: #d6dde6;
+  --muted: #9aa7b4;
+  --line: #2d333b;
+  --line-strong: #3a4149;
+  --header: #16324f;
+  --header-2: #21496f;
+  --accent: #6cb0e6;
+  --accent-soft: #1d3348;
+  --accent-2: #4ec6bb;
+  --success: #57c191;
+  --success-soft: #123024;
+  --warning: #f0b35c;
+  --warning-soft: #302410;
+  --danger: #ff8585;
+  --danger-soft: #33191a;
+  --violet: #b3a0ff;
+  --stripe: #171c22;
+  --user-bg: #182634;
+  --asst-bg: #17251d;
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    --bg: #14181e;
+    --bg-elev: #181d24;
+    --paper: #1c2128;
+    --paper-2: #20262e;
+    --ink: #d6dde6;
+    --muted: #9aa7b4;
+    --line: #2d333b;
+    --line-strong: #3a4149;
+    --header: #16324f;
+    --header-2: #21496f;
+    --accent: #6cb0e6;
+    --accent-soft: #1d3348;
+    --accent-2: #4ec6bb;
+    --success: #57c191;
+    --success-soft: #123024;
+    --warning: #f0b35c;
+    --warning-soft: #302410;
+    --danger: #ff8585;
+    --danger-soft: #33191a;
+    --violet: #b3a0ff;
+    --stripe: #171c22;
+    --user-bg: #182634;
+    --asst-bg: #17251d;
+  }
 }
 * { box-sizing: border-box; }
 body {
@@ -112,7 +179,7 @@ body {
   margin: 14px 0;
   background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 16px;
   padding: 14px 16px 16px;
   box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
 }
@@ -142,7 +209,7 @@ h2 {
   width: 22%;
 }
 pre {
-  background: #f1f5fb;
+  background: var(--paper-2);
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 10px 12px;
@@ -186,8 +253,8 @@ a { color: var(--accent); }
   padding: 1px 7px;
   border: 1px solid var(--line);
   border-radius: 4px;
-  background: #fff;
-  color: #5a6a7c;
+  background: var(--paper);
+  color: var(--muted);
   font-size: 10px;
   font-weight: 600;
   line-height: 1.3;
@@ -202,7 +269,7 @@ details.ai-ev-fold {
   border-radius: 6px;
   padding: 2px 8px 4px;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--paper);
 }
 details.ai-ev-fold-l1,
 details.ai-ev-fold:not(.ai-ev-fold-l2) {
@@ -213,22 +280,22 @@ details.ai-ev-fold:not(.ai-ev-fold-l2) > summary {
   cursor: pointer;
   font-weight: 600;
   font-size: 12px;
-  color: #284563;
+  color: var(--ink);
   padding: 5px 0;
   list-style: none;
 }
 details.ai-ev-fold-l2 {
   margin: 4px 0 4px 10px;
-  border-color: #e2e8f0;
+  border-color: var(--line);
   border-radius: 4px;
   padding: 1px 6px 3px;
-  background: #f8fafc;
+  background: var(--paper-2);
 }
 details.ai-ev-fold-l2 > summary {
   cursor: pointer;
   font-weight: 600;
   font-size: 11px;
-  color: #5f6f82;
+  color: var(--muted);
   padding: 3px 0;
   list-style: none;
 }
@@ -274,11 +341,11 @@ table.ai-md-table th, table.ai-md-table td {
   padding: 4px 8px;
 }
 table.ai-md-table th {
-  background: #f1f5fb;
-  color: #284563;
+  background: var(--paper-2);
+  color: var(--ink);
 }
 table.ai-md-table td {
-  background: #fff;
+  background: var(--paper);
   color: var(--ink);
 }
 
@@ -286,18 +353,18 @@ table.ai-md-table td {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 999px;
-  background: #e8eef7;
-  color: #123355;
+  background: var(--accent-soft);
+  color: var(--header);
   font-size: 12px;
   font-weight: 650;
   margin-right: 6px;
 }
-.badge-status { background: #dfe9f8; }
-.badge-ok { background: #d9f0e3; color: #1f6b45; }
-.badge-warn { background: #fce8c8; color: #8a4b00; }
+.badge-status { background: var(--accent-soft); }
+.badge-ok { background: var(--success-soft); color: var(--success); }
+.badge-warn { background: var(--warning-soft); color: var(--warning); }
 .warn-banner {
-  background: #fff6e8;
-  border: 1px solid #f0d2a0;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
   border-radius: 8px;
   padding: 8px 10px;
 }
@@ -308,12 +375,12 @@ details.report-appendix {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 6px 10px;
-  background: #f8fafc;
+  background: var(--paper-2);
 }
 details.report-appendix > summary {
   cursor: pointer;
   font-weight: 650;
-  color: #123355;
+  color: var(--ink);
 }
 .appendix-body { margin-top: 8px; }
 .export-note { color: var(--muted); font-size: 12px; margin-top: 12px; }
@@ -328,9 +395,12 @@ details.report-appendix > summary {
   tr { break-inside: avoid; }
   details.report-card:not([open]) > *:not(summary) { display: revert; }
   details[open] > summary { list-style: none; }
-  /* Interactive chrome has no place on paper. */
+  /* Interactive chrome has no place on paper. The sortable class sits on the
+     <th> itself, so only its affordance is dropped — never the header cell. */
   .table-toolbar, .table-pager, .report-toc [data-toc],
-  .ai-ev-panel-toggle, .sortable { display: none !important; }
+  .ai-ev-panel-toggle { display: none !important; }
+  .sortable { cursor: default; }
+  thead th.sortable:hover { background: var(--paper-2); }
   .table-scroll { overflow: visible !important; }
   a { color: inherit; text-decoration: none; }
 }
@@ -342,31 +412,51 @@ details.report-appendix > summary {
   font-size: 11px;
   text-align: center;
 }
+.theme-toggle {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f3f7fd;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.theme-toggle:hover { background: rgba(255, 255, 255, 0.22); }
+@media print {
+  .theme-toggle { display: none !important; }
+}
+html[data-theme="dark"] body { background: #12161b; }
+html[data-theme="dark"] h2 { color: #cfe1f7; }
+html[data-theme="dark"] pre { background: #12161b; border-color: var(--line); color: var(--ink); }
+html[data-theme="dark"] .msg.user h3 { color: #6cb0e6; }
+html[data-theme="dark"] .msg.assistant h3 { color: #57c191; }
+html[data-theme="dark"] .msg.evidence h3 { color: #9aa7b4; }
+html[data-theme="dark"] .msg.evidence .body { background: #171b21; border-left-color: #5a6a7c; }
+html[data-theme="dark"] .ai-ev-panel-toggle { background: var(--paper); color: var(--muted); }
+html[data-theme="dark"] details.ai-ev-fold { background: var(--paper); }
+html[data-theme="dark"] details.ai-ev-fold-l1 > summary,
+html[data-theme="dark"] details.ai-ev-fold:not(.ai-ev-fold-l2) > summary { color: #b6c2cf; }
+html[data-theme="dark"] details.ai-ev-fold-l2 { background: #171b21; border-color: var(--line); }
+html[data-theme="dark"] details.ai-ev-fold-l2 > summary { color: var(--muted); }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14181e;
-    --paper: #1c2128;
-    --ink: #d6dde6;
-    --muted: #9aa7b4;
-    --line: #2d333b;
-    --header: #16324f;
-    --accent: #6cb0e6;
-    --user-bg: #182634;
-    --asst-bg: #17251d;
-  }
-  body { background: #12161b; }
-  h2 { color: #cfe1f7; }
-  pre { background: #12161b; border-color: var(--line); color: var(--ink); }
-  .msg.user h3 { color: #6cb0e6; }
-  .msg.assistant h3 { color: #57c191; }
-  .msg.evidence h3 { color: #9aa7b4; }
-  .msg.evidence .body { background: #171b21; border-left-color: #5a6a7c; }
-  .ai-ev-panel-toggle { background: var(--paper); color: var(--muted); }
-  details.ai-ev-fold { background: var(--paper); }
-  details.ai-ev-fold-l1 > summary,
-  details.ai-ev-fold:not(.ai-ev-fold-l2) > summary { color: #b6c2cf; }
-  details.ai-ev-fold-l2 { background: #171b21; border-color: var(--line); }
-  details.ai-ev-fold-l2 > summary { color: var(--muted); }
+  html:not([data-theme="light"]) body { background: #12161b; }
+  html:not([data-theme="light"]) h2 { color: #cfe1f7; }
+  html:not([data-theme="light"]) pre { background: #12161b; border-color: var(--line); color: var(--ink); }
+  html:not([data-theme="light"]) .msg.user h3 { color: #6cb0e6; }
+  html:not([data-theme="light"]) .msg.assistant h3 { color: #57c191; }
+  html:not([data-theme="light"]) .msg.evidence h3 { color: #9aa7b4; }
+  html:not([data-theme="light"]) .msg.evidence .body { background: #171b21; border-left-color: #5a6a7c; }
+  html:not([data-theme="light"]) .ai-ev-panel-toggle { background: var(--paper); color: var(--muted); }
+  html:not([data-theme="light"]) details.ai-ev-fold { background: var(--paper); }
+  html:not([data-theme="light"]) details.ai-ev-fold-l1 > summary,
+  html:not([data-theme="light"]) details.ai-ev-fold:not(.ai-ev-fold-l2) > summary { color: #b6c2cf; }
+  html:not([data-theme="light"]) details.ai-ev-fold-l2 { background: #171b21; border-color: var(--line); }
+  html:not([data-theme="light"]) details.ai-ev-fold-l2 > summary { color: var(--muted); }
 }
 `.trim()
 
@@ -398,6 +488,7 @@ export function btfHtmlReportDocument(title, bodyHtml, {
 <style>
 ${css}
 </style>
+<script>(function(){try{var t=localStorage.getItem('btfviewer-report-theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();</script>
 </head>
 <body>
 <div class="${cls}">
@@ -408,20 +499,56 @@ ${css}
 <h1>${escapeHtml(title)}</h1>
 <div class="sub">${sub}</div>
 </div>
+<button class="theme-toggle" type="button" aria-label="Toggle report theme" onclick="btfToggleReportTheme()">☾ Dark</button>
 </header>
 ${bodyHtml}
 <footer class="report-foot">
 Generated by ${escapeHtml(PRODUCT_NAME)} ${escapeHtml(APP_VERSION)} — ${escapeHtml(PRODUCT_TAGLINE)}
 </footer>
 </div>
+<script>
+${BTF_THEME_TOGGLE_JS}
+</script>
 </body>
 </html>
 `
 }
 
+export const BTF_THEME_TOGGLE_JS = `
+function btfToggleReportTheme() {
+  var root = document.documentElement;
+  var cur = root.getAttribute('data-theme');
+  if (!cur) {
+    cur = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      ? 'dark' : 'light';
+  }
+  var next = cur === 'dark' ? 'light' : 'dark';
+  root.setAttribute('data-theme', next);
+  try { localStorage.setItem('btfviewer-report-theme', next); } catch (e) {}
+  btfSyncThemeToggleLabel();
+}
+function btfSyncThemeToggleLabel() {
+  var root = document.documentElement;
+  var explicit = root.getAttribute('data-theme');
+  var dark = explicit
+    ? explicit === 'dark'
+    : !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  var btn = document.querySelector('.theme-toggle');
+  if (btn) btn.textContent = dark ? '☀ Light' : '☾ Dark';
+}
+document.addEventListener('DOMContentLoaded', btfSyncThemeToggleLabel);
+if (window.matchMedia) {
+  try {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+      if (!document.documentElement.getAttribute('data-theme')) btfSyncThemeToggleLabel();
+    });
+  } catch (e) {}
+}
+`.trim()
+
 export const HTML_REPORT_TOC_CSS = `
 .report-toc {
-  background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-2) 100%);
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 16px 18px 18px;
@@ -455,7 +582,7 @@ export const HTML_REPORT_TOC_CSS = `
   font-size: 11px;
   font-weight: 650;
   color: var(--muted);
-  background: #eef3f9;
+  background: var(--paper-2);
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 2px 8px;
@@ -474,12 +601,12 @@ export const HTML_REPORT_TOC_CSS = `
   padding: 5px 11px;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: #fff;
+  background: var(--paper);
   color: var(--accent);
   cursor: pointer;
   box-shadow: 0 1px 2px rgba(30, 60, 90, 0.04);
 }
-.toc-btn:hover { background: #eef4fb; border-color: #c5d4e6; }
+.toc-btn:hover { background: var(--paper-2); border-color: var(--accent); }
 .report-toc ul {
   margin: 0;
   padding: 0;
@@ -506,7 +633,7 @@ export const HTML_REPORT_TOC_CSS = `
   color: var(--muted);
 }
 .report-toc a {
-  color: #1a4f80;
+  color: var(--accent);
   text-decoration: none;
   font-size: 13px;
   line-height: 1.35;
@@ -514,7 +641,7 @@ export const HTML_REPORT_TOC_CSS = `
 .report-toc a:hover { color: var(--accent); text-decoration: underline; }
 .toc-groups { display: grid; gap: 12px; }
 .toc-group {
-  background: #fff;
+  background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 10px 12px 12px;
@@ -523,12 +650,12 @@ export const HTML_REPORT_TOC_CSS = `
 .toc-group h3 {
   margin: 0 0 8px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #e8eef5;
+  border-bottom: 1px solid var(--line);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #5f6f82;
+  color: var(--muted);
 }
 .toc-group ul { columns: 1; }
 @media (min-width: 720px) {
@@ -620,22 +747,17 @@ export const HTML_REPORT_INTERACTIVE_SCRIPT = `
       + (hasProblems ? '<label class="table-check"><input type="checkbox" data-problems> Problems only</label>' : '')
       + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
       + '<span class="table-count"></span>'
-      + '<button type="button" class="table-csv">CSV</button>'
+      + '<button type="button" class="table-csv table-action">CSV</button>'
     wrap.insertBefore(bar, scroll)
-    var PGBTN = 'font:inherit;font-size:12px;padding:2px 9px;border:1px solid var(--line,#d9e0ea);'
-      + 'border-radius:6px;background:#f1f5fb;color:inherit;cursor:pointer;'
     var csvBtn = bar.querySelector('.table-csv')
     if (csvBtn) {
-      csvBtn.style.cssText = PGBTN
       csvBtn.title = 'Download the filtered rows as a CSV file'
     }
     var pager = document.createElement('div')
     pager.className = 'table-pager'
-    pager.style.cssText = 'display:none;gap:8px;align-items:center;margin-top:6px;'
-      + 'font-size:12px;color:var(--muted,#5f6f82);'
-    pager.innerHTML = '<button type="button" data-pg="prev" style="' + PGBTN + '">\\u2039 Prev</button>'
+    pager.innerHTML = '<button type="button" data-pg="prev" class="table-action">\\u2039 Prev</button>'
       + '<span data-pg="label"></span>'
-      + '<button type="button" data-pg="next" style="' + PGBTN + '">Next \\u203a</button>'
+      + '<button type="button" data-pg="next" class="table-action">Next \\u203a</button>'
     wrap.appendChild(pager)
     var pgPrev = pager.querySelector('[data-pg="prev"]')
     var pgNext = pager.querySelector('[data-pg="next"]')

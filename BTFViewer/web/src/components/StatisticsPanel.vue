@@ -5138,9 +5138,9 @@ import StatsSectionHeader from './StatsSectionHeader.vue'
 import StatsSectionBlock from './StatsSectionBlock.vue'
 import StatsEmptyHint from './StatsEmptyHint.vue'
 import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggleStatsPin, isDefaultStatsSectionOrder, defaultStatsSectionOrder, mergeSectionCollapsed, STATS_SECTION_CATEGORIES, STATS_SECTION_CATEGORY, STATS_PINNABLE_SECTIONS, findStatsSections } from '../utils/statsPins.js'
-import { buildHistogramModel, histogramBarTooltip } from '../utils/histogramModel.js'
+import { buildHistogramModel, histogramBarTooltip, percentile } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
-import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
+import { classifyLoadBalance, loadBalanceGaugeHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
 import { btfHtmlReportDocument, htmlApplyCollapsibleToc, htmlMakeCollapsibleSections, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, HTML_REPORT_INTERACTIVE_SCRIPT, APP_VERSION } from '../utils/htmlReport.js'
 import {
   STATS_DEFAULT_EXPANDED,
@@ -5150,14 +5150,21 @@ import {
   htmlEvidenceRefsCard,
   htmlGlossary,
   htmlHealthBars,
+  htmlHeatLegend,
   htmlInvestigateAnomalies,
   htmlInvestigationSection,
   htmlMatrixHeatmap,
   htmlPercentileBars,
+  htmlRankBars,
+  htmlReportVerdict,
+  htmlResponseP99Chart,
+  htmlSchedulingBalanceChart,
   htmlScopeIdentityCard,
   htmlTagOverview,
   htmlTraceHealthCard,
   htmlTraceMetadataCard,
+  htmlUtilBarRow,
+  htmlUtilSection,
   evidenceRefsFromFindings,
 } from '../utils/statsHtmlReport.js'
 import { buildTraceHealthResult, traceHealthStatusLabel } from '../utils/traceHealth.js'
@@ -8405,61 +8412,203 @@ function _makeCollapsibleSections(docHtml) {
   return htmlMakeCollapsibleSections(docHtml, STATS_DEFAULT_EXPANDED, STATS_TOC_GROUPS)
 }
 
-const _HTML_EXPORT_UTIL_CSS = `
-    .util-list { display: flex; flex-direction: column; gap: 4px; }
-    .util-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-height: 18px;
-    }
-    .util-label {
-      flex: 0 0 128px;
-      max-width: 128px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      text-align: left;
-      font-size: 13px;
-      color: var(--ink);
-    }
-    .util-bar {
-      flex: 1 1 auto;
-      height: 8px;
-      min-width: 24px;
-      border-radius: 4px;
-      background: var(--line);
-      overflow: hidden;
-    }
-    .util-bar-fill {
-      height: 100%;
-      border-radius: 4px;
-      background: #5FCF6F;
-    }
-    .util-row-task .util-bar-fill { background: #5B9BD5; }
-    .util-pct {
-      flex: 0 0 44px;
-      text-align: left;
-      font-size: 13px;
-    }
-    .util-pct-core { color: #77BB77; }
-    .util-pct-task { color: #6AAADD; }
-`
-
-function _htmlUtilBarRow(label, pct, kind) {
-  const pctV = Math.max(0, Math.min(100, Number(pct) || 0))
-  const rowCls = kind === 'core' ? 'util-row util-row-core' : 'util-row util-row-task'
-  const pctCls = kind === 'core' ? 'util-pct util-pct-core' : 'util-pct util-pct-task'
-  return `<div class="${rowCls}"><span class="util-label">${_htmlCell(label)}</span>`
-    + `<div class="util-bar"><div class="util-bar-fill" style="width:${pctV.toFixed(1)}%"></div></div>`
-    + `<span class="${pctCls}">${pctV.toFixed(1)}%</span></div>`
+/**
+ * Performance Overview: 3 compact panels reusing already-computed data
+ * (core utilization rows, concurrent-core-active rows, top-CPU task rows)
+ * with no new stats logic — a visual summary only, not a duplicate of the
+ * detailed sections below.
+ */
+function _performanceOverviewHtml(coreRows, ccRows, taskRows, suffix) {
+  const coreItems = coreRows.map(r => htmlUtilBarRow(r.core, r.pct, 'core')).join('')
+  const corePanel = '<div class="perf-panel"><h3 class="sub">Core utilization</h3>'
+    + `<div class="util-list">${coreItems || '<p class="empty">No data</p>'}</div></div>`
+  const ccItems = ccRows.map(r => htmlUtilBarRow(`${r.activeCores} core${r.activeCores !== 1 ? 's' : ''}`, r.pctOfSpan, 'core')).join('')
+  const parallelPanel = '<div class="perf-panel"><h3 class="sub">Parallel activity</h3>'
+    + `<div class="util-list">${ccItems || '<p class="empty">No data</p>'}</div></div>`
+  const topTasks = taskRows.slice(0, 5).map(r => [r.name, r.pct, `${Number(r.pct).toFixed(1)}%`])
+  const cpuPanel = '<div class="perf-panel"><h3 class="sub">Highest CPU consumers</h3>'
+    + `${htmlRankBars(topTasks, { fillKind: 'accent' })}</div>`
+  return `<section class="report-card" id="sec-performance-overview">`
+    + `<h2>Performance Overview${_htmlCell(suffix)}</h2>`
+    + '<div class="perf-overview-grid">'
+    + corePanel + parallelPanel + cpuPanel
+    + '</div></section>'
 }
 
-function _htmlUtilSection(title, rows, kind) {
-  const body = rows.length
-    ? `<div class="util-list">${rows.map(r => _htmlUtilBarRow(r.label, r.pct, kind)).join('')}</div>`
-    : '<p class="empty">No data</p>'
-  return `<section class="report-card"><h2>${_htmlCell(title)}</h2>${body}</section>`
+/**
+ * Core Migration Count: KPI summary + Top-12 bar chart + raw table +
+ * interpretation note. `rows` is already sorted by count desc (see
+ * migrationRows) and reused as the one data source for every visual form.
+ */
+function _migrationCountHtml(rows, total, suffix) {
+  const n = rows.length
+  const counts = rows.map(r => Number(r.migrations) || 0)
+  let kpis = []
+  if (n) {
+    const topName = rows[0].name
+    const topCount = counts[0]
+    const avg = total / n
+    const sortedCounts = [...counts].sort((a, b) => a - b)
+    const mid = Math.floor(n / 2)
+    const median = n % 2 ? sortedCounts[mid] : (sortedCounts[mid - 1] + sortedCounts[mid]) / 2
+    const top5Share = total ? 100 * counts.slice(0, 5).reduce((a, b) => a + b, 0) / total : 0
+    kpis = [
+      { label: 'Total migrations', value: total.toLocaleString('en-US') },
+      { label: 'Highest task', value: String(topName), hint: `${topCount.toLocaleString('en-US')} migrations` },
+      { label: 'Average / task', value: avg.toFixed(1) },
+      { label: 'Median', value: median.toFixed(1) },
+      { label: 'Top 5 share', value: `${top5Share.toFixed(0)}%` },
+    ]
+  }
+  const top12 = rows.slice(0, 12).map(r => [String(r.name), Number(r.migrations) || 0, (Number(r.migrations) || 0).toLocaleString('en-US')])
+  const note = '<p class="detail-note">A high migration count alone is not '
+    + 'necessarily a problem. Check migration rate, dwell time, '
+    + 'ping-pong count, and the Core-Pair Migration Summary.</p>'
+  const rowsHtml = n
+    ? rows.map(r => `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.migrations)}</td><td>${_htmlCell(r.migrRate)}</td><td>${_htmlCell(r.avgDwell)}</td><td>${_htmlCell(r.coreCount)}</td><td>${_htmlCell(`${r.primary} (${r.primaryPct.toFixed(0)}%)`)}</td><td>${_htmlCell(r.pingPong)}</td><td>${_htmlCell(r.stiNear)}</td><td>${_htmlCell(r.gapAfter)}</td><td>${_htmlCell(r.gapOther)}</td></tr>`).join('')
+    : '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'
+  return `<section class="report-card" id="sec-core-migrations">`
+    + `<h2>Core Migration Count${_htmlCell(suffix)}</h2>`
+    + htmlDiagnosticKpiGrid(kpis)
+    + htmlRankBars(top12, { fillKind: 'accent' })
+    + '<table><thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th>'
+    + '<th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead>'
+    + `<tbody>${rowsHtml}</tbody>`
+    + '</table>'
+    + note
+    + '</section>'
+}
+
+/**
+ * Core-Pair Migration Summary: KPI summary + Top-8 routes bar chart + heat
+ * matrix + raw table, in that reading order. `pairRows` is already sorted
+ * by count desc (see buildCorePairRows) and reused as the one data source
+ * for every visual form.
+ */
+function _corePairMigrationSummaryHtml(pairRows, suffix, timeScale) {
+  const total = pairRows.reduce((s, r) => s + (Number(r.count) || 0), 0)
+  let kpis = []
+  if (pairRows.length) {
+    const busiest = pairRows[0]
+    const srcTotals = {}
+    const dstTotals = {}
+    for (const r of pairRows) {
+      srcTotals[r.fromCore] = (srcTotals[r.fromCore] || 0) + (Number(r.count) || 0)
+      dstTotals[r.toCore] = (dstTotals[r.toCore] || 0) + (Number(r.count) || 0)
+    }
+    const topSrc = Object.entries(srcTotals).sort((a, b) => b[1] - a[1])[0]
+    const topDst = Object.entries(dstTotals).sort((a, b) => b[1] - a[1])[0]
+    kpis = [
+      { label: 'Total migrations', value: total.toLocaleString('en-US') },
+      {
+        label: 'Busiest route',
+        value: `${busiest.fromCore} → ${busiest.toCore}`,
+        hint: `${(Number(busiest.count) || 0).toLocaleString('en-US')} transitions`,
+      },
+      {
+        label: 'Most active source',
+        value: String(topSrc[0]),
+        hint: `${topSrc[1].toLocaleString('en-US')} outgoing migrations`,
+      },
+      {
+        label: 'Most active destination',
+        value: String(topDst[0]),
+        hint: `${topDst[1].toLocaleString('en-US')} incoming migrations`,
+      },
+    ]
+  }
+  const top8 = pairRows.slice(0, 8).map(r => [`${r.fromCore} → ${r.toCore}`, Number(r.count) || 0, (Number(r.count) || 0).toLocaleString('en-US')])
+  const pairBody = pairRows.length
+    ? pairRows.map(r =>
+        `<tr><td>${_htmlCell(r.fromCore)}</td><td>${_htmlCell(r.toCore)}</td>` +
+        `<td>${r.count}</td><td>${r.bounces}</td><td>${r.bouncePct.toFixed(1)}%</td>` +
+        `<td>${_htmlCell(formatMigrationGapTime(r.avgGapNs, timeScale))}</td></tr>`
+      ).join('')
+    : '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
+  const pairCores = []
+  for (const row of pairRows) {
+    if (!pairCores.includes(row.fromCore)) pairCores.push(row.fromCore)
+    if (!pairCores.includes(row.toCore)) pairCores.push(row.toCore)
+  }
+  const pairIdx = Object.fromEntries(pairCores.map((c, i) => [c, i]))
+  const pairCells = pairCores.map(() => pairCores.map(() => 0))
+  for (const row of pairRows) {
+    if (row.fromCore in pairIdx && row.toCore in pairIdx) {
+      pairCells[pairIdx[row.fromCore]][pairIdx[row.toCore]] = Number(row.count) || 0
+    }
+  }
+  const pairHeat = pairCores.length
+    ? htmlMatrixHeatmap(pairCores, pairCores, pairCells, {
+      title: 'Core migration count',
+      subtitle: 'source → destination · darker cells indicate more migrations',
+      unit: '',
+      diagonalDash: true,
+    })
+    : ''
+  return `<section class="report-card" id="sec-core-pair-migration-summary">`
+    + `<h2>Core-Pair Migration Summary${_htmlCell(suffix)}</h2>`
+    + htmlDiagnosticKpiGrid(kpis)
+    + htmlRankBars(top8, { fillKind: 'accent' })
+    + pairHeat
+    + '<table><thead><tr><th>From</th><th>To</th><th>Count</th>'
+    + '<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>'
+    + `<tbody>${pairBody}</tbody></table></section>`
+}
+
+/**
+ * Core Utilization Over Time: KPI summary + heat matrix (with a trailing
+ * Spread column) + gradient legend + raw table, in that reading order.
+ * `grid` is coreUtilOverTime()'s already-computed per-sample bins, reused
+ * as the one data source for every visual form.
+ */
+function _coreUtilizationOverTimeHtml(grid, timeScale, suffix) {
+  const cores = grid.cores || []
+  const bins = grid.bins || []
+  const allVals = []
+  const spreads = []
+  for (const r of bins) {
+    const vals = cores.map(c => Number(r.cells?.[c]?.pct) || 0)
+    allVals.push(...vals)
+    spreads.push(vals.length ? Math.max(...vals) - Math.min(...vals) : 0)
+  }
+  let kpis = []
+  if (bins.length) {
+    const avgUtil = allVals.length ? allVals.reduce((a, b) => a + b, 0) / allVals.length : 0
+    const peakUtil = allVals.length ? Math.max(...allVals) : 0
+    let maxSpreadIdx = 0
+    spreads.forEach((s, i) => { if (s > spreads[maxSpreadIdx]) maxSpreadIdx = i })
+    const maxSpread = spreads.length ? spreads[maxSpreadIdx] : 0
+    const maxSpreadTs = bins.length ? formatTime(bins[maxSpreadIdx].start, timeScale) : ''
+    kpis = [
+      { label: 'Average utilization', value: `${avgUtil.toFixed(1)}%` },
+      { label: 'Peak utilization', value: `${peakUtil.toFixed(0)}%` },
+      { label: 'Max core spread', value: `${maxSpread.toFixed(0)}%`, hint: `At ${maxSpreadTs}` },
+      { label: 'Samples', value: String(bins.length), hint: `${cores.length} cores` },
+    ]
+  }
+  const head = '<tr><th>Time</th>' + cores.map(c => `<th>${_htmlCell(c)}</th>`).join('') + '<th>Spread</th></tr>'
+  const body = bins.length
+    ? bins.map((row, i) =>
+        `<tr><td>${_htmlCell(formatTime(row.start, timeScale))}</td>` +
+        cores.map(c => {
+          const cell = row.cells?.[c]
+          return `<td>${cell ? cell.pct.toFixed(1) + '%' : '—'}</td>`
+        }).join('') +
+        `<td>${spreads[i].toFixed(1)}%</td></tr>`
+      ).join('')
+    : `<tr><td colspan="${cores.length + 2}" class="empty">No on-CPU slices</td></tr>`
+  const heat = htmlMatrixHeatmap(
+    bins.map(row => formatTime(row.start, timeScale)),
+    cores,
+    bins.map(row => cores.map(c => Number(row.cells?.[c]?.pct) || 0)),
+    { title: 'Core Utilization Over Time', unit: '%', extraCol: ['Spread', spreads, '%'] },
+  )
+  return `<section class="report-card" id="sec-core-utilization-over-time">`
+    + `<h2>Core Utilization Over Time${_htmlCell(suffix)}</h2>`
+    + htmlDiagnosticKpiGrid(kpis)
+    + heat
+    + htmlHeatLegend()
+    + `<table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
 }
 
 function _downloadText(filename, text, mime) {
@@ -8826,20 +8975,18 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
   const migReportRows = migrationRows(tr, lo, hi)
   const { rows: preemptHtmlRows } = preemptionChainRows(tr, lo, hi)
   const schedKpi = schedulingSummary.value
-  const coreHtml = (() => {
-    const section = _htmlUtilSection(
-      `Core Utilization (excl. IDLE/TICK)${suffix}`,
-      coreRows.map(r => ({ label: r.core, pct: r.pct })),
-      'core',
-    )
-    const lb = loadBalanceScore.value
-    if (!lb) return section
-    const gauge = loadBalanceGaugeImgHtml(lb, { width: 300 })
-    return section.replace('</h2>', `</h2>${gauge}`)
-  })()
-  const taskHtml = _htmlUtilSection(
+  const lbGauge = loadBalanceScore.value
+    ? loadBalanceGaugeHtml(loadBalanceScore.value, { width: 600 })
+    : ''
+  const coreHtml = htmlUtilSection(
+    `Core Utilization (excl. IDLE/TICK)${suffix}`,
+    coreRows.map(r => [r.core, r.pct]),
+    'core',
+    { leadHtml: lbGauge },
+  )
+  const taskHtml = htmlUtilSection(
     `Top Tasks by CPU (excl. IDLE/TICK)${suffix}`,
-    taskRows.map(r => ({ label: r.name, pct: r.pct })),
+    taskRows.map(r => [r.name, r.pct]),
     'task',
   )
   const tick = tickHealthReport(tr, lo, hi)
@@ -8859,10 +9006,8 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
       <h2 style="margin-top:12px;font-size:14px;">Large TICK gaps</h2>
       <table><thead><tr><th>Start</th><th>End</th><th>Gap</th><th>Missed</th></tr></thead><tbody>${tickGapBody}</tbody></table></section>`
     : `<section class="report-card"><h2>Trace Health (TICK)${_htmlCell(suffix)}</h2><p class="empty">No STI TICK events</p></section>`
-  const migHtml = `<section class="report-card"><h2>Core Migrations${_htmlCell(suffix)}</h2><table><thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th><th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead><tbody>${migReportRows.length
-    ? migReportRows.map(r => `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.migrations)}</td><td>${_htmlCell(r.migrRate)}</td><td>${_htmlCell(r.avgDwell)}</td><td>${_htmlCell(r.coreCount)}</td><td>${_htmlCell(`${r.primary} (${r.primaryPct.toFixed(0)}%)`)}</td><td>${_htmlCell(r.pingPong)}</td><td>${_htmlCell(r.stiNear)}</td><td>${_htmlCell(r.gapAfter)}</td><td>${_htmlCell(r.gapOther)}</td></tr>`).join('')
-    : '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'
-  }</tbody></table></section>`
+  const migTotal = migReportRows.reduce((s, row) => s + (Number(row.migrations) || 0), 0)
+  const migHtml = _migrationCountHtml(migReportRows, migTotal, suffix)
 
   const findings = (analysisFindings.value || []).map(f => (
     exportAnon.value
@@ -8905,7 +9050,6 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
   const utilHi = pcts.length ? Math.max(...pcts) : 0
   const lbKpi = loadBalanceScore.value
   const worstRt = [...(responseRows.value || [])].sort((a, b) => (b.p99_ns || 0) - (a.p99_ns || 0))[0]
-  const migTotal = migReportRows.reduce((s, row) => s + (Number(row.migrations) || 0), 0)
   const tickLabel = tick.tickCount ? String(tick.health || 'n/a').toUpperCase() : 'No TICK'
   const tickHealthKind = tick.tickCount
     ? (String(tick.health || '').toLowerCase() === 'bad' ? 'error'
@@ -8934,13 +9078,15 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
       label: 'Core Utilization range',
       value: `${utilLo.toFixed(1)}–${utilHi.toFixed(1)}%`,
       hint: 'Wall-clock span, one-core = 100%',
+      kind: 'metric-util',
     },
     {
       label: 'Worst response P99',
       value: worstRt ? formatTime(worstRt.p99_ns, tr.timeScale) : '—',
       hint: worstRt?.task || '',
+      kind: 'metric-latency',
     },
-    { label: 'Migration activity', value: migTotal.toLocaleString('en-US'), hint: 'Total core hops in scope' },
+    { label: 'Migration activity', value: migTotal.toLocaleString('en-US'), hint: 'Total core hops in scope', kind: 'metric-migration' },
     { label: 'Tick health', value: tickLabel, kind: tickHealthKind },
     { label: 'Synchronization issues', value: syncN.toLocaleString('en-US'), kind: syncN ? 'warn' : 'ok' },
     { label: 'Deadline misses', value: dlN.toLocaleString('en-US'), kind: dlN ? 'error' : 'ok' },
@@ -8988,7 +9134,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
   const now = new Date()
   const pad = n => String(n).padStart(2, '0')
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
-  const statsExtraCss = `${STATS_HTML_EXTRA_CSS}\n${HTML_REPORT_TOC_CSS}\n${_HTML_EXPORT_UTIL_CSS}`.trim()
+  const statsExtraCss = `${STATS_HTML_EXTRA_CSS}\n${HTML_REPORT_TOC_CSS}`.trim()
 
   // One-sentence verdict above the KPI grid, for skimming.
   const vBits = []
@@ -9006,17 +9152,13 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
   }
   const vTail = (errN || warnN) ? ' — see Analysis Findings.' : ' — no triage flags.'
   const vKind = errN ? 'error' : ((warnN || tickHealthKind === 'warn') ? 'warn' : 'ok')
-  const vCol = { error: '#c0392b', warn: '#9a4d00', ok: '#166534' }[vKind]
-  const vBg = { error: '#fdecec', warn: '#fdf3e3', ok: '#eaf6ee' }[vKind]
-  const verdictHtml = `<p class="report-verdict ${vKind}" `
-    + `style="margin:0 0 14px;padding:10px 14px;border-radius:10px;`
-    + `border-left:4px solid ${vCol};background:${vBg};color:#182230;font-size:14px;">`
-    + `<strong style="color:${vCol};">Verdict:</strong> ${_htmlCell(vBits.join(' · '))}${vTail}</p>`
+  const verdictHtml = htmlReportVerdict(vKind, `${_htmlCell(vBits.join(' · '))}${vTail}`)
 
   const body = `
     ${verdictHtml}
     ${htmlDiagnosticKpiGrid(kpis)}
     <!--TOC-->
+    ${_performanceOverviewHtml(coreRows, concurrentCoreActiveRows(tr, lo, hi), taskRows, suffix)}
     ${scopeHtml}
     ${evidenceRefsHtml}
     ${analysisHtml}
@@ -9080,7 +9222,13 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
             `<td>${r.lbScore == null ? '—' : Math.round(r.lbScore)}</td></tr>`
           ).join('')
         : '<tr><td colspan="6" class="empty">No on-CPU slices in scope</td></tr>'
+      const slChart = htmlSchedulingBalanceChart(slRows.map(r => ({
+        time: formatTime(r.start, tr.timeScale),
+        score: r.lbScore,
+        sigma: r.sigmaPct,
+      })))
       return `<section class="report-card"><h2>Scheduling Load Over Time${_htmlCell(suffix)}</h2>` +
+        slChart +
         '<table><thead><tr><th>Time</th><th>Ctx sw</th><th>Ctx sw/s</th><th>Busiest core</th>' +
         '<th>Util &#963;</th><th>LB score</th></tr></thead>' +
         `<tbody>${body}</tbody></table></section>`
@@ -9130,39 +9278,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
     })()}
     ${taskHtml}
     ${migHtml}
-    ${(() => {
-      const pairRows = buildCorePairRows(tr, lo, hi)
-      const pairBody = pairRows.length
-        ? pairRows.map(r =>
-            `<tr><td>${_htmlCell(r.fromCore)}</td><td>${_htmlCell(r.toCore)}</td>` +
-            `<td>${r.count}</td><td>${r.bounces}</td><td>${r.bouncePct.toFixed(1)}%</td>` +
-            `<td>${_htmlCell(formatMigrationGapTime(r.avgGapNs, tr.timeScale))}</td></tr>`
-          ).join('')
-        : '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
-      const pairCores = []
-      for (const row of pairRows) {
-        if (!pairCores.includes(row.fromCore)) pairCores.push(row.fromCore)
-        if (!pairCores.includes(row.toCore)) pairCores.push(row.toCore)
-      }
-      const pairIdx = Object.fromEntries(pairCores.map((c, i) => [c, i]))
-      const pairCells = pairCores.map(() => pairCores.map(() => 0))
-      for (const row of pairRows) {
-        if (row.fromCore in pairIdx && row.toCore in pairIdx) {
-          pairCells[pairIdx[row.fromCore]][pairIdx[row.toCore]] = Number(row.count) || 0
-        }
-      }
-      const pairHeat = pairCores.length
-        ? htmlMatrixHeatmap(pairCores, pairCores, pairCells, {
-          title: 'Core migration count (source → destination)',
-          unit: '',
-        })
-        : ''
-      return `<section class="report-card"><h2>Core-Pair Migration Summary${_htmlCell(suffix)}</h2>` +
-        pairHeat +
-        '<table><thead><tr><th>From</th><th>To</th><th>Count</th>' +
-        '<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>' +
-        `<tbody>${pairBody}</tbody></table></section>`
-    })()}
+    ${_corePairMigrationSummaryHtml(buildCorePairRows(tr, lo, hi), suffix, tr.timeScale)}
     ${(() => {
       const affRows = coreAffinityRows.value
       const affBody = affRows.length
@@ -9190,39 +9306,34 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
             }).join('') + '</tr>'
           ).join('')
         : `<tr><td colspan="${cores.length + 1}" class="empty">No on-CPU slices</td></tr>`
+      const tcMatrixRows = (matrix.rows || []).slice(0, 24)
+      const tcMatrixCells = tcMatrixRows.map(row =>
+        cores.map(c => (row.cells?.[c]?.ns ? Number(row.cells[c].pct_span) || 0 : null)))
+      const tcNonzero = tcMatrixCells.flat().filter(v => v).sort((a, b) => a - b)
+      // A single hot task/core pair would otherwise flatten every other cell
+      // to the same faint shade; cap the color scale at the 90th percentile
+      // so normal task variation stays distinguishable, and say so under the
+      // matrix (values above the cap still show their real number, only the
+      // color saturates).
+      const tcCap = tcNonzero.length ? percentile(tcNonzero, 0.90) : 0
       const heat = htmlMatrixHeatmap(
-        (matrix.rows || []).slice(0, 24).map(row => row.task || ''),
+        tcMatrixRows.map(row => row.task || ''),
         cores,
-        (matrix.rows || []).slice(0, 24).map(row => cores.map(c => Number(row.cells?.[c]?.pct_span) || 0)),
-        { title: 'Task × Core Utilization (% of span)', unit: '%' },
+        tcMatrixCells,
+        {
+          title: 'Task × Core Utilization (% of span)',
+          subtitle: tcCap > 0
+            ? `Scale emphasizes normal task variation; values above ${tcCap.toFixed(1)}% use the maximum color.`
+            : '',
+          unit: '%',
+          maxValueOverride: tcCap,
+        },
       )
       return `<section class="report-card"><h2>Task × Core${_htmlCell(suffix)}</h2>` +
         heat +
         `<table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
     })()}
-    ${(() => {
-      const grid = coreTimeModel.value
-      const cores = grid.cores || []
-      const head = '<tr><th>Time</th>' + cores.map(c => `<th>${_htmlCell(c)}</th>`).join('') + '</tr>'
-      const body = (grid.bins || []).length
-        ? grid.bins.map(row =>
-            `<tr><td>${_htmlCell(formatTime(row.start, tr.timeScale))}</td>` +
-            cores.map(c => {
-              const cell = row.cells?.[c]
-              return `<td>${cell ? cell.pct.toFixed(1) + '%' : '—'}</td>`
-            }).join('') + '</tr>'
-          ).join('')
-        : `<tr><td colspan="${cores.length + 1}" class="empty">No on-CPU slices</td></tr>`
-      const heat = htmlMatrixHeatmap(
-        (grid.bins || []).map(row => formatTime(row.start, tr.timeScale)),
-        cores,
-        (grid.bins || []).map(row => cores.map(c => Number(row.cells?.[c]?.pct) || 0)),
-        { title: 'Core Utilization Over Time', unit: '%' },
-      )
-      return `<section class="report-card"><h2>Core Utilization Over Time${_htmlCell(suffix)}</h2>` +
-        heat +
-        `<table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
-    })()}
+    ${_coreUtilizationOverTimeHtml(coreTimeModel.value, tr.timeScale, suffix)}
     ${(() => {
       const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi, tr.taskCreateTimes, tr.segByMergeKey)
       const lcBody = lcRows.length
@@ -9418,6 +9529,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
       return `<section class="report-card"><h2>Response Time${_htmlCell(suffix)}</h2>` +
         '<p class="detail-note">Heuristic ready→completion from adjacent slices, not an explicit BTF release/completion pair.</p>' +
         htmlPercentileBars(rows, { title: 'Response P50–P99' }) +
+        htmlResponseP99Chart(rows, { formatP99: ns => formatTime(ns, tr.timeScale) }) +
         '<table><thead><tr><th>Task</th><th>N</th><th>Min</th><th>Avg</th><th>Max</th>' +
         '<th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>p99.9</th><th>Jitter</th><th>CV</th></tr></thead>' +
         `<tbody>${body}</tbody></table></section>`

@@ -77,6 +77,60 @@ class CliReportTests(unittest.TestCase):
         body = out.read_text(encoding="utf-8")
         self.assertIn("<html", body.lower())
         self.assertIn("mini.btf", body)
+        self.assertIn('class="kpi metric-util"', body)
+        self.assertIn('class="kpi metric-latency"', body)
+        self.assertIn('class="kpi metric-migration"', body)
+        import re
+        verdict = re.search(r'<p class="report-verdict[^"]*"[^>]*>', body)
+        self.assertIsNotNone(verdict)
+        self.assertNotIn("style=", verdict.group(0))
+        self.assertNotIn("#fdf3e3", body)
+        self.assertIn("tbody tr:hover td,", body)
+        self.assertIn("--data-bar:", body)
+        # Report CSS/components come from stats_html only — no second copy.
+        self.assertEqual(body.count(".util-bar {"), 1)
+        self.assertIn("Highest response P99", body)
+        self.assertIn("Load balance over time", body)
+        self.assertIn("chart-point", body)
+        self.assertIn("p99-chart", body)
+
+    def test_html_report_keeps_tables_table_tools_and_heatmaps(self) -> None:
+        """The charts are summaries: the raw tables, their CSV/search/pagination
+        chrome and the heat matrices all have to survive alongside them."""
+        out = self.tmp / "full.html"
+        self.assertEqual(_cli_report_run(_args(str(self.trace), str(out), "html")), 0)
+        body = out.read_text(encoding="utf-8")
+
+        # Full source tables: the P99 chart shows 8 tasks, the table keeps every
+        # percentile column for every task.
+        response = body.split("<h2>Response Time")[1].split("</section>")[0]
+        for col in ("<th>p50</th>", "<th>p90</th>", "<th>p95</th>", "<th>p99</th>",
+                    "<th>p99.9</th>", "<th>Jitter</th>", "<th>CV</th>"):
+            self.assertIn(col, response, col)
+        self.assertIn("p99-chart", response)
+        self.assertGreaterEqual(response.count("<tr><td>"), 2)
+        for section in ("Core Migration Count", "Scheduling Load Over Time",
+                        "Task Health", "Core Utilization Over Time"):
+            head = body.split(f"<h2>{section}")[1].split("</section>")[0]
+            self.assertIn("<table>", head, section)
+
+        # CSV / search / pagination chrome (attached at runtime by the script).
+        self.assertIn("table-csv table-action", body)
+        self.assertIn("table-search", body)
+        self.assertIn("table-pager", body)
+        self.assertIn("text/csv", body)
+        self.assertIn("data-problems", body)
+        self.assertIn("table-tools", body)
+
+        # Heatmaps: six fixed bins plus the legend, themed for light and dark.
+        self.assertIn("heat-grid", body)
+        self.assertIn("heat-legend-bar", body)
+        for i in range(6):
+            self.assertIn(f"--data-{i}-bg:", body)
+            self.assertIn(f".heat-{i} {{ background: var(--data-{i}-bg)", body)
+        self.assertIn('html[data-theme="dark"] {', body)
+        self.assertIn("prefers-color-scheme: dark", body)
+        self.assertIn(".heat-grid-cell:hover", body)
 
     def test_both_formats(self) -> None:
         stem = self.tmp / "r"

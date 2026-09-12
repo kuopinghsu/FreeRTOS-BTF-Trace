@@ -171,7 +171,7 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("Search table", html)
         self.assertIn("Show all", html)
         # Each interactive table offers a per-table CSV download.
-        self.assertIn('class="table-csv"', html)
+        self.assertIn('class="table-csv table-action"', html)
         self.assertIn("text/csv", html)
         self.assertIn("toc-count", html)
         self.assertIn("report-toc-lead", html)

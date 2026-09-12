@@ -7,7 +7,7 @@ import { investigationSections, loadInvestigation } from './investigationNoteboo
 
 export const STATS_TOC_GROUPS = [
   ['Overview and Findings', [
-    'Analysis Scope', 'Evidence Refs', 'Analysis Findings',
+    'Performance Overview', 'Analysis Scope', 'Evidence Refs', 'Analysis Findings',
     'Trace Health Check', 'Investigation', 'Trace Metadata',
   ]],
   ['CPU and Scheduling', [
@@ -17,7 +17,7 @@ export const STATS_TOC_GROUPS = [
     'Top Tasks by CPU',
   ]],
   ['Migrations and Core Affinity', [
-    'Core Migrations', 'Core-Pair Migration Summary', 'Core Affinity',
+    'Core Migration Count', 'Core-Pair Migration Summary', 'Core Affinity',
     'Task × Core', 'Core Utilization Over Time', 'Task Lifecycle',
     'Deadlines / CPU budget', 'Task Health',
   ]],
@@ -45,7 +45,161 @@ export const STATS_DEFAULT_EXPANDED = [
 ]
 
 export const STATS_HTML_EXTRA_CSS = `
-:root { --line-strong: #c8d2e0; --stripe: #f7f9fc; }
+:root {
+  --bg: #F8FAFC;
+  --bg-elev: #F1F5F9;
+  --paper: #FFFFFF;
+  --paper-2: #F1F5F9;
+  --surface: #FFFFFF;
+  --ink: #0F172A;
+  --muted: #475569;
+  --line: #E2E8F0;
+  --line-strong: #E2E8F0;
+  --stripe: #F8FAFC;
+  --accent: #0284C7;
+  --accent-2: #0284C7;
+  --accent-soft: #E0F2FE;
+  --success: #10B981;
+  --success-soft: #D1FAE5;
+  --warning: #D97706;
+  --warning-soft: #FEF3C7;
+  --danger: #E11D48;
+  --danger-soft: #FFE4E6;
+  --violet: #0284C7;
+  --ok-border: #6EE7B7;
+  --warn-border: #FBBF24;
+  --error-border: #FB7185;
+  --accent-border: #7DD3FC;
+  --canvas-top: #FFFFFF;
+  --canvas-edge: #E4EAF2;
+  --bar-track-bg: #F1F5F9;
+  --bar-track-border: #E2E8F0;
+  --data-bar: #0284C7;
+  --data-bar-soft: #BAE6FD;
+  --data-0-bg: #F8FAFC; --data-0-ink: #64748B;
+  --data-1-bg: #E0F2FE; --data-1-ink: #075985;
+  --data-2-bg: #BAE6FD; --data-2-ink: #075985;
+  --data-3-bg: #7DD3FC; --data-3-ink: #0C4A6E;
+  --data-4-bg: #38BDF8; --data-4-ink: #082F49;
+  --data-5-bg: #0284C7; --data-5-ink: #FFFFFF;
+  --matrix-bg: #FFFFFF;
+  --matrix-border: #E2E8F0;
+  --matrix-label: #475569;
+  --matrix-diag-bg: #F1F5F9;
+  --matrix-diag-ink: #64748B;
+  --chart-grid: #E2E8F0;
+  --chart-axis: #475569;
+}
+html[data-theme="dark"] {
+  --bg: #0B0F19;
+  --bg-elev: #101827;
+  --paper: #151D2E;
+  --paper-2: #101827;
+  --surface: #151D2E;
+  --ink: #F1F5F9;
+  --muted: #94A3B8;
+  --line: #1E293B;
+  --line-strong: #1E293B;
+  --stripe: #111827;
+  --accent: #38BDF8;
+  --accent-2: #38BDF8;
+  --accent-soft: #102A3A;
+  --success: #10B981;
+  --success-soft: #123024;
+  --warning: #FB923C;
+  --warning-soft: #332417;
+  --danger: #E11D48;
+  --danger-soft: #3F1D29;
+  --violet: #38BDF8;
+  --ok-border: #065F46;
+  --warn-border: #9A3412;
+  --error-border: #9F1239;
+  --accent-border: #15506C;
+  --canvas-top: #151D2E;
+  --canvas-edge: #0D1218;
+  --bar-track-bg: #101827;
+  --bar-track-border: #1E293B;
+  --data-bar: #38BDF8;
+  --data-bar-soft: #15506C;
+  --data-0-bg: #111827; --data-0-ink: #94A3B8;
+  --data-1-bg: #102A3A; --data-1-ink: #7DD3FC;
+  --data-2-bg: #123B52; --data-2-ink: #BAE6FD;
+  --data-3-bg: #15506C; --data-3-ink: #E0F2FE;
+  --data-4-bg: #1679A3; --data-4-ink: #FFFFFF;
+  --data-5-bg: #38BDF8; --data-5-ink: #082F49;
+  --matrix-bg: #151D2E;
+  --matrix-border: #1E293B;
+  --matrix-label: #94A3B8;
+  --matrix-diag-bg: #101827;
+  --matrix-diag-ink: #94A3B8;
+  --chart-grid: #1E293B;
+  --chart-axis: #94A3B8;
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    --bg: #0B0F19;
+    --bg-elev: #101827;
+    --paper: #151D2E;
+    --paper-2: #101827;
+    --surface: #151D2E;
+    --ink: #F1F5F9;
+    --muted: #94A3B8;
+    --line: #1E293B;
+    --line-strong: #1E293B;
+    --stripe: #111827;
+    --accent: #38BDF8;
+    --accent-2: #38BDF8;
+    --accent-soft: #102A3A;
+    --success: #10B981;
+    --success-soft: #123024;
+    --warning: #FB923C;
+    --warning-soft: #332417;
+    --danger: #E11D48;
+    --danger-soft: #3F1D29;
+    --violet: #38BDF8;
+    --ok-border: #065F46;
+    --warn-border: #9A3412;
+    --error-border: #9F1239;
+    --accent-border: #15506C;
+    --canvas-top: #151D2E;
+    --canvas-edge: #0D1218;
+    --bar-track-bg: #101827;
+    --bar-track-border: #1E293B;
+    --data-bar: #38BDF8;
+    --data-bar-soft: #15506C;
+    --data-0-bg: #111827; --data-0-ink: #94A3B8;
+    --data-1-bg: #102A3A; --data-1-ink: #7DD3FC;
+    --data-2-bg: #123B52; --data-2-ink: #BAE6FD;
+    --data-3-bg: #15506C; --data-3-ink: #E0F2FE;
+    --data-4-bg: #1679A3; --data-4-ink: #FFFFFF;
+    --data-5-bg: #38BDF8; --data-5-ink: #082F49;
+    --matrix-bg: #151D2E;
+    --matrix-border: #1E293B;
+    --matrix-label: #94A3B8;
+    --matrix-diag-bg: #101827;
+    --matrix-diag-ink: #94A3B8;
+    --chart-grid: #1E293B;
+    --chart-axis: #94A3B8;
+  }
+}
+body,
+html[data-theme="dark"] body {
+  background: radial-gradient(circle at 88% -10%, var(--canvas-top) 0%, var(--bg) 48%, var(--canvas-edge) 100%);
+  color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) body {
+    background: radial-gradient(circle at 88% -10%, var(--canvas-top) 0%, var(--bg) 48%, var(--canvas-edge) 100%);
+    color: var(--ink);
+  }
+}
+h2, h3.sub,
+html[data-theme="dark"] h2,
+html[data-theme="dark"] h3.sub { color: var(--ink); }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) h2,
+  html:not([data-theme="light"]) h3.sub { color: var(--ink); }
+}
 .report.report-wide { max-width: 1160px; }
 .kpi-grid {
   display: grid;
@@ -53,19 +207,69 @@ export const STATS_HTML_EXTRA_CSS = `
   gap: 10px;
   margin-bottom: 16px;
 }
+/* A KPI with no status kind is a normal measurement, so it carries the primary
+   accent outline; only ok/warn/error and migration override it. */
 .kpi {
+  position: relative;
+  overflow: hidden;
   background: var(--paper);
-  border: 1px solid var(--line);
+  border: 1px solid var(--accent-border);
   border-radius: 12px;
-  padding: 12px 14px;
-  box-shadow: 0 2px 8px rgba(30, 60, 90, 0.06);
+  padding: 12px 14px 12px 16px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+.kpi::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent);
 }
 .kpi .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
-.kpi .v { margin-top: 4px; font-size: 20px; font-weight: 700; color: #0f2b47; }
+.kpi .v { margin-top: 4px; font-size: 20px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
 .kpi .s { margin-top: 2px; font-size: 12px; color: var(--muted); }
-.kpi.warn { border-color: #e0a020; }
-.kpi.error { border-color: #c0392b; }
-.kpi.ok { border-color: #5FCF6F; }
+.kpi.metric-util, .kpi.metric-latency {
+  border-color: var(--accent-border);
+}
+.kpi.metric-util::before, .kpi.metric-latency::before { background: var(--accent); }
+.kpi.metric-migration {
+  border-color: var(--warn-border);
+}
+.kpi.metric-migration::before { background: var(--warning); }
+.kpi.ok { border-color: var(--ok-border); }
+.kpi.ok::before { background: var(--success); }
+.kpi.warn { border-color: var(--warn-border); }
+.kpi.warn::before { background: var(--warning); }
+.kpi.error { border-color: var(--error-border); }
+.kpi.error::before { background: var(--danger); }
+.report-verdict {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+}
+.report-verdict.ok {
+  background: var(--success-soft);
+  border-color: var(--ok-border);
+  border-left-color: var(--success);
+}
+.report-verdict.ok strong { color: var(--success); }
+.report-verdict.warn {
+  background: var(--warning-soft);
+  border-color: var(--warn-border);
+  border-left-color: var(--warning);
+}
+.report-verdict.warn strong { color: var(--warning); }
+.report-verdict.error {
+  background: var(--danger-soft);
+  border-color: var(--error-border);
+  border-left-color: var(--danger);
+}
+.report-verdict.error strong { color: var(--danger); }
 .notes { border-left: 4px solid var(--accent); }
 .notes ul { margin: 8px 0 0 18px; padding: 0; }
 .notes li { margin: 6px 0; line-height: 1.45; }
@@ -73,8 +277,8 @@ table { border-collapse: separate; border-spacing: 0; width: 100%; }
 th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }
 th:first-child, td:first-child { text-align: left; }
 thead th {
-  background: #f1f5fb;
-  color: #284563;
+  background: var(--paper-2);
+  color: var(--ink);
   font-weight: 600;
   border-top: 1px solid var(--line-strong);
   border-bottom: 1px solid var(--line-strong);
@@ -82,21 +286,21 @@ thead th {
 tbody tr:nth-child(even) td { background: var(--stripe); }
 .empty { text-align: center !important; color: var(--muted); }
 .detail-note { margin: 6px 0 8px; font-size: 12px; color: var(--muted); }
-h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
-.sev-error { color: #c0392b; font-weight: 600; }
-.sev-warning { color: #9a4d00; font-weight: 600; }
-.finding-info { color: var(--ink, var(--fg, #182230)); }
-.finding-ok { color: #166534; font-weight: 600; }
+h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 600; }
+.sev-error { color: var(--danger); font-weight: 600; }
+.sev-warning { color: var(--warning); font-weight: 600; }
+.finding-info { color: var(--ink); }
+.finding-ok { color: var(--success); font-weight: 600; }
 .findings-list { margin: 8px 0 0 18px; padding: 0; }
 .findings-list li { margin: 8px 0; line-height: 1.45; }
-.analysis-findings { border-left: 4px solid #c0392b; }
+.analysis-findings { border-left: 4px solid var(--danger); }
 .trace-health { border-left: 4px solid var(--accent); }
 .trace-health-status { font-size: 14px; font-weight: 600; margin: 6px 0 10px; }
 .trace-health-check { margin: 6px 0; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .trace-health-check:last-of-type { border-bottom: 0; }
 .trace-health-check > summary { cursor: pointer; line-height: 1.45; }
 .trace-health-check .finding-meta { margin-left: 16px; }
-.investigation { border-left: 4px solid #7a5cc0; }
+.investigation { border-left: 4px solid var(--accent); }
 .investigation .finding-meta ul { margin: 4px 0 0 16px; padding: 0; }
 .investigation h3.sub { margin-top: 16px; }
 .finding-cards { display: grid; gap: 10px; }
@@ -105,64 +309,248 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; 
   border-left-width: 4px;
   border-radius: 10px;
   padding: 10px 12px;
-  background: #fff;
+  background: var(--paper);
 }
-.finding-card.sev-error { border-left-color: #c0392b; }
-.finding-card.sev-warning { border-left-color: #e0a020; }
+.finding-card.sev-error { border-left-color: var(--danger); }
+.finding-card.sev-warning { border-left-color: var(--warning); }
 .finding-card.finding-info { border-left-color: var(--accent); }
-.finding-card.finding-ok { border-left-color: #5FCF6F; }
-.finding-card h3 { margin: 0 0 6px; font-size: 14px; color: #123355; }
+.finding-card.finding-ok { border-left-color: var(--success); }
+.finding-card h3 { margin: 0 0 6px; font-size: 14px; color: var(--ink); }
 .finding-meta { font-size: 12px; color: var(--muted); margin: 4px 0; }
 .finding-card a { color: var(--accent); }
 .scope-table th { width: 28%; }
-.heat-wrap { overflow-x: auto; margin: 8px 0 12px; }
+.heat-wrap { overflow-x: auto; margin: 8px 0 12px; background: var(--matrix-bg); }
 .heat-cell { font-size: 10px; text-anchor: middle; }
+.heat-matrix-head { margin: 4px 0 8px; }
+.heat-matrix-title { font-size: 13px; font-weight: 650; color: var(--ink); }
+.heat-matrix-subtitle { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.heat-grid {
+  display: grid;
+  grid-template-columns: minmax(90px, 130px) repeat(var(--col-count), minmax(44px, 1fr));
+  gap: 2px;
+  font-size: 11px;
+  min-width: 480px;
+}
+.heat-grid-corner, .heat-grid-collabel, .heat-grid-rowlabel {
+  display: flex; align-items: center;
+  padding: 4px 6px;
+  color: var(--matrix-label);
+  font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.heat-grid-collabel { justify-content: center; }
+.heat-grid-cell {
+  display: flex; align-items: center; justify-content: center;
+  padding: 4px 2px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+  min-height: 22px;
+}
+.heat-grid-diagonal, .heat-grid-nodata {
+  background: var(--matrix-diag-bg); color: var(--matrix-diag-ink); border: 1px dashed var(--matrix-border);
+}
+.heat-grid-extra {
+  background: var(--paper-2); color: var(--ink); border: 1px solid var(--line);
+  font-weight: 600;
+}
+/* Six fixed bins (predictable in Qt WebEngine, no color-mix) reading the one
+   quantitative scale that also drives every bar. */
+.heat-0 { background: var(--data-0-bg); color: var(--data-0-ink); }
+.heat-1 { background: var(--data-1-bg); color: var(--data-1-ink); }
+.heat-2 { background: var(--data-2-bg); color: var(--data-2-ink); }
+.heat-3 { background: var(--data-3-bg); color: var(--data-3-ink); }
+.heat-4 { background: var(--data-4-bg); color: var(--data-4-ink); }
+.heat-5 { background: var(--data-5-bg); color: var(--data-5-ink); }
+/* Outline, not a fill change: the cell keeps its place on the quantitative
+   scale while the pointer marks which row/column pair is being read. */
+.heat-grid-cell:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+.heat-legend { margin: 6px 0 10px; font-size: 11px; color: var(--muted); }
+.heat-legend-grid {
+  display: grid; grid-template-columns: auto minmax(120px, 220px) auto;
+  align-items: center; gap: 2px 8px; max-width: 260px;
+}
+.heat-legend-bar {
+  height: 12px; border-radius: 999px;
+  background: linear-gradient(to right,
+    var(--data-0-bg), var(--data-1-bg), var(--data-2-bg),
+    var(--data-3-bg), var(--data-4-bg), var(--data-5-bg));
+}
 .table-tools { margin: 8px 0 12px; }
 .table-toolbar {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px;
 }
 .table-search {
   font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line);
-  border-radius: 6px; min-width: 160px;
+  border-radius: 6px; min-width: 160px; background: var(--paper); color: var(--ink);
+}
+.table-search::placeholder { color: var(--muted); }
+.table-search:hover { border-color: var(--accent); }
+.table-search:focus-visible {
+  border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px;
 }
 .table-check { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+.table-check:hover { color: var(--accent); cursor: pointer; }
+.table-check input[type="checkbox"] { accent-color: var(--accent); }
+.table-action {
+  font: inherit; font-size: 12px; padding: 2px 9px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--paper-2); color: var(--ink); cursor: pointer;
+}
+.table-action:hover { border-color: var(--accent); color: var(--accent); }
+.table-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.table-action:disabled { opacity: 0.55; cursor: default; }
+.table-action:disabled:hover { border-color: var(--line); color: var(--ink); }
+.table-pager { display: none; gap: 8px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.lb-gauge-embed { margin: 8px 0 12px; }
+.lb-gauge-svg { display: block; max-width: 100%; height: auto; }
+.lb-gauge-svg .lb-bg { fill: var(--paper-2); stroke: var(--line); }
+.lb-gauge-svg .lb-bg-amber { stroke: var(--warning); }
+.lb-gauge-svg .lb-bg-red { stroke: var(--danger); }
+.lb-gauge-svg .lb-title { fill: var(--ink); }
+.lb-gauge-svg .lb-muted { fill: var(--muted); }
+.lb-gauge-svg .lb-track { stroke: var(--line); }
+.lb-gauge-svg .lb-needle { stroke: var(--ink); }
+.lb-gauge-svg .lb-hub { fill: var(--paper); stroke: var(--ink); }
+.lb-gauge-svg .lb-value-ok { fill: var(--success); }
+.lb-gauge-svg .lb-value-amber { fill: var(--warning); }
+.lb-gauge-svg .lb-value-red { fill: var(--danger); }
+.lb-gauge-svg .lb-chip-amber { fill: var(--warning-soft); stroke: var(--warning); }
+.lb-gauge-svg .lb-chip-red { fill: var(--danger-soft); stroke: var(--danger); }
+.lb-gauge-svg .lb-chip-text-amber { fill: var(--warning); }
+.lb-gauge-svg .lb-chip-text-red { fill: var(--danger); }
+.pctile-svg { display: block; max-width: 100%; height: auto; }
+.pctile-title { fill: var(--ink); }
+.pctile-sub { fill: var(--muted); }
+.pctile-label { fill: var(--ink); }
+.pctile-bar { fill: var(--accent-soft); }
+.pctile-marker { stroke: var(--accent); }
+.sparkline-line { stroke: var(--accent); }
 .table-count { font-size: 12px; color: var(--muted); margin-left: auto; }
 .table-scroll { overflow-x: auto; max-width: 100%; }
 .table-scroll table { min-width: 100%; }
 .table-scroll thead th { position: sticky; top: 0; z-index: 2; }
 .table-scroll td:first-child, .table-scroll th:first-child {
-  position: sticky; left: 0; z-index: 1; background: #fff;
+  position: sticky; left: 0; z-index: 1; background: var(--paper);
 }
 .table-scroll tbody tr:nth-child(even) td:first-child { background: var(--stripe); }
+/* Row hover. Declared after the stripe and sticky-column rules so the whole
+   row tracks the pointer, including a sticky first cell and meta-table <th>. */
+tbody tr:hover td,
+tbody tr:hover th,
+.table-scroll tbody tr:hover td:first-child,
+.table-scroll tbody tr:hover th:first-child { background: var(--accent-soft); }
 .sortable { cursor: pointer; }
 .sortable:hover { color: var(--accent); }
+thead th.sortable:hover { background: var(--accent-soft); }
 .report-tabs .tab-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .report-tabs .tab-btn {
   font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--line);
-  border-radius: 999px; background: #f1f5fb; color: var(--accent); cursor: pointer;
+  border-radius: 999px; background: var(--paper-2); color: var(--accent); cursor: pointer;
 }
-.report-tabs .tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.report-tabs .tab-btn.active { background: var(--accent); color: var(--paper); border-color: var(--accent); }
 .pct-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
-.pct-bar .lab { flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pct-bar .track { flex: 1; height: 10px; background: #eef2f7; border-radius: 6px; overflow: hidden; }
-.pct-bar .fill { height: 100%; border-radius: 6px; }
-@media (prefers-color-scheme: dark) {
-  :root { --line-strong: #3a4048; --stripe: #191d23; }
-  .kpi { background: var(--paper); }
-  .kpi .v { color: #dbe6f2; }
-  thead th { background: #232830; color: #b6c2cf; }
-  .finding-card, .finding-card.sev-error, .finding-card.sev-warning { background: var(--paper); }
-  .finding-card h3 { color: #cfe1f7; }
-  h3.sub { color: #b6c2cf; }
-  .sev-warning { color: #e0a44a; }
-  .sev-error { color: #e5776a; }
-  .finding-ok { color: #57c191; }
-  .table-search { background: var(--paper); color: var(--ink); }
-  .table-scroll td:first-child, .table-scroll th:first-child { background: var(--paper); }
-  .table-scroll tbody tr:nth-child(even) td:first-child { background: var(--stripe); }
-  .report-tabs .tab-btn { background: #232830; }
-  .pct-bar .track { background: #232830; }
-  .heat-cell { fill: var(--ink); }
+.pct-bar .lab {
+  flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
+}
+.pct-bar .track {
+  flex: 1; height: 12px; background: var(--bar-track-bg);
+  border: 1px solid var(--bar-track-border); border-radius: 999px; overflow: hidden;
+}
+.pct-bar .fill { height: 100%; border-radius: 999px; background: var(--data-bar); }
+.rank-bars { margin: 8px 0 4px; }
+.rank-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+.rank-bar-num { flex: 0 0 18px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.rank-bar-label {
+  flex: 0 0 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
+}
+.rank-bar-track {
+  flex: 1; height: 12px; background: var(--bar-track-bg);
+  border: 1px solid var(--bar-track-border); border-radius: 999px; overflow: hidden;
+}
+.rank-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--data-bar); }
+.rank-bar-fill.accent { background: var(--data-bar); }
+.rank-bar-fill.warning { background: var(--warning); }
+.rank-bar-fill.danger { background: var(--danger); }
+.rank-bar-fill.success { background: var(--success); }
+.rank-bar-value {
+  flex: 0 0 88px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.perf-overview-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 4px;
+}
+.perf-panel h3.sub { margin: 0 0 8px; }
+.util-list { display: flex; flex-direction: column; gap: 4px; }
+.util-row { display: flex; align-items: center; gap: 8px; min-height: 18px; }
+.util-label {
+  flex: 0 0 128px; max-width: 128px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; text-align: left; font-size: 13px; color: var(--ink);
+}
+.util-bar {
+  flex: 1 1 auto; height: 12px; min-width: 24px; border-radius: 999px;
+  background: var(--bar-track-bg); border: 1px solid var(--bar-track-border); overflow: hidden;
+}
+.util-bar-fill, .util-row-task .util-bar-fill {
+  height: 100%; border-radius: 999px; background: var(--data-bar);
+}
+.util-pct { flex: 0 0 44px; text-align: left; font-size: 13px; }
+.util-pct-core, .util-pct-task { color: var(--data-bar); }
+.util-row .util-bar, .rank-bar .rank-bar-track, .pct-bar .track,
+.util-row .util-label, .rank-bar .rank-bar-label, .pct-bar .lab {
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.util-row:hover .util-bar,
+.rank-bar:hover .rank-bar-track,
+.pct-bar:hover .track { border-color: var(--accent); }
+.util-row:hover .util-label,
+.rank-bar:hover .rank-bar-label,
+.pct-bar:hover .lab { color: var(--accent); }
+.util-row:hover .util-bar-fill,
+.rank-bar:hover .rank-bar-fill,
+.pct-bar:hover .fill { filter: brightness(1.08); }
+.metric-chart {
+  margin: 12px 0 16px; padding: 14px 16px 16px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--paper);
+}
+.metric-chart-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; margin-bottom: 12px;
+}
+.metric-chart-title { color: var(--ink); font-size: 13px; font-weight: 700; }
+.metric-chart-subtitle {
+  margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.45;
+}
+.chart-callout {
+  flex: 0 0 auto; min-width: 82px; padding: 7px 10px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--paper-2); text-align: right;
+}
+.chart-callout-label, .chart-callout-note { display: block; color: var(--muted); font-size: 10px; }
+.chart-callout strong {
+  display: block; color: var(--ink); font-size: 18px; line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.trend-svg { display: block; width: 100%; height: auto; min-height: 180px; }
+.chart-gridline { stroke: var(--chart-grid); stroke-width: 1; }
+.chart-axis-label {
+  fill: var(--chart-axis); font-size: 10px;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+.chart-line {
+  stroke: var(--data-bar); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round;
+}
+.chart-point { stroke: var(--paper); stroke-width: 2; }
+.chart-point-normal { fill: var(--data-bar); }
+.chart-point-low { fill: var(--warning); }
+.heat-cell { fill: var(--ink); }
+@media (max-width: 680px) {
+  .metric-chart-head { flex-direction: column; }
+  .chart-callout { text-align: left; }
+  .rank-bar-label { flex-basis: 82px; }
+  .rank-bar-value { flex-basis: 72px; }
+}
+@media print {
+  body, html[data-theme="dark"] body { background: #fff !important; }
+  .metric-chart, .kpi, .report-card { box-shadow: none; }
+  .theme-toggle { display: none !important; }
+  .metric-chart, .kpi { break-inside: avoid; }
 }
 `.trim()
 
@@ -280,7 +668,146 @@ export function htmlTraceMetadataCard({
 
 export function htmlDiagnosticKpiGrid(kpis) {
   if (!kpis?.length) return ''
-  return `<section class="kpi-grid">${kpis.map(k => htmlKpi(k.label, k.value, k)).join('')}</section>`
+  return `<div class="kpi-grid">${kpis.map(k => htmlKpi(k.label, k.value, k)).join('')}</div>`
+}
+
+/**
+ * Ranked HTML/CSS bar list (not canvas/SVG): `[[label, value, display], ...]`,
+ * already in display order. The largest value in `items` (or `maxV`, if a
+ * caller wants a scale independent of this particular slice) is 100% bar
+ * width. `fillKind` selects the semantic color family (warning/danger/
+ * accent/success) per the mini-bar-chart palette rule.
+ */
+export function htmlRankBars(items, { fillKind = 'accent', maxV = null } = {}) {
+  const rows = (items || []).filter(Boolean)
+  if (!rows.length) return ''
+  const peak = Math.max(maxV || Math.max(...rows.map(([, v]) => Number(v)), 1), 1)
+  const cls = fillKind ? ` ${fillKind}` : ''
+  const parts = ['<div class="rank-bars">']
+  rows.forEach(([label, value, display], idx) => {
+    const pct = Math.max(0, Math.min(100, 100 * Number(value) / peak))
+    parts.push(
+      `<div class="rank-bar" title="${esc(label)}: ${esc(display)}">`
+      + `<span class="rank-bar-num">${idx + 1}</span>`
+      + `<span class="rank-bar-label">${esc(label)}</span>`
+      + `<span class="rank-bar-track"><span class="rank-bar-fill${cls}" `
+      + `style="width:${pct.toFixed(1)}%"></span></span>`
+      + `<span class="rank-bar-value">${esc(display)}</span>`
+      + '</div>'
+    )
+  })
+  parts.push('</div>')
+  return parts.join('')
+}
+
+/**
+ * One `label + progress bar + %` row, for Core Utilization / Top Tasks by CPU
+ * and the Performance Overview panels. `kind` is `core` or `task`.
+ */
+export function htmlUtilBarRow(label, pct, kind) {
+  const pctV = Math.max(0, Math.min(100, Number(pct) || 0))
+  const lab = esc(label)
+  const rowCls = kind === 'core' ? 'util-row util-row-core' : 'util-row util-row-task'
+  const pctCls = kind === 'core' ? 'util-pct util-pct-core' : 'util-pct util-pct-task'
+  return `<div class="${rowCls}" title="${lab}: ${pctV.toFixed(1)}%">`
+    + `<span class="util-label">${lab}</span>`
+    + `<div class="util-bar"><div class="util-bar-fill" style="width:${pctV.toFixed(1)}%"></div></div>`
+    + `<span class="${pctCls}">${pctV.toFixed(1)}%</span></div>`
+}
+
+/**
+ * Report card of utilisation bar rows: `[[label, pct], ...]`.
+ * `leadHtml` is placed between the heading and the bars (the Core Utilization
+ * card uses it for the load-balance gauge).
+ */
+export function htmlUtilSection(title, rows, kind, { leadHtml = '' } = {}) {
+  const items = (rows || []).map(([label, pct]) => htmlUtilBarRow(label, pct, kind)).join('')
+  const body = items ? `<div class="util-list">${items}</div>` : '<p class="empty">No data</p>'
+  return `<section class="report-card"><h2>${esc(title)}</h2>${leadHtml}${body}</section>`
+}
+
+/** Theme-aware verdict banner. `bodyHtml` is already escaped by the caller. */
+export function htmlReportVerdict(kind, bodyHtml) {
+  const k = (kind === 'ok' || kind === 'warn' || kind === 'error') ? kind : 'ok'
+  return `<p class="report-verdict ${k}"><strong>Verdict:</strong> ${bodyHtml}</p>`
+}
+
+/** Top-N horizontal P99 bars from the same response-time rows as the table. */
+export function htmlResponseP99Chart(rows, { formatP99, limit = 8 } = {}) {
+  const items = (rows || []).filter(r => r && typeof r === 'object')
+    .sort((a, b) => (Number(b.p99_ns) || 0) - (Number(a.p99_ns) || 0))
+    .slice(0, Math.max(0, Number(limit) || 0))
+  if (!items.length) return ''
+  const bars = htmlRankBars(items.map((r) => {
+    const ns = Number(r.p99_ns) || 0
+    const display = typeof formatP99 === 'function' ? formatP99(ns) : String(ns)
+    return [String(r.task || ''), ns, display]
+  }), { fillKind: 'accent' })
+  return '<div class="metric-chart p99-chart"><div class="metric-chart-head"><div>'
+    + '<div class="metric-chart-title">Highest response P99</div>'
+    + '<div class="metric-chart-subtitle">Top observed tasks by P99 response time. '
+    + 'Full percentile data remains in the table below.</div>'
+    + `</div></div>${bars}</div>`
+}
+
+/**
+ * Inline SVG of Load Balance Score over time.
+ * `samples` is `[{time, score, sigma}, ...]` already formatted and in
+ * trace-time order. Every numeric score is plotted; Y is 0–100.
+ */
+export function htmlSchedulingBalanceChart(samples) {
+  const pts = []
+  for (const s of samples || []) {
+    if (!s || typeof s !== 'object' || s.score == null) continue
+    const score = Number(s.score)
+    if (!Number.isFinite(score)) continue
+    const sigma = Number(s.sigma)
+    pts.push([String(s.time || ''), Math.max(0, Math.min(100, score)), Number.isFinite(sigma) ? sigma : 0])
+  }
+  if (!pts.length) return ''
+  const width = 760
+  const height = 230
+  const padL = 52
+  const padR = 20
+  const padT = 24
+  const padB = 38
+  const plotW = width - padL - padR
+  const plotH = height - padT - padB
+  const n = pts.length
+  const xAt = i => (n === 1 ? padL : padL + plotW * i / (n - 1))
+  const yAt = score => padT + plotH * (1 - score / 100)
+  let lowI = 0
+  pts.forEach((p, i) => { if (p[1] < pts[lowI][1]) lowI = i })
+  const grid = [0, 25, 50, 75, 100].map((mark) => {
+    const gy = yAt(mark)
+    return `<line class="chart-gridline" x1="${padL}" x2="${width - padR}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}"/>`
+      + `<text class="chart-axis-label" text-anchor="end" x="${padL - 9}" y="${(gy + 4).toFixed(1)}">${mark}</text>`
+  }).join('')
+  const labelIdx = n === 1 ? [0] : [0, Math.floor(n / 2), n - 1]
+  const seen = new Set()
+  const axisX = labelIdx.filter((i) => {
+    if (seen.has(i)) return false
+    seen.add(i)
+    return true
+  }).map(i => (
+    `<text class="chart-axis-label" text-anchor="middle" x="${xAt(i).toFixed(1)}" y="${height - 12}">${esc(pts[i][0])}</text>`
+  )).join('')
+  const poly = pts.map((p, i) => `${xAt(i).toFixed(1)},${yAt(p[1]).toFixed(1)}`).join(' ')
+  const dots = pts.map((p, i) => {
+    const kind = i === lowI ? 'chart-point-low' : 'chart-point-normal'
+    const title = `${esc(p[0])} · Load balance ${p[1].toFixed(0)} · Util σ ${p[2].toFixed(1)}%`
+    return `<circle class="chart-point ${kind}" cx="${xAt(i).toFixed(1)}" cy="${yAt(p[1]).toFixed(1)}" r="4"><title>${title}</title></circle>`
+  }).join('')
+  const [lowTime, lowScore] = pts[lowI]
+  return '<div class="metric-chart scheduling-chart"><div class="metric-chart-head"><div>'
+    + '<div class="metric-chart-title">Load balance over time</div>'
+    + '<div class="metric-chart-subtitle">Lower scores indicate more uneven '
+    + 'core utilization during that sample window.</div></div>'
+    + `<div class="chart-callout"><span class="chart-callout-label">Lowest</span>`
+    + `<strong>${lowScore.toFixed(0)}</strong>`
+    + `<span class="chart-callout-note">at ${esc(lowTime)}</span></div></div>`
+    + `<svg class="trend-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Load balance score over time">`
+    + `${grid}${axisX}<polyline class="chart-line" fill="none" points="${poly}"/>${dots}</svg></div>`
 }
 
 /**
@@ -546,52 +1073,103 @@ export function htmlInvestigationSection(investigation, {
     + '</section>'
 }
 
-function heatColor(frac) {
-  const f = Math.max(0, Math.min(1, Number(frac) || 0))
-  const r = Math.round(241 + (192 - 241) * f)
-  const g = Math.round(245 + (57 - 245) * f)
-  const b = Math.round(251 + (43 - 251) * f)
-  return `rgb(${r},${g},${b})`
+/** Fixed heat-0..heat-5 bin index (not a continuous color) - a Chromium /
+ *  Qt WebEngine runtime theme switch cannot be relied on to re-evaluate
+ *  color-mix()/computed colors, but a plain class swap always repaints. */
+function heatBin(value, maxV) {
+  if (value <= 0) return 0
+  const normalized = value / Math.max(1, maxV)
+  return Math.max(1, Math.min(5, Math.ceil(normalized * 5)))
 }
 
-export function htmlMatrixHeatmap(rowLabels, colLabels, cells, { title, unit = '%', width = 640 } = {}) {
+/**
+ * CSS-grid heat matrix with fixed heat-0..heat-5 classes (not inline SVG
+ * rgb() fills - see heatBin). A cell value of `null`/`undefined` renders as
+ * a dashed no-data cell, distinct from a real 0. `diagonalDash: true` treats
+ * a cell whose row/col label match (self-pair) as a dashed diagonal cell
+ * instead of a heat cell, e.g. Core_5 vs. Core_5. `extraCol`, if given, is
+ * `[label, values, unit]`: one additional trailing column rendered as a
+ * plain (non heat-colored) value per row — e.g. a derived per-sample
+ * "Spread" figure that shouldn't be confused with the matrix's own
+ * heat-scaled readings.
+ */
+export function htmlMatrixHeatmap(rowLabels, colLabels, cells, {
+  title, subtitle = '', unit = '%', width = 640, diagonalDash = false,
+  tooltipSep = '→', maxValueOverride = null, extraCol = null,
+} = {}) {
   const rows = rowLabels || []
   const cols = colLabels || []
   if (!rows.length || !cols.length) return ''
-  let maxV = 1
+  const [extraLabel, extraValues, extraUnit] = extraCol || [null, [], '%']
+  let maxV = 0
   for (const line of cells || []) {
-    for (const v of line || []) maxV = Math.max(maxV, Number(v) || 0)
+    for (const v of line || []) {
+      if (v == null) continue
+      maxV = Math.max(maxV, Number(v) || 0)
+    }
   }
-  const labelW = 88
-  const headH = 36
-  const cell = 22
-  const w = Math.max(width, labelW + 12 + cols.length * cell)
-  const h = headH + 8 + rows.length * cell + 8
+  maxV = (maxValueOverride != null && maxValueOverride > 0) ? Number(maxValueOverride) : Math.max(maxV, 1)
+  const head = '<div class="heat-matrix-head">'
+    + `<div class="heat-matrix-title">${esc(title)}</div>`
+    + (subtitle ? `<div class="heat-matrix-subtitle">${esc(subtitle)}</div>` : '')
+    + '</div>'
+  const colCount = cols.length + (extraLabel ? 1 : 0)
   const parts = [
-    `<div class="heat-wrap"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="${esc(title)}">`,
-    `<text x="8" y="16" font-size="12" fill="#123355" font-weight="600">${esc(title)}</text>`,
+    '<div class="heat-wrap">',
+    head,
+    `<div class="heat-grid" style="--col-count:${colCount}">`,
+    '<div class="heat-grid-corner"></div>',
   ]
-  cols.forEach((col, j) => {
-    const x = labelW + j * cell + cell / 2
-    parts.push(`<text x="${x.toFixed(1)}" y="${headH - 4}" font-size="9" fill="#5f6f82" text-anchor="middle">${esc(String(col).slice(0, 10))}</text>`)
+  cols.forEach(col => {
+    const colS = String(col)
+    parts.push(`<div class="heat-grid-collabel" title="${esc(colS)}">${esc(colS.slice(0, 6))}</div>`)
   })
+  if (extraLabel) {
+    parts.push(`<div class="heat-grid-collabel" title="${esc(extraLabel)}">${esc(String(extraLabel).slice(0, 8))}</div>`)
+  }
   rows.forEach((row, i) => {
-    const y = headH + i * cell
-    parts.push(`<text x="8" y="${y + 15}" font-size="10" fill="#182230">${esc(String(row).slice(0, 14))}</text>`)
+    const rowS = String(row)
+    parts.push(`<div class="heat-grid-rowlabel" title="${esc(rowS)}">${esc(rowS.slice(0, 16))}</div>`)
     const line = cells[i] || []
-    cols.forEach((_c, j) => {
-      const val = Number(line[j]) || 0
-      const x = labelW + j * cell
-      const color = val > 0 ? heatColor(val / maxV) : '#f7f9fc'
-      parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${cell - 2}" height="${cell - 2}" rx="3" fill="${color}"/>`)
-      if (val > 0) {
-        const label = unit === '%' ? `${val.toFixed(0)}${unit}` : `${val.toFixed(0)}`
-        parts.push(`<text class="heat-cell" x="${(x + (cell - 2) / 2).toFixed(1)}" y="${(y + 14).toFixed(1)}" fill="#123355">${esc(label)}</text>`)
+    cols.forEach((col, j) => {
+      const colS = String(col)
+      if (diagonalDash && rowS === colS) {
+        parts.push(`<div class="heat-grid-cell heat-grid-diagonal" title="${esc(rowS)}">—</div>`)
+        return
       }
+      const raw = line[j]
+      if (raw == null) {
+        parts.push('<div class="heat-grid-cell heat-grid-nodata" title="No data">—</div>')
+        return
+      }
+      const val = Number(raw) || 0
+      const label = unit === '%' ? `${val.toFixed(0)}${unit}` : `${val.toFixed(0)}`
+      const tip = `${esc(rowS)} ${tooltipSep} ${esc(colS)}: ${esc(label)}`
+      parts.push(`<div class="heat-grid-cell heat-${heatBin(val, maxV)}" title="${tip}">${esc(label)}</div>`)
     })
+    if (extraLabel) {
+      const extraRaw = extraValues[i]
+      if (extraRaw == null) {
+        parts.push('<div class="heat-grid-cell heat-grid-nodata" title="No data">—</div>')
+      } else {
+        const extraVal = Number(extraRaw) || 0
+        const extraDisp = extraUnit === '%' ? `${extraVal.toFixed(0)}${extraUnit}` : `${extraVal.toFixed(0)}`
+        parts.push(`<div class="heat-grid-cell heat-grid-extra" title="${esc(rowS)}: ${esc(extraLabel)} ${esc(extraDisp)}">${esc(extraDisp)}</div>`)
+      }
+    }
   })
-  parts.push('</svg></div>')
+  parts.push('</div></div>')
   return parts.join('')
+}
+
+/** 0% -> 100% gradient key for the heat-0..heat-5 color scale, for a
+ *  matrix where the reader benefits from an explicit low/high reference
+ *  (e.g. Core Utilization Over Time). */
+export function htmlHeatLegend() {
+  return '<div class="heat-legend"><div class="heat-legend-grid">'
+    + '<span>0%</span><div class="heat-legend-bar"></div><span>100%</span>'
+    + '<span>Lower</span><span></span><span>Higher</span>'
+    + '</div></div>'
 }
 
 export function htmlPercentileBars(rows, { title = 'Response P50–P99', width = 640 } = {}) {
@@ -606,9 +1184,9 @@ export function htmlPercentileBars(rows, { title = 'Response P50–P99', width =
   const h = header + items.length * rowH + 10
   const plotW = Math.max(80, width - labelW - pad - 80)
   const parts = [
-    `<div class="heat-wrap"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${h}" width="${width}" height="${h}" role="img" aria-label="${esc(title)}">`,
-    `<text x="${pad}" y="16" font-size="12" fill="#123355" font-weight="600">${esc(title)}</text>`,
-    `<text x="${width - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">interval = P50–P99</text>`,
+    `<div class="heat-wrap"><svg class="pctile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${h}" width="${width}" height="${h}" role="img" aria-label="${esc(title)}">`,
+    `<text class="pctile-title" x="${pad}" y="16" font-size="12" font-weight="600">${esc(title)}</text>`,
+    `<text class="pctile-sub" x="${width - pad}" y="16" text-anchor="end" font-size="11">interval = P50–P99</text>`,
   ]
   items.forEach((r, i) => {
     const y = header + i * rowH
@@ -618,27 +1196,34 @@ export function htmlPercentileBars(rows, { title = 'Response P50–P99', width =
     const x0 = labelW + plotW * p50 / maxV
     const x1 = labelW + plotW * Math.max(p99, p50) / maxV
     const x95 = labelW + plotW * p95 / maxV
-    parts.push(`<text x="8" y="${y + 14}" font-size="11" fill="#182230">${esc(String(r.task || '').slice(0, 16))}</text>`)
-    parts.push(`<rect x="${x0.toFixed(1)}" y="${y + 6}" width="${Math.max(x1 - x0, 2).toFixed(1)}" height="8" rx="3" fill="#9ec5e8"/>`)
-    parts.push(`<line x1="${x95.toFixed(1)}" y1="${y + 4}" x2="${x95.toFixed(1)}" y2="${y + 16}" stroke="#2a6fb2" stroke-width="2"/>`)
+    parts.push(`<text class="pctile-label" x="8" y="${y + 14}" font-size="11">${esc(String(r.task || '').slice(0, 16))}</text>`)
+    parts.push(`<rect class="pctile-bar" x="${x0.toFixed(1)}" y="${y + 6}" width="${Math.max(x1 - x0, 2).toFixed(1)}" height="8" rx="3"/>`)
+    parts.push(`<line class="pctile-marker" x1="${x95.toFixed(1)}" y1="${y + 4}" x2="${x95.toFixed(1)}" y2="${y + 16}" stroke-width="2"/>`)
   })
   parts.push('</svg></div>')
   return parts.join('')
 }
 
+/**
+ * Task Health score bars. The score is a 0-100 magnitude, so it uses the
+ * shared quantitative bar component (`--data-bar`) like every other bar in the
+ * report; the per-metric deductions stay in the trailing text and the table
+ * below.
+ */
 export function htmlHealthBars(rows) {
   const items = [...(rows || [])].filter(r => r && typeof r === 'object')
     .sort((a, b) => (a.score || 0) - (b.score || 0))
     .slice(0, 16)
   if (!items.length) return ''
   return `<div class="health-bars">${items.map((r) => {
-    const score = Number(r.score || 0)
+    const score = Math.max(0, Math.min(100, Number(r.score || 0)))
     const marks = r.marks || {}
     const reasons = Object.keys(marks).filter(k => marks[k])
     const reason = reasons.length ? reasons.join(', ') : 'no deductions'
-    const color = score < 50 ? '#c0392b' : score < 80 ? '#e0a020' : '#1a8a2a'
-    return `<div class="pct-bar"><span class="lab" title="${esc(r.task || '')}">${esc(String(r.task || '').slice(0, 18))}</span>`
-      + `<div class="track"><div class="fill" style="width:${score}%;background:${color}"></div></div>`
+    const task = String(r.task || '')
+    return `<div class="pct-bar" title="${esc(task)}: score ${score}/100 · ${esc(reason)}">`
+      + `<span class="lab">${esc(task.slice(0, 18))}</span>`
+      + `<div class="track"><div class="fill" style="width:${score}%"></div></div>`
       + `<span>${score} · ${esc(reason)}</span></div>`
   }).join('')}</div>`
 }
@@ -654,8 +1239,8 @@ function sparkline(vals, width = 420, height = 48) {
     const y = height - 6 - (height - 12) * ((v - mn) / span)
     return `${x.toFixed(1)},${y.toFixed(1)}`
   })
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Tag time series">`
-    + `<polyline fill="none" stroke="#2a6fb2" stroke-width="1.5" points="${pts.join(' ')}"/></svg>`
+  return `<svg class="pctile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Tag time series">`
+    + `<polyline class="sparkline-line" fill="none" stroke-width="1.5" points="${pts.join(' ')}"/></svg>`
 }
 
 export function htmlTagOverview(samples, { timeOf = (s) => s.time, maxRows = 12 } = {}) {
