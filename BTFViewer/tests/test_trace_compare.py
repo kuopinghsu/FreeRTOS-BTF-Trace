@@ -173,6 +173,9 @@ class TraceCompareTests(unittest.TestCase):
         # Series tones, one shared bar geometry, no retired literals.
         self.assertIn("var(--series-a)", html)
         self.assertIn("var(--series-b)", html)
+        self.assertIn('html[data-theme="dark"] .paired-fill.a', html)
+        self.assertIn("repeating-linear-gradient", html)
+        self.assertIn('html[data-theme="dark"] .cmp-chart-bar.minus', html)
         self.assertIn("--std-bar-h: 10px", html)
         self.assertIn("--row-hover-bg", html)
         # Bars hover like the statistics export and carry row tooltips.

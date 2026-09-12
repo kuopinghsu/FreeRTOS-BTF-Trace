@@ -7114,6 +7114,17 @@ tbody tr:hover {{
 }}
 .paired-fill.a {{ background: var(--series-a); }}
 .paired-fill.b {{ background: var(--series-b); }}
+/* In dark mode the two required blue series are close in luminance. Keep the
+   palette intact, but give Baseline A a quiet hatch while Candidate B stays
+   solid. This also makes the pair distinguishable in grayscale. */
+html[data-theme="dark"] .legend-swatch.a,
+html[data-theme="dark"] .legend-swatch.delta-minus,
+html[data-theme="dark"] .paired-fill.a,
+html[data-theme="dark"] .migration-delta-unified .delta-fill.minus {{
+  background-color: var(--series-a);
+  background-image: repeating-linear-gradient(
+    135deg, transparent 0 3px, rgba(11, 15, 25, .42) 3px 5px);
+}}
 .paired-value {{
   color: var(--ink); font-size: 11px; line-height: 1.2;
   font-variant-numeric: tabular-nums; text-align: right;
@@ -7187,6 +7198,22 @@ tbody tr:hover {{
 .cmp-chart-bar.minus {{ fill: var(--series-a); }}
 .cmp-chart-bar.plus {{ fill: var(--series-b); }}
 .cmp-chart-value {{ fill: var(--ink); }}
+html[data-theme="dark"] .cmp-chart-bar.minus {{
+  opacity: .66; stroke: var(--series-a-text); stroke-width: 1px;
+}}
+@media (prefers-color-scheme: dark) {{
+  html:not([data-theme="light"]) .legend-swatch.a,
+  html:not([data-theme="light"]) .legend-swatch.delta-minus,
+  html:not([data-theme="light"]) .paired-fill.a,
+  html:not([data-theme="light"]) .migration-delta-unified .delta-fill.minus {{
+    background-color: var(--series-a);
+    background-image: repeating-linear-gradient(
+      135deg, transparent 0 3px, rgba(11, 15, 25, .42) 3px 5px);
+  }}
+  html:not([data-theme="light"]) .cmp-chart-bar.minus {{
+    opacity: .66; stroke: var(--series-a-text); stroke-width: 1px;
+  }}
+}}
 .table-tools {{ margin: 8px 0 12px; }}
 .table-toolbar {{
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px;
@@ -8313,4 +8340,3 @@ def _parse_btf(filepath: str,
         from .ux_explore import prepare_ux_events as prepare
     prepare(trace)
     return trace
-

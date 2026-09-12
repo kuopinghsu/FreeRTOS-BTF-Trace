@@ -157,7 +157,7 @@ describe('stats HTML helpers', () => {
     assert.match(css, /tbody tr:hover td,/)
     assert.match(css, /tbody tr:hover th,/)
     assert.match(css, /\.table-scroll tbody tr:hover td:first-child,/)
-    assert.match(css, /\.table-scroll tbody tr:hover th:first-child \{ background: var\(--row-hover-bg\); \}/)
+    assert.match(css, /\.table-scroll tbody tr:focus-within th:first-child \{ background: var\(--row-hover-bg\); \}/)
     assert.match(REPORT_THEME_CSS, /--row-hover-bg: #F1F5F9;/)
     // Declared after the stripe / sticky rules it has to win against.
     assert.ok(css.indexOf('tbody tr:nth-child(even) td {') < css.indexOf('tbody tr:hover td,'))

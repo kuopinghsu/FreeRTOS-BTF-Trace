@@ -56,15 +56,14 @@ class TraceHealthPillStyleTests(unittest.TestCase):
     def _load_example_8cores(self, win: MainWindow) -> None:
         if not EXAMPLE_8CORES.is_file():
             self.skipTest(f"missing trace fixture: {EXAMPLE_8CORES}")
-        import time
-        win._open_file(str(EXAMPLE_8CORES.resolve()))
-        deadline = time.monotonic() + 20.0
-        while time.monotonic() < deadline:
-            self._app.processEvents()
-            if win._trace is not None and not getattr(win, "_load_in_progress", False):
-                break
-            time.sleep(0.02)
-        self.assertIsNotNone(win._trace, "example-8cores.btf.gz did not finish loading")
+        # These tests exercise the pill, not asynchronous file loading. Parse
+        # synchronously so Python's cyclic GC cannot run in _ParseThread while
+        # the GUI thread is creating/polishing PySide widgets. With Python 3.14
+        # and PySide 6.11 that cross-thread Shiboken traversal can intermittently
+        # segfault a long-running suite before the assertion is reached.
+        path = str(EXAMPLE_8CORES.resolve())
+        win._add_trace_tab(path, _parse_btf(path))
+        win._refresh_trace_health()
 
     def test_pill_is_a_styled_widget_not_a_plain_toolbutton_text_dump(self) -> None:
         """The pill must carry an objectName the app QSS can target, a

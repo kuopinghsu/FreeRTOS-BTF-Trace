@@ -121,7 +121,7 @@ STATS_HTML_EXTRA_CSS = """
 .notes ul { margin: 8px 0 0 18px; padding: 0; }
 .notes li { margin: 6px 0; line-height: 1.45; }
 table { border-collapse: separate; border-spacing: 0; width: 100%; }
-th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 13px; text-align: right; }
+th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 12px; text-align: right; }
 th:first-child, td:first-child { text-align: left; }
 thead th {
   background: var(--paper-2);
@@ -284,11 +284,15 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 60
 /* Row hover. Declared after the stripe and sticky-column rules so the whole
    row tracks the pointer, including a sticky first cell and meta-table <th>. */
 tbody tr { transition: background-color 120ms ease, box-shadow 120ms ease; }
+tbody tr:focus-within td,
+tbody tr:focus-within th,
 tbody tr:hover td,
 tbody tr:hover th,
 .table-scroll tbody tr:hover td:first-child,
-.table-scroll tbody tr:hover th:first-child { background: var(--row-hover-bg); }
-tbody tr:hover {
+.table-scroll tbody tr:hover th:first-child,
+.table-scroll tbody tr:focus-within td:first-child,
+.table-scroll tbody tr:focus-within th:first-child { background: var(--row-hover-bg); }
+tbody tr:hover, tbody tr:focus-within {
   box-shadow: inset 0 1px 0 var(--row-hover-edge), inset 0 -1px 0 var(--row-hover-edge);
 }
 .sortable { cursor: pointer; }
@@ -306,7 +310,7 @@ thead th.sortable:hover { background: var(--accent-soft); }
 }
 .pct-bar .track {
   flex: 1; height: var(--std-bar-h); background: var(--bar-track-bg);
-  border: 1px solid var(--bar-track-border); border-radius: var(--std-bar-r); overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--bar-track-border); border-radius: var(--std-bar-r); overflow: hidden;
 }
 .pct-bar .fill { height: 100%; border-radius: calc(var(--std-bar-r) - 1px); background: var(--data-bar); }
 .rank-bars { margin: 8px 0 4px; }
@@ -317,7 +321,7 @@ thead th.sortable:hover { background: var(--accent-soft); }
 }
 .rank-bar-track {
   flex: 1; height: var(--std-bar-h); background: var(--bar-track-bg);
-  border: 1px solid var(--bar-track-border); border-radius: var(--std-bar-r); overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--bar-track-border); border-radius: var(--std-bar-r); overflow: hidden;
 }
 .rank-bar-fill { display: block; height: 100%; border-radius: calc(var(--std-bar-r) - 1px); background: var(--data-bar); }
 .rank-bar-fill.accent { background: var(--data-bar); }
@@ -335,16 +339,16 @@ thead th.sortable:hover { background: var(--accent-soft); }
 .util-row { display: flex; align-items: center; gap: 8px; min-height: 18px; }
 .util-label {
   flex: 0 0 128px; max-width: 128px; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; text-align: left; font-size: 13px; color: var(--ink);
+  white-space: nowrap; text-align: left; font-size: 12px; color: var(--ink);
 }
 .util-bar {
   flex: 1 1 auto; height: var(--std-bar-h); min-width: 24px; border-radius: var(--std-bar-r);
-  background: var(--bar-track-bg); border: 1px solid var(--bar-track-border); overflow: hidden;
+  background: var(--bar-track-bg); box-shadow: inset 0 0 0 1px var(--bar-track-border); overflow: hidden;
 }
 .util-bar-fill, .util-row-task .util-bar-fill {
   height: 100%; border-radius: calc(var(--std-bar-r) - 1px); background: var(--data-bar);
 }
-.util-pct { flex: 0 0 44px; text-align: left; font-size: 13px; }
+.util-pct { flex: 0 0 44px; text-align: left; font-size: 12px; }
 .util-pct-core, .util-pct-task { color: var(--data-bar); }
 .util-row .util-bar, .rank-bar .rank-bar-track, .pct-bar .track,
 .util-row .util-label, .rank-bar .rank-bar-label, .pct-bar .lab {
@@ -401,6 +405,12 @@ thead th.sortable:hover { background: var(--accent-soft); }
 }
 @media print {
   body, html[data-theme="dark"] body { background: #fff !important; }
+  tbody tr:hover td, tbody tr:hover th, tbody tr:focus-within td, tbody tr:focus-within th,
+  .table-scroll tbody tr:hover td:first-child, .table-scroll tbody tr:hover th:first-child,
+  .table-scroll tbody tr:focus-within td:first-child, .table-scroll tbody tr:focus-within th:first-child { background: inherit; }
+  tbody tr:hover, tbody tr:focus-within { box-shadow: none; }
+  .util-row:hover .util-bar-fill, .rank-bar:hover .rank-bar-fill, .pct-bar:hover .fill { filter: none; }
+  .util-row:hover .util-label, .rank-bar:hover .rank-bar-label, .pct-bar:hover .lab { color: var(--ink); }
   .metric-chart, .kpi, .report-card { box-shadow: none; }
   .theme-toggle { display: none !important; }
   .metric-chart, .kpi { break-inside: avoid; }

@@ -406,7 +406,7 @@ class StatsHtmlProfessionalUiTest(unittest.TestCase):
         self.assertIn("tbody tr:hover th,", css)
         self.assertIn(".table-scroll tbody tr:hover td:first-child,", css)
         self.assertIn(
-            ".table-scroll tbody tr:hover th:first-child { background: var(--row-hover-bg); }",
+            ".table-scroll tbody tr:focus-within th:first-child { background: var(--row-hover-bg); }",
             css,
         )
         self.assertIn("inset 0 1px 0 var(--row-hover-edge)", css)
