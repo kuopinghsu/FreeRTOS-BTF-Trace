@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { BTF_HTML_REPORT_CSS } from '../src/utils/htmlReport.js'
+import { BTF_HTML_REPORT_CSS, REPORT_THEME_CSS } from '../src/utils/htmlReport.js'
 import {
   STATS_HTML_EXTRA_CSS,
   evidenceRefsFromFindings,
@@ -98,7 +98,8 @@ describe('stats HTML helpers', () => {
     assert.match(html, /class="report-verdict warn"/)
     assert.doesNotMatch(html, /style=/)
     assert.doesNotMatch(html, /#fdf3e3/)
-    assert.match(STATS_HTML_EXTRA_CSS, /--data-bar: #0284C7/)
+    assert.match(REPORT_THEME_CSS, /--data-bar: #0284C7/)
+    assert.equal(STATS_HTML_EXTRA_CSS.includes('--data-bar:'), false)
   })
 
   it('response P99 chart ranks top eight from the same rows', () => {
@@ -138,7 +139,7 @@ describe('stats HTML helpers', () => {
     assert.doesNotMatch(html, /var\(--danger\)|var\(--warning\)|var\(--success\)/)
     assert.doesNotMatch(html, /background:/)
     assert.match(html, /class="fill" style="width:32%"/)
-    assert.match(STATS_HTML_EXTRA_CSS, /\.pct-bar \.fill \{ height: 100%; border-radius: 999px; background: var\(--data-bar\); \}/)
+    assert.match(STATS_HTML_EXTRA_CSS, /\.pct-bar \.fill \{ height: 100%; border-radius: calc\(var\(--std-bar-r\) - 1px\); background: var\(--data-bar\); \}/)
   })
 
   it('bar rows hover and carry tooltips', () => {
@@ -156,7 +157,8 @@ describe('stats HTML helpers', () => {
     assert.match(css, /tbody tr:hover td,/)
     assert.match(css, /tbody tr:hover th,/)
     assert.match(css, /\.table-scroll tbody tr:hover td:first-child,/)
-    assert.match(css, /\.table-scroll tbody tr:hover th:first-child \{ background: var\(--accent-soft\); \}/)
+    assert.match(css, /\.table-scroll tbody tr:hover th:first-child \{ background: var\(--row-hover-bg\); \}/)
+    assert.match(REPORT_THEME_CSS, /--row-hover-bg: #F1F5F9;/)
     // Declared after the stripe / sticky rules it has to win against.
     assert.ok(css.indexOf('tbody tr:nth-child(even) td {') < css.indexOf('tbody tr:hover td,'))
     assert.ok(css.indexOf('.table-scroll tbody tr:nth-child(even) td:first-child {')
@@ -193,8 +195,8 @@ describe('stats HTML helpers', () => {
     const css = STATS_HTML_EXTRA_CSS
     for (const name of ['.util-bar {', '.rank-bar-track {', '.pct-bar .track {']) {
       const rule = css.split(name)[1].split('}')[0]
-      assert.match(rule, /height: 12px/, name)
-      assert.match(rule, /border-radius: 999px/, name)
+      assert.match(rule, /height: var\(--std-bar-h\)/, name)
+      assert.match(rule, /border-radius: var\(--std-bar-r\)/, name)
       assert.match(rule, /var\(--bar-track-bg\)/, name)
       assert.match(rule, /var\(--bar-track-border\)/, name)
     }
@@ -202,13 +204,14 @@ describe('stats HTML helpers', () => {
       '.rank-bar-fill {', '.pct-bar .fill {']) {
       const rule = css.split(name)[1].split('}')[0]
       assert.match(rule, /height: 100%/, name)
-      assert.match(rule, /border-radius: 999px/, name)
+      assert.match(rule, /border-radius: calc\(var\(--std-bar-r\) - 1px\)/, name)
     }
     const legend = css.split('.heat-legend-bar {')[1].split('}')[0]
-    assert.match(legend, /height: 12px/)
-    assert.match(legend, /border-radius: 999px/)
+    assert.match(legend, /height: var\(--std-bar-h\)/)
+    assert.match(legend, /border-radius: var\(--std-bar-r\)/)
+    assert.match(REPORT_THEME_CSS, /--std-bar-h: 10px;/)
     assert.equal(css.includes('height: 8px'), false)
-    assert.equal(css.includes('height: 10px'), false)
+    assert.equal(css.includes('height: 12px'), false)
     assert.equal((css.match(/border-radius: 4px/g) || []).length, 1)
   })
 

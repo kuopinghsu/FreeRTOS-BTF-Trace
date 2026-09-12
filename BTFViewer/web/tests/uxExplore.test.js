@@ -13,7 +13,8 @@ import {
   compareSectionForMetric,
   compareTaskForRow,
   compareCoreUtilChartRows,
-  compareCoreUtilChartSvg,
+  compareMigrationDeltaHtml,
+  comparePairedBarsHtml,
   compareP99DeltaChartRows,
   compareP99DeltaChartSvg,
   compareRowDeltaStatus,
@@ -23,7 +24,6 @@ import {
   compareSummaryChangeBarsSvg,
   compareSummaryDecisionHtml,
   compareMigrationHeatmapRows,
-  compareMigrationHeatmapSvg,
   filterCompareMigrationRows,
   formatBurstReason,
   formatBurstWindowNs,
@@ -365,6 +365,35 @@ describe('uxExplore', () => {
     assert.equal(notable.verdict_label, 'SIMILAR')
   })
 
+  it('paired bars share one scale and carry row tooltips', () => {
+    const html = comparePairedBarsHtml(
+      [['CS[15]', '14.0', '14.9', '+0.9'], ['CS[16]', '9.0', '3.0', '-6.0']],
+      { title: 'Top CPU consumers', subtitle: 'Largest CPU users.' },
+    )
+    assert.match(html, /Top CPU consumers/)
+    assert.match(html, /class="paired-fill a"/)
+    assert.match(html, /class="paired-fill b"/)
+    assert.match(html, /--w:100\.0%/)
+    assert.match(html, /--w:94\.0%/)
+    assert.match(html, /<div class="paired-row" title="CS\[15\]: A 14\.0 \u00b7 B 14\.9">/)
+    assert.doesNotMatch(html, /class="paired-label" title=/)
+    assert.equal((html.match(/class="paired-row"/g) || []).length, 2)
+    assert.equal(comparePairedBarsHtml([], { title: 'x' }), '')
+  })
+
+  it('migration delta bars diverge around zero', () => {
+    const html = compareMigrationDeltaHtml([
+      { name: 'CS[19]', migrationsA: 1, migrationsB: 13, delta: -12 },
+      { name: 'CS[20]', migrationsA: 40, migrationsB: 2, delta: 38 },
+    ])
+    assert.match(html, /migration-delta-unified/)
+    assert.match(html, /delta-zero/)
+    assert.match(html, /class="delta-fill minus"/)
+    assert.match(html, /class="delta-fill plus"/)
+    assert.match(html, /<div class="delta-row" title="CS\[19\]: \u0394 \u221212">/)
+    assert.equal(compareMigrationDeltaHtml([]), '')
+  })
+
   it('compare charts and migration views', () => {
     const util = compareCoreUtilChartRows({
       coreUtil: [
@@ -372,10 +401,6 @@ describe('uxExplore', () => {
         { core: 'Core_1', utilA: '10.0', utilB: '8.0', delta: '+2.0' },
       ],
     })
-    const svg = compareCoreUtilChartSvg(util)
-    assert.match(svg, /Core_0/)
-    assert.match(svg, /#2a6fb2/)
-    assert.match(svg, /#6b4ea8/)
     const p99 = compareP99DeltaChartRows({
       response: [
         { name: 'QP[198]', a: '13 ms', b: '29 ms', delta: '-16 ms' },
@@ -386,8 +411,16 @@ describe('uxExplore', () => {
     assert.equal(p99[0].status, 'Regressed')
     assert.equal(p99[1].status, 'Improved')
     const p99Svg = compareP99DeltaChartSvg(p99)
-    assert.match(p99Svg, /#c0392b/)
-    assert.match(p99Svg, /#1f6b45/)
+    // Paint comes from CSS classes: var() does not resolve inside an SVG
+    // presentation attribute, so fill="var(...)" would never re-theme.
+    // Bars use directional blue series (minus/plus), not green/red status.
+    assert.match(p99Svg, /class="cmp-chart-bar plus"/)
+    assert.match(p99Svg, /class="cmp-chart-bar minus"/)
+    assert.doesNotMatch(p99Svg, /class="cmp-chart-bar regressed"/)
+    assert.doesNotMatch(p99Svg, /class="cmp-chart-bar improved"/)
+    assert.match(p99Svg, /class="cmp-chart-title"/)
+    assert.match(p99Svg, /class="cmp-chart-axis"/)
+    assert.doesNotMatch(p99Svg, /(?:fill|stroke)="(?!none)/)
     const mig = []
     for (let i = 0; i < 8; i++) {
       mig.push({
@@ -436,12 +469,37 @@ describe('uxExplore', () => {
     }, 8)
     assert.equal(bars.length, 2)
     assert.ok(bars.every(r => r.cand !== 0))
+    const migrationBar = bars.find(r => r.label === 'Migrations (total)')
+    assert.ok(migrationBar.change.includes('%'))
+    // % scale: Core gap (~20%) outranks Migrations /s (~4%); labels show %.
+    const mixed = compareSummaryChangeBarRows({
+      summary: [
+        { label: 'Blocking time /s', a: '1000 s/s', b: '1006.387 s/s', delta: '−6.387 s/s' },
+        { label: 'Core gap max', a: '32 µs', b: '40 µs', delta: '−8 µs' },
+        { label: 'Migrations /s', a: '7000000/s', b: '7298265.52/s', delta: '−298265.52/s' },
+        { label: 'Context switches /s', a: '1000000/s', b: '1022508.99/s', delta: '−22508.99/s' },
+      ],
+    })
+    const byLabel = Object.fromEntries(mixed.map(r => [r.label, r]))
+    assert.ok(byLabel['Core gap max'].change.includes('%'))
+    assert.ok(byLabel['Migrations /s'].change.includes('%'))
+    assert.ok(Math.abs(byLabel['Core gap max'].cand) > Math.abs(byLabel['Migrations /s'].cand))
+    const mixedSvg = compareSummaryChangeBarsSvg(mixed)
+    assert.match(mixedSvg, /bar = % of max\(A, B\)/)
+    assert.match(mixedSvg, /\/ [+\-−]?\d+\.\d+%/)
+    const widthAt = (label) => {
+      const i = mixedSvg.indexOf(label)
+      const m = mixedSvg.slice(i).match(/class="cmp-chart-bar[^"]*"\s+x="[^"]+"\s+y="[^"]+"\s+width="([^"]+)"/)
+      return Number(m[1])
+    }
+    assert.ok(widthAt('Core gap max') > widthAt('Migrations /s'))
     const barSvg = compareSummaryChangeBarsSvg(bars)
     assert.match(barSvg, /Summary changes/)
     assert.match(barSvg, /y="16"[^>]*>Summary changes</)
-    assert.match(barSvg, /y="34"[^>]*>Improved</)
-    assert.match(barSvg, /y="34"[^>]*>Regressed</)
-    assert.ok(barSvg.indexOf('Summary changes') < barSvg.indexOf('>Improved<'))
+    assert.match(barSvg, /y="34"[^>]*>B lower</)
+    assert.match(barSvg, /y="34"[^>]*>B higher</)
+    assert.match(barSvg, /class="cmp-chart-bar (minus|plus)"/)
+    assert.ok(barSvg.indexOf('Summary changes') < barSvg.indexOf('>B lower<'))
     const decision = compareSummaryDecisionHtml({
       summary: [
         { label: 'Migrations (total)', a: '10', b: '25', delta: '−15' },
@@ -456,8 +514,6 @@ describe('uxExplore', () => {
     const heat = compareMigrationHeatmapRows(mig, 5)
     assert.equal(heat.length, 5)
     assert.ok(heat.every(r => r.delta !== 0))
-    const heatSvg = compareMigrationHeatmapSvg(heat)
-    assert.match(heatSvg, /Migration Δ heatmap/)
 
     assert.equal(compareRowDeltaStatus('Migrations (total)', '−15'), 'Regressed')
     assert.equal(compareRowDeltaStatus('QP[1]', '+8', 'migrations'), 'Improved')

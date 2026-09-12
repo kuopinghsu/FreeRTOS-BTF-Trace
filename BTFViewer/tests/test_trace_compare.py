@@ -117,7 +117,7 @@ class TraceCompareTests(unittest.TestCase):
         expected = {
             "summary", "top", "core_util", "migrations", "execution",
             "blocking", "inter_arrival", "preemption", "sync",
-            "response", "mutex_block", "shared_patterns", "trends", "shape",
+            "response", "mutex_block", "shared_patterns", "trends", "shape", "evidence",
         }
         self.assertEqual(set(tables.keys()), expected)
         self.assertTrue(tables["core_util"])
@@ -154,6 +154,43 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("compare-chart", html)
         self.assertIn("Core Utilization", html)
         self.assertIn("Summary changes", html)
+        # Paired A/B bars lead the ranked tables and replace the Core
+        # Utilization SVG; the migration delta chart replaces the Δ heatmap.
+        self.assertIn('class="compare-visual"', html)
+        self.assertIn('class="paired-bars"', html)
+        self.assertIn('class="paired-fill a"', html)
+        self.assertIn('class="paired-fill b"', html)
+        self.assertIn("Top CPU consumers", html)
+        self.assertIn("Core utilization", html)
+        self.assertIn("Largest execution-time changes", html)
+        self.assertIn("Largest blocking-time changes", html)
+        self.assertIn("Largest inter-arrival changes", html)
+        # The delta chart's stylesheet ships with the report; its markup is
+        # covered by the unit test, since this fixture has no non-zero deltas.
+        self.assertIn(".migration-delta-unified .delta-bars", html)
+        self.assertNotIn("Core Utilization Baseline A vs Candidate B", html)
+        self.assertNotIn("Migration count change heatmap", html.split("compare-visual")[0])
+        # Series tones, one shared bar geometry, no retired literals.
+        self.assertIn("var(--series-a)", html)
+        self.assertIn("var(--series-b)", html)
+        self.assertIn("--std-bar-h: 10px", html)
+        self.assertIn("--row-hover-bg", html)
+        # Bars hover like the statistics export and carry row tooltips.
+        self.assertIn(".paired-row:hover .paired-track", html)
+        self.assertIn(".paired-row:hover .paired-fill", html)
+        self.assertIn(".migration-delta-unified .delta-row:hover .delta-track", html)
+        self.assertRegex(html, r'<div class="paired-row" title="[^"]+: A [^"]+ \u00b7 B ')
+        # Verdict badge colours remain; SVG chart axis + bars use blue series.
+        self.assertIn("--success: #10B981;", html)
+        self.assertIn("--success: #34D399;", html)
+        self.assertIn("--danger: #E11D48;", html)
+        self.assertIn("--danger: #FB7185;", html)
+        self.assertIn(".cmp-chart-improved { fill: var(--series-a-text); }", html)
+        self.assertIn(".cmp-chart-regressed { fill: var(--series-b-text); }", html)
+        self.assertIn(".cmp-chart-bar.minus { fill: var(--series-a); }", html)
+        self.assertIn(".cmp-chart-bar.plus { fill: var(--series-b); }", html)
+        self.assertNotIn(".cmp-chart-bar.improved", html)
+        self.assertNotIn(".cmp-chart-bar.regressed", html)
         self.assertIn('class="compare-decision"', html)
         self.assertIn('class="compare-verdict-banner tone-', html)
         self.assertRegex(html, r"<h2>Summary</h2>[\s\S]*class=\"compare-decision\"")
@@ -162,7 +199,7 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("Δ (pp)", html)
         self.assertIn("detail-note", html)
         # Metric shorthand lives on the owning table's note, not the top banner.
-        self.assertNotIn("STI = software trace item", html.split("<h2>Overview</h2>")[1].split("<h2>Summary</h2>")[0])
+        self.assertNotIn("STI = software trace item", html.split("<h2>Overview</h2>")[1].split("<h2>Trace Quality / Comparability</h2>")[0])
         self.assertIn("σ = util stddev.", html)          # Summary note
         self.assertIn("Ping = A↔B core ping-pong; /tick", html)  # Core Migrations note
         self.assertIn("STI = software trace item.", html)        # Sync Objects note

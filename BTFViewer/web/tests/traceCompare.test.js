@@ -271,6 +271,26 @@ describe('new compare builders', () => {
     assert.match(html, /<details class="report-card" id="sec-overview" open>/)
     assert.match(html, /compare-chart/)
     assert.match(html, /Core Utilization/)
+    assert.match(html, /class="compare-visual"/)
+    assert.match(html, /class="paired-fill a"/)
+    assert.match(html, /class="paired-fill b"/)
+    assert.match(html, /Core utilization</)
+    assert.match(html, /Largest execution-time changes/)
+    assert.match(html, /Largest inter-arrival changes/)
+    assert.doesNotMatch(html, /Core Utilization Baseline A vs Candidate B/)
+    assert.match(html, /var\(--series-a\)/)
+    assert.match(html, /--std-bar-h: 10px/)
+    assert.match(html, /\.paired-row:hover \.paired-track/)
+    assert.match(html, /\.migration-delta-unified \.delta-row:hover \.delta-track/)
+    assert.match(html, /<div class="paired-row" title="[^"]+: A [^"]+ \u00b7 B /)
+    assert.match(html, /--success: #34D399;/)
+    assert.match(html, /--danger: #FB7185;/)
+    assert.match(html, /\.cmp-chart-improved \{ fill: var\(--series-a-text\); \}/)
+    assert.match(html, /\.cmp-chart-regressed \{ fill: var\(--series-b-text\); \}/)
+    assert.match(html, /\.cmp-chart-bar\.minus \{ fill: var\(--series-a\); \}/)
+    assert.match(html, /\.cmp-chart-bar\.plus \{ fill: var\(--series-b\); \}/)
+    assert.doesNotMatch(html, /\.cmp-chart-bar\.improved/)
+    assert.doesNotMatch(html, /\.cmp-chart-bar\.regressed/)
     assert.match(html, /class="compare-decision"/)
     assert.match(html, /class="compare-verdict-banner tone-/)
     assert.match(html, /class="compare-card compare-card-mover"/)
@@ -280,7 +300,7 @@ describe('new compare builders', () => {
     assert.match(html, /data-toc="expand"/)
     assert.match(html, /detail-note/)
     // Metric shorthand belongs to the owning table's note, not the top banner.
-    const overview = html.split('<h2>Overview</h2>')[1].split('<h2>Summary</h2>')[0]
+    const overview = html.split('<h2>Overview</h2>')[1].split('<h2>Trace Quality / Comparability</h2>')[0]
     assert.doesNotMatch(overview, /STI = software trace item/)
     assert.match(html, /σ = util stddev\./)
     assert.match(html, /Ping = A↔B core ping-pong; \/tick/)
@@ -412,4 +432,28 @@ describe('new compare builders', () => {
     assert.match(String(p99.a), /\(/)
     assert.match(String(p99.b), /\(/)
   })
+})
+
+it('exports context in Overview and one decision block in Summary', () => {
+  const a = makeTrace({ segments: [makeSeg('Worker', 'Core_0', 0, 100)] })
+  const b = makeTrace({ segments: [makeSeg('Worker', 'Core_0', 0, 200)] })
+  const html = buildCompareHtml('Baseline', 'Candidate', false, buildAllCompareTables(a, b))
+  const overview = html.split('<h2>Overview</h2>')[1].split('<h2>Trace Quality / Comparability</h2>')[0]
+  const summary = html.split('<h2>Summary</h2>')[1].split('<h2>Overview</h2>')[0]
+  assert.match(overview, /Comparison identity/)
+  assert.doesNotMatch(overview, /compare-verdict-banner|compare-card-k|Notable Changes/)
+  assert.match(summary, /Notable Changes/)
+  assert.match(summary, /All summary metrics/)
+  assert.doesNotMatch(summary, /compare-decision-identity|compare-comparability-warn/)
+  assert.equal((html.match(/class="compare-verdict-banner tone-/g) || []).length, 1)
+  assert.ok((html.match(/class="compare-next"/g) || []).length <= 1)
+  assert.ok(html.indexOf('<h2>Summary</h2>') < html.indexOf('<h2>Largest Relative Changes</h2>'))
+  assert.ok(html.indexOf('<h2>Summary</h2>') < html.indexOf('<h2>Overview</h2>'))
+  assert.ok(summary.indexOf('class="compare-cards"') < summary.indexOf('class="compare-verdict-banner'))
+
+})
+
+it('rounds sample averages with the desktop half-even convention', () => {
+  assert.equal(summarizeTimeSamples([2192, 2193], 'ns').avgNs, 2192)
+  assert.equal(summarizeTimeSamples([2193, 2194], 'ns').avgNs, 2194)
 })

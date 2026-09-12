@@ -1,6 +1,7 @@
 """BTF Viewer — stats module (source). Do not edit btf_viewer.py; run make bundle."""
 from __future__ import annotations
 
+from .compare_evidence import COMPARE_EVIDENCE, format_evidence_cell
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .config import (  # private symbols are not pulled in by import *
@@ -45,6 +46,7 @@ from .html_report import (
     HTML_REPORT_INTERACTIVE_SCRIPT,
     HTML_REPORT_TOC_CSS,
     HTML_REPORT_TOC_SCRIPT,
+    REPORT_THEME_CSS,
     btf_html_report_document,
     html_apply_collapsible_toc,
 )
@@ -94,6 +96,7 @@ from .evidence_nav import (
     resolve_timestamp_evidence,
 )
 from .ux_explore import (
+    _paired_bar_items,
     COMPARE_DELTA_FORMULA,
     COMPARE_NOTE_MIGRATION,
     COMPARE_NOTE_P99,
@@ -3314,6 +3317,8 @@ class _CompareBarChart(QWidget):
         super().__init__(parent)
         self._kind = kind if kind in ("util", "p99", "summary", "heatmap") else "util"
         self._rows: List[dict] = []
+        self._title = "Core Utilization"
+        self._unit = "%"
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMinimumHeight(0)
         self.hide()
@@ -3341,6 +3346,9 @@ class _CompareBarChart(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         pal = self.palette()
         ink = pal.color(QPalette.ColorRole.WindowText)
+        dark = pal.color(QPalette.ColorRole.Window).lightness() < 128
+        baseline = QColor('#60A5FA' if dark else '#2563EB')
+        candidate = QColor('#FBBF24' if dark else '#B45309')
         muted = QColor(ink)
         muted.setAlpha(170)
         w = self.width()
@@ -3353,7 +3361,7 @@ class _CompareBarChart(QWidget):
         p.setPen(ink)
         p.setFont(self.font())
         if self._kind == "util":
-            title = "Core Utilization"
+            title = self._title
         elif self._kind == "summary":
             title = "Summary changes"
         elif self._kind == "heatmap":
@@ -3377,18 +3385,18 @@ class _CompareBarChart(QWidget):
                 a_v = max(0.0, float(row.get("a") or 0))
                 b_v = max(0.0, float(row.get("b") or 0))
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor("#2a6fb2"))
-                p.drawRoundedRect(QRectF(plot_x, y + 2, max(2.0, plot_w * a_v / max_v), 9), 3, 3)
-                p.setBrush(QColor("#6b4ea8"))
-                p.drawRoundedRect(QRectF(plot_x, y + 14, max(2.0, plot_w * b_v / max_v), 9), 3, 3)
-                p.setPen(QColor("#2a6fb2"))
+                p.setBrush(baseline)
+                p.drawRoundedRect(QRectF(plot_x, y + 2, max(2.0, plot_w * a_v / max_v), 10), 5, 5)
+                p.setBrush(candidate)
+                p.drawRoundedRect(QRectF(plot_x, y + 14, max(2.0, plot_w * b_v / max_v), 10), 5, 5)
+                p.setPen(baseline)
                 p.drawText(QRectF(plot_x + plot_w + 6, y, right_w, 12),
                            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                           f"{a_v:.1f}%")
-                p.setPen(QColor("#6b4ea8"))
+                           f"{a_v:.1f}{self._unit}")
+                p.setPen(candidate)
                 p.drawText(QRectF(plot_x + plot_w + 6, y + 12, right_w, 12),
                            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                           f"{b_v:.1f}%")
+                           f"{b_v:.1f}{self._unit}")
         else:
             subtitle = "Δ = A − B" if self._kind == "heatmap" else "Candidate B − Baseline A"
             p.drawText(QRectF(w - pad - 220, 2, 220, 16),
@@ -3397,14 +3405,14 @@ class _CompareBarChart(QWidget):
             max_v = max((abs(float(r.get("cand") or r.get("delta") or 0)) for r in rows), default=1.0) or 1.0
             mid = plot_x + plot_w / 2.0
             half = plot_w / 2.0
-            p.setPen(QColor("#3cb371"))
+            p.setPen(baseline)
             p.drawText(QRectF(plot_x, 22, plot_w / 2.0, 14),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                       "Improved")
-            p.setPen(QColor("#e07070"))
+                       "Negative Δ")
+            p.setPen(candidate)
             p.drawText(QRectF(plot_x + plot_w / 2.0, 22, plot_w / 2.0, 14),
                        int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-                       "Regressed")
+                       "Positive Δ")
             p.setPen(QPen(QColor("#888888"), 1))
             p.drawLine(int(mid), header_h, int(mid), self.height() - 6)
             for i, row in enumerate(rows):
@@ -3416,14 +3424,14 @@ class _CompareBarChart(QWidget):
                 if "cand" in row:
                     cand = float(row.get("cand") or 0)
                 else:
-                    # heatmap stores table Δ = A−B; chart wants B−A
-                    cand = -float(row.get("delta") or 0)
+                    # Migration chart preserves table Δ = A−B
+                    cand = float(row.get("delta") or 0)
                 bar_w = abs(cand) / max_v * half
-                color = QColor("#e07070") if cand > 0 else QColor("#3cb371")
+                color = candidate if cand > 0 else baseline
                 x = mid if cand >= 0 else mid - bar_w
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(color)
-                p.drawRoundedRect(QRectF(x, y + 3, max(2.0, bar_w), 12), 2, 2)
+                p.drawRoundedRect(QRectF(x, y + 3, max(2.0, bar_w), 10), 5, 5)
                 p.setPen(color)
                 change = str(row.get("change") or "")
                 if not change and self._kind == "heatmap":
@@ -3665,41 +3673,57 @@ class _TraceCompareDialog(QDialog):
             " border-left: 3px solid #c87a12; color: #e8c9a0;"
             " font-size: 11px; padding: 4px 8px; border-radius: 3px; }")
         self._dec_comparability.hide()
-        dec.addWidget(self._dec_comparability)
         self._dec_identity = QLabel("")
         self._dec_identity.setWordWrap(True)
         self._dec_identity.setStyleSheet("QLabel { color: #9a9a9a; font-size: 11px; }")
-        dec.addWidget(self._dec_identity)
         self._dec_verdict = QLabel("")
         self._dec_verdict.setWordWrap(True)
         self._dec_verdict.setTextFormat(Qt.TextFormat.RichText)
         self._dec_verdict.setStyleSheet("QLabel { font-size: 12px; }")
-        dec.addWidget(self._dec_verdict)
-        self._dec_counts = QLabel("")
-        self._dec_counts.setStyleSheet(
-            "QLabel { color: #cfd8dc; font-weight: 600; font-size: 12px; }")
-        dec.addWidget(self._dec_counts)
+        self._dec_counts = QWidget()
+        cards_layout = QHBoxLayout(self._dec_counts)
+        cards_layout.setContentsMargins(0, 0, 0, 0)
+        cards_layout.setSpacing(8)
+        self._dec_card_values = {}
         self._dec_largest = QLabel("")
         self._dec_largest.setWordWrap(True)
         self._dec_largest.setStyleSheet("QLabel { color: #e0e0e0; font-size: 12px; }")
         self._dec_largest_clickable = False
         self._dec_largest.mousePressEvent = (  # type: ignore[method-assign]
             lambda ev: self._on_largest_clicked(ev))
-        dec.addWidget(self._dec_largest)
+        for title, key, color in (
+            ('Regressions', 'regressions', '#E11D48'),
+            ('Improvements', 'improvements', '#10B981'),
+            ('Warnings', 'warnings', '#D97706'),
+            ('Biggest mover', 'mover', None),
+        ):
+            card = QFrame()
+            card.setFrameShape(QFrame.Shape.StyledPanel)
+            column = QVBoxLayout(card)
+            heading = QLabel(title)
+            heading.setStyleSheet('font-size: 10px;')
+            value = self._dec_largest if key == 'mover' else QLabel('0')
+            value.setTextFormat(Qt.TextFormat.PlainText)
+            value.setStyleSheet('font-size: 12px; font-weight: 600;' + (f'color: {color};' if color else ''))
+            column.addWidget(heading)
+            column.addWidget(value)
+            self._dec_card_values[key] = value
+            cards_layout.addWidget(card, 2 if key == 'mover' else 1)
         self._dec_why = QLabel("")
         self._dec_why.setWordWrap(True)
         self._dec_why.setStyleSheet("QLabel { color: #9a9a9a; font-size: 11px; }")
-        dec.addWidget(self._dec_why)
         self._dec_next = QLabel("")
         self._dec_next.setWordWrap(True)
         self._dec_next.setStyleSheet("QLabel { color: #b0bec5; font-size: 11px; }")
         self._dec_next.hide()
-        dec.addWidget(self._dec_next)
         self._dec_sig_note = QLabel("")
         self._dec_sig_note.setWordWrap(True)
         self._dec_sig_note.setStyleSheet("QLabel { color: #7a8690; font-size: 10px; }")
         self._dec_sig_note.hide()
-        dec.addWidget(self._dec_sig_note)
+        for widget in (self._dec_counts, self._dec_verdict,
+                       self._dec_next, self._dec_comparability, self._dec_identity,
+                       self._dec_why, self._dec_sig_note):
+            dec.addWidget(widget)
         self._decision.hide()
         # Back-compat alias for tests that look for _strip
         self._strip = self._dec_largest
@@ -3746,7 +3770,23 @@ class _TraceCompareDialog(QDialog):
         self._trends_table = QTableWidget(0, 6)
         self._trends_table.setHorizontalHeaderLabels(
             ["Trace", "Tasks", "Migrations", "Load balance", "Tick health", "Span"])
+        self._evidence_tables = {}
+        self._evidence_widgets_by_key = {}
+        self._evidence_widgets = {page: [] for page in ('summary', 'migrations', 'response')}
+        for key, title, page, headers in COMPARE_EVIDENCE:
+            table = QTableWidget(0, len(headers))
+            table.setHorizontalHeaderLabels(headers)
+            search = QLineEdit()
+            search.setPlaceholderText('Search ' + title)
+            def filter_rows(text, table=table):
+                for row in range(table.rowCount()):
+                    table.setRowHidden(row, not any(text.lower() in (table.item(row, col).text() if table.item(row, col) else '').lower() for col in range(table.columnCount())))
+            search.textChanged.connect(filter_rows)
+            self._evidence_tables[key] = table
+            self._evidence_widgets_by_key[key] = [QLabel(title), search, table]
+            self._evidence_widgets[page].extend(self._evidence_widgets_by_key[key])
         self._all_tables = (
+            *self._evidence_tables.values(),
             self._summary_table, self._top_table, self._core_util_table,
             self._mig_table, self._exec_table, self._block_table,
             self._inter_table, self._preempt_table, self._sync_table,
@@ -3827,18 +3867,36 @@ class _TraceCompareDialog(QDialog):
                 "QLabel { color: #8a8a8a; font-size: 11px; padding: 2px 8px 0; }")
             return lb
 
+        self._paired_charts = {}
+        paired_pages = {}
+        for key, title, table, a_idx, b_idx, limit, delta, unit in (
+            ('top', 'Top CPU consumers', self._top_table, 1, 2, 12, False, '%'),
+            ('execution', 'Largest execution-time changes', self._exec_table, 5, 6, 10, True, ' ns'),
+            ('blocking', 'Largest blocking-time changes', self._block_table, 5, 6, 10, True, ' ns'),
+            ('inter_arrival', 'Largest inter-arrival changes', self._inter_table, 3, 4, 10, True, ' ns'),
+            ('mutex_block', 'Largest mutex-blocking totals', self._mutex_table, 1, 2, 10, False, ' ns'),
+        ):
+            chart = _CompareBarChart('util')
+            chart._title, chart._unit = title, unit
+            self._paired_charts[key] = (chart, dict(a_idx=a_idx, b_idx=b_idx, limit=limit, sort_by_delta=delta))
+            self._prepare_compare_embedded_table(table)
+            paired_pages[key] = self._make_compare_scroll_page(chart, table)
         # Chart + table pages share one scroll viewport (Web compare-table-wrap parity).
         summary_page = self._make_compare_scroll_page(
-            self._decision, self._summary_chart, self._summary_table,
-            _pagenote(COMPARE_NOTE_SIGMA))
+            self._decision,
+            *self._evidence_widgets_by_key['trace_comparability'],
+            *self._evidence_widgets_by_key['task_presence'],
+            self._summary_chart,
+            *self._evidence_widgets_by_key['relative_changes'],
+            self._summary_table, _pagenote(COMPARE_NOTE_SIGMA))
         core_page = self._make_compare_scroll_page(
             self._core_util_chart, self._core_util_table)
         resp_page = self._make_compare_scroll_page(
             self._response_chart, self._response_table,
-            _pagenote(COMPARE_NOTE_P99))
+            _pagenote(COMPARE_NOTE_P99), *self._evidence_widgets["response"])
         mig_page = self._make_compare_scroll_page(
             mig_ctrl_w, self._mig_heatmap, self._mig_table,
-            _pagenote(COMPARE_NOTE_MIGRATION))
+            _pagenote(COMPARE_NOTE_MIGRATION), *self._evidence_widgets["migrations"])
         # Sync keeps its own scrollbars; just append the STI note below it.
         sync_page = QWidget()
         _sync_v = QVBoxLayout(sync_page)
@@ -3848,16 +3906,16 @@ class _TraceCompareDialog(QDialog):
         _sync_v.addWidget(_pagenote(COMPARE_NOTE_STI))
 
         self._pages.addTab(summary_page, "Summary")
-        self._pages.addTab(self._top_table, "Top Tasks")
+        self._pages.addTab(paired_pages["top"], "Top Tasks")
         self._pages.addTab(core_page, "Core Utilization")
         self._pages.addTab(mig_page, "Core Migrations")
-        self._pages.addTab(self._exec_table, "Execution")
-        self._pages.addTab(self._block_table, "Blocking")
-        self._pages.addTab(self._inter_table, "Inter-Arrival")
+        self._pages.addTab(paired_pages["execution"], "Execution")
+        self._pages.addTab(paired_pages["blocking"], "Blocking")
+        self._pages.addTab(paired_pages["inter_arrival"], "Inter-Arrival")
         self._pages.addTab(self._preempt_table, "Preemption")
         self._pages.addTab(sync_page, "Sync")
         self._pages.addTab(resp_page, "Response")
-        self._pages.addTab(self._mutex_table, "Mutex")
+        self._pages.addTab(paired_pages["mutex_block"], "Mutex")
         self._pages.addTab(self._trends_table, "Trends")
         lay.addWidget(self._pages, 1)
 
@@ -4071,31 +4129,14 @@ class _TraceCompareDialog(QDialog):
         sorting = table.isSortingEnabled()
         table.setSortingEnabled(False)
         table.setRowCount(len(rows))
-        improved = QColor("#3cb371")
-        regressed = QColor("#e07070")
-        colorblind = bool(getattr(_RENDER_RUNTIME, "colorblind_active", False))
         for ri, vals in enumerate(rows):
-            label = str(vals[0]) if vals else ""
-            status = None
-            if delta_col >= 0 and delta_col < len(vals):
-                status = compare_row_delta_status(
-                    label, vals[delta_col], status_metric)
             for ci, val in enumerate(vals):
                 text = str(val)
-                if status and ci == delta_col:
-                    text = format_semantic_delta(text, status, colorblind)
                 item = _StatsSortItem(text, compare_cell_sort_key(val))
                 if ci < left_cols:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
                 else:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
-                if status and ci == delta_col:
-                    if status == "Improved":
-                        item.setForeground(QBrush(improved))
-                        item.setToolTip("Improved (Candidate B better)")
-                    elif status == "Regressed":
-                        item.setForeground(QBrush(regressed))
-                        item.setToolTip("Regressed (Candidate B worse)")
                 table.setItem(ri, ci, item)
         table.setSortingEnabled(sorting)
         if fit_embedded:
@@ -4161,6 +4202,8 @@ class _TraceCompareDialog(QDialog):
             if getattr(self, "_strip", None) is not None:
                 self._strip.hide()
             self._mig_all_rows = []
+            for chart, _ in getattr(self, "_paired_charts", {}).values():
+                chart.set_rows([])
             if hasattr(self, "_core_util_chart"):
                 self._core_util_chart.set_rows([])
             if hasattr(self, "_response_chart"):
@@ -4176,7 +4219,18 @@ class _TraceCompareDialog(QDialog):
                 self._fit_compare_embedded_table(tbl)
             return
         tables = _build_trace_compare_rows(
-            *args, deadlines=self._compare_deadlines())
+            *args, deadlines=self._compare_deadlines(), row_limit=None, top_limit=None)
+        for key, (chart, options) in self._paired_charts.items():
+            chart.set_rows(_paired_bar_items(tables.get('evidence', {}).get('_charts', {}).get(key, tables.get(key, [])), **options))
+        for key, table in self._evidence_tables.items():
+            rows = [[format_evidence_cell(key, v, i) for i, v in enumerate(row)] for row in tables.get('evidence', {}).get(key, [])]
+            table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
+            self._fill_table(table, rows, fit_embedded=True)
+            table.setSortingEnabled(False)
+            for ri, raw in enumerate(tables.get('evidence', {}).get(key, [])):
+                for ci, value in enumerate(raw):
+                    table.setItem(ri, ci, _StatsSortItem(rows[ri][ci], compare_cell_sort_key(value)))
+            table.setSortingEnabled(True)
         self._update_compare_strip(tables)
         if self._on_compare is not None:
             try:
@@ -4358,15 +4412,8 @@ class _TraceCompareDialog(QDialog):
         mover = (regs_now or (list(data.get("improvements") or []) or [None]))[0]
         mover_txt = (f"{mover.get('label')}: {mover.get('change')}"
                      if mover else "—")
-        self._dec_counts.setTextFormat(Qt.TextFormat.RichText)
-        self._dec_counts.setText(
-            f'<span style="color:#e57373;">Regressions {n_reg}</span>'
-            f'&nbsp;&nbsp;&nbsp;<span style="color:#81c784;">Improvements '
-            f'{n_imp}</span>'
-            + (f'&nbsp;&nbsp;&nbsp;<span style="color:#e6b877;">Warnings '
-               f'{n_warn}</span>' if n_warn else "")
-            + f'&nbsp;&nbsp;·&nbsp;&nbsp;Biggest mover: {html.escape(mover_txt)}'
-        )
+        for key, value in (('regressions', n_reg), ('improvements', n_imp), ('warnings', n_warn), ('mover', mover_txt)):
+            self._dec_card_values[key].setText(str(value))
         comp = notable.get("comparability") or {}
         comp_warnings = list(comp.get("warnings") or [])
         if comp_warnings:
@@ -4383,9 +4430,6 @@ class _TraceCompareDialog(QDialog):
         regs = list(data.get("regressions") or [])
         if regs:
             top = regs[0]
-            self._dec_largest.setText(
-                f"→ Investigate {top.get('label')} on Candidate"
-            )
             self._dec_largest_clickable = True
             self._dec_largest.setCursor(Qt.CursorShape.PointingHandCursor)
             self._dec_largest.setToolTip(
@@ -4395,7 +4439,7 @@ class _TraceCompareDialog(QDialog):
             self._dec_largest_clickable = False
             self._dec_largest.setCursor(Qt.CursorShape.ArrowCursor)
             self._dec_largest.setToolTip("")
-            self._dec_largest.hide()
+            self._dec_largest.show()
         self._dec_why.hide()
         nxt = str(notable.get("next_investigation") or "").strip()
         if nxt:
@@ -15342,7 +15386,9 @@ class _StatsPanel(QWidget):
         glossary_html = html_glossary(range_note=range_note)
 
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        stats_extra_css = f"{STATS_HTML_EXTRA_CSS}\n{HTML_REPORT_TOC_CSS}".strip()
+        stats_extra_css = (
+            f"{REPORT_THEME_CSS}\n{STATS_HTML_EXTRA_CSS}\n{HTML_REPORT_TOC_CSS}"
+        ).strip()
 
         performance_overview_html = _performance_overview_html(
             core_rows, cc_rows_html, task_rows, scope_title,

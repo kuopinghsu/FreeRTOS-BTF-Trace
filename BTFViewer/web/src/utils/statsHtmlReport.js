@@ -45,161 +45,6 @@ export const STATS_DEFAULT_EXPANDED = [
 ]
 
 export const STATS_HTML_EXTRA_CSS = `
-:root {
-  --bg: #F8FAFC;
-  --bg-elev: #F1F5F9;
-  --paper: #FFFFFF;
-  --paper-2: #F1F5F9;
-  --surface: #FFFFFF;
-  --ink: #0F172A;
-  --muted: #475569;
-  --line: #E2E8F0;
-  --line-strong: #E2E8F0;
-  --stripe: #F8FAFC;
-  --accent: #0284C7;
-  --accent-2: #0284C7;
-  --accent-soft: #E0F2FE;
-  --success: #10B981;
-  --success-soft: #D1FAE5;
-  --warning: #D97706;
-  --warning-soft: #FEF3C7;
-  --danger: #E11D48;
-  --danger-soft: #FFE4E6;
-  --violet: #0284C7;
-  --ok-border: #6EE7B7;
-  --warn-border: #FBBF24;
-  --error-border: #FB7185;
-  --accent-border: #7DD3FC;
-  --canvas-top: #FFFFFF;
-  --canvas-edge: #E4EAF2;
-  --bar-track-bg: #F1F5F9;
-  --bar-track-border: #E2E8F0;
-  --data-bar: #0284C7;
-  --data-bar-soft: #BAE6FD;
-  --data-0-bg: #F8FAFC; --data-0-ink: #64748B;
-  --data-1-bg: #E0F2FE; --data-1-ink: #075985;
-  --data-2-bg: #BAE6FD; --data-2-ink: #075985;
-  --data-3-bg: #7DD3FC; --data-3-ink: #0C4A6E;
-  --data-4-bg: #38BDF8; --data-4-ink: #082F49;
-  --data-5-bg: #0284C7; --data-5-ink: #FFFFFF;
-  --matrix-bg: #FFFFFF;
-  --matrix-border: #E2E8F0;
-  --matrix-label: #475569;
-  --matrix-diag-bg: #F1F5F9;
-  --matrix-diag-ink: #64748B;
-  --chart-grid: #E2E8F0;
-  --chart-axis: #475569;
-}
-html[data-theme="dark"] {
-  --bg: #0B0F19;
-  --bg-elev: #101827;
-  --paper: #151D2E;
-  --paper-2: #101827;
-  --surface: #151D2E;
-  --ink: #F1F5F9;
-  --muted: #94A3B8;
-  --line: #1E293B;
-  --line-strong: #1E293B;
-  --stripe: #111827;
-  --accent: #38BDF8;
-  --accent-2: #38BDF8;
-  --accent-soft: #102A3A;
-  --success: #10B981;
-  --success-soft: #123024;
-  --warning: #FB923C;
-  --warning-soft: #332417;
-  --danger: #E11D48;
-  --danger-soft: #3F1D29;
-  --violet: #38BDF8;
-  --ok-border: #065F46;
-  --warn-border: #9A3412;
-  --error-border: #9F1239;
-  --accent-border: #15506C;
-  --canvas-top: #151D2E;
-  --canvas-edge: #0D1218;
-  --bar-track-bg: #101827;
-  --bar-track-border: #1E293B;
-  --data-bar: #38BDF8;
-  --data-bar-soft: #15506C;
-  --data-0-bg: #111827; --data-0-ink: #94A3B8;
-  --data-1-bg: #102A3A; --data-1-ink: #7DD3FC;
-  --data-2-bg: #123B52; --data-2-ink: #BAE6FD;
-  --data-3-bg: #15506C; --data-3-ink: #E0F2FE;
-  --data-4-bg: #1679A3; --data-4-ink: #FFFFFF;
-  --data-5-bg: #38BDF8; --data-5-ink: #082F49;
-  --matrix-bg: #151D2E;
-  --matrix-border: #1E293B;
-  --matrix-label: #94A3B8;
-  --matrix-diag-bg: #101827;
-  --matrix-diag-ink: #94A3B8;
-  --chart-grid: #1E293B;
-  --chart-axis: #94A3B8;
-}
-@media (prefers-color-scheme: dark) {
-  html:not([data-theme="light"]) {
-    --bg: #0B0F19;
-    --bg-elev: #101827;
-    --paper: #151D2E;
-    --paper-2: #101827;
-    --surface: #151D2E;
-    --ink: #F1F5F9;
-    --muted: #94A3B8;
-    --line: #1E293B;
-    --line-strong: #1E293B;
-    --stripe: #111827;
-    --accent: #38BDF8;
-    --accent-2: #38BDF8;
-    --accent-soft: #102A3A;
-    --success: #10B981;
-    --success-soft: #123024;
-    --warning: #FB923C;
-    --warning-soft: #332417;
-    --danger: #E11D48;
-    --danger-soft: #3F1D29;
-    --violet: #38BDF8;
-    --ok-border: #065F46;
-    --warn-border: #9A3412;
-    --error-border: #9F1239;
-    --accent-border: #15506C;
-    --canvas-top: #151D2E;
-    --canvas-edge: #0D1218;
-    --bar-track-bg: #101827;
-    --bar-track-border: #1E293B;
-    --data-bar: #38BDF8;
-    --data-bar-soft: #15506C;
-    --data-0-bg: #111827; --data-0-ink: #94A3B8;
-    --data-1-bg: #102A3A; --data-1-ink: #7DD3FC;
-    --data-2-bg: #123B52; --data-2-ink: #BAE6FD;
-    --data-3-bg: #15506C; --data-3-ink: #E0F2FE;
-    --data-4-bg: #1679A3; --data-4-ink: #FFFFFF;
-    --data-5-bg: #38BDF8; --data-5-ink: #082F49;
-    --matrix-bg: #151D2E;
-    --matrix-border: #1E293B;
-    --matrix-label: #94A3B8;
-    --matrix-diag-bg: #101827;
-    --matrix-diag-ink: #94A3B8;
-    --chart-grid: #1E293B;
-    --chart-axis: #94A3B8;
-  }
-}
-body,
-html[data-theme="dark"] body {
-  background: radial-gradient(circle at 88% -10%, var(--canvas-top) 0%, var(--bg) 48%, var(--canvas-edge) 100%);
-  color: var(--ink);
-}
-@media (prefers-color-scheme: dark) {
-  html:not([data-theme="light"]) body {
-    background: radial-gradient(circle at 88% -10%, var(--canvas-top) 0%, var(--bg) 48%, var(--canvas-edge) 100%);
-    color: var(--ink);
-  }
-}
-h2, h3.sub,
-html[data-theme="dark"] h2,
-html[data-theme="dark"] h3.sub { color: var(--ink); }
-@media (prefers-color-scheme: dark) {
-  html:not([data-theme="light"]) h2,
-  html:not([data-theme="light"]) h3.sub { color: var(--ink); }
-}
 .report.report-wide { max-width: 1160px; }
 .kpi-grid {
   display: grid;
@@ -370,7 +215,7 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 60
   align-items: center; gap: 2px 8px; max-width: 260px;
 }
 .heat-legend-bar {
-  height: 12px; border-radius: 999px;
+  height: var(--std-bar-h); border-radius: var(--std-bar-r);
   background: linear-gradient(to right,
     var(--data-0-bg), var(--data-1-bg), var(--data-2-bg),
     var(--data-3-bg), var(--data-4-bg), var(--data-5-bg));
@@ -421,9 +266,11 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 60
 .pctile-title { fill: var(--ink); }
 .pctile-sub { fill: var(--muted); }
 .pctile-label { fill: var(--ink); }
-.pctile-bar { fill: var(--accent-soft); }
-.pctile-marker { stroke: var(--accent); }
-.sparkline-line { stroke: var(--accent); }
+/* The P50-P99 band is data, so it uses the soft bar colour rather than the
+   accent tint, which was too faint to see on either surface. */
+.pctile-bar { fill: var(--data-bar-soft); }
+.pctile-marker { stroke: var(--data-bar); }
+.sparkline-line { stroke: var(--data-bar); }
 .table-count { font-size: 12px; color: var(--muted); margin-left: auto; }
 .table-scroll { overflow-x: auto; max-width: 100%; }
 .table-scroll table { min-width: 100%; }
@@ -434,10 +281,14 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 60
 .table-scroll tbody tr:nth-child(even) td:first-child { background: var(--stripe); }
 /* Row hover. Declared after the stripe and sticky-column rules so the whole
    row tracks the pointer, including a sticky first cell and meta-table <th>. */
+tbody tr { transition: background-color 120ms ease, box-shadow 120ms ease; }
 tbody tr:hover td,
 tbody tr:hover th,
 .table-scroll tbody tr:hover td:first-child,
-.table-scroll tbody tr:hover th:first-child { background: var(--accent-soft); }
+.table-scroll tbody tr:hover th:first-child { background: var(--row-hover-bg); }
+tbody tr:hover {
+  box-shadow: inset 0 1px 0 var(--row-hover-edge), inset 0 -1px 0 var(--row-hover-edge);
+}
 .sortable { cursor: pointer; }
 .sortable:hover { color: var(--accent); }
 thead th.sortable:hover { background: var(--accent-soft); }
@@ -452,10 +303,10 @@ thead th.sortable:hover { background: var(--accent-soft); }
   flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
 }
 .pct-bar .track {
-  flex: 1; height: 12px; background: var(--bar-track-bg);
-  border: 1px solid var(--bar-track-border); border-radius: 999px; overflow: hidden;
+  flex: 1; height: var(--std-bar-h); background: var(--bar-track-bg);
+  border: 1px solid var(--bar-track-border); border-radius: var(--std-bar-r); overflow: hidden;
 }
-.pct-bar .fill { height: 100%; border-radius: 999px; background: var(--data-bar); }
+.pct-bar .fill { height: 100%; border-radius: calc(var(--std-bar-r) - 1px); background: var(--data-bar); }
 .rank-bars { margin: 8px 0 4px; }
 .rank-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
 .rank-bar-num { flex: 0 0 18px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
@@ -463,10 +314,10 @@ thead th.sortable:hover { background: var(--accent-soft); }
   flex: 0 0 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
 }
 .rank-bar-track {
-  flex: 1; height: 12px; background: var(--bar-track-bg);
-  border: 1px solid var(--bar-track-border); border-radius: 999px; overflow: hidden;
+  flex: 1; height: var(--std-bar-h); background: var(--bar-track-bg);
+  border: 1px solid var(--bar-track-border); border-radius: var(--std-bar-r); overflow: hidden;
 }
-.rank-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--data-bar); }
+.rank-bar-fill { display: block; height: 100%; border-radius: calc(var(--std-bar-r) - 1px); background: var(--data-bar); }
 .rank-bar-fill.accent { background: var(--data-bar); }
 .rank-bar-fill.warning { background: var(--warning); }
 .rank-bar-fill.danger { background: var(--danger); }
@@ -485,11 +336,11 @@ thead th.sortable:hover { background: var(--accent-soft); }
   white-space: nowrap; text-align: left; font-size: 13px; color: var(--ink);
 }
 .util-bar {
-  flex: 1 1 auto; height: 12px; min-width: 24px; border-radius: 999px;
+  flex: 1 1 auto; height: var(--std-bar-h); min-width: 24px; border-radius: var(--std-bar-r);
   background: var(--bar-track-bg); border: 1px solid var(--bar-track-border); overflow: hidden;
 }
 .util-bar-fill, .util-row-task .util-bar-fill {
-  height: 100%; border-radius: 999px; background: var(--data-bar);
+  height: 100%; border-radius: calc(var(--std-bar-r) - 1px); background: var(--data-bar);
 }
 .util-pct { flex: 0 0 44px; text-align: left; font-size: 13px; }
 .util-pct-core, .util-pct-task { color: var(--data-bar); }

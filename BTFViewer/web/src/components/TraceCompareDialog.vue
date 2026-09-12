@@ -113,6 +113,11 @@
           class="compare-table-wrap"
           role="tabpanel"
         >
+          <ComparePairedChart
+            v-if="pairedChart"
+            :rows="pairedChart.rows"
+            :options="pairedChart.options"
+          />
           <div
             v-if="activePage === 'summary'"
             class="compare-page"
@@ -121,40 +126,6 @@
               v-if="compareDecision.visible"
               class="compare-decision"
             >
-              <div
-                v-if="!compareDecision.comparability.comparable"
-                class="compare-comparability-warn"
-              >
-                <div class="compare-comparability-head">
-                  ⚠ Traces may not be directly comparable
-                </div>
-                <ul>
-                  <li
-                    v-for="(w, i) in compareDecision.comparability.warnings"
-                    :key="i"
-                  >
-                    {{ w }}
-                  </li>
-                </ul>
-              </div>
-
-              <div
-                class="compare-verdict-banner"
-                :class="'tone-' + compareDecision.verdictTone"
-              >
-                <span
-                  class="compare-verdict-glyph"
-                  aria-hidden="true"
-                >{{ compareDecision.verdictGlyph }}</span>
-                <span class="compare-verdict-main">
-                  <span class="compare-verdict-label">{{ compareDecision.verdictLabel }}</span>
-                  <span
-                    v-if="compareDecision.verdictSentence"
-                    class="compare-verdict-sentence"
-                  >{{ compareDecision.verdictSentence }}</span>
-                </span>
-              </div>
-
               <div class="compare-cards">
                 <div class="compare-card tone-regressed">
                   <span class="compare-card-k">Regressions</span>
@@ -181,18 +152,54 @@
                 </div>
               </div>
 
+              <div
+                class="compare-verdict-banner"
+                :class="'tone-' + compareDecision.verdictTone"
+              >
+                <span
+                  class="compare-verdict-glyph"
+                  aria-hidden="true"
+                >{{ compareDecision.verdictGlyph }}</span>
+                <span class="compare-verdict-main">
+                  <span class="compare-verdict-label">{{ compareDecision.verdictLabel }}</span>
+                  <span
+                    v-if="compareDecision.verdictSentence"
+                    class="compare-verdict-sentence"
+                  >{{ compareDecision.verdictSentence }}</span>
+                </span>
+              </div>
+
+              <div
+                v-if="compareDecision.next"
+                class="compare-next-btn"
+              >
+                <span
+                  class="next-chevron"
+                  aria-hidden="true"
+                >›</span><strong>Next</strong>
+                <span>{{ compareDecision.next.replace(/^Next:\s*/, '') }}</span>
+              </div>
+              <div
+                v-if="!compareDecision.comparability.comparable"
+                class="compare-comparability-warn"
+              >
+                <div class="compare-comparability-head">
+                  ⚠ Traces may not be directly comparable
+                </div>
+                <ul>
+                  <li
+                    v-for="(w, i) in compareDecision.comparability.warnings"
+                    :key="i"
+                  >
+                    {{ w }}
+                  </li>
+                </ul>
+              </div>
+
               <div class="compare-decision-identity">
                 {{ compareDecision.identity }}
               </div>
 
-              <button
-                v-if="compareDecision.next"
-                type="button"
-                class="compare-next-btn"
-                @click="compareDecision.largestClickable && investigateSide('b')"
-              >
-                {{ compareDecision.next }} <span aria-hidden="true">→</span>
-              </button>
               <div
                 v-if="compareDecision.sigNote"
                 class="compare-decision-sig"
@@ -200,6 +207,12 @@
                 {{ compareDecision.sigNote }}
               </div>
             </div>
+            <CompareEvidenceTable
+              v-for="key in ['trace_comparability', 'task_presence']"
+              :key="key"
+              :spec="COMPARE_EVIDENCE.find(s => s.key === key)"
+              :rows="focusedEvidence[key] || []"
+            />
             <div
               v-if="summaryChartModel.length"
               class="compare-chart"
@@ -232,6 +245,10 @@
                 >{{ row.change }}</span>
               </div>
             </div>
+            <CompareEvidenceTable
+              :spec="COMPARE_EVIDENCE.find(s => s.key === 'relative_changes')"
+              :rows="focusedEvidence.relative_changes || []"
+            />
             <details
               class="compare-allmetrics"
               open
@@ -264,7 +281,7 @@
                       :class="thSortClass('summary', 'delta')"
                       @click="toggleTableSort('summary', 'delta')"
                     >
-                      Change (A → B)
+                      Δ (A − B)
                     </th>
                   </tr>
                 </thead>
@@ -318,7 +335,7 @@
                   :class="thSortClass('top', 'delta')"
                   @click="toggleTableSort('top', 'delta')"
                 >
-                  Change (A → B)
+                  Δ (A − B)
                 </th>
               </tr>
             </thead>
@@ -351,43 +368,6 @@
             v-else-if="activePage === 'coreUtil'"
             class="compare-page"
           >
-            <div
-              v-if="coreUtilChartModel.length"
-              class="compare-chart"
-            >
-              <div class="compare-chart-head">
-                <span class="compare-chart-title">Core Utilization</span>
-                <span class="compare-chart-legend">
-                  <span class="swatch swatch-a" />Baseline A
-                  <span class="swatch swatch-b" />Candidate B
-                </span>
-              </div>
-              <div
-                v-for="row in coreUtilChartModel"
-                :key="row.label"
-                class="util-chart-row"
-              >
-                <span class="chart-label">{{ row.label }}</span>
-                <div class="util-chart-bars">
-                  <div class="util-track">
-                    <div
-                      class="util-fill util-fill-a"
-                      :style="{ width: row.aPct + '%' }"
-                    />
-                  </div>
-                  <div class="util-track">
-                    <div
-                      class="util-fill util-fill-b"
-                      :style="{ width: row.bPct + '%' }"
-                    />
-                  </div>
-                </div>
-                <span class="chart-pct">
-                  <span class="pct-a">{{ row.a.toFixed(1) }}%</span>
-                  <span class="pct-b">{{ row.b.toFixed(1) }}%</span>
-                </span>
-              </div>
-            </div>
             <table class="compare-table">
               <thead>
                 <tr>
@@ -413,7 +393,7 @@
                     :class="thSortClass('coreUtil', 'delta')"
                     @click="toggleTableSort('coreUtil', 'delta')"
                   >
-                    Change (A → B)
+                    Δ (A − B)
                   </th>
                 </tr>
               </thead>
@@ -632,12 +612,12 @@
                   :class="thSortClass('execution', 'deltaMax')"
                   @click="toggleTableSort('execution', 'deltaMax')"
                 >
-                  Change (A → B)
+                  Δ (A − B)
                 </th>
                 <th
                   :class="thSortClass('execution', 'shapeDelta')"
-                  @click="toggleTableSort('execution', 'shapeDelta')"
                   title="Two-sample Kolmogorov–Smirnov statistic (0 = same distribution)"
+                  @click="toggleTableSort('execution', 'shapeDelta')"
                 >
                   Shape Δ
                 </th>
@@ -725,12 +705,12 @@
                   :class="thSortClass('blocking', 'delta')"
                   @click="toggleTableSort('blocking', 'delta')"
                 >
-                  Change (A → B)
+                  Δ (A − B)
                 </th>
                 <th
                   :class="thSortClass('blocking', 'shapeDelta')"
-                  @click="toggleTableSort('blocking', 'shapeDelta')"
                   title="Two-sample Kolmogorov–Smirnov statistic (0 = same distribution)"
+                  @click="toggleTableSort('blocking', 'shapeDelta')"
                 >
                   Shape Δ
                 </th>
@@ -818,12 +798,12 @@
                   :class="thSortClass('interArrival', 'delta')"
                   @click="toggleTableSort('interArrival', 'delta')"
                 >
-                  Change (A → B)
+                  Δ (A − B)
                 </th>
                 <th
                   :class="thSortClass('interArrival', 'shapeDelta')"
-                  @click="toggleTableSort('interArrival', 'shapeDelta')"
                   title="Two-sample Kolmogorov–Smirnov statistic (0 = same distribution)"
+                  @click="toggleTableSort('interArrival', 'shapeDelta')"
                 >
                   Shape Δ
                 </th>
@@ -887,7 +867,7 @@
                   :class="thSortClass('preemption', 'delta')"
                   @click="toggleTableSort('preemption', 'delta')"
                 >
-                  Change (A → B)
+                  Δ (A − B)
                 </th>
                 <th
                   :class="thSortClass('preemption', 'totalA')"
@@ -959,7 +939,7 @@
                     :class="thSortClass('sync', 'delta')"
                     @click="toggleTableSort('sync', 'delta')"
                   >
-                    Change (A → B)
+                    Δ (A − B)
                   </th>
                 </tr>
               </thead>
@@ -1053,7 +1033,7 @@
                     :class="thSortClass('response', 'delta')"
                     @click="toggleTableSort('response', 'delta')"
                   >
-                    Change (A → B)
+                    Δ (A − B)
                   </th>
                 </tr>
               </thead>
@@ -1114,7 +1094,7 @@
                   :class="thSortClass('mutex', 'delta')"
                   @click="toggleTableSort('mutex', 'delta')"
                 >
-                  Change (A → B)
+                  Δ (A − B)
                 </th>
               </tr>
             </thead>
@@ -1211,6 +1191,12 @@
               </tr>
             </tbody>
           </table>
+          <CompareEvidenceTable
+            v-for="spec in evidenceSpecs.filter(s => s.page !== 'summary')"
+            :key="spec.key"
+            :spec="spec"
+            :rows="focusedEvidence[spec.key] || []"
+          />
         </div>
       </div>
 
@@ -1308,6 +1294,10 @@
 </template>
 
 <script setup>
+import ComparePairedChart from './ComparePairedChart.vue'
+import CompareEvidenceTable from './CompareEvidenceTable.vue'
+import { COMPARE_EVIDENCE } from '../utils/compareEvidence.js'
+import { buildFocusedCompareEvidence } from '../utils/traceCompare.js'
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import DomSelect from './DomSelect.vue'
 import AnalysisContextStrip from './AnalysisContextStrip.vue'
@@ -1339,12 +1329,9 @@ import {
   COMPARE_NOTE_MIGRATION,
   COMPARE_NOTE_STI,
   COMPARE_NOTE_P99,
-  compareCoreUtilChartRows,
   compareP99DeltaChartRows,
   compareSummaryChangeBarRows,
   compareMigrationHeatmapRows,
-  compareRowDeltaStatus,
-  compareDirectionalDelta,
   filterCompareMigrationRows,
   compareFieldSortAccessors,
 } from '../utils/uxExplore.js'
@@ -1354,7 +1341,6 @@ import {
   sortHeaderClass,
   sortStatsRows,
 } from '../utils/statsTableSort.js'
-import { formatSemanticDelta, semanticLabel } from '../utils/semanticColors.js'
 
 const props = defineProps({
   tabs: { type: Array, required: true },
@@ -1634,15 +1620,6 @@ const sortedCoreUtilRows = computed(() =>
   sortStatsRows(coreUtilRows.value, tableSort.value.coreUtil, CORE_UTIL_SORT_ACCESSORS))
 const sortedMigViewRows = computed(() =>
   sortStatsRows(migViewRows.value, tableSort.value.migrations, migSortAccessors.value))
-const coreUtilChartModel = computed(() => {
-  const rows = compareCoreUtilChartRows({ coreUtil: coreUtilRows.value })
-  const maxV = Math.max(1, ...rows.map(r => Math.max(Number(r.a) || 0, Number(r.b) || 0)))
-  return rows.map(r => ({
-    ...r,
-    aPct: Math.max(1, (Number(r.a) || 0) / maxV * 100),
-    bPct: Math.max(1, (Number(r.b) || 0) / maxV * 100),
-  }))
-})
 function divergingBarModel(rows, valueKey = 'cand') {
   const maxV = Math.max(1, ...rows.map(r => Math.abs(Number(r[valueKey]) || 0)))
   return rows.map((r) => {
@@ -1664,29 +1641,13 @@ const migHeatmapModel = computed(() => {
   const rows = compareMigrationHeatmapRows(migrationRows.value, 12).map((r) => {
     const d = Number(r.delta) || 0
     const change = d === 0 ? '0' : `${d > 0 ? '+' : '−'}${Math.abs(Math.trunc(d))}`
-    return { ...r, cand: -d, change }
+    return { ...r, cand: d, change }
   })
   return divergingBarModel(rows)
 })
-function deltaClass(label, delta, metric = '') {
-  const status = compareRowDeltaStatus(label, delta, metric)
-  if (status === 'Improved') return 'delta-improved'
-  if (status === 'Regressed') return 'delta-regressed'
-  return ''
-}
-function deltaText(label, delta, metric = '', aText = null) {
-  // Direction-aware "Change (A → B)" cell: signed value + % + ▲/▼ + word.
-  const dir = compareDirectionalDelta(label, delta, metric, aText)
-  if (dir) return dir.text
-  const status = compareRowDeltaStatus(label, delta, metric)
-  const colorblind = !!props.analysisSettings?.colorblindSafe
-  return formatSemanticDelta(String(delta ?? ''), status || '', colorblind)
-}
-function statusLegend(role) {
-  const colorblind = !!props.analysisSettings?.colorblindSafe
-  if (role === 'improved') return semanticLabel('Improved', 'improved', colorblind)
-  return semanticLabel('Regressed', 'regressed', colorblind)
-}
+function deltaClass() { return '' }
+function deltaText(label, delta) { return String(delta ?? '—') }
+function statusLegend(role) { return role === 'improved' ? 'Negative Δ' : 'Positive Δ' }
 function migCellClass(ci, row) {
   const classes = []
   if (ci === 0) classes.push('task-col')
@@ -1823,6 +1784,22 @@ function investigateSide(side) {
   })
 }
 
+const pairedChart = computed(() => {
+  const spec = {
+    top: ['top', 'Top CPU consumers', 'cpuA', 'cpuB', false, 12],
+    coreUtil: ['coreUtil', 'Core utilization', 'utilA', 'utilB', false, 0],
+    execution: ['execution', 'Largest execution-time changes', 'maxA', 'maxB', true, 10],
+    blocking: ['blocking', 'Largest blocking-time changes', 'maxA', 'maxB', true, 10],
+    interArrival: ['interArrival', 'Largest inter-arrival changes', 'avgA', 'avgB', true, 10],
+    mutex: ['mutex_block', 'Largest mutex-blocking totals', 'a', 'b', false, 10],
+  }[activePage.value]
+  if (!spec) return null
+  const tables = buildAllCompareTables(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value, 0)
+  return { rows: tables.evidence._charts[spec[0]], options: { title: spec[1], aKey: 'a', bKey: 'b', sortByDelta: spec[4], limit: spec[5] || tables[spec[0]].length, labelKey: 'label' } }
+})
+const focusedEvidence = computed(() => buildFocusedCompareEvidence(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value, deadlines.value))
+const evidenceSpecs = computed(() => COMPARE_EVIDENCE.filter(spec => spec.page === activePage.value))
+
 function exportTables() {
   const tables = buildAllCompareTables(
     traceA.value, traceB.value, tabA.value, tabB.value,
@@ -1886,6 +1863,12 @@ function onScoreBaseline() {
 }
 
 .compare-dialog {
+  --compare-a: #60A5FA;
+  --compare-b: #FBBF24;
+  --cmp-a: var(--compare-a);
+  --cmp-b: var(--compare-b);
+  --std-bar-h: 10px;
+  --std-bar-r: 5px;
   width: min(1200px, 96vw);
   height: min(85vh, 820px);
   min-width: 720px;
@@ -1965,11 +1948,11 @@ function onScoreBaseline() {
 }
 
 .compare-select-label.compare-label-baseline {
-  color: #2a6fb2;
+  color: var(--compare-a);
 }
 
 .compare-select-label.compare-label-candidate {
-  color: #6b4ea8;
+  color: var(--compare-b);
 }
 
 .compare-formula {
@@ -2025,8 +2008,8 @@ function onScoreBaseline() {
   border-radius: 2px;
 }
 
-.swatch-a { background: #2a6fb2; }
-.swatch-b { background: #6b4ea8; }
+.swatch-a { background: var(--compare-a); }
+.swatch-b { background: var(--compare-b); }
 
 .util-chart-row,
 .p99-chart-row {
@@ -2056,7 +2039,7 @@ function onScoreBaseline() {
 }
 
 .util-track {
-  height: 9px;
+  height: var(--std-bar-h);
   border-radius: 3px;
   background: color-mix(in srgb, var(--fg) 12%, transparent);
   overflow: hidden;
@@ -2068,8 +2051,8 @@ function onScoreBaseline() {
   min-width: 2px;
 }
 
-.util-fill-a { background: #2a6fb2; }
-.util-fill-b { background: #6b4ea8; }
+.util-fill-a { background: var(--compare-a); }
+.util-fill-b { background: var(--compare-b); }
 
 .chart-pct {
   display: flex;
@@ -2078,8 +2061,8 @@ function onScoreBaseline() {
   line-height: 1.2;
 }
 
-.pct-a { color: #2a6fb2; }
-.pct-b { color: #6b4ea8; }
+.pct-a { color: var(--compare-a); }
+.pct-b { color: var(--compare-b); }
 
 .p99-axis {
   display: flex;
@@ -2088,8 +2071,8 @@ function onScoreBaseline() {
   margin: 0 96px 2px 96px;
 }
 
-.p99-improved { color: var(--semantic-improvement, #3cb371); }
-.p99-regressed { color: var(--semantic-error, #e07070); }
+.p99-improved { color: var(--compare-a); }
+.p99-regressed { color: var(--compare-b); }
 
 .p99-track {
   position: relative;
@@ -2110,20 +2093,20 @@ function onScoreBaseline() {
 .p99-bar {
   position: absolute;
   top: 3px;
-  height: 12px;
-  border-radius: 2px;
+  height: var(--std-bar-h);
+  border-radius: var(--std-bar-r);
   min-width: 2px;
 }
 
-.p99-bar.improved { background: var(--semantic-improvement, #3cb371); }
-.p99-bar.regressed { background: var(--semantic-error, #e07070); }
+.p99-bar.improved { background: var(--compare-a); }
+.p99-bar.regressed { background: var(--compare-b); }
 
 .p99-change {
   font-size: 10px;
 }
 
-.p99-change.improved { color: var(--semantic-improvement, #3cb371); }
-.p99-change.regressed { color: var(--semantic-error, #e07070); }
+.p99-change.improved { color: var(--compare-a); }
+.p99-change.regressed { color: var(--compare-b); }
 
 .compare-mig-controls {
   display: flex;
@@ -2260,23 +2243,9 @@ function onScoreBaseline() {
   border-color: var(--accent);
 }
 
-.compare-next-btn {
-  margin-top: 12px;
-  align-self: flex-start;
-  appearance: none;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  border-radius: 7px;
-  padding: 8px 13px;
-  cursor: pointer;
-}
-.compare-next-btn:hover {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
+.compare-next-btn { display:flex; align-items:baseline; gap:8px; margin-top:12px; padding:8px 10px; border-left:2px solid var(--compare-b); background:var(--panel-bg); color:var(--fg-dim); font-size:11px; }
+.compare-next-btn strong, .next-chevron { color:var(--compare-b); }
+.next-chevron { display:inline-grid; place-items:center; width:16px; height:16px; border:1px solid var(--compare-b); border-radius:50%; }
 
 .compare-allmetrics {
   margin-top: 14px;
@@ -2447,7 +2416,7 @@ function onScoreBaseline() {
 }
 .compare-legend-dot {
   width: 9px;
-  height: 9px;
+  height: var(--std-bar-h);
   border-radius: 3px;
   flex: none;
 }
@@ -2581,4 +2550,6 @@ function onScoreBaseline() {
   flex-shrink: 0;
   opacity: 0.9;
 }
+.compare-table tbody tr:hover td, .compare-table tbody tr:focus-within td { background: color-mix(in srgb, var(--fg) 6%, var(--panel-bg)); }
+:global(body:has(.app:not(.dark)) .compare-dialog) { --compare-a: #2563EB; --compare-b: #B45309; }
 </style>

@@ -460,6 +460,185 @@ html[data-theme="dark"] details.ai-ev-fold-l2 > summary { color: var(--muted); }
 }
 `.trim()
 
+export const REPORT_THEME_CSS = `
+:root {
+  --bg: #F8FAFC;
+  --bg-elev: #F1F5F9;
+  --paper: #FFFFFF;
+  --paper-2: #F1F5F9;
+  --surface: #FFFFFF;
+  --ink: #0F172A;
+  --muted: #475569;
+  --line: #E2E8F0;
+  --line-strong: #E2E8F0;
+  --stripe: #F8FAFC;
+  --accent: #0284C7;
+  --accent-2: #0284C7;
+  --accent-soft: #E0F2FE;
+  --success: #10B981;
+  --success-soft: #D1FAE5;
+  --warning: #D97706;
+  --warning-soft: #FEF3C7;
+  --danger: #E11D48;
+  --danger-soft: #FFE4E6;
+  --violet: #0284C7;
+  --ok-border: #6EE7B7;
+  --warn-border: #FBBF24;
+  --error-border: #FB7185;
+  --accent-border: #7DD3FC;
+  --canvas-top: #FFFFFF;
+  --canvas-edge: #E4EAF2;
+  --bar-track-bg: #F1F5F9;
+  --bar-track-border: #E2E8F0;
+  --data-bar: #0284C7;
+  --data-bar-soft: #BAE6FD;
+  --data-0-bg: #F8FAFC; --data-0-ink: #64748B;
+  --data-1-bg: #E0F2FE; --data-1-ink: #075985;
+  --data-2-bg: #BAE6FD; --data-2-ink: #075985;
+  --data-3-bg: #7DD3FC; --data-3-ink: #0C4A6E;
+  --data-4-bg: #38BDF8; --data-4-ink: #082F49;
+  --data-5-bg: #0284C7; --data-5-ink: #FFFFFF;
+  --matrix-bg: #FFFFFF;
+  --matrix-border: #E2E8F0;
+  --matrix-label: #475569;
+  --matrix-diag-bg: #F1F5F9;
+  --matrix-diag-ink: #64748B;
+  --chart-grid: #E2E8F0;
+  --chart-axis: #475569;
+  --series-a: #7DD3FC;
+  --series-a-text: #075985;
+  --series-b: #0284C7;
+  --series-b-text: #075985;
+  --row-hover-bg: #F1F5F9;
+  --row-hover-edge: #CBD5E1;
+  /* Theme-independent bar geometry, shared by every quantitative visual. */
+  --std-bar-h: 10px;
+  --std-bar-r: 5px;
+}
+html[data-theme="dark"] {
+  --bg: #0B0F19;
+  --bg-elev: #101827;
+  --paper: #151D2E;
+  --paper-2: #101827;
+  --surface: #151D2E;
+  --ink: #F1F5F9;
+  --muted: #94A3B8;
+  --line: #1E293B;
+  --line-strong: #1E293B;
+  --stripe: #111827;
+  --accent: #38BDF8;
+  --accent-2: #38BDF8;
+  --accent-soft: #102A3A;
+  --success: #34D399;
+  --success-soft: #123024;
+  --warning: #FB923C;
+  --warning-soft: #332417;
+  --danger: #FB7185;
+  --danger-soft: #3F1D29;
+  --violet: #38BDF8;
+  --ok-border: #065F46;
+  --warn-border: #9A3412;
+  --error-border: #9F1239;
+  --accent-border: #15506C;
+  --canvas-top: #151D2E;
+  --canvas-edge: #0D1218;
+  --bar-track-bg: #101827;
+  --bar-track-border: #1E293B;
+  --data-bar: #38BDF8;
+  --data-bar-soft: #15506C;
+  --data-0-bg: #111827; --data-0-ink: #94A3B8;
+  --data-1-bg: #102A3A; --data-1-ink: #7DD3FC;
+  --data-2-bg: #123B52; --data-2-ink: #BAE6FD;
+  --data-3-bg: #15506C; --data-3-ink: #E0F2FE;
+  --data-4-bg: #1679A3; --data-4-ink: #FFFFFF;
+  --data-5-bg: #38BDF8; --data-5-ink: #082F49;
+  --matrix-bg: #151D2E;
+  --matrix-border: #1E293B;
+  --matrix-label: #94A3B8;
+  --matrix-diag-bg: #101827;
+  --matrix-diag-ink: #94A3B8;
+  --chart-grid: #1E293B;
+  --chart-axis: #94A3B8;
+  --series-a: #0EA5E9;
+  --series-a-text: #7DD3FC;
+  --series-b: #38BDF8;
+  --series-b-text: #BAE6FD;
+  --row-hover-bg: #182235;
+  --row-hover-edge: #334155;
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    --bg: #0B0F19;
+    --bg-elev: #101827;
+    --paper: #151D2E;
+    --paper-2: #101827;
+    --surface: #151D2E;
+    --ink: #F1F5F9;
+    --muted: #94A3B8;
+    --line: #1E293B;
+    --line-strong: #1E293B;
+    --stripe: #111827;
+    --accent: #38BDF8;
+    --accent-2: #38BDF8;
+    --accent-soft: #102A3A;
+    --success: #34D399;
+    --success-soft: #123024;
+    --warning: #FB923C;
+    --warning-soft: #332417;
+    --danger: #FB7185;
+    --danger-soft: #3F1D29;
+    --violet: #38BDF8;
+    --ok-border: #065F46;
+    --warn-border: #9A3412;
+    --error-border: #9F1239;
+    --accent-border: #15506C;
+    --canvas-top: #151D2E;
+    --canvas-edge: #0D1218;
+    --bar-track-bg: #101827;
+    --bar-track-border: #1E293B;
+    --data-bar: #38BDF8;
+    --data-bar-soft: #15506C;
+    --data-0-bg: #111827; --data-0-ink: #94A3B8;
+    --data-1-bg: #102A3A; --data-1-ink: #7DD3FC;
+    --data-2-bg: #123B52; --data-2-ink: #BAE6FD;
+    --data-3-bg: #15506C; --data-3-ink: #E0F2FE;
+    --data-4-bg: #1679A3; --data-4-ink: #FFFFFF;
+    --data-5-bg: #38BDF8; --data-5-ink: #082F49;
+    --matrix-bg: #151D2E;
+    --matrix-border: #1E293B;
+    --matrix-label: #94A3B8;
+    --matrix-diag-bg: #101827;
+    --matrix-diag-ink: #94A3B8;
+    --chart-grid: #1E293B;
+    --chart-axis: #94A3B8;
+    --series-a: #0EA5E9;
+    --series-a-text: #7DD3FC;
+    --series-b: #38BDF8;
+    --series-b-text: #BAE6FD;
+    --row-hover-bg: #182235;
+    --row-hover-edge: #334155;
+  }
+}
+body,
+html[data-theme="dark"] body {
+  background: radial-gradient(circle at 88% -10%, var(--canvas-top) 0%, var(--bg) 48%, var(--canvas-edge) 100%);
+  color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) body {
+    background: radial-gradient(circle at 88% -10%, var(--canvas-top) 0%, var(--bg) 48%, var(--canvas-edge) 100%);
+    color: var(--ink);
+  }
+}
+h2, h3.sub,
+html[data-theme="dark"] h2,
+html[data-theme="dark"] h3.sub { color: var(--ink); }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) h2,
+  html:not([data-theme="light"]) h3.sub { color: var(--ink); }
+}
+`.trim()
+
 /**
  * Wrap bodyHtml in a professional BTFViewer report shell with embedded SVG icon.
  */

@@ -329,11 +329,10 @@ class AiWebParityTests(unittest.TestCase):
             ("def compare_cell_sort_key", "export function compareCellSortKey"),
             ("def compare_section_for_metric", "export function compareSectionForMetric"),
             ("def compare_task_for_row", "export function compareTaskForRow"),
-            ("def compare_core_util_chart_svg", "export function compareCoreUtilChartSvg"),
             ("def compare_p99_delta_chart_svg", "export function compareP99DeltaChartSvg"),
             ("def compare_summary_change_bars_svg", "export function compareSummaryChangeBarsSvg"),
             ("def compare_summary_change_bar_rows", "export function compareSummaryChangeBarRows"),
-            ("def compare_migration_heatmap_svg", "export function compareMigrationHeatmapSvg"),
+            ("def compare_delta_scale_family", "export function compareDeltaScaleFamily"),
             ("def compare_migration_heatmap_rows", "export function compareMigrationHeatmapRows"),
             ("def compare_row_delta_status", "export function compareRowDeltaStatus"),
             ("def compare_directional_delta", "export function compareDirectionalDelta"),
@@ -670,7 +669,10 @@ class AiWebParityTests(unittest.TestCase):
         self.assertNotIn("Investigate on Baseline", compare)
         self.assertNotIn("Investigate on Candidate", stats)
         self.assertNotIn("Investigate on Candidate", compare)
-        self.assertIn("self._decision, self._summary_chart, self._summary_table", stats)
+        summary_layout = stats.split('summary_page = self._make_compare_scroll_page(', 1)[1].split('core_page =', 1)[0]
+        ordered = ['self._decision', "self._evidence_widgets_by_key['trace_comparability']", "self._evidence_widgets_by_key['task_presence']", 'self._summary_chart', "self._evidence_widgets_by_key['relative_changes']", 'self._summary_table']
+        positions = [summary_layout.index(item) for item in ordered]
+        self.assertEqual(positions, sorted(positions))
         self.assertIn("toggleTableSort('summary', 'delta')", compare)
         self.assertIn("compare_cell_sort_key(val)", stats)
         self.assertIn('addTab(self._trends_table, "Trends")', stats)

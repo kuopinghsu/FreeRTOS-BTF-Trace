@@ -30,6 +30,7 @@ BUNDLE_MODULES: list[str] = [
     "zip_container",
     "html_report",
     "stats_html",
+    "compare_evidence",
     "parser",
     "btf_slice",
     "timeline_util",

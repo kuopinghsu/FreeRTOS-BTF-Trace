@@ -562,6 +562,23 @@ def parse_signed_delta(text: Any) -> Optional[Tuple[float, str]]:
     return sign * val, "count"
 
 
+def compare_delta_scale_family(text: Any) -> str:
+    """Unit family for Summary-change bar length (do not mix ns with bare /s)."""
+    s = str(text or "").strip().replace("−", "-").replace(",", "")
+    s = _VALUE_PAREN_RE.sub("", s).strip()
+    m = _DELTA_RE.match(s) if s else None
+    if not m:
+        return "count"
+    unit = (m.group(3) or "").lower()
+    if unit in _UNIT_NS:
+        return "time_ns"
+    if unit == "/s":
+        return "per_s"
+    if unit in ("%", "pp"):
+        return "pct"
+    return "count"
+
+
 def compare_cell_sort_key(value: Any) -> Any:
     """Numeric/time-aware sort key for Trace Compare cells (Web parity)."""
     if isinstance(value, bool):
@@ -692,6 +709,7 @@ def compare_summary_decision_html(
     tables: dict,
     name_a: str = "",
     name_b: str = "",
+    *, include_context: bool = True,
 ) -> str:
     """Dialog-matching regression result for the Trace Compare HTML Summary card."""
     data = compare_summary_strip(tables, 4, name_a, name_b)
@@ -730,7 +748,20 @@ def compare_summary_decision_html(
     mover_text = f"{mover.get('label')}: {mover.get('change')}" if mover else "—"
     glyph = {"regressed": "▲", "improved": "▼", "mixed": "◆"}.get(tone, "●")
     parts = ['<div class="compare-decision">']
-    if comp_warnings:
+    parts.append(
+        '<div class="compare-cards">'
+        f'<div class="compare-card tone-regressed"><span class="compare-card-k">'
+        f'Regressions</span><span class="compare-card-v">{n_reg}</span></div>'
+        f'<div class="compare-card tone-improved"><span class="compare-card-k">'
+        f'Improvements</span><span class="compare-card-v">{n_imp}</span></div>'
+        f'<div class="compare-card tone-warn"><span class="compare-card-k">'
+        f'Warnings</span><span class="compare-card-v">{n_warn}</span></div>'
+        f'<div class="compare-card compare-card-mover"><span class="compare-card-k">'
+        f'Biggest mover</span><span class="compare-card-v">'
+        f'{html.escape(mover_text)}</span></div>'
+        "</div>"
+    )
+    if include_context and comp_warnings:
         parts.append('<div class="compare-comparability-warn">')
         parts.append(
             '<div class="compare-comparability-head">⚠ Traces may not be '
@@ -748,24 +779,10 @@ def compare_summary_decision_html(
            if sentence else "")
         + "</span></div>"
     )
-    parts.append(
-        '<div class="compare-cards">'
-        f'<div class="compare-card tone-regressed"><span class="compare-card-k">'
-        f'Regressions</span><span class="compare-card-v">{n_reg}</span></div>'
-        f'<div class="compare-card tone-improved"><span class="compare-card-k">'
-        f'Improvements</span><span class="compare-card-v">{n_imp}</span></div>'
-        f'<div class="compare-card tone-warn"><span class="compare-card-k">'
-        f'Warnings</span><span class="compare-card-v">{n_warn}</span></div>'
-        f'<div class="compare-card compare-card-mover"><span class="compare-card-k">'
-        f'Biggest mover</span><span class="compare-card-v">'
-        f'{html.escape(mover_text)}</span></div>'
-        "</div>"
-    )
-    parts.append(
-        f'<div class="compare-decision-identity">{html.escape(ident)}</div>'
-    )
+    if include_context:
+        parts.append(f'<div class="compare-decision-identity">{html.escape(ident)}</div>')
     if nxt:
-        parts.append(f'<div class="compare-next">{html.escape(nxt)}</div>')
+        parts.append('<div class="compare-next"><strong>Next</strong><span>' + html.escape((nxt[5:] if nxt.startswith('Next:') else nxt).strip()) + '</span></div>')
     if sig_note:
         parts.append(
             f'<div class="compare-decision-sig">{html.escape(sig_note)}</div>'
@@ -1257,10 +1274,6 @@ def compare_notable_changes(
     }
 
 
-COMPARE_CHART_BASELINE = "#2a6fb2"
-COMPARE_CHART_CANDIDATE = "#6b4ea8"
-COMPARE_CHART_REGRESSED = "#c0392b"
-COMPARE_CHART_IMPROVED = "#1f6b45"
 COMPARE_MIG_VIEWS = ("count", "dwell", "cores")
 COMPARE_MIG_FILTERS = ("top", "changed", "regressed", "all")
 _MIG_VIEW_SPEC = {
@@ -1341,63 +1354,22 @@ def compare_p99_delta_chart_rows(tables: dict, limit: int = 12) -> List[dict]:
     return out[:lim]
 
 
-def compare_core_util_chart_svg(rows: Sequence[dict], width: int = 640) -> str:
-    """Paired horizontal bars: Baseline A (blue) above Candidate B (purple)."""
-    items = [r for r in (rows or []) if isinstance(r, dict)]
-    if not items:
-        return ""
-    w = max(280, int(width or 640))
-    label_w = 78
-    pad = 12
-    row_h = 32
-    header = 22
-    pct_w = 52
-    h = header + pad + len(items) * row_h + 8
-    max_v = max((max(float(r.get("a") or 0), float(r.get("b") or 0)) for r in items), default=1.0)
-    max_v = max(max_v, 1.0)
-    plot_w = max(80.0, w - label_w - pad - pct_w)
-    ax = label_w
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
-        f'width="{w}" height="{h}" role="img" '
-        'aria-label="Core Utilization Baseline A vs Candidate B">',
-        f'<text x="{pad}" y="16" font-size="12" fill="#123355" font-weight="600">'
-        "Core Utilization</text>",
-        f'<text x="{w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
-        '<tspan fill="#2a6fb2">Baseline A</tspan>'
-        '<tspan fill="#5f6f82"> · </tspan>'
-        '<tspan fill="#6b4ea8">Candidate B</tspan></text>',
-    ]
-    for i, row in enumerate(items):
-        y = header + pad + i * row_h
-        lab = html.escape(str(row.get("label") or "")[:18])
-        a_v = max(0.0, float(row.get("a") or 0))
-        b_v = max(0.0, float(row.get("b") or 0))
-        aw = plot_w * a_v / max_v
-        bw = plot_w * b_v / max_v
-        parts.append(f'<text x="{pad}" y="{y + 14}" font-size="11" fill="#182230">{lab}</text>')
-        parts.append(
-            f'<rect x="{ax:.1f}" y="{y}" width="{max(aw, 0.5):.1f}" height="9" rx="3" '
-            f'fill="{COMPARE_CHART_BASELINE}"/>'
-        )
-        parts.append(
-            f'<rect x="{ax:.1f}" y="{y + 12}" width="{max(bw, 0.5):.1f}" height="9" rx="3" '
-            f'fill="{COMPARE_CHART_CANDIDATE}"/>'
-        )
-        parts.append(
-            f'<text x="{ax + plot_w + 6:.1f}" y="{y + 9}" font-size="10" '
-            f'fill="{COMPARE_CHART_BASELINE}">{a_v:.1f}%</text>'
-        )
-        parts.append(
-            f'<text x="{ax + plot_w + 6:.1f}" y="{y + 21}" font-size="10" '
-            f'fill="{COMPARE_CHART_CANDIDATE}">{b_v:.1f}%</text>'
-        )
-    parts.append("</svg>")
-    return "".join(parts)
+def compare_p99_delta_chart_svg(
+    rows: Sequence[dict],
+    width: int = 640,
+    *,
+    title: str = "Response P99 change",
+    axis: tuple = ("Improved", "Regressed"),
+    tint_axis: bool = True,
+    subtitle: str = "Candidate B − Baseline A",
+    change_w: int = 88,
+) -> str:
+    """Diverging bars around zero (Candidate B − Baseline A).
 
-
-def compare_p99_delta_chart_svg(rows: Sequence[dict], width: int = 640) -> str:
-    """Diverging bars: improvements left, regressions right (Candidate B − Baseline A)."""
+    Bar paint follows *direction* (left/minus → ``--series-a``, right/plus →
+    ``--series-b``), matching the other compare charts. *tint_axis* colours the
+    Improved/Regressed axis words with the matching series text tones.
+    """
     items = [r for r in (rows or []) if isinstance(r, dict)]
     if not items:
         return ""
@@ -1406,43 +1378,50 @@ def compare_p99_delta_chart_svg(rows: Sequence[dict], width: int = 640) -> str:
     pad = 12
     row_h = 22
     header = 44
-    change_w = 88
+    change_w = max(48, int(change_w or 88))
     h = header + len(items) * row_h + 16
     max_v = max((abs(float(r.get("cand") or 0)) for r in items), default=1.0) or 1.0
     plot_w = max(80.0, w - label_w - pad - change_w)
     mid = label_w + plot_w / 2.0
     half = plot_w / 2.0
     axis_y = 34
+    axis_left, axis_right = (list(axis) + ["", ""])[:2]
+    left_cls = "cmp-chart-improved" if tint_axis else "cmp-chart-sub"
+    right_cls = "cmp-chart-regressed" if tint_axis else "cmp-chart-sub"
+    sub = str(subtitle or "Candidate B − Baseline A")
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
         f'width="{w}" height="{h}" role="img" '
-        'aria-label="Response P99 change Candidate B minus Baseline A">',
-        f'<text x="{pad}" y="16" font-size="12" fill="#123355" font-weight="600">'
-        "Response P99 change</text>",
-        f'<text x="{w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
-        "Candidate B − Baseline A</text>",
-        f'<text x="{label_w:.1f}" y="{axis_y}" font-size="9" fill="{COMPARE_CHART_IMPROVED}">'
-        "Improved</text>",
-        f'<text x="{label_w + plot_w:.1f}" y="{axis_y}" text-anchor="end" font-size="9" '
-        f'fill="{COMPARE_CHART_REGRESSED}">Regressed</text>',
-        f'<line x1="{mid:.1f}" y1="{header - 2}" x2="{mid:.1f}" y2="{h - 10}" '
-        'stroke="#d9e0ea" stroke-width="1"/>',
+        f'aria-label="{html.escape(title)} Candidate B minus Baseline A">',
+        f'<text class="cmp-chart-title" x="{pad}" y="16" font-size="12" font-weight="600">'
+        f"{html.escape(title)}</text>",
+        f'<text class="cmp-chart-sub" x="{w - pad}" y="16" text-anchor="end" font-size="11">'
+        f"{html.escape(sub)}</text>",
+        f'<text class="{left_cls}" x="{label_w:.1f}" y="{axis_y}" font-size="9">'
+        f"{html.escape(axis_left)}</text>",
+        f'<text class="{right_cls}" x="{label_w + plot_w:.1f}" y="{axis_y}" '
+        f'text-anchor="end" font-size="9">{html.escape(axis_right)}</text>',
+        f'<line class="cmp-chart-axis" x1="{mid:.1f}" y1="{header - 2}" x2="{mid:.1f}" '
+        f'y2="{h - 10}" stroke-width="1"/>',
     ]
     for i, row in enumerate(items):
         y = header + i * row_h
         lab = html.escape(str(row.get("label") or "")[:16])
         cand = float(row.get("cand") or 0)
         bar_w = abs(cand) / max_v * half
-        color = COMPARE_CHART_REGRESSED if cand > 0 else COMPARE_CHART_IMPROVED
+        # Directional blue series (not improved/regressed green/red).
+        tone = "plus" if cand >= 0 else "minus"
         x = mid if cand >= 0 else mid - bar_w
-        parts.append(f'<text x="{pad}" y="{y + 14}" font-size="11" fill="#182230">{lab}</text>')
         parts.append(
-            f'<rect x="{x:.1f}" y="{y + 4}" width="{max(bar_w, 0.8):.1f}" height="12" rx="2" '
-            f'fill="{color}"/>'
+            f'<text class="cmp-chart-label" x="{pad}" y="{y + 14}" font-size="11">{lab}</text>'
         )
         parts.append(
-            f'<text x="{mid + half + 8:.1f}" y="{y + 14}" font-size="10" fill="{color}">'
-            f'{html.escape(str(row.get("change") or ""))}</text>'
+            f'<rect class="cmp-chart-bar {tone}" x="{x:.1f}" y="{y + 4}" '
+            f'width="{max(bar_w, 0.8):.1f}" height="10" rx="5"/>'
+        )
+        parts.append(
+            f'<text class="cmp-chart-value" x="{mid + half + 8:.1f}" y="{y + 14}" '
+            f'font-size="10">{html.escape(str(row.get("change") or ""))}</text>'
         )
     parts.append("</svg>")
     return "".join(parts)
@@ -1654,15 +1633,24 @@ def compare_dumbbell_rows(rows: Any, **opts: Any) -> List[dict]:
 
 
 def compare_summary_change_bar_rows(tables: dict, limit: int = 8) -> List[dict]:
-    """Compact Summary change bars (Candidate B − Baseline A) for key metrics."""
+    """Compact Summary change bars (Candidate B − Baseline A) for key metrics.
+
+    Bar length is the relative move ``Δ / max(|A|, |B|, |Δ|)`` (same basis as
+    the printed ``/ ±N%``), so mixed units stay comparable and the label matches
+    the geometry. Absolute flipped Δ is still shown beside the %.
+    """
     lim = max(1, min(16, int(limit or 8)))
     out: List[dict] = []
     for row in (tables or {}).get("summary") or []:
         if isinstance(row, dict):
             label = str(row.get("label") or "")
             delta = row.get("delta")
+            a_raw = row.get("a")
+            b_raw = row.get("b")
         elif isinstance(row, (list, tuple)) and len(row) >= 4:
             label = str(row[0] or "")
+            a_raw = row[1]
+            b_raw = row[2]
             delta = row[3]
         else:
             continue
@@ -1675,28 +1663,46 @@ def compare_summary_change_bar_rows(tables: dict, limit: int = 8) -> List[dict]:
         signed, kind = parsed
         if signed == 0:
             continue
-        cand = -signed
+        a_mag = _cell_magnitude(a_raw)
+        b_mag = _cell_magnitude(b_raw)
+        base = max(abs(a_mag or 0.0), abs(b_mag or 0.0), abs(signed), 1.0)
+        cand = -signed / base
+        rel_pct = 100.0 * cand
         status = compare_row_delta_status(label, delta) or "Changed"
+        abs_txt = _flip_delta_text(delta)
         out.append({
             "label": label,
             "signed": signed,
             "cand": cand,
+            "rel_pct": rel_pct,
             "kind": kind,
+            "family": compare_delta_scale_family(delta),
             "status": status,
             "delta": str(delta),
-            "change": _flip_delta_text(delta),
+            "change": f"{abs_txt} / {rel_pct:+.1f}%",
         })
     out.sort(key=lambda r: -abs(float(r.get("cand") or 0)))
     return out[:lim]
 
 
 def compare_summary_change_bars_svg(rows: Sequence[dict], width: int = 640) -> str:
-    """Compact diverging bars for Summary metric changes."""
-    return compare_p99_delta_chart_svg([
-        {**r, "label": str(r.get("label") or "")[:22]}
-        for r in (rows or []) if isinstance(r, dict)
-    ], width=width).replace(
-        "Response P99 change", "Summary changes",
+    """Compact diverging bars for Summary metric changes.
+
+    Rows carry relative ``cand`` and a change label that includes the matching
+    ``%``. Axis ends state direction (B lower / B higher); bars use the shared
+    blue series colours by sign.
+    """
+    return compare_p99_delta_chart_svg(
+        [
+            {**r, "label": str(r.get("label") or "")[:22]}
+            for r in (rows or []) if isinstance(r, dict)
+        ],
+        width=width,
+        title="Summary changes",
+        axis=("B lower", "B higher"),
+        tint_axis=False,
+        subtitle="Candidate B − Baseline A · bar = % of max(A, B)",
+        change_w=132,
     )
 
 
@@ -1724,45 +1730,136 @@ def compare_migration_heatmap_rows(rows: Sequence, limit: int = 16) -> List[dict
     return out
 
 
-def compare_migration_heatmap_svg(rows: Sequence[dict], width: int = 640) -> str:
-    """Task-by-task migration Δ color strip (green=improved, red=regressed)."""
-    items = [r for r in (rows or []) if isinstance(r, dict)]
+def _paired_bar_items(
+    rows: Sequence,
+    *,
+    a_idx: int = 1,
+    b_idx: int = 2,
+    label_key: str = "name",
+    a_key: str = "a",
+    b_key: str = "b",
+    limit: int = 10,
+    sort_by_delta: bool = False,
+) -> List[dict]:
+    """``[{label, a, b}]`` from compare table rows (dicts or sequences)."""
+    items: List[dict] = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            label = str(row.get(label_key) or row.get("label")
+                        or row.get("core") or row.get("name") or "")
+            a_raw = row.get(a_key)
+            b_raw = row.get(b_key)
+        elif isinstance(row, (list, tuple)):
+            label = str(row[0] or "") if row else ""
+            a_raw = row[a_idx] if len(row) > a_idx else None
+            b_raw = row[b_idx] if len(row) > b_idx else None
+        else:
+            continue
+        if not label:
+            continue
+        a_val = _cell_magnitude(a_raw)
+        b_val = _cell_magnitude(b_raw)
+        if a_val is None and b_val is None:
+            continue
+        items.append({"label": label, "a": a_val or 0.0, "b": b_val or 0.0})
+    items.sort(key=lambda r: (-(abs(r["b"] - r["a"]) if sort_by_delta else max(r["a"], r["b"])), r["label"]))
+    return items[:max(1, int(limit or 10))]
+
+
+def compare_paired_bars_html(
+    rows: Sequence,
+    *,
+    title: str,
+    subtitle: str = "",
+    digits: int = 1,
+    **opts,
+) -> str:
+    """Paired A/B bars for one compare table: Baseline A above Candidate B on a
+    single shared scale, so the pair can be read without doing arithmetic.
+    Reuses the report bar geometry (``--std-bar-*``) and series colours."""
+    items = _paired_bar_items(rows, **opts)
     if not items:
         return ""
-    w = max(280, int(width or 640))
-    label_w = 110
-    pad = 12
-    row_h = 18
-    header = 24
-    h = header + len(items) * row_h + 10
-    max_v = max((abs(float(r.get("delta") or 0)) for r in items), default=1.0) or 1.0
-    bar_w = max(80.0, w - label_w - pad - 60)
+    peak = max([1e-9] + [max(r["a"], r["b"]) for r in items])
     parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
-        f'width="{w}" height="{h}" role="img" '
-        'aria-label="Migration count change heatmap">',
-        f'<text x="{pad}" y="16" font-size="12" fill="#123355" font-weight="600">'
-        "Migration Δ heatmap</text>",
-        f'<text x="{w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">'
-        "Δ = A − B</text>",
+        '<div class="compare-visual"><div class="compare-visual-head"><div>',
+        f'<div class="compare-visual-title">{html.escape(str(title))}</div>',
     ]
-    for i, row in enumerate(items):
-        y = header + i * row_h
-        lab = html.escape(str(row.get("label") or "")[:18])
-        d = float(row.get("delta") or 0)
-        frac = abs(d) / max_v
-        color = COMPARE_CHART_IMPROVED if d > 0 else COMPARE_CHART_REGRESSED
-        parts.append(f'<text x="{pad}" y="{y + 13}" font-size="11" fill="#182230">{lab}</text>')
+    if subtitle:
         parts.append(
-            f'<rect x="{label_w:.1f}" y="{y + 3}" width="{max(bar_w * frac, 2):.1f}" '
-            f'height="12" rx="2" fill="{color}" opacity="0.85"/>'
-        )
-        sign = "+" if d > 0 else "−" if d < 0 else ""
+            f'<div class="compare-visual-sub">{html.escape(str(subtitle))}</div>')
+    parts.append(
+        '</div><div class="compare-legend">'
+        '<span class="compare-legend-item"><i class="legend-swatch a"></i>Baseline A</span>'
+        '<span class="compare-legend-item"><i class="legend-swatch b"></i>Candidate B</span>'
+        '</div></div><div class="paired-bars">'
+    )
+    for r in items:
+        lab = html.escape(str(r["label"]))
+        tip = (f'{lab}: A {r["a"]:,.{digits}f} \u00b7 B {r["b"]:,.{digits}f}')
         parts.append(
-            f'<text x="{label_w + bar_w + 8:.1f}" y="{y + 13}" font-size="10" '
-            f'fill="{color}">{sign}{abs(int(d))}</text>'
+            f'<div class="paired-row" title="{tip}">'
+            f'<div class="paired-label">{lab}</div>'
+            '<div class="paired-pair">'
         )
-    parts.append("</svg>")
+        for tag, val in (("a", r["a"]), ("b", r["b"])):
+            pct = max(0.0, min(100.0, 100.0 * val / peak))
+            parts.append(
+                f'<div class="paired-line"><span class="paired-tag {tag}">{tag.upper()}</span>'
+                f'<span class="paired-track"><span class="paired-fill {tag}" '
+                f'style="--w:{pct:.1f}%"></span></span>'
+                f'<span class="paired-value">{val:,.{digits}f}</span></div>'
+            )
+        parts.append("</div></div>")
+    parts.append("</div></div>")
+    return "".join(parts)
+
+
+def compare_migration_delta_html(rows: Sequence, limit: int = 12) -> str:
+    """Diverging migration-Δ bars around a zero line, replacing the Δ heatmap
+    SVG. Both directions stay in the quantitative blue family: a large delta is
+    a measurement, not a verdict."""
+    items = [r for r in (compare_migration_heatmap_rows(rows, limit) or [])
+             if isinstance(r, dict)]
+    if not items:
+        return ""
+    minus = "\u2212"
+    peak = max([1.0] + [abs(float(r.get("delta") or 0)) for r in items])
+    parts = [
+        '<div class="compare-visual migration-delta-unified">'
+        '<div class="compare-visual-head"><div>'
+        '<div class="compare-visual-title">Migration \u0394 heatmap</div>'
+        '<div class="compare-visual-sub">\u0394 = A ' + minus + ' B. Negative and positive '
+        'deltas use the same quantitative blue family as the rest of the report.'
+        '</div></div>'
+        '<div class="compare-legend migration-delta-legend">'
+        '<span class="compare-legend-item"><i class="legend-swatch delta-minus"></i>'
+        'Negative \u0394</span>'
+        '<span class="compare-legend-item"><i class="legend-swatch delta-plus"></i>'
+        'Positive \u0394</span>'
+        '</div></div><div class="delta-bars">'
+    ]
+    placeholder = '<span class="delta-track-placeholder"></span>'
+    for r in items:
+        lab = html.escape(str(r.get("label") or ""))
+        d = float(r.get("delta") or 0)
+        pct = max(0.0, min(100.0, 100.0 * abs(d) / peak))
+        if d < 0:
+            visual = (f'<span class="delta-track left"><span class="delta-fill minus" '
+                      f'style="--w:{pct:.1f}%"></span></span>{placeholder}')
+        elif d > 0:
+            visual = (f'{placeholder}<span class="delta-track right">'
+                      f'<span class="delta-fill plus" style="--w:{pct:.1f}%"></span></span>')
+        else:
+            visual = placeholder + placeholder
+        sign = minus if d < 0 else ""
+        parts.append(
+            f'<div class="delta-row" title="{lab}: \u0394 {sign}{abs(int(round(d))):,}">'
+            f'<div class="delta-label">{lab}</div>'
+            f'<div class="delta-visual"><span class="delta-zero"></span>{visual}</div>'
+            f'<div class="delta-value">{sign}{abs(int(round(d))):,}</div></div>'
+        )
+    parts.append("</div></div>")
     return "".join(parts)
 
 

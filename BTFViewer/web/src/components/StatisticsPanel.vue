@@ -5141,7 +5141,7 @@ import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggl
 import { buildHistogramModel, histogramBarTooltip, percentile } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
-import { btfHtmlReportDocument, htmlApplyCollapsibleToc, htmlMakeCollapsibleSections, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, HTML_REPORT_INTERACTIVE_SCRIPT, APP_VERSION } from '../utils/htmlReport.js'
+import { btfHtmlReportDocument, htmlApplyCollapsibleToc, htmlMakeCollapsibleSections, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, HTML_REPORT_INTERACTIVE_SCRIPT, REPORT_THEME_CSS, APP_VERSION } from '../utils/htmlReport.js'
 import {
   STATS_DEFAULT_EXPANDED,
   STATS_HTML_EXTRA_CSS,
@@ -9134,7 +9134,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
   const now = new Date()
   const pad = n => String(n).padStart(2, '0')
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
-  const statsExtraCss = `${STATS_HTML_EXTRA_CSS}\n${HTML_REPORT_TOC_CSS}`.trim()
+  const statsExtraCss = `${REPORT_THEME_CSS}\n${STATS_HTML_EXTRA_CSS}\n${HTML_REPORT_TOC_CSS}`.trim()
 
   // One-sentence verdict above the KPI grid, for skimming.
   const vBits = []

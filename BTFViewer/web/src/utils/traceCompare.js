@@ -1,3 +1,4 @@
+import { COMPARE_EVIDENCE, buildComparisonEvidence, formatEvidenceCell } from './compareEvidence.js'
 /**
  * Compare summary and per-task metrics between two loaded traces.
  * Optional lo/hi per trace for cursor-scoped compare.
@@ -12,7 +13,7 @@ import { syncObjectStatsRows } from './syncObjectAnalysis.js'
 import { getPlacedCursors, segFullyInRange, segOverlapNs } from './statsRange.js'
 import { tickHealthReport } from './tickHealth.js'
 import loadBalanceMetrics from './loadBalanceGauge.js'
-import { btfHtmlReportDocument, HTML_REPORT_INTERACTIVE_SCRIPT, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, htmlApplyCollapsibleToc } from './htmlReport.js'
+import { btfHtmlReportDocument, HTML_REPORT_INTERACTIVE_SCRIPT, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, REPORT_THEME_CSS, htmlApplyCollapsibleToc } from './htmlReport.js'
 import {
   compareAnalysisTables,
   compareNotableChanges,
@@ -23,14 +24,12 @@ import {
   COMPARE_NOTE_MIGRATION,
   COMPARE_NOTE_STI,
   COMPARE_NOTE_P99,
-  compareCoreUtilChartRows,
-  compareCoreUtilChartSvg,
+  comparePairedBarsHtml,
   compareP99DeltaChartRows,
   compareP99DeltaChartSvg,
   compareSummaryChangeBarRows,
   compareSummaryChangeBarsSvg,
-  compareMigrationHeatmapRows,
-  compareMigrationHeatmapSvg,
+  compareMigrationDeltaHtml,
   filterCompareMigrationRows,
 } from './uxExplore.js'
 
@@ -118,7 +117,10 @@ export function summarizeTimeSamples(samples, scale) {
   const sorted = [...samples].sort((a, b) => a - b)
   const n = sorted.length
   const sum = sorted.reduce((a, b) => a + b, 0)
-  const avgNs = Math.round(sum / n)
+  // Match Python round(): exact halves round to the nearest even integer.
+  const mean = sum / n
+  const floor = Math.floor(mean)
+  const avgNs = mean - floor === 0.5 ? floor + floor % 2 : Math.round(mean)
   const p95Idx = Math.min(n - 1, Math.ceil(n * 0.95) - 1)
   const minNs = sorted[0]
   const maxNs = sorted[n - 1]
@@ -177,6 +179,7 @@ export function fmtKs(a, b) {
 
 function taskMetricCompareByName(trace, sampleFn, lo, hi, {
   includeCpu = false,
+  includeSystem = false,
   runsFromStarts = false,
 } = {}) {
   const map = new Map()
@@ -189,7 +192,7 @@ function taskMetricCompareByName(trace, sampleFn, lo, hi, {
     if (!segs?.length) continue
     const repr = taskReprGet(trace, mk) ?? mk
     const { name: tname } = parseTaskName(repr)
-    if (isIdleTaskName(tname) || tname === 'TICK') continue
+    if (!includeSystem && (isIdleTaskName(tname) || tname === 'TICK')) continue
     const samples = sampleFn(segs, lo, hi)
     const summary = summarizeTimeSamples(samples, scale)
     if (!summary) continue
@@ -277,7 +280,7 @@ export function crossTraceTrends(rows = []) {
 }
 
 /** Top tasks by CPU% keyed by display name. */
-export function topTasksCpuByName(trace, limit = 10, lo = null, hi = null) {
+export function topTasksCpuByName(trace, limit = 10, lo = null, hi = null, includeSystem = false) {
   if (!trace?.segByMergeKey) return new Map()
   const total = (lo != null && hi != null)
     ? Math.max(1, hi - lo)
@@ -286,7 +289,7 @@ export function topTasksCpuByName(trace, limit = 10, lo = null, hi = null) {
   for (const [mk, segs] of trace.segByMergeKey) {
     const repr = taskReprGet(trace, mk) ?? mk
     const { name } = parseTaskName(repr)
-    if (isIdleTaskName(name) || name === 'TICK') continue
+    if (!includeSystem && (isIdleTaskName(name) || name === 'TICK')) continue
     let t = 0
     for (const s of segs) {
       if (lo != null && hi != null) {
@@ -936,6 +939,7 @@ function htmlCell(v) {
 
 function normalizeCompareTables(tables = {}) {
   return {
+    evidence: tables.evidence || {},
     summary: tables.summary || [],
     top: tables.top || tables.topTasks || [],
     coreUtil: tables.coreUtil || [],
@@ -998,12 +1002,58 @@ function trendCells(row) {
   }
 }
 
+export function buildFocusedCompareEvidence(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, deadlines = null) {
+  const ra = rangeForTab(tabA, scopeEnabled), rb = rangeForTab(tabB, scopeEnabled)
+  const extras = analysisCompareExtras(traceA, traceB, tabA, tabB, scopeEnabled, deadlines, 0)
+  function side(trace, range, suffix) {
+    const cpu = topTasksCpuByName(trace, 0, range.lo, range.hi, true)
+    const execution = taskMetricCompareByName(trace, execSliceSamples, range.lo, range.hi, { includeSystem: true })
+    const blocking = blockingSummaryByName(trace, range.lo, range.hi)
+    const arrival = taskMetricCompareByName(trace, interArrivalSamples, range.lo, range.hi)
+    const response = new Map((extras.response || []).map(r => [r.name, r[`p99_${suffix}`] || 0]))
+    const result = Object.create(null)
+    for (const mk of trace?.tasks || []) {
+      const name = taskDisplayName(taskReprGet(trace, mk) || mk)
+      const times = new Map()
+      for (const seg of trace.segByMergeKey?.get(mk) || []) {
+        const duration = Math.max(0, Math.min(seg.end, range.hi ?? seg.end) - Math.max(seg.start, range.lo ?? seg.start))
+        if (duration) times.set(seg.core, (times.get(seg.core) || 0) + duration)
+      }
+      const cores = [...times.keys()].sort()
+      const primary = [...cores].sort((x, y) => times.get(y) - times.get(x) || (x < y ? -1 : x > y ? 1 : 0))[0] || null
+      const migrations = (trace.migrationsByMk?.get(mk) || []).filter(m => (range.lo == null || m.ns >= range.lo) && (range.hi == null || m.ns <= range.hi)).length
+      result[name] = { cpu: cpu.get(name) || 0, runs: execution.get(name)?.runs || 0,
+        execution: execution.get(name)?.maxNs || 0, blocking: blocking.get(name)?.maxNs || 0,
+        response: response.get(name) || 0, interArrival: arrival.get(name)?.avgNs || 0, cores, primary, migrations }
+    }
+    return result
+  }
+  const a = side(traceA, ra, 'a'), b = side(traceB, rb, 'b')
+  const shape = compareTraceShapeInfo(traceA, traceB, tabA, tabB, scopeEnabled)
+  const evidence = buildComparisonEvidence(a, b, [
+    ['Trace span (ns)', shape.span_a_ns, shape.span_b_ns],
+    ['Task count', Object.keys(a).length, Object.keys(b).length],
+    ['Core count', shape.cores_a, shape.cores_b],
+  ])
+  const names = [...new Set([...Object.keys(a), ...Object.keys(b)])]
+  const pairs = metric => names.filter(name => !isIdleTaskName(parseTaskName(name).name) && parseTaskName(name).name !== 'TICK').map(label => ({ label, a: a[label]?.[metric] || 0, b: b[label]?.[metric] || 0 })).filter(row => row.a > 0 || row.b > 0)
+  const ua = new Map(coreUtilPctRows(traceA, ra.lo, ra.hi).map(r => [r.core, r.pct]))
+  const ub = new Map(coreUtilPctRows(traceB, rb.lo, rb.hi).map(r => [r.core, r.pct]))
+  evidence._charts = {
+    top: pairs('cpu'), execution: pairs('execution'), blocking: pairs('blocking'), interArrival: pairs('interArrival'),
+    coreUtil: [...new Set([...ua.keys(), ...ub.keys()])].map(label => ({ label, a: ua.get(label) || 0, b: ub.get(label) || 0 })),
+    mutex_block: (extras.mutex_block || []).map(r => ({ label: r.name, a: r.total_a || 0, b: r.total_b || 0 })),
+  }
+  return evidence
+}
+
 /** Build all Trace Compare table sets (same as TraceCompareDialog export).
  *  Pass ``rowLimit`` 0/null for every row (HTML/CSV export). */
 export function buildAllCompareTables(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, deadlines = null, rowLimit = 15) {
   const cap = isUnlimitedLimit(rowLimit) ? 0 : rowLimit
   const topCap = isUnlimitedLimit(rowLimit) ? 0 : 10
   return {
+    evidence: buildFocusedCompareEvidence(traceA, traceB, tabA, tabB, scopeEnabled, deadlines),
     summary: buildSummaryCompareRows(traceA, traceB, tabA, tabB, scopeEnabled, deadlines),
     top: buildTopTasksCompareRows(traceA, traceB, tabA, tabB, scopeEnabled, topCap),
     coreUtil: buildCoreUtilCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
@@ -1091,8 +1141,8 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
   }
   const evRefs = []
   for (const row of t.shared_patterns || t.sharedPatterns || []) {
-    let task = 'pattern'
-    let reason = ''
+    let task
+    let reason
     if (row && typeof row === 'object' && !Array.isArray(row)) {
       task = String(row.task || row.name || 'pattern')
       reason = String(row.reason || '')
@@ -1244,10 +1294,15 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
     ].join(','))
   }
 
+  for (const spec of COMPARE_EVIDENCE) {
+    lines.push('', spec.title, spec.columns.map(csvCell).join(','))
+    for (const row of t.evidence[spec.key] || []) lines.push(row.map((v, i) => csvCell(formatEvidenceCell(spec.key, v, i))).join(','))
+  }
   return lines.join('\n')
 }
 
 const _COMPARE_HTML_EXTRA_CSS = `
+${REPORT_THEME_CSS}
 .report.report-compare { max-width: min(1280px, 100%); }
 .report-card { overflow: hidden; }
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
@@ -1260,131 +1315,284 @@ th, td {
   white-space: nowrap;
 }
 th:first-child, td:first-child { text-align: left; }
-thead th { background: #f1f5fb; font-weight: 600; }
+thead th { background: var(--paper-2); color: var(--ink); font-weight: 600; }
 thead th:first-child, tbody td:first-child { position: sticky; left: 0; z-index: 1; }
-thead th:first-child { background: #f1f5fb; }
-tbody td:first-child { background: #fff; }
-tbody tr:nth-child(even) td { background: #f7f9fc; }
-tbody tr:nth-child(even) td:first-child { background: #f7f9fc; }
+thead th:first-child { background: var(--paper-2); }
+tbody td:first-child { background: var(--paper); }
+tbody tr:nth-child(even) td { background: var(--stripe); }
+tbody tr:nth-child(even) td:first-child { background: var(--stripe); }
+tbody tr { transition: background-color 120ms ease, box-shadow 120ms ease; }
+tbody tr:hover td,
+tbody tr:hover td:first-child,
+tbody tr:focus-within td { background: var(--row-hover-bg); }
+tbody tr {
+  box-shadow: none;
+}
+tbody tr:hover {
+  box-shadow: inset 0 1px 0 var(--row-hover-edge), inset 0 -1px 0 var(--row-hover-edge);
+}
 .empty { text-align: center; color: var(--muted); white-space: normal; }
 .detail-note { margin: 6px 0 10px; font-size: 12px; color: var(--muted); line-height: 1.45; }
 .overview-why { color: var(--muted); margin: 0 0 10px; }
-.overview-sub { margin: 12px 0 6px; font-size: 13px; color: #123355; }
+.overview-sub { margin: 12px 0 6px; font-size: 13px; color: var(--ink); }
 .overview-formula { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
-.col-baseline { color: #2a6fb2; }
-.col-candidate { color: #6b4ea8; }
+/* Baseline and candidate are two series of the same measurement, so they share
+   the primary data colour; only status tones carry semantic colour. */
+.col-baseline { color: var(--series-a-text); }
+.col-candidate { color: var(--series-b-text); }
 .status-cards { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
 .status-card {
-  flex: 1 1 120px; border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 10px; background: #fff;
+  flex: 1 1 120px; border: 1px solid var(--accent-border); border-radius: 8px;
+  padding: 8px 10px; background: var(--paper);
 }
-.status-card .n { font-size: 20px; font-weight: 700; line-height: 1.1; }
-.status-regressed { border-left: 4px solid #c0392b; }
-.status-improved { border-left: 4px solid #1f6b45; }
-.status-changed { border-left: 4px solid #2a6fb2; }
-.status-warn { border-left: 4px solid #c87a12; }
-.badge-regressed { background: #fde8e6; color: #9b2c2c; }
-.badge-changed { background: #e8eef7; color: #123355; }
+.status-card .n { font-size: 20px; font-weight: 700; line-height: 1.1; color: var(--ink); }
+.status-regressed { border-left: 4px solid var(--danger); }
+.status-improved { border-left: 4px solid var(--success); }
+.status-changed { border-left: 4px solid var(--accent); }
+.status-warn { border-left: 4px solid var(--warning); }
+.badge-regressed { background: var(--danger-soft); color: var(--danger); }
+.badge-changed { background: var(--accent-soft); color: var(--accent); }
 .compare-decision {
   margin: 0 0 12px; padding: 8px 10px; border-radius: 6px;
-  background: rgba(52, 152, 219, 0.10); font-size: 12px; line-height: 1.45; color: #3d4f63;
+  background: var(--paper-2); border: 1px solid var(--line);
+  font-size: 12px; line-height: 1.45; color: var(--muted);
 }
-.compare-decision-identity { font-size: 11px; color: #5f6f82; }
-.compare-decision-counts { margin-top: 4px; font-weight: 600; color: #123355; }
-.compare-decision-largest { margin-top: 4px; color: #182230; }
-.compare-decision-why, .compare-decision-next { margin-top: 2px; font-size: 11px; color: #5f6f82; }
-.compare-decision-sig { margin-top: 2px; font-size: 10px; color: #7a8690; }
+.compare-decision-identity { font-size: 11px; color: var(--muted); }
+.compare-decision-counts { margin-top: 4px; font-weight: 600; color: var(--ink); }
+.compare-decision-largest { margin-top: 4px; color: var(--ink); }
+.compare-decision-why, .compare-decision-next { margin-top: 2px; font-size: 11px; color: var(--muted); }
+.compare-decision-sig { margin-top: 2px; font-size: 10px; color: var(--muted); }
 .compare-verdict { margin-top: 6px; }
 .compare-verdict-chip {
   display: inline-block; padding: 2px 10px; border-radius: 999px;
-  font-weight: 700; font-size: 12px; letter-spacing: 0.04em; color: #fff;
+  font-weight: 700; font-size: 12px; letter-spacing: 0.04em; color: var(--paper);
 }
-.compare-verdict-chip.tone-regressed { background: #c0392b; }
-.compare-verdict-chip.tone-improved { background: #1f6b45; }
-.compare-verdict-chip.tone-mixed { background: #c87a12; }
-.compare-verdict-chip.tone-neutral { background: #6b7a8d; }
+.compare-verdict-chip.tone-regressed { background: var(--danger); }
+.compare-verdict-chip.tone-improved { background: var(--success); }
+.compare-verdict-chip.tone-mixed { background: var(--warning); }
+.compare-verdict-chip.tone-neutral { background: var(--muted); }
 .compare-verdict-bullets { margin: 6px 0 0; padding-left: 18px; }
-.compare-verdict-bullets li { margin: 1px 0; color: #182230; }
-.compare-verdict-bullets li.reg { color: #9b2c2c; }
-.compare-verdict-bullets li.imp { color: #1f6b45; }
-.compare-verdict-none { margin-top: 6px; color: #5f6f82; font-size: 11px; }
-/* Redesigned verdict: full-width banner + stat cards (arrow glyph carries
-   meaning without colour). */
+.compare-verdict-bullets li { margin: 1px 0; color: var(--ink); }
+.compare-verdict-bullets li.reg { color: var(--danger); }
+.compare-verdict-bullets li.imp { color: var(--success); }
+.compare-verdict-none { margin-top: 6px; color: var(--muted); font-size: 11px; }
 .compare-verdict-banner {
   display: flex; gap: 10px; align-items: flex-start;
-  margin: 6px 0 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid #d9e0ea;
+  margin: 6px 0 10px; padding: 10px 12px; border-radius: 8px;
+  background: var(--paper-2); border: 1px solid var(--line);
 }
 .compare-verdict-glyph { font-size: 15px; line-height: 1.3; }
 .compare-verdict-main { display: flex; flex-direction: column; gap: 2px; }
-.compare-verdict-label { font-weight: 700; font-size: 13px; letter-spacing: 0.04em; }
-.compare-verdict-sentence { font-size: 12px; color: #3d4f63; }
-.compare-verdict-banner.tone-regressed { background: #fdecea; border-color: #e6b3ac; }
+.compare-verdict-label { font-weight: 700; font-size: 13px; letter-spacing: 0.04em; color: var(--ink); }
+.compare-verdict-sentence { font-size: 12px; color: var(--muted); }
+.compare-verdict-banner.tone-regressed { background: var(--danger-soft); border-color: var(--error-border); }
 .compare-verdict-banner.tone-regressed .compare-verdict-label,
-.compare-verdict-banner.tone-regressed .compare-verdict-glyph { color: #b23125; }
-.compare-verdict-banner.tone-improved { background: #e9f5ee; border-color: #a9d3ba; }
+.compare-verdict-banner.tone-regressed .compare-verdict-glyph { color: var(--danger); }
+.compare-verdict-banner.tone-improved { background: var(--success-soft); border-color: var(--ok-border); }
 .compare-verdict-banner.tone-improved .compare-verdict-label,
-.compare-verdict-banner.tone-improved .compare-verdict-glyph { color: #1f6b45; }
-.compare-verdict-banner.tone-mixed { background: #fdf3e2; border-color: #e2c48a; }
+.compare-verdict-banner.tone-improved .compare-verdict-glyph { color: var(--success); }
+.compare-verdict-banner.tone-mixed { background: var(--warning-soft); border-color: var(--warn-border); }
 .compare-verdict-banner.tone-mixed .compare-verdict-label,
-.compare-verdict-banner.tone-mixed .compare-verdict-glyph { color: #b4670e; }
-.compare-verdict-banner.tone-neutral { background: #eef1f5; border-color: #d1d8e0; }
+.compare-verdict-banner.tone-mixed .compare-verdict-glyph { color: var(--warning); }
+.compare-verdict-banner.tone-neutral { background: var(--paper-2); border-color: var(--line); }
 .compare-cards { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 10px; }
 .compare-card {
-  flex: 1 1 120px; border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 10px; background: #fff; display: flex; flex-direction: column; gap: 3px;
+  flex: 1 1 120px; border: 1px solid var(--accent-border); border-radius: 8px;
+  padding: 8px 10px; background: var(--paper); display: flex; flex-direction: column; gap: 3px;
 }
 .compare-card-k { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-.compare-card-v { font-size: 18px; font-weight: 700; line-height: 1.1; }
-.compare-card.tone-regressed { border-left: 4px solid #c0392b; }
-.compare-card.tone-regressed .compare-card-v { color: #b23125; }
-.compare-card.tone-improved { border-left: 4px solid #1f6b45; }
-.compare-card.tone-improved .compare-card-v { color: #1f6b45; }
-.compare-card.tone-warn { border-left: 4px solid #c87a12; }
-.compare-card.tone-warn .compare-card-v { color: #b4670e; }
+.compare-card-v { font-size: 18px; font-weight: 700; line-height: 1.1; color: var(--ink); }
+.compare-card.tone-regressed { border-left: 4px solid var(--danger); border-color: var(--error-border); }
+.compare-card.tone-regressed .compare-card-v { color: var(--danger); }
+.compare-card.tone-improved { border-left: 4px solid var(--success); border-color: var(--ok-border); }
+.compare-card.tone-improved .compare-card-v { color: var(--success); }
+.compare-card.tone-warn { border-left: 4px solid var(--warning); border-color: var(--warn-border); }
+.compare-card.tone-warn .compare-card-v { color: var(--warning); }
 .compare-card-mover { flex: 2 1 200px; }
 .compare-card-mover .compare-card-v { font-size: 13px; font-weight: 600; }
-.compare-next { margin: 6px 0 4px; font-size: 12px; font-weight: 600; color: #123355; }
+.compare-next { margin: 6px 0 4px; font-size: 12px; font-weight: 600; color: var(--ink); }
 .compare-comparability-warn {
   margin: 0 0 8px; padding: 8px 10px; border-radius: 6px;
-  background: #fdf0e2; border-left: 4px solid #c87a12; color: #6b4a12;
+  background: var(--warning-soft); border: 1px solid var(--warn-border);
+  border-left: 4px solid var(--warning); color: var(--ink);
 }
-.compare-comparability-head { font-weight: 700; }
+.compare-comparability-head { font-weight: 700; color: var(--warning); }
 .compare-comparability-warn ul { margin: 4px 0 0; padding-left: 18px; }
 .compare-comparability-warn li { margin: 1px 0; }
+/* Paired A/B comparison bars and the migration delta chart. Geometry comes
+   from the shared --std-bar-* tokens so every bar in both reports matches. */
+.compare-visual {
+  margin: 10px 0 16px; padding: 14px 16px 16px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--paper);
+}
+.compare-visual-head {
+  display: flex; justify-content: space-between; gap: 14px;
+  align-items: flex-start; margin-bottom: 12px;
+}
+.compare-visual-title { color: var(--ink); font-size: 13px; font-weight: 700; }
+.compare-visual-sub { margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.compare-legend { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 10px; }
+.compare-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.legend-swatch { display: inline-block; width: 14px; height: 6px; border-radius: 99px; }
+.legend-swatch.a, .legend-swatch.delta-minus { background: var(--series-a); }
+.legend-swatch.b, .legend-swatch.delta-plus { background: var(--series-b); }
+.paired-bars { display: grid; gap: 7px; }
+.paired-row {
+  display: grid; grid-template-columns: minmax(95px, 145px) minmax(0, 1fr);
+  gap: 10px; align-items: center; padding: 3px 0;
+}
+.paired-label {
+  overflow: hidden; color: var(--ink); font-size: 11px; font-weight: 600;
+  white-space: nowrap; text-overflow: ellipsis;
+}
+.paired-pair { display: grid; gap: 5px; }
+.paired-line {
+  display: grid; grid-template-columns: 18px minmax(80px, 1fr) 96px;
+  gap: 7px; align-items: center; min-height: 20px;
+}
+.paired-tag { font-size: 9px; font-weight: 700; text-align: center; line-height: 1.2; }
+.paired-tag.a { color: var(--series-a-text); }
+.paired-tag.b { color: var(--series-b-text); }
+.paired-track {
+  display: block; height: var(--std-bar-h); overflow: hidden;
+  background: var(--bar-track-bg); box-shadow: inset 0 0 0 1px var(--bar-track-border);
+  border-radius: var(--std-bar-r);
+}
+.paired-fill {
+  display: block; width: var(--w); height: 100%;
+  border-radius: calc(var(--std-bar-r) - 1px);
+}
+.paired-fill.a { background: var(--series-a); }
+.paired-fill.b { background: var(--series-b); }
+.paired-value {
+  color: var(--ink); font-size: 11px; line-height: 1.2;
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+.migration-delta-unified .delta-bars { display: grid; gap: 7px; }
+.migration-delta-unified .delta-row {
+  display: grid; grid-template-columns: minmax(90px, 120px) minmax(220px, 1fr) 64px;
+  gap: 10px; align-items: center; padding: 2px 0;
+}
+.migration-delta-unified .delta-label {
+  font-size: 11px; color: var(--ink); font-weight: 600;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.migration-delta-unified .delta-visual {
+  position: relative; display: grid; grid-template-columns: 1fr 1fr;
+  gap: 8px; align-items: center;
+}
+.migration-delta-unified .delta-zero {
+  position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px;
+  transform: translateX(-50%); background: var(--line);
+}
+.migration-delta-unified .delta-track,
+.migration-delta-unified .delta-track-placeholder {
+  display: block; height: var(--std-bar-h); overflow: hidden;
+  background: var(--bar-track-bg); box-shadow: inset 0 0 0 1px var(--bar-track-border);
+  border-radius: var(--std-bar-r);
+}
+.migration-delta-unified .delta-track.left,
+.migration-delta-unified .delta-track.right { justify-self: stretch; }
+.migration-delta-unified .delta-fill {
+  display: block; width: var(--w); height: 100%;
+  border-radius: calc(var(--std-bar-r) - 1px);
+}
+.migration-delta-unified .delta-fill.minus { margin-left: auto; background: var(--series-a); }
+.migration-delta-unified .delta-fill.plus { background: var(--series-b); }
+.migration-delta-unified .delta-value {
+  font-size: 11px; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums;
+}
+/* Bar hover matches the statistics export: the track edge and label pick up
+   the accent and the fill brightens, without moving anything. */
+.paired-row .paired-track, .paired-row .paired-label,
+.migration-delta-unified .delta-row .delta-track,
+.migration-delta-unified .delta-row .delta-label {
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.paired-row:hover .paired-track,
+.migration-delta-unified .delta-row:hover .delta-track {
+  border-color: var(--accent);
+}
+.paired-row:hover .paired-label,
+.migration-delta-unified .delta-row:hover .delta-label { color: var(--accent); }
+.paired-row:hover .paired-fill,
+.migration-delta-unified .delta-row:hover .delta-fill { filter: brightness(1.08); }
+@media (max-width: 680px) {
+  .paired-row { grid-template-columns: 86px minmax(0, 1fr); gap: 8px; }
+  .paired-line { grid-template-columns: 16px minmax(60px, 1fr) 72px; gap: 6px; }
+  .migration-delta-unified .delta-row {
+    grid-template-columns: 86px minmax(140px, 1fr) 56px; gap: 8px;
+  }
+}
 .compare-chart { margin: 0 0 12px; overflow-x: auto; }
 .compare-chart svg { max-width: 100%; height: auto; display: block; }
+/* Chart paint must come from CSS, never from fill="var(...)": var() is not
+   valid in an SVG presentation attribute, so those charts would not re-theme. */
+.cmp-chart-title, .cmp-chart-label { fill: var(--ink); }
+.cmp-chart-sub { fill: var(--muted); }
+.cmp-chart-axis { stroke: var(--chart-grid); }
+/* Axis words + bars share the blue series (left/minus, right/plus). */
+.cmp-chart-improved { fill: var(--series-a-text); }
+.cmp-chart-regressed { fill: var(--series-b-text); }
+.cmp-chart-bar.minus { fill: var(--series-a); }
+.cmp-chart-bar.plus { fill: var(--series-b); }
+.cmp-chart-value { fill: var(--ink); }
 .table-tools { margin: 8px 0 12px; }
 .table-toolbar {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px;
 }
 .table-search {
   font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line);
-  border-radius: 6px; min-width: 160px;
+  border-radius: 6px; min-width: 160px; background: var(--paper); color: var(--ink);
+}
+.table-search::placeholder { color: var(--muted); }
+.table-search:hover { border-color: var(--accent); }
+.table-search:focus-visible {
+  border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px;
 }
 .table-check { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+.table-check:hover { color: var(--accent); cursor: pointer; }
+.table-check input[type="checkbox"] { accent-color: var(--accent); }
 .table-count { font-size: 12px; color: var(--muted); margin-left: auto; }
+.table-action {
+  font: inherit; font-size: 12px; padding: 2px 9px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--paper-2); color: var(--ink); cursor: pointer;
+}
+.table-action:hover { border-color: var(--accent); color: var(--accent); }
+.table-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.table-action:disabled { cursor: default; }
+.table-action:disabled:hover { border-color: var(--line); color: var(--ink); }
+.table-pager { display: none; gap: 8px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }
 .table-scroll table { min-width: 100%; }
 .sortable { cursor: pointer; }
 .sortable:hover { color: var(--accent); }
-@media (prefers-color-scheme: dark) {
-  .compare-card { background: var(--paper); }
-  .compare-card.tone-regressed .compare-card-v { color: #e5776a; }
-  .compare-card.tone-improved .compare-card-v { color: #57c191; }
-  .compare-card.tone-warn .compare-card-v { color: #e0a44a; }
-  .compare-next { color: #cfe1f7; }
-  .compare-comparability-warn {
-    background: #2a2114; border-left-color: #c87a12; color: #e6cfa6;
-  }
-  .table-search { background: var(--paper); color: var(--ink); }
+thead th.sortable:hover { background: var(--accent-soft); }
+@media print {
+  body, html[data-theme="dark"] body { background: #fff !important; }
+  tbody tr:hover td, tbody tr:focus-within td { background: inherit; }
+  tbody tr:hover { box-shadow: none; }
+  .compare-card, .status-card, .report-card { box-shadow: none; }
+  .compare-chart, .compare-card, .status-card { break-inside: avoid; }
 }
+
+.report-compare { font-size:12px; line-height:1.45; }
+.report-compare h1 { font-size:24px; }
+.report-compare h2 { font-size:18px; }
+.report-compare h3, .compare-visual-title { font-size:14px; }
+.report-compare th, .report-compare td, .paired-value, .paired-label { font-size:12px; }
+.paired-tag, .compare-legend { font-size:10px; }
+.compare-next { display:flex; align-items:baseline; gap:8px; padding:8px 10px; border-left:2px solid var(--accent); background:var(--paper); color:var(--muted); font-size:11px; font-weight:400; }
+.compare-next::before { content:'›'; display:inline-grid; place-items:center; width:16px; height:16px; border:1px solid var(--accent); border-radius:50%; color:var(--accent); }
+.compare-next strong { color:var(--accent); font-weight:600; }
+@media print { .compare-visual-head, h2, h3 { break-after:avoid; } .paired-row:hover .paired-fill, .delta-row:hover .delta-fill { filter:none; } .paired-row:hover .paired-label, .delta-row:hover .delta-label { color:var(--ink); } }
 ${HTML_REPORT_TOC_CSS}
 `.trim()
 
 // Same grouping as the Trace Compare dialog's nav rail (pageTabs `group`).
 export const COMPARE_TOC_GROUPS = [
-  ['Overview', ['Overview', 'Summary']],
-  ['CPU & Cores', ['Top Tasks', 'Core Utilization', 'Core Migrations']],
-  ['Timing', ['Execution Time', 'Blocking Time', 'Inter-Arrival Time', 'Response P99']],
+  ['Overview', ['Summary', 'Overview', 'Trace Quality / Comparability', 'New / Missing Tasks', 'Largest Relative Changes']],
+  ['CPU & Cores', ['Top Tasks', 'Core Utilization', 'Core Migrations', 'Core Distribution Change', 'Migration Concentration']],
+  ['Timing', ['Execution Time', 'Blocking Time', 'Inter-Arrival Time', 'Response P99', 'Timing Change Candidates']],
   ['Contention', ['Preemption Chains', 'Sync Objects', 'Mutex Blocking']],
   ['Cross-trace', ['Shared Patterns', 'Trends']],
 ]
@@ -1414,7 +1622,6 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
   const ident = notable.identity || {}
   const identA = ident.a || {}
   const identB = ident.b || {}
-  const cards = notable.cards || {}
   const badge = { Regressed: 'badge-regressed', Improved: 'badge-ok', Changed: 'badge-changed' }
   const identRows = [
     ['File', identA.file || nameA, identB.file || nameB],
@@ -1422,11 +1629,7 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     ['Tick mode', identA.tick_mode || '—', identB.tick_mode || '—'],
   ]
   const notableRows = (notable.rows || []).filter(r => r && typeof r === 'object')
-  const verdictLabel = String(notable.verdict_label || 'SIMILAR')
-  const verdictTone = String(notable.verdict_tone || 'neutral')
   const compWarnings = (notable.comparability || {}).warnings || []
-  const nextInv = String(notable.next_investigation || '').trim()
-  const omitted = Number(notable.small_omitted_count || 0) || 0
   const warnHtml = (notable.warnings || []).map(w => `<p class="warn-banner">${htmlCell(w)}</p>`).join('')
   const notableBody = notableRows.length
     ? notableRows.map(r => {
@@ -1438,8 +1641,8 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     : '<tr><td colspan="5" class="empty">No significant improvements or regressions above threshold</td></tr>'
   const evRefs = []
   for (const row of t.shared_patterns || t.sharedPatterns || []) {
-    let task = 'pattern'
-    let reason = ''
+    let task
+    let reason
     if (row && typeof row === 'object' && !Array.isArray(row)) {
       task = String(row.task || row.name || 'pattern')
       reason = String(row.reason || '')
@@ -1461,51 +1664,24 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       + evRefs.map(r => `<tr><td>${htmlCell(r[0])}</td><td>${htmlCell(r[1])}</td></tr>`).join('')
       + '</tbody></table></div>'
     : ''
-  const verdictSentence = String(notable.verdict || '').replace(/^Overall:\s*/i, '').trim()
-  const verdictGlyph = { regressed: '▲', improved: '▼', mixed: '◆' }[verdictTone] || '●'
-  const moverRow = notableRows.find(r => r.status === 'Regressed')
-    || notableRows.find(r => r.status === 'Improved') || null
-  const moverText = moverRow ? `${moverRow.label}: ${moverRow.change}` : '—'
-  const overviewHtml = `<section class="report-card"><h2>Overview</h2>`
-    + '<p class="detail-note">Verdict, identity, and engineering-significant '
-    + 'deltas between Baseline A and Candidate B.</p>'
+  const overviewHtml = '<section class="report-card"><h2>Overview</h2>'
+    + '<p class="detail-note">Trace identity, scope, and comparability. Use this context when interpreting the Summary results.</p>'
+    + '<h3 class="overview-sub">Comparison identity</h3>'
+    + '<div class="table-scroll"><table><thead><tr><th>Item</th>'
+    + '<th class="col-baseline">Baseline A</th><th class="col-candidate">Candidate B</th></tr></thead><tbody>'
+    + _rowsOrEmpty(identRows, 3,
+      r => `<tr><td>${htmlCell(r[0])}</td><td>${htmlCell(r[1])}</td><td>${htmlCell(r[2])}</td></tr>`, 'No identity')
+    + '</tbody></table></div>'
     + (compWarnings.length
       ? '<div class="compare-comparability-warn"><div class="compare-comparability-head">'
         + '⚠ Traces may not be directly comparable</div><ul>'
         + compWarnings.map(w => `<li>${htmlCell(w)}</li>`).join('') + '</ul></div>'
       : '')
-    + `<div class="compare-verdict-banner tone-${htmlCell(verdictTone)}">`
-    + `<span class="compare-verdict-glyph">${verdictGlyph}</span>`
-    + '<span class="compare-verdict-main">'
-    + `<span class="compare-verdict-label">${htmlCell(verdictLabel)}</span>`
-    + (verdictSentence ? `<span class="compare-verdict-sentence">${htmlCell(verdictSentence)}</span>` : '')
-    + '</span></div>'
-    + (nextInv ? `<p class="compare-next">${htmlCell(nextInv)}</p>` : '')
-    + ((omitted || Number(cards.significant || 0))
-      ? '<p class="overview-formula">Showing engineering-significant deltas only (small changes omitted)</p>'
-      : '')
-    + `<p class="overview-formula">${htmlCell(COMPARE_DELTA_FORMULA)}</p>`
-    + '<div class="compare-cards">'
-    + `<div class="compare-card tone-regressed"><span class="compare-card-k">Regressions</span><span class="compare-card-v">${Number(cards.regressions || 0)}</span></div>`
-    + `<div class="compare-card tone-improved"><span class="compare-card-k">Improvements</span><span class="compare-card-v">${Number(cards.improvements || 0)}</span></div>`
-    + `<div class="compare-card tone-warn"><span class="compare-card-k">Warnings</span><span class="compare-card-v">${Number(cards.warnings || 0)}</span></div>`
-    + `<div class="compare-card compare-card-mover"><span class="compare-card-k">Biggest mover</span><span class="compare-card-v">${htmlCell(moverText)}</span></div>`
-    + '</div>'
-    + warnHtml
-    + '<h3 class="overview-sub">Comparison identity</h3>'
-    + '<div class="table-scroll"><table><thead><tr><th></th>'
-    + '<th class="col-baseline">Baseline A</th><th class="col-candidate">Candidate B</th></tr></thead><tbody>'
-    + _rowsOrEmpty(identRows, 3,
-      r => `<tr><td>${htmlCell(r[0])}</td><td>${htmlCell(r[1])}</td><td>${htmlCell(r[2])}</td></tr>`,
-      'No identity')
-    + '</tbody></table></div>'
-    + evHtml
-    + '<h3 class="overview-sub">Notable Changes</h3>'
+    + warnHtml + '</section>'
+  const notableEvidence = '<h3 class="overview-sub">Notable Changes</h3>'
     + '<div class="table-scroll"><table><thead><tr><th>Status</th><th>Metric</th>'
     + '<th class="col-baseline">Baseline A</th><th class="col-candidate">Candidate B</th>'
-    + '<th>Change</th></tr></thead><tbody>'
-    + notableBody
-    + '</tbody></table></div></section>'
+    + '<th>Change</th></tr></thead><tbody>' + notableBody + '</tbody></table></div>' + evHtml
 
   const summaryHtml = _rowsOrEmpty(t.summary, 4,
     r => `<tr><td>${htmlCell(r.label)}</td><td>${htmlCell(r.a)}</td><td>${htmlCell(r.b)}</td><td>${htmlCell(r.delta)}</td></tr>`,
@@ -1561,15 +1737,34 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     return `<tr><td>${htmlCell(c.name)}</td><td>${htmlCell(c.tasks)}</td><td>${htmlCell(c.migrations)}</td><td>${htmlCell(c.loadBalance)}</td><td>${htmlCell(c.tickHealth)}</td><td>${htmlCell(c.spanNs)}</td></tr>`
   }, 'Open 2+ traces to trend summaries')
 
-  const utilSvg = compareCoreUtilChartSvg(compareCoreUtilChartRows(t))
+  // Core Utilization and Core Migrations use the HTML paired-bar and delta
+  // components, so only the diverging Summary / Response P99 charts stay SVG.
   const p99Svg = compareP99DeltaChartSvg(compareP99DeltaChartRows(t, 12))
   const sumSvg = compareSummaryChangeBarsSvg(compareSummaryChangeBarRows(t, 8))
-  const heatSvg = compareMigrationHeatmapSvg(compareMigrationHeatmapRows(t.migrations, 12))
-  const decisionHtml = compareSummaryDecisionHtml(t, nameA, nameB)
-  const utilLead = utilSvg ? `<div class="compare-chart">${utilSvg}</div>` : ''
+  const decisionHtml = compareSummaryDecisionHtml(t, nameA, nameB, { includeContext: false })
+  const pairedLead = (key, rows, title, subtitle, opts) => comparePairedBarsHtml(t.evidence._charts?.[key] || rows || [], { title, subtitle, ...opts, ...(t.evidence._charts?.[key] ? { aKey: 'a', bKey: 'b', labelKey: 'label' } : {}) })
+  const utilLead = pairedLead('coreUtil', t.coreUtil, 'Core utilization',
+    'Per-core busy share for Baseline A and Candidate B on one scale.',
+    { aKey: 'utilA', bKey: 'utilB', labelKey: 'core', limit: 16 })
+  const topLead = pairedLead('top', t.top, 'Top CPU consumers',
+    'Largest CPU users, shown with the same scale for Baseline A and Candidate B.',
+    { aKey: 'cpuA', bKey: 'cpuB', limit: 12 })
+  const execLead = pairedLead('execution', t.execution, 'Largest execution-time changes',
+    'Tasks with the largest absolute change in maximum execution time.',
+    { aKey: 'maxA', bKey: 'maxB', limit: 10, sortByDelta: true })
+  const blockLead = pairedLead('blocking', t.blocking, 'Largest blocking-time changes',
+    'Tasks with the largest absolute change in maximum off-CPU gap.',
+    { aKey: 'maxA', bKey: 'maxB', limit: 10, sortByDelta: true })
+  const interLead = pairedLead('interArrival', t.interArrival, 'Largest inter-arrival changes',
+    'Tasks with the largest absolute change in average activation spacing.',
+    { aKey: 'avgA', bKey: 'avgB', limit: 10, sortByDelta: true })
+  const mutexLead = pairedLead('mutex_block', t.mutex_block, 'Largest mutex-blocking totals',
+    'Tasks with the most mutex-attributed blocking time.',
+    { aKey: 'a', bKey: 'b', limit: 10 })
   const p99Lead = p99Svg ? `<div class="compare-chart">${p99Svg}</div>` : ''
   const sumLead = (decisionHtml || '') + (sumSvg ? `<div class="compare-chart">${sumSvg}</div>` : '')
-  const heatLead = heatSvg ? `<div class="compare-chart">${heatSvg}</div>` : ''
+    + notableEvidence + '<h3 class="overview-sub">All summary metrics</h3>'
+  const heatLead = compareMigrationDeltaHtml(t.migrations, 12)
   const migTop = filterCompareMigrationRows(t.migrations, 'count', 'top', '', 10)
   let migLead = heatLead
   if (migTop.rows?.length) {
@@ -1577,18 +1772,21 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     const migBody = _rowsOrEmpty(migTop.rows, (migTop.headers || []).length,
       r => `<tr>${r.map(c => `<td>${htmlCell(c)}</td>`).join('')}</tr>`,
       'No migration count changes')
-    migLead += `<h3 class="overview-sub">Largest changes (count &amp; rate)</h3>`
+    migLead += '<h3 class="overview-sub">Largest changes (count &amp; rate)</h3>'
       + `<p class="overview-formula">${migTop.shown} of ${migTop.total} migrated tasks</p>`
       + `<div class="table-scroll"><table><thead><tr>${migTh}</tr></thead><tbody>${migBody}</tbody></table></div>`
       + '<h3 class="overview-sub">All columns</h3>'
   }
 
+  const evidenceCards = (page, keys = null) => (keys ? keys.map(key => COMPARE_EVIDENCE.find(spec => spec.key === key)) : COMPARE_EVIDENCE.filter(spec => spec.page === page)).map(spec => _cardHtml(spec.title, spec.columns.map(c => `<th>${htmlCell(c)}</th>`).join(''), _rowsOrEmpty(t.evidence[spec.key] || [], spec.columns.length, row => `<tr>${row.map((v, i) => `<td>${htmlCell(formatEvidenceCell(spec.key, v, i))}</td>`).join('')}</tr>`, 'No differences to show'), '', 'Timing values are ns. Relative and timing Δ = B − A; migration count Δ = A − B. Direction is quantitative, not a verdict.')).join('')
   const report = btfHtmlReportDocument('Trace Compare', [
     '<!--TOC-->',
-    overviewHtml,
     _cardHtml('Summary', '<th>Metric</th><th>Baseline A</th><th>Candidate B</th><th>Δ</th>', summaryHtml, sumLead,
       `KPI-style totals and rates. Δ = Baseline A − Candidate B (positive means A is numerically larger). ${COMPARE_NOTE_SIGMA}`),
-    _cardHtml('Top Tasks', '<th>Task</th><th>CPU A (%)</th><th>CPU B (%)</th><th>Δ (pp)</th>', topHtml, '',
+    overviewHtml,
+    evidenceCards('summary', ['trace_comparability', 'task_presence']),
+    evidenceCards('summary', ['relative_changes']),
+    _cardHtml('Top Tasks', '<th>Task</th><th>CPU A (%)</th><th>CPU B (%)</th><th>Δ (pp)</th>', topHtml, topLead,
       'Highest CPU consumers excluding IDLE/TICK. Δ is percentage points (pp).'),
     _cardHtml('Core Utilization', '<th>Core</th><th>Util A (%)</th><th>Util B (%)</th><th>Δ (pp)</th>', coreHtml, utilLead,
       'Per-core active util % excluding IDLE/TICK over each side\'s scoped wall-clock span.'),
@@ -1596,17 +1794,18 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       '<th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th><th>Cores A</th><th>Cores B</th><th>Primary A</th><th>Primary B</th>',
       migHtml, migLead,
       `Migration count, rate, dwell, ping-pong, and primary-core affinity for tasks that ran on more than one core. ${COMPARE_NOTE_MIGRATION}`),
+    evidenceCards('migrations'),
     _cardHtml('Execution Time',
       '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ max</th><th>Shape Δ</th>',
-      execHtml, '',
+      execHtml, execLead,
       'Per-slice run durations between consecutive context switches. Shape Δ is the two-sample KS statistic (0 = same distribution).'),
     _cardHtml('Blocking Time',
       '<th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th><th>Shape Δ</th>',
-      blockHtml, '',
+      blockHtml, blockLead,
       'Off-CPU gaps between consecutive slices of the same task (preemption, wait, or scheduling delay). Shape Δ is the two-sample KS statistic (0 = same distribution).'),
     _cardHtml('Inter-Arrival Time',
       '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th><th>Shape Δ</th>',
-      interHtml, '',
+      interHtml, interLead,
       'Time between consecutive activations of the same task (slice start to next slice start). Shape Δ is the two-sample KS statistic (0 = same distribution).'),
     _cardHtml('Preemption Chains',
       '<th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th>',
@@ -1616,7 +1815,8 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       `Mutex, semaphore, and queue STI instrumentation totals. ${COMPARE_NOTE_STI}`),
     _cardHtml('Response P99', '<th>Task</th><th>P99 A</th><th>P99 B</th><th>Δ</th>', responseHtml, p99Lead,
       `Heuristic ready→completion P99 from adjacent slices (not an explicit BTF release/completion pair). ${COMPARE_NOTE_P99}`),
-    _cardHtml('Mutex Blocking', '<th>Task</th><th>Total A</th><th>Total B</th><th>Δ</th>', mutexHtml, '',
+    evidenceCards('response'),
+    _cardHtml('Mutex Blocking', '<th>Task</th><th>Total A</th><th>Total B</th><th>Δ</th>', mutexHtml, mutexLead,
       'Total mutex-attributed blocking time per task.'),
     _cardHtml('Shared Patterns',
       '<th>Task</th><th>Kind</th><th>Count A</th><th>Count B</th><th>Description</th>',

@@ -68,6 +68,14 @@ class TraceCompareColumnFitTest(unittest.TestCase):
         self.addCleanup(dlg.deleteLater)
         return dlg
 
+    def test_result_cards_lead_summary_and_keep_zero_warnings_visible(self):
+        dlg = self._dialog()
+        self.assertIs(dlg._decision.layout().itemAt(0).widget(), dlg._dec_counts)
+        self.assertEqual(list(dlg._dec_card_values), ['regressions', 'improvements', 'warnings', 'mover'])
+        self.assertEqual(dlg._dec_counts.layout().count(), 4)
+        self.assertIs(dlg._dec_card_values['mover'], dlg._dec_largest)
+        self.assertFalse(dlg._dec_card_values['warnings'].isHidden())
+
     def test_narrow_tables_stretch_columns_wide_table_does_not(self):
         dlg = self._dialog()
         self.assertEqual(

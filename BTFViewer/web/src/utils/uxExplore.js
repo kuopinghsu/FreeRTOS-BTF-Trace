@@ -464,6 +464,19 @@ export function parseSignedDelta(text) {
   return { signed: sign * val, kind: 'count' }
 }
 
+/** Unit family for Summary-change bar length (do not mix ns with bare /s). */
+export function compareDeltaScaleFamily(text) {
+  let s = String(text ?? '').trim().replace(/−/g, '-').replace(/,/g, '')
+  s = s.replace(VALUE_PAREN_RE, '').trim()
+  const m = s ? DELTA_RE.exec(s) : null
+  if (!m) return 'count'
+  const unit = String(m[3] || '').toLowerCase()
+  if (unit in UNIT_NS) return 'time_ns'
+  if (unit === '/s') return 'per_s'
+  if (unit === '%' || unit === 'pp') return 'pct'
+  return 'count'
+}
+
 /** Numeric/time-aware sort key for Trace Compare cells (desktop `_StatsSortItem` parity). */
 export function compareCellSortKey(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value
@@ -575,7 +588,7 @@ export function compareSummaryStrip(tables, limit = 4, nameA = '', nameB = '') {
 }
 
 /** Dialog-matching regression result for the Trace Compare HTML Summary card. */
-export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '') {
+export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '', { includeContext = true } = {}) {
   const data = compareSummaryStrip(tables, 4, nameA, nameB)
   const notable = data.notable || {}
   const identity = notable.identity || {}
@@ -606,7 +619,15 @@ export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '') {
   const moverText = mover ? `${mover.label}: ${mover.change}` : '—'
   const glyph = { regressed: '▲', improved: '▼', mixed: '◆' }[tone] || '●'
   const parts = ['<div class="compare-decision">']
-  if (compWarnings.length) {
+  parts.push(
+    '<div class="compare-cards">'
+    + `<div class="compare-card tone-regressed"><span class="compare-card-k">Regressions</span><span class="compare-card-v">${nReg}</span></div>`
+    + `<div class="compare-card tone-improved"><span class="compare-card-k">Improvements</span><span class="compare-card-v">${nImp}</span></div>`
+    + `<div class="compare-card tone-warn"><span class="compare-card-k">Warnings</span><span class="compare-card-v">${nWarn}</span></div>`
+    + `<div class="compare-card compare-card-mover"><span class="compare-card-k">Biggest mover</span><span class="compare-card-v">${svgEscape(moverText)}</span></div>`
+    + '</div>',
+  )
+  if (includeContext && compWarnings.length) {
     parts.push('<div class="compare-comparability-warn">')
     parts.push('<div class="compare-comparability-head">⚠ Traces may not be directly comparable</div><ul>')
     for (const w of compWarnings) parts.push(`<li>${svgEscape(String(w))}</li>`)
@@ -620,16 +641,8 @@ export function compareSummaryDecisionHtml(tables, nameA = '', nameB = '') {
     + (sentence ? `<span class="compare-verdict-sentence">${svgEscape(sentence)}</span>` : '')
     + '</span></div>',
   )
-  parts.push(
-    '<div class="compare-cards">'
-    + `<div class="compare-card tone-regressed"><span class="compare-card-k">Regressions</span><span class="compare-card-v">${nReg}</span></div>`
-    + `<div class="compare-card tone-improved"><span class="compare-card-k">Improvements</span><span class="compare-card-v">${nImp}</span></div>`
-    + `<div class="compare-card tone-warn"><span class="compare-card-k">Warnings</span><span class="compare-card-v">${nWarn}</span></div>`
-    + `<div class="compare-card compare-card-mover"><span class="compare-card-k">Biggest mover</span><span class="compare-card-v">${svgEscape(moverText)}</span></div>`
-    + '</div>',
-  )
-  parts.push(`<div class="compare-decision-identity">${svgEscape(ident)}</div>`)
-  if (next) parts.push(`<div class="compare-next">${svgEscape(next)}</div>`)
+  if (includeContext) parts.push(`<div class="compare-decision-identity">${svgEscape(ident)}</div>`)
+  if (next) parts.push(`<div class="compare-next"><strong>Next</strong><span>${svgEscape(next.replace(/^Next:\s*/, ''))}</span></div>`)
   if (sigNote) parts.push(`<div class="compare-decision-sig">${svgEscape(sigNote)}</div>`)
   parts.push('</div>')
   return parts.join('')
@@ -1024,10 +1037,6 @@ export function compareTraceShapeWarnings(coresA, coresB, taskNamesA, taskNamesB
   return out
 }
 
-export const COMPARE_CHART_BASELINE = '#2a6fb2'
-export const COMPARE_CHART_CANDIDATE = '#6b4ea8'
-export const COMPARE_CHART_REGRESSED = '#c0392b'
-export const COMPARE_CHART_IMPROVED = '#1f6b45'
 export const COMPARE_MIG_VIEWS = Object.freeze(['count', 'dwell', 'cores'])
 export const COMPARE_MIG_FILTERS = Object.freeze(['top', 'changed', 'regressed', 'all'])
 const MIG_VIEW_SPEC = {
@@ -1110,46 +1119,20 @@ export function compareP99DeltaChartRows(tables, limit = 12) {
   return out.slice(0, lim)
 }
 
-export function compareCoreUtilChartSvg(rows, width = 640) {
-  const items = (rows || []).filter(r => r && typeof r === 'object')
-  if (!items.length) return ''
-  const w = Math.max(280, Number(width) || 640)
-  const labelW = 78
-  const pad = 12
-  const rowH = 32
-  const header = 22
-  const pctW = 52
-  const h = header + pad + items.length * rowH + 8
-  let maxV = 1
-  for (const r of items) maxV = Math.max(maxV, Number(r.a || 0), Number(r.b || 0))
-  const plotW = Math.max(80, w - labelW - pad - pctW)
-  const ax = labelW
-  const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Core Utilization Baseline A vs Candidate B">`,
-    `<text x="${pad}" y="16" font-size="12" fill="#123355" font-weight="600">Core Utilization</text>`,
-    `<text x="${w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">`,
-    `<tspan fill="${COMPARE_CHART_BASELINE}">Baseline A</tspan>`,
-    '<tspan fill="#5f6f82"> · </tspan>',
-    `<tspan fill="${COMPARE_CHART_CANDIDATE}">Candidate B</tspan></text>`,
-  ]
-  items.forEach((row, i) => {
-    const y = header + pad + i * rowH
-    const lab = svgEscape(String(row.label || '').slice(0, 18))
-    const aV = Math.max(0, Number(row.a || 0))
-    const bV = Math.max(0, Number(row.b || 0))
-    const aw = plotW * aV / maxV
-    const bw = plotW * bV / maxV
-    parts.push(`<text x="${pad}" y="${y + 14}" font-size="11" fill="#182230">${lab}</text>`)
-    parts.push(`<rect x="${ax.toFixed(1)}" y="${y}" width="${Math.max(aw, 0.5).toFixed(1)}" height="9" rx="3" fill="${COMPARE_CHART_BASELINE}"/>`)
-    parts.push(`<rect x="${ax.toFixed(1)}" y="${y + 12}" width="${Math.max(bw, 0.5).toFixed(1)}" height="9" rx="3" fill="${COMPARE_CHART_CANDIDATE}"/>`)
-    parts.push(`<text x="${(ax + plotW + 6).toFixed(1)}" y="${y + 9}" font-size="10" fill="${COMPARE_CHART_BASELINE}">${aV.toFixed(1)}%</text>`)
-    parts.push(`<text x="${(ax + plotW + 6).toFixed(1)}" y="${y + 21}" font-size="10" fill="${COMPARE_CHART_CANDIDATE}">${bV.toFixed(1)}%</text>`)
-  })
-  parts.push('</svg>')
-  return parts.join('')
-}
 
-export function compareP99DeltaChartSvg(rows, width = 640) {
+/**
+ * Diverging bars around zero (Candidate B − Baseline A). Bar paint follows
+ * direction (left/minus → `--series-a`, right/plus → `--series-b`), matching
+ * the other compare charts. `tintAxis` colours the Improved/Regressed axis
+ * words with the matching series text tones.
+ */
+export function compareP99DeltaChartSvg(rows, width = 640, {
+  title = 'Response P99 change',
+  axis = ['Improved', 'Regressed'],
+  tintAxis = true,
+  subtitle = 'Candidate B − Baseline A',
+  changeW = 88,
+} = {}) {
   const items = (rows || []).filter(r => r && typeof r === 'object')
   if (!items.length) return ''
   const w = Math.max(280, Number(width) || 640)
@@ -1157,32 +1140,37 @@ export function compareP99DeltaChartSvg(rows, width = 640) {
   const pad = 12
   const rowH = 22
   const header = 44
-  const changeW = 88
+  const changeCol = Math.max(48, Number(changeW) || 88)
   const h = header + items.length * rowH + 16
   let maxV = 1
   for (const r of items) maxV = Math.max(maxV, Math.abs(Number(r.cand || 0)))
-  const plotW = Math.max(80, w - labelW - pad - changeW)
+  const plotW = Math.max(80, w - labelW - pad - changeCol)
   const mid = labelW + plotW / 2
   const half = plotW / 2
   const axisY = 34
+  const [axisLeft = '', axisRight = ''] = axis
+  const leftCls = tintAxis ? 'cmp-chart-improved' : 'cmp-chart-sub'
+  const rightCls = tintAxis ? 'cmp-chart-regressed' : 'cmp-chart-sub'
+  const sub = String(subtitle || 'Candidate B − Baseline A')
   const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Response P99 change Candidate B minus Baseline A">`,
-    `<text x="${pad}" y="16" font-size="12" fill="#123355" font-weight="600">Response P99 change</text>`,
-    `<text x="${w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">Candidate B − Baseline A</text>`,
-    `<text x="${labelW.toFixed(1)}" y="${axisY}" font-size="9" fill="${COMPARE_CHART_IMPROVED}">Improved</text>`,
-    `<text x="${(labelW + plotW).toFixed(1)}" y="${axisY}" text-anchor="end" font-size="9" fill="${COMPARE_CHART_REGRESSED}">Regressed</text>`,
-    `<line x1="${mid.toFixed(1)}" y1="${header - 2}" x2="${mid.toFixed(1)}" y2="${h - 10}" stroke="#d9e0ea" stroke-width="1"/>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="${svgEscape(title)} Candidate B minus Baseline A">`,
+    `<text class="cmp-chart-title" x="${pad}" y="16" font-size="12" font-weight="600">${svgEscape(title)}</text>`,
+    `<text class="cmp-chart-sub" x="${w - pad}" y="16" text-anchor="end" font-size="11">${svgEscape(sub)}</text>`,
+    `<text class="${leftCls}" x="${labelW.toFixed(1)}" y="${axisY}" font-size="9">${svgEscape(axisLeft)}</text>`,
+    `<text class="${rightCls}" x="${(labelW + plotW).toFixed(1)}" y="${axisY}" text-anchor="end" font-size="9">${svgEscape(axisRight)}</text>`,
+    `<line class="cmp-chart-axis" x1="${mid.toFixed(1)}" y1="${header - 2}" x2="${mid.toFixed(1)}" y2="${h - 10}" stroke-width="1"/>`,
   ]
   items.forEach((row, i) => {
     const y = header + i * rowH
     const lab = svgEscape(String(row.label || '').slice(0, 16))
     const cand = Number(row.cand || 0)
     const barW = Math.abs(cand) / maxV * half
-    const color = cand > 0 ? COMPARE_CHART_REGRESSED : COMPARE_CHART_IMPROVED
+    // Directional blue series (not improved/regressed green/red).
+    const tone = cand >= 0 ? 'plus' : 'minus'
     const x = cand >= 0 ? mid : mid - barW
-    parts.push(`<text x="${pad}" y="${y + 14}" font-size="11" fill="#182230">${lab}</text>`)
-    parts.push(`<rect x="${x.toFixed(1)}" y="${y + 4}" width="${Math.max(barW, 0.8).toFixed(1)}" height="12" rx="2" fill="${color}"/>`)
-    parts.push(`<text x="${(mid + half + 8).toFixed(1)}" y="${y + 14}" font-size="10" fill="${color}">${svgEscape(row.change || '')}</text>`)
+    parts.push(`<text class="cmp-chart-label" x="${pad}" y="${y + 14}" font-size="11">${lab}</text>`)
+    parts.push(`<rect class="cmp-chart-bar ${tone}" x="${x.toFixed(1)}" y="${y + 4}" width="${Math.max(barW, 0.8).toFixed(1)}" height="10" rx="5"/>`)
+    parts.push(`<text class="cmp-chart-value" x="${(mid + half + 8).toFixed(1)}" y="${y + 14}" font-size="10">${svgEscape(row.change || '')}</text>`)
   })
   parts.push('</svg>')
   return parts.join('')
@@ -1365,38 +1353,62 @@ export function compareDumbbellRows(rows, opts = {}) {
   }))
 }
 
+/**
+ * Compact Summary change bars (Candidate B − Baseline A).
+ * Bar length is the relative move Δ / max(|A|, |B|, |Δ|) (same basis as the
+ * printed / ±N%), so mixed units stay comparable and the label matches the
+ * geometry. Absolute flipped Δ is still shown beside the %.
+ */
 export function compareSummaryChangeBarRows(tables, limit = 8) {
   const lim = Math.max(1, Math.min(16, Number(limit) || 8))
   const out = []
   for (const row of tables?.summary || []) {
     let label = ''
     let delta
+    let aRaw
+    let bRaw
     if (row && typeof row === 'object' && !Array.isArray(row)) {
       label = String(row.label || '')
       delta = row.delta
+      aRaw = row.a
+      bRaw = row.b
     } else if (Array.isArray(row) && row.length >= 4) {
       label = String(row[0] || '')
+      aRaw = row[1]
+      bRaw = row[2]
       delta = row[3]
     } else continue
     const low = label.toLowerCase()
     if (low.startsWith('tick ') || ['tasks', 'segments', 'sti events'].includes(low)) continue
     const parsed = parseSignedDelta(delta)
     if (!parsed || parsed.signed === 0) continue
-    const cand = -parsed.signed
+    const aMag = cellMagnitude(aRaw)
+    const bMag = cellMagnitude(bRaw)
+    const base = Math.max(Math.abs(aMag || 0), Math.abs(bMag || 0), Math.abs(parsed.signed), 1)
+    const cand = -parsed.signed / base
+    const relPct = 100 * cand
+    const absTxt = flipDeltaText(delta)
     out.push({
       label,
       signed: parsed.signed,
       cand,
+      rel_pct: relPct,
       kind: parsed.kind,
+      family: compareDeltaScaleFamily(delta),
       status: compareRowDeltaStatus(label, delta) || 'Changed',
       delta: String(delta),
-      change: flipDeltaText(delta),
+      change: `${absTxt} / ${relPct >= 0 ? '+' : ''}${relPct.toFixed(1)}%`,
     })
   }
   out.sort((a, b) => Math.abs(b.cand) - Math.abs(a.cand))
   return out.slice(0, lim)
 }
 
+/**
+ * Compact diverging bars for Summary metric changes. Rows carry relative `cand`
+ * and a change label that includes the matching `%`. Axis ends state direction
+ * (B lower / B higher); bars use the shared blue series colours by sign.
+ */
 export function compareSummaryChangeBarsSvg(rows, width = 640) {
   return compareP99DeltaChartSvg(
     (rows || []).filter(r => r && typeof r === 'object').map(r => ({
@@ -1404,8 +1416,14 @@ export function compareSummaryChangeBarsSvg(rows, width = 640) {
       label: String(r.label || '').slice(0, 22),
     })),
     width,
+    {
+      title: 'Summary changes',
+      axis: ['B lower', 'B higher'],
+      tintAxis: false,
+      subtitle: 'Candidate B − Baseline A · bar = % of max(A, B)',
+      changeW: 132,
+    },
   )
-    .replace(/Response P99 change/g, 'Summary changes')
 }
 
 export function compareMigrationHeatmapRows(rows, limit = 16) {
@@ -1433,35 +1451,123 @@ export function compareMigrationHeatmapRows(rows, limit = 16) {
   })
 }
 
-export function compareMigrationHeatmapSvg(rows, width = 640) {
-  const items = (rows || []).filter(r => r && typeof r === 'object')
+
+
+function pairedBarItems(rows, {
+  aIdx = 1, bIdx = 2, labelKey = 'name', aKey = 'a', bKey = 'b',
+  limit = 10, sortByDelta = false,
+} = {}) {
+  const items = []
+  for (const row of rows || []) {
+    let label
+    let aRaw
+    let bRaw
+    if (row && !Array.isArray(row) && typeof row === 'object') {
+      label = String(row[labelKey] || row.label || row.core || row.name || '')
+      aRaw = row[aKey]
+      bRaw = row[bKey]
+    } else if (Array.isArray(row)) {
+      label = String(row[0] ?? '')
+      aRaw = row.length > aIdx ? row[aIdx] : null
+      bRaw = row.length > bIdx ? row[bIdx] : null
+    } else {
+      continue
+    }
+    if (!label) continue
+    const aVal = cellMagnitude(aRaw)
+    const bVal = cellMagnitude(bRaw)
+    if (aVal == null && bVal == null) continue
+    items.push({ label, a: aVal || 0, b: bVal || 0 })
+  }
+  items.sort((x, y) => (sortByDelta ? Math.abs(y.b - y.a) - Math.abs(x.b - x.a) : Math.max(y.a, y.b) - Math.max(x.a, x.b)) || (x.label < y.label ? -1 : x.label > y.label ? 1 : 0))
+  return items.slice(0, Math.max(1, Number(limit) || 10))
+}
+
+/**
+ * Paired A/B bars for one compare table: Baseline A above Candidate B on a
+ * single shared scale, so the pair can be read without doing arithmetic.
+ * Reuses the report bar geometry (`--std-bar-*`) and series colours.
+ */
+export function comparePairedBarsHtml(rows, { title, subtitle = '', digits = 1, ...opts } = {}) {
+  const items = pairedBarItems(rows, opts)
   if (!items.length) return ''
-  const w = Math.max(280, Number(width) || 640)
-  const labelW = 110
-  const pad = 12
-  const rowH = 18
-  const header = 24
-  const h = header + items.length * rowH + 10
-  let maxV = 1
-  for (const r of items) maxV = Math.max(maxV, Math.abs(Number(r.delta) || 0))
-  const barW = Math.max(80, w - labelW - pad - 60)
+  const peak = Math.max(1e-9, ...items.map(r => Math.max(r.a, r.b)))
   const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Migration count change heatmap">`,
-    `<text x="${pad}" y="16" font-size="12" fill="#123355" font-weight="600">Migration Δ heatmap</text>`,
-    `<text x="${w - pad}" y="16" text-anchor="end" font-size="11" fill="#5f6f82">Δ = A − B</text>`,
+    '<div class="compare-visual"><div class="compare-visual-head"><div>',
+    `<div class="compare-visual-title">${svgEscape(String(title))}</div>`,
   ]
-  items.forEach((row, i) => {
-    const y = header + i * rowH
-    const lab = svgEscape(String(row.label || '').slice(0, 18))
-    const d = Number(row.delta) || 0
-    const frac = Math.abs(d) / maxV
-    const color = d > 0 ? COMPARE_CHART_IMPROVED : COMPARE_CHART_REGRESSED
-    const sign = d > 0 ? '+' : (d < 0 ? '−' : '')
-    parts.push(`<text x="${pad}" y="${y + 13}" font-size="11" fill="#182230">${lab}</text>`)
-    parts.push(`<rect x="${labelW.toFixed(1)}" y="${y + 3}" width="${Math.max(barW * frac, 2).toFixed(1)}" height="12" rx="2" fill="${color}" opacity="0.85"/>`)
-    parts.push(`<text x="${(labelW + barW + 8).toFixed(1)}" y="${y + 13}" font-size="10" fill="${color}">${sign}${Math.abs(Math.trunc(d))}</text>`)
-  })
-  parts.push('</svg>')
+  if (subtitle) parts.push(`<div class="compare-visual-sub">${svgEscape(String(subtitle))}</div>`)
+  parts.push(
+    '</div><div class="compare-legend">'
+    + '<span class="compare-legend-item"><i class="legend-swatch a"></i>Baseline A</span>'
+    + '<span class="compare-legend-item"><i class="legend-swatch b"></i>Candidate B</span>'
+    + '</div></div><div class="paired-bars">'
+  )
+  for (const r of items) {
+    const lab = svgEscape(String(r.label))
+    const fmt = v => v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+    const tip = `${lab}: A ${fmt(r.a)} \u00b7 B ${fmt(r.b)}`
+    parts.push(`<div class="paired-row" title="${tip}"><div class="paired-label">${lab}</div><div class="paired-pair">`)
+    for (const [tag, val] of [['a', r.a], ['b', r.b]]) {
+      const pct = Math.max(0, Math.min(100, 100 * val / peak))
+      parts.push(
+        `<div class="paired-line"><span class="paired-tag ${tag}">${tag.toUpperCase()}</span>`
+        + `<span class="paired-track"><span class="paired-fill ${tag}" style="--w:${pct.toFixed(1)}%"></span></span>`
+        + `<span class="paired-value">${val.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}</span></div>`
+      )
+    }
+    parts.push('</div></div>')
+  }
+  parts.push('</div></div>')
+  return parts.join('')
+}
+
+/**
+ * Diverging migration-Δ bars around a zero line, replacing the Δ heatmap SVG.
+ * Both directions stay in the quantitative blue family: a large delta is a
+ * measurement, not a verdict.
+ */
+export function compareMigrationDeltaHtml(rows, limit = 12) {
+  const items = (compareMigrationHeatmapRows(rows, limit) || []).filter(r => r && typeof r === 'object')
+  if (!items.length) return ''
+  const minus = '\u2212'
+  const peak = Math.max(1, ...items.map(r => Math.abs(Number(r.delta) || 0)))
+  const placeholder = '<span class="delta-track-placeholder"></span>'
+  const parts = [
+    '<div class="compare-visual migration-delta-unified">'
+    + '<div class="compare-visual-head"><div>'
+    + '<div class="compare-visual-title">Migration \u0394 heatmap</div>'
+    + `<div class="compare-visual-sub">\u0394 = A ${minus} B. Negative and positive `
+    + 'deltas use the same quantitative blue family as the rest of the report.'
+    + '</div></div>'
+    + '<div class="compare-legend migration-delta-legend">'
+    + '<span class="compare-legend-item"><i class="legend-swatch delta-minus"></i>'
+    + 'Negative \u0394</span>'
+    + '<span class="compare-legend-item"><i class="legend-swatch delta-plus"></i>'
+    + 'Positive \u0394</span>'
+    + '</div></div><div class="delta-bars">',
+  ]
+  for (const r of items) {
+    const lab = svgEscape(String(r.label || ''))
+    const d = Number(r.delta) || 0
+    const pct = Math.max(0, Math.min(100, 100 * Math.abs(d) / peak))
+    let visual
+    if (d < 0) {
+      visual = `<span class="delta-track left"><span class="delta-fill minus" style="--w:${pct.toFixed(1)}%"></span></span>${placeholder}`
+    } else if (d > 0) {
+      visual = `${placeholder}<span class="delta-track right"><span class="delta-fill plus" style="--w:${pct.toFixed(1)}%"></span></span>`
+    } else {
+      visual = placeholder + placeholder
+    }
+    const sign = d < 0 ? minus : ''
+    const shown = `${sign}${Math.abs(Math.round(d)).toLocaleString('en-US')}`
+    parts.push(
+      `<div class="delta-row" title="${lab}: \u0394 ${shown}"><div class="delta-label">${lab}</div>`
+      + `<div class="delta-visual"><span class="delta-zero"></span>${visual}</div>`
+      + `<div class="delta-value">${shown}</div></div>`
+    )
+  }
+  parts.push('</div></div>')
   return parts.join('')
 }
 

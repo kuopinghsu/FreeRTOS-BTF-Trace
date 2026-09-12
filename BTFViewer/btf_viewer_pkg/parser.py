@@ -1,6 +1,7 @@
 """BTF Viewer — parser module (source). Do not edit btf_viewer.py; run make bundle."""
 from __future__ import annotations
 
+from .compare_evidence import COMPARE_EVIDENCE, build_comparison_evidence, format_evidence_cell
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 # Star-import skips leading-underscore names; STI helpers are used by name below.
@@ -9,6 +10,7 @@ from .html_report import (
     HTML_REPORT_INTERACTIVE_SCRIPT,
     HTML_REPORT_TOC_CSS,
     HTML_REPORT_TOC_SCRIPT,
+    REPORT_THEME_CSS,
     btf_html_report_document,
     html_apply_collapsible_toc,
 )
@@ -5922,6 +5924,7 @@ def _task_metric_compare_by_name(
     hi: Optional[int] = None,
     *,
     include_cpu: bool = False,
+    include_system: bool = False,
 ) -> Dict[str, dict]:
     """Per-task time-sample summary keyed by display name (excludes IDLE/TICK)."""
     scale = trace.time_scale
@@ -5933,7 +5936,7 @@ def _task_metric_compare_by_name(
     for mk, segs in trace.seg_map_by_merge_key.items():
         raw = trace.task_repr.get(mk, mk)
         _, _, tname = _parse_task_name(raw)
-        if _is_idle_task_name(tname) or tname == "TICK":
+        if not include_system and (_is_idle_task_name(tname) or tname == "TICK"):
             continue
         samples = sample_fn(segs, lo, hi)
         summary = _summarize_time_samples(samples, scale)
@@ -6116,7 +6119,7 @@ def _shared_pattern_table_row(row) -> List:
 
 
 def _top_tasks_cpu_by_name(trace: "BtfTrace", limit: Optional[int] = 10,
-                           lo: Optional[int] = None, hi: Optional[int] = None) -> Dict[str, float]:
+                           lo: Optional[int] = None, hi: Optional[int] = None, include_system: bool = False) -> Dict[str, float]:
     """Top tasks by CPU%, keyed by display name.
 
     *limit* ``None`` or ``<= 0`` returns every user task (HTML/CSV export).
@@ -6131,7 +6134,7 @@ def _top_tasks_cpu_by_name(trace: "BtfTrace", limit: Optional[int] = 10,
     for mk, segs in trace.seg_map_by_merge_key.items():
         raw = trace.task_repr.get(mk, mk)
         _, _, tname = _parse_task_name(raw)
-        if _is_idle_task_name(tname) or tname == "TICK":
+        if not include_system and (_is_idle_task_name(tname) or tname == "TICK"):
             continue
         t_ns = 0
         for s in segs:
@@ -6673,7 +6676,48 @@ def _build_trace_compare_rows(
         {"name": "Trace B", "snap": b},
     ]))
 
+    # Preserve raw values for sorting and rendering on both surfaces.
+    full_extras = extras if row_limit is None or row_limit == 0 else extras_fn(
+        trace_a, trace_b, lo_a, hi_a, lo_b, hi_b, deadlines, None)
+    def evidence_side(trace, lo, hi, cpu, execution, blocking, suffix):
+        cpu = _top_tasks_cpu_by_name(trace, None, lo, hi, include_system=True)
+        execution = _task_metric_compare_by_name(trace, _exec_slice_samples, lo, hi, include_system=True)
+        response = {r['name']: r.get('p99_' + suffix, 0) for r in full_extras.get('response', [])}
+        result = {}
+        for mk in trace.tasks:
+            name = _task_display_name(trace.task_repr.get(mk, mk))
+            times = defaultdict(int)
+            for seg in trace.seg_map_by_merge_key.get(mk, []):
+                duration = max(0, min(seg.end, hi if hi is not None else seg.end) - max(seg.start, lo if lo is not None else seg.start))
+                if duration:
+                    times[seg.core] += duration
+            cores = sorted(times)
+            primary = sorted(cores, key=lambda c: (-times[c], c))[0] if cores else None
+            migrations = sum(1 for m in trace.migrations_by_mk.get(mk, []) if (lo is None or m.ns >= lo) and (hi is None or m.ns <= hi))
+            result[name] = dict(cpu=cpu.get(name, 0), runs=execution.get(name, {}).get('count', 0),
+                execution=execution.get(name, {}).get('max_ns', 0), blocking=blocking.get(name, {}).get('max_ns', 0),
+                response=response.get(name, 0), cores=cores, primary=primary, migrations=migrations)
+        return result
+    evidence_a = evidence_side(trace_a, lo_a, hi_a, map_a, exec_a, block_a, 'a')
+    evidence_b = evidence_side(trace_b, lo_b, hi_b, map_b, exec_b, block_b, 'b')
+    evidence = build_comparison_evidence(evidence_a, evidence_b, [
+        ('Trace span (ns)', a['span_ns'], b['span_ns']),
+        ('Task count', len(evidence_a), len(evidence_b)),
+        ('Core count', len(trace_a.core_names), len(trace_b.core_names)),
+    ])
+
+    def metric_pairs(ma, mb, field):
+        return [dict(label=name, a=ma.get(name, {}).get(field, 0), b=mb.get(name, {}).get(field, 0)) for name in sorted(set(ma) | set(mb))]
+    evidence['_charts'] = {
+        'top': [dict(label=name, a=map_a.get(name, 0), b=map_b.get(name, 0)) for name in sorted(set(map_a) | set(map_b))],
+        'core_util': [dict(label=name, a=util_a.get(name, 0), b=util_b.get(name, 0)) for name in core_names],
+        'execution': metric_pairs(exec_a, exec_b, 'max_ns'),
+        'blocking': metric_pairs(block_a, block_b, 'max_ns'),
+        'inter_arrival': metric_pairs(ia_a, ia_b, 'avg_ns'),
+        'mutex_block': [dict(label=r['name'], a=r.get('total_a', 0), b=r.get('total_b', 0)) for r in full_extras.get('mutex_block', [])],
+    }
     return {
+        "evidence": evidence,
         "summary": summary_rows,
         "top": top_rows,
         "core_util": core_util_rows,
@@ -6905,9 +6949,13 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
 
     while lines and lines[-1] == "":
         lines.pop()
+    for key, title, _, headers in COMPARE_EVIDENCE:
+        rows = [[format_evidence_cell(key, v, i) for i, v in enumerate(row)] for row in tables.get('evidence', {}).get(key, [])]
+        _section(title, ','.join(headers), rows, len(headers))
     return "\n".join(lines)
 
 _COMPARE_HTML_EXTRA_CSS = f"""
+{REPORT_THEME_CSS}
 .report.report-compare {{ max-width: min(1280px, 100%); }}
 .report-card {{ overflow: hidden; }}
 .table-scroll {{ overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }}
@@ -6920,134 +6968,286 @@ th, td {{
   white-space: nowrap;
 }}
 th:first-child, td:first-child {{ text-align: left; }}
-thead th {{ background: #f1f5fb; font-weight: 600; }}
+thead th {{ background: var(--paper-2); color: var(--ink); font-weight: 600; }}
 thead th:first-child, tbody td:first-child {{ position: sticky; left: 0; z-index: 1; }}
-thead th:first-child {{ background: #f1f5fb; }}
-tbody td:first-child {{ background: #fff; }}
-tbody tr:nth-child(even) td {{ background: #f7f9fc; }}
-tbody tr:nth-child(even) td:first-child {{ background: #f7f9fc; }}
+thead th:first-child {{ background: var(--paper-2); }}
+tbody td:first-child {{ background: var(--paper); }}
+tbody tr:nth-child(even) td {{ background: var(--stripe); }}
+tbody tr:nth-child(even) td:first-child {{ background: var(--stripe); }}
+tbody tr {{ transition: background-color 120ms ease, box-shadow 120ms ease; }}
+tbody tr:hover td,
+tbody tr:hover td:first-child,
+tbody tr:focus-within td {{ background: var(--row-hover-bg); }}
+tbody tr:hover {{
+  box-shadow: inset 0 1px 0 var(--row-hover-edge), inset 0 -1px 0 var(--row-hover-edge);
+}}
 .empty {{ text-align: center; color: var(--muted); white-space: normal; }}
 .detail-note {{ margin: 6px 0 10px; font-size: 12px; color: var(--muted); line-height: 1.45; }}
 .overview-why {{ color: var(--muted); margin: 0 0 10px; }}
-.overview-sub {{ margin: 12px 0 6px; font-size: 13px; color: #123355; }}
+.overview-sub {{ margin: 12px 0 6px; font-size: 13px; color: var(--ink); }}
 .overview-formula {{ color: var(--muted); font-size: 12px; margin: 0 0 10px; }}
-.col-baseline {{ color: #2a6fb2; }}
-.col-candidate {{ color: #6b4ea8; }}
+/* Baseline and candidate are two series of the same measurement, so they share
+   the primary data colour; only status tones carry semantic colour. */
+.col-baseline {{ color: var(--series-a-text); }}
+.col-candidate {{ color: var(--series-b-text); }}
 .status-cards {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }}
 .status-card {{
-  flex: 1 1 120px; border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 10px; background: #fff;
+  flex: 1 1 120px; border: 1px solid var(--accent-border); border-radius: 8px;
+  padding: 8px 10px; background: var(--paper);
 }}
-.status-card .n {{ font-size: 20px; font-weight: 700; line-height: 1.1; }}
-.status-regressed {{ border-left: 4px solid #c0392b; }}
-.status-improved {{ border-left: 4px solid #1f6b45; }}
-.status-changed {{ border-left: 4px solid #2a6fb2; }}
-.status-warn {{ border-left: 4px solid #c87a12; }}
-.badge-regressed {{ background: #fde8e6; color: #9b2c2c; }}
-.badge-changed {{ background: #e8eef7; color: #123355; }}
+.status-card .n {{ font-size: 20px; font-weight: 700; line-height: 1.1; color: var(--ink); }}
+.status-regressed {{ border-left: 4px solid var(--danger); }}
+.status-improved {{ border-left: 4px solid var(--success); }}
+.status-changed {{ border-left: 4px solid var(--accent); }}
+.status-warn {{ border-left: 4px solid var(--warning); }}
+.badge-regressed {{ background: var(--danger-soft); color: var(--danger); }}
+.badge-changed {{ background: var(--accent-soft); color: var(--accent); }}
 .compare-decision {{
   margin: 0 0 12px; padding: 8px 10px; border-radius: 6px;
-  background: rgba(52, 152, 219, 0.10); font-size: 12px; line-height: 1.45; color: #3d4f63;
+  background: var(--paper-2); border: 1px solid var(--line);
+  font-size: 12px; line-height: 1.45; color: var(--muted);
 }}
-.compare-decision-identity {{ font-size: 11px; color: #5f6f82; }}
-.compare-decision-counts {{ margin-top: 4px; font-weight: 600; color: #123355; }}
-.compare-decision-largest {{ margin-top: 4px; color: #182230; }}
-.compare-decision-why, .compare-decision-next {{ margin-top: 2px; font-size: 11px; color: #5f6f82; }}
-.compare-decision-sig {{ margin-top: 2px; font-size: 10px; color: #7a8690; }}
+.compare-decision-identity {{ font-size: 11px; color: var(--muted); }}
+.compare-decision-counts {{ margin-top: 4px; font-weight: 600; color: var(--ink); }}
+.compare-decision-largest {{ margin-top: 4px; color: var(--ink); }}
+.compare-decision-why, .compare-decision-next {{ margin-top: 2px; font-size: 11px; color: var(--muted); }}
+.compare-decision-sig {{ margin-top: 2px; font-size: 10px; color: var(--muted); }}
 .compare-verdict {{ margin-top: 6px; }}
 .compare-verdict-chip {{
   display: inline-block; padding: 2px 10px; border-radius: 999px;
-  font-weight: 700; font-size: 12px; letter-spacing: 0.04em; color: #fff;
+  font-weight: 700; font-size: 12px; letter-spacing: 0.04em; color: var(--paper);
 }}
-.compare-verdict-chip.tone-regressed {{ background: #c0392b; }}
-.compare-verdict-chip.tone-improved {{ background: #1f6b45; }}
-.compare-verdict-chip.tone-mixed {{ background: #c87a12; }}
-.compare-verdict-chip.tone-neutral {{ background: #6b7a8d; }}
+.compare-verdict-chip.tone-regressed {{ background: var(--danger); }}
+.compare-verdict-chip.tone-improved {{ background: var(--success); }}
+.compare-verdict-chip.tone-mixed {{ background: var(--warning); }}
+.compare-verdict-chip.tone-neutral {{ background: var(--muted); }}
 .compare-verdict-bullets {{ margin: 6px 0 0; padding-left: 18px; }}
-.compare-verdict-bullets li {{ margin: 1px 0; color: #182230; }}
-.compare-verdict-bullets li.reg {{ color: #9b2c2c; }}
-.compare-verdict-bullets li.imp {{ color: #1f6b45; }}
-.compare-verdict-none {{ margin-top: 6px; color: #5f6f82; font-size: 11px; }}
+.compare-verdict-bullets li {{ margin: 1px 0; color: var(--ink); }}
+.compare-verdict-bullets li.reg {{ color: var(--danger); }}
+.compare-verdict-bullets li.imp {{ color: var(--success); }}
+.compare-verdict-none {{ margin-top: 6px; color: var(--muted); font-size: 11px; }}
 .compare-verdict-banner {{
   display: flex; gap: 10px; align-items: flex-start;
-  margin: 6px 0 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid #d9e0ea;
+  margin: 6px 0 10px; padding: 10px 12px; border-radius: 8px;
+  background: var(--paper-2); border: 1px solid var(--line);
 }}
 .compare-verdict-glyph {{ font-size: 15px; line-height: 1.3; }}
 .compare-verdict-main {{ display: flex; flex-direction: column; gap: 2px; }}
-.compare-verdict-label {{ font-weight: 700; font-size: 13px; letter-spacing: 0.04em; }}
-.compare-verdict-sentence {{ font-size: 12px; color: #3d4f63; }}
-.compare-verdict-banner.tone-regressed {{ background: #fdecea; border-color: #e6b3ac; }}
+.compare-verdict-label {{ font-weight: 700; font-size: 13px; letter-spacing: 0.04em; color: var(--ink); }}
+.compare-verdict-sentence {{ font-size: 12px; color: var(--muted); }}
+.compare-verdict-banner.tone-regressed {{ background: var(--danger-soft); border-color: var(--error-border); }}
 .compare-verdict-banner.tone-regressed .compare-verdict-label,
-.compare-verdict-banner.tone-regressed .compare-verdict-glyph {{ color: #b23125; }}
-.compare-verdict-banner.tone-improved {{ background: #e9f5ee; border-color: #a9d3ba; }}
+.compare-verdict-banner.tone-regressed .compare-verdict-glyph {{ color: var(--danger); }}
+.compare-verdict-banner.tone-improved {{ background: var(--success-soft); border-color: var(--ok-border); }}
 .compare-verdict-banner.tone-improved .compare-verdict-label,
-.compare-verdict-banner.tone-improved .compare-verdict-glyph {{ color: #1f6b45; }}
-.compare-verdict-banner.tone-mixed {{ background: #fdf3e2; border-color: #e2c48a; }}
+.compare-verdict-banner.tone-improved .compare-verdict-glyph {{ color: var(--success); }}
+.compare-verdict-banner.tone-mixed {{ background: var(--warning-soft); border-color: var(--warn-border); }}
 .compare-verdict-banner.tone-mixed .compare-verdict-label,
-.compare-verdict-banner.tone-mixed .compare-verdict-glyph {{ color: #b4670e; }}
-.compare-verdict-banner.tone-neutral {{ background: #eef1f5; border-color: #d1d8e0; }}
+.compare-verdict-banner.tone-mixed .compare-verdict-glyph {{ color: var(--warning); }}
+.compare-verdict-banner.tone-neutral {{ background: var(--paper-2); border-color: var(--line); }}
 .compare-cards {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 10px; }}
 .compare-card {{
-  flex: 1 1 120px; border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 10px; background: #fff; display: flex; flex-direction: column; gap: 3px;
+  flex: 1 1 120px; border: 1px solid var(--accent-border); border-radius: 8px;
+  padding: 8px 10px; background: var(--paper); display: flex; flex-direction: column; gap: 3px;
 }}
 .compare-card-k {{ font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }}
-.compare-card-v {{ font-size: 18px; font-weight: 700; line-height: 1.1; }}
-.compare-card.tone-regressed {{ border-left: 4px solid #c0392b; }}
-.compare-card.tone-regressed .compare-card-v {{ color: #b23125; }}
-.compare-card.tone-improved {{ border-left: 4px solid #1f6b45; }}
-.compare-card.tone-improved .compare-card-v {{ color: #1f6b45; }}
-.compare-card.tone-warn {{ border-left: 4px solid #c87a12; }}
-.compare-card.tone-warn .compare-card-v {{ color: #b4670e; }}
+.compare-card-v {{ font-size: 18px; font-weight: 700; line-height: 1.1; color: var(--ink); }}
+.compare-card.tone-regressed {{ border-left: 4px solid var(--danger); border-color: var(--error-border); }}
+.compare-card.tone-regressed .compare-card-v {{ color: var(--danger); }}
+.compare-card.tone-improved {{ border-left: 4px solid var(--success); border-color: var(--ok-border); }}
+.compare-card.tone-improved .compare-card-v {{ color: var(--success); }}
+.compare-card.tone-warn {{ border-left: 4px solid var(--warning); border-color: var(--warn-border); }}
+.compare-card.tone-warn .compare-card-v {{ color: var(--warning); }}
 .compare-card-mover {{ flex: 2 1 200px; }}
 .compare-card-mover .compare-card-v {{ font-size: 13px; font-weight: 600; }}
-.compare-next {{ margin: 6px 0 4px; font-size: 12px; font-weight: 600; color: #123355; }}
+.compare-next {{ margin: 6px 0 4px; font-size: 12px; font-weight: 600; color: var(--ink); }}
 .compare-comparability-warn {{
   margin: 0 0 8px; padding: 8px 10px; border-radius: 6px;
-  background: #fdf0e2; border-left: 4px solid #c87a12; color: #6b4a12;
+  background: var(--warning-soft); border: 1px solid var(--warn-border);
+  border-left: 4px solid var(--warning); color: var(--ink);
 }}
-.compare-comparability-head {{ font-weight: 700; }}
+.compare-comparability-head {{ font-weight: 700; color: var(--warning); }}
 .compare-comparability-warn ul {{ margin: 4px 0 0; padding-left: 18px; }}
 .compare-comparability-warn li {{ margin: 1px 0; }}
+/* Paired A/B comparison bars and the migration delta chart. Geometry comes
+   from the shared --std-bar-* tokens so every bar in both reports matches. */
+.compare-visual {{
+  margin: 10px 0 16px; padding: 14px 16px 16px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--paper);
+}}
+.compare-visual-head {{
+  display: flex; justify-content: space-between; gap: 14px;
+  align-items: flex-start; margin-bottom: 12px;
+}}
+.compare-visual-title {{ color: var(--ink); font-size: 13px; font-weight: 700; }}
+.compare-visual-sub {{ margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.45; }}
+.compare-legend {{ display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 10px; }}
+.compare-legend-item {{ display: inline-flex; align-items: center; gap: 5px; }}
+.legend-swatch {{ display: inline-block; width: 14px; height: 6px; border-radius: 99px; }}
+.legend-swatch.a, .legend-swatch.delta-minus {{ background: var(--series-a); }}
+.legend-swatch.b, .legend-swatch.delta-plus {{ background: var(--series-b); }}
+.paired-bars {{ display: grid; gap: 7px; }}
+.paired-row {{
+  display: grid; grid-template-columns: minmax(95px, 145px) minmax(0, 1fr);
+  gap: 10px; align-items: center; padding: 3px 0;
+}}
+.paired-label {{
+  overflow: hidden; color: var(--ink); font-size: 11px; font-weight: 600;
+  white-space: nowrap; text-overflow: ellipsis;
+}}
+.paired-pair {{ display: grid; gap: 5px; }}
+.paired-line {{
+  display: grid; grid-template-columns: 18px minmax(80px, 1fr) 96px;
+  gap: 7px; align-items: center; min-height: 20px;
+}}
+.paired-tag {{ font-size: 9px; font-weight: 700; text-align: center; line-height: 1.2; }}
+.paired-tag.a {{ color: var(--series-a-text); }}
+.paired-tag.b {{ color: var(--series-b-text); }}
+.paired-track {{
+  display: block; height: var(--std-bar-h); overflow: hidden;
+  background: var(--bar-track-bg); box-shadow: inset 0 0 0 1px var(--bar-track-border);
+  border-radius: var(--std-bar-r);
+}}
+.paired-fill {{
+  display: block; width: var(--w); height: 100%;
+  border-radius: calc(var(--std-bar-r) - 1px);
+}}
+.paired-fill.a {{ background: var(--series-a); }}
+.paired-fill.b {{ background: var(--series-b); }}
+.paired-value {{
+  color: var(--ink); font-size: 11px; line-height: 1.2;
+  font-variant-numeric: tabular-nums; text-align: right;
+}}
+.migration-delta-unified .delta-bars {{ display: grid; gap: 7px; }}
+.migration-delta-unified .delta-row {{
+  display: grid; grid-template-columns: minmax(90px, 120px) minmax(220px, 1fr) 64px;
+  gap: 10px; align-items: center; padding: 2px 0;
+}}
+.migration-delta-unified .delta-label {{
+  font-size: 11px; color: var(--ink); font-weight: 600;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}}
+.migration-delta-unified .delta-visual {{
+  position: relative; display: grid; grid-template-columns: 1fr 1fr;
+  gap: 8px; align-items: center;
+}}
+.migration-delta-unified .delta-zero {{
+  position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px;
+  transform: translateX(-50%); background: var(--line);
+}}
+.migration-delta-unified .delta-track,
+.migration-delta-unified .delta-track-placeholder {{
+  display: block; height: var(--std-bar-h); overflow: hidden;
+  background: var(--bar-track-bg); box-shadow: inset 0 0 0 1px var(--bar-track-border);
+  border-radius: var(--std-bar-r);
+}}
+.migration-delta-unified .delta-track.left,
+.migration-delta-unified .delta-track.right {{ justify-self: stretch; }}
+.migration-delta-unified .delta-fill {{
+  display: block; width: var(--w); height: 100%;
+  border-radius: calc(var(--std-bar-r) - 1px);
+}}
+.migration-delta-unified .delta-fill.minus {{ margin-left: auto; background: var(--series-a); }}
+.migration-delta-unified .delta-fill.plus {{ background: var(--series-b); }}
+.migration-delta-unified .delta-value {{
+  font-size: 11px; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums;
+}}
+/* Bar hover matches the statistics export: the track edge and label pick up
+   the accent and the fill brightens, without moving anything. */
+.paired-row .paired-track, .paired-row .paired-label,
+.migration-delta-unified .delta-row .delta-track,
+.migration-delta-unified .delta-row .delta-label {{
+  transition: border-color 0.15s ease, color 0.15s ease;
+}}
+.paired-row:hover .paired-track,
+.migration-delta-unified .delta-row:hover .delta-track {{
+  border-color: var(--accent);
+}}
+.paired-row:hover .paired-label,
+.migration-delta-unified .delta-row:hover .delta-label {{ color: var(--accent); }}
+.paired-row:hover .paired-fill,
+.migration-delta-unified .delta-row:hover .delta-fill {{ filter: brightness(1.08); }}
+@media (max-width: 680px) {{
+  .paired-row {{ grid-template-columns: 86px minmax(0, 1fr); gap: 8px; }}
+  .paired-line {{ grid-template-columns: 16px minmax(60px, 1fr) 72px; gap: 6px; }}
+  .migration-delta-unified .delta-row {{
+    grid-template-columns: 86px minmax(140px, 1fr) 56px; gap: 8px;
+  }}
+}}
 .compare-chart {{ margin: 0 0 12px; overflow-x: auto; }}
 .compare-chart svg {{ max-width: 100%; height: auto; display: block; }}
+/* Chart paint must come from CSS, never from fill="var(...)": var() is not
+   valid in an SVG presentation attribute, so those charts would not re-theme. */
+.cmp-chart-title, .cmp-chart-label {{ fill: var(--ink); }}
+.cmp-chart-sub {{ fill: var(--muted); }}
+.cmp-chart-axis {{ stroke: var(--chart-grid); }}
+/* Axis words + bars share the blue series (left/minus, right/plus). */
+.cmp-chart-improved {{ fill: var(--series-a-text); }}
+.cmp-chart-regressed {{ fill: var(--series-b-text); }}
+.cmp-chart-bar.minus {{ fill: var(--series-a); }}
+.cmp-chart-bar.plus {{ fill: var(--series-b); }}
+.cmp-chart-value {{ fill: var(--ink); }}
 .table-tools {{ margin: 8px 0 12px; }}
 .table-toolbar {{
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px;
 }}
 .table-search {{
   font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line);
-  border-radius: 6px; min-width: 160px;
+  border-radius: 6px; min-width: 160px; background: var(--paper); color: var(--ink);
+}}
+.table-search::placeholder {{ color: var(--muted); }}
+.table-search:hover {{ border-color: var(--accent); }}
+.table-search:focus-visible {{
+  border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px;
 }}
 .table-check {{ font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }}
+.table-check:hover {{ color: var(--accent); cursor: pointer; }}
+.table-check input[type="checkbox"] {{ accent-color: var(--accent); }}
 .table-count {{ font-size: 12px; color: var(--muted); margin-left: auto; }}
+.table-action {{
+  font: inherit; font-size: 12px; padding: 2px 9px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--paper-2); color: var(--ink); cursor: pointer;
+}}
+.table-action:hover {{ border-color: var(--accent); color: var(--accent); }}
+.table-action:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 1px; }}
+.table-action:disabled {{ cursor: default; }}
+.table-action:disabled:hover {{ border-color: var(--line); color: var(--ink); }}
+.table-pager {{ display: none; gap: 8px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }}
 .table-scroll table {{ min-width: 100%; }}
 .sortable {{ cursor: pointer; }}
 .sortable:hover {{ color: var(--accent); }}
-@media (prefers-color-scheme: dark) {{
-  .compare-card {{ background: var(--paper); }}
-  .compare-card.tone-regressed .compare-card-v {{ color: #e5776a; }}
-  .compare-card.tone-improved .compare-card-v {{ color: #57c191; }}
-  .compare-card.tone-warn .compare-card-v {{ color: #e0a44a; }}
-  .compare-next {{ color: #cfe1f7; }}
-  .compare-comparability-warn {{
-    background: #2a2114; border-left-color: #c87a12; color: #e6cfa6;
-  }}
-  .table-search {{ background: var(--paper); color: var(--ink); }}
+thead th.sortable:hover {{ background: var(--accent-soft); }}
+@media print {{
+  body, html[data-theme="dark"] body {{ background: #fff !important; }}
+  tbody tr:hover td, tbody tr:focus-within td {{ background: inherit; }}
+  tbody tr:hover {{ box-shadow: none; }}
+  .compare-card, .status-card, .report-card {{ box-shadow: none; }}
+  .compare-chart, .compare-card, .status-card {{ break-inside: avoid; }}
 }}
+
+.report-compare {{ font-size:12px; line-height:1.45; }}
+.report-compare h1 {{ font-size:24px; }}
+.report-compare h2 {{ font-size:18px; }}
+.report-compare h3, .compare-visual-title {{ font-size:14px; }}
+.report-compare th, .report-compare td, .paired-value, .paired-label {{ font-size:12px; }}
+.paired-tag, .compare-legend {{ font-size:10px; }}
+.compare-next {{ display:flex; align-items:baseline; gap:8px; padding:8px 10px; border-left:2px solid var(--accent); background:var(--paper); color:var(--muted); font-size:11px; font-weight:400; }}
+.compare-next::before {{ content:'›'; display:inline-grid; place-items:center; width:16px; height:16px; border:1px solid var(--accent); border-radius:50%; color:var(--accent); }}
+.compare-next strong {{ color:var(--accent); font-weight:600; }}
+@media print {{ .compare-visual-head, h2, h3 {{ break-after:avoid; }} .paired-row:hover .paired-fill, .delta-row:hover .delta-fill {{ filter:none; }} .paired-row:hover .paired-label, .delta-row:hover .delta-label {{ color:var(--ink); }} }}
 {HTML_REPORT_TOC_CSS}
 """.strip()
 
 # Same grouping as the Trace Compare dialog's nav rail (pageTabs `group`).
 COMPARE_TOC_GROUPS = (
     ("Overview", (
-        "Overview", "Summary",
+        "Summary", "Overview", "Trace Quality / Comparability", "New / Missing Tasks", "Largest Relative Changes",
     )),
     ("CPU & Cores", (
-        "Top Tasks", "Core Utilization", "Core Migrations",
+        "Top Tasks", "Core Utilization", "Core Migrations", "Core Distribution Change", "Migration Concentration",
     )),
     ("Timing", (
-        "Execution Time", "Blocking Time", "Inter-Arrival Time", "Response P99",
+        "Execution Time", "Blocking Time", "Inter-Arrival Time", "Response P99", "Timing Change Candidates",
     )),
     ("Contention", (
         "Preemption Chains", "Sync Objects", "Mutex Blocking",
@@ -7103,212 +7303,136 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
             f"</section>"
         )
 
+    def _evidence_cards(page, keys=None):
+        return ''.join(_card(title, headers,
+            [[format_evidence_cell(key, v, i) for i, v in enumerate(row)] for row in tables.get('evidence', {}).get(key, [])],
+            'No differences to show', note='Timing values are ns. Relative and timing Δ = B − A; migration count Δ = A − B. Direction is quantitative, not a verdict.')
+            for key, title, placement, headers in (sorted(COMPARE_EVIDENCE, key=lambda spec: keys.index(spec[0]) if spec[0] in keys else len(keys)) if keys else COMPARE_EVIDENCE) if placement == page and (keys is None or key in keys))
+
+    notable_fn = globals().get("compare_notable_changes")
+    if notable_fn is None:
+        from .ux_explore import compare_notable_changes as notable_fn
+    notable = notable_fn(tables or {}, 8, name_a, name_b) or {}
+
     def _overview_card() -> str:
-        notable_fn = globals().get("compare_notable_changes")
-        formula = globals().get("COMPARE_DELTA_FORMULA")
-        if notable_fn is None or formula is None:
-            from .ux_explore import COMPARE_DELTA_FORMULA as formula
-            from .ux_explore import compare_notable_changes as notable_fn
-        notable = notable_fn(tables or {}, 8, name_a, name_b) or {}
-        ident = notable.get("identity") or {}
-        ident_a = ident.get("a") or {}
-        ident_b = ident.get("b") or {}
-        ident_rows = [
-            ["File", ident_a.get("file") or name_a, ident_b.get("file") or name_b],
-            ["Range", ident_a.get("span") or "—", ident_b.get("span") or "—"],
-            ["Tick mode", ident_a.get("tick_mode") or "—", ident_b.get("tick_mode") or "—"],
+        ident = notable.get('identity') or {}
+        a, b = ident.get('a') or {}, ident.get('b') or {}
+        rows = [
+            ['File', a.get('file') or name_a, b.get('file') or name_b],
+            ['Range', a.get('span') or '—', b.get('span') or '—'],
+            ['Tick mode', a.get('tick_mode') or '—', b.get('tick_mode') or '—'],
         ]
-        verdict_label = str(notable.get("verdict_label") or "SIMILAR")
-        verdict_tone = str(notable.get("verdict_tone") or "neutral")
-        import re as _re
-        verdict_sentence = _re.sub(
-            r"^Overall:\s*", "", str(notable.get("verdict") or "")).strip()
-        verdict_glyph = {"regressed": "▲", "improved": "▼", "mixed": "◆"}.get(
-            verdict_tone, "●")
-        comparability = notable.get("comparability") or {}
-        comp_warnings = list(comparability.get("warnings") or [])
-        cards = notable.get("cards") or {}
-        notable_rows = [
-            [r.get("status"), r.get("label"), r.get("a"), r.get("b"), r.get("change")]
-            for r in (notable.get("rows") or [])
-            if isinstance(r, dict)
-        ]
-        warn_html = "".join(
-            f'<p class="warn-banner">{_esc(w)}</p>'
-            for w in (notable.get("warnings") or [])
-        )
-        badge = {
-            "Regressed": "badge-regressed",
-            "Improved": "badge-ok",
-            "Changed": "badge-changed",
-        }
-
-        def _notable_rows_html() -> str:
-            if not notable_rows:
-                return (
-                    '<tr><td colspan="5" class="empty">'
-                    "No significant improvements or regressions above threshold"
-                    "</td></tr>"
-                )
-            parts = []
-            for status, label, a_val, b_val, change in notable_rows:
-                cls = badge.get(str(status), "badge-changed")
-                parts.append(
-                    "<tr>"
-                    f'<td><span class="badge {cls}">{_esc(status)}</span></td>'
-                    f"<td>{_esc(label)}</td>"
-                    f"<td>{_esc(a_val)}</td>"
-                    f"<td>{_esc(b_val)}</td>"
-                    f"<td>{_esc(change)}</td>"
-                    "</tr>"
-                )
-            return "".join(parts)
-
         parts = ['<section class="report-card"><h2>Overview</h2>'
-                 '<p class="detail-note">Verdict, identity, and engineering-significant '
-                 "deltas between Baseline A and Candidate B.</p>"]
-        if comp_warnings:
-            parts.append(
-                '<div class="compare-comparability-warn">'
-                '<div class="compare-comparability-head">⚠ Traces may not be '
-                'directly comparable</div><ul>'
-                + "".join(f"<li>{_esc(w)}</li>" for w in comp_warnings)
-                + "</ul></div>"
-            )
-        parts.append(
-            f'<div class="compare-verdict-banner tone-{_esc(verdict_tone)}">'
-            f'<span class="compare-verdict-glyph">{verdict_glyph}</span>'
-            '<span class="compare-verdict-main">'
-            f'<span class="compare-verdict-label">{_esc(verdict_label)}</span>'
-            + (f'<span class="compare-verdict-sentence">{_esc(verdict_sentence)}</span>'
-               if verdict_sentence else "")
-            + "</span></div>"
-        )
-        nxt = str(notable.get("next_investigation") or "").strip()
-        if nxt:
-            parts.append(f'<p class="compare-next">{_esc(nxt)}</p>')
-        omitted = int(notable.get("small_omitted_count") or 0)
-        if omitted or int(cards.get("significant") or 0):
-            parts.append(
-                '<p class="overview-formula">'
-                "Showing engineering-significant deltas only "
-                "(small changes omitted)</p>"
-            )
-        parts.append(f'<p class="overview-formula">{_esc(formula)}</p>')
-        _mover = None
-        for _r in notable_rows:
-            if str(_r[0]) == "Regressed":
-                _mover = _r
-                break
-        if _mover is None:
-            for _r in notable_rows:
-                if str(_r[0]) == "Improved":
-                    _mover = _r
-                    break
-        _mover_text = f"{_mover[1]}: {_mover[4]}" if _mover else "—"
-        parts.append(
-            '<div class="compare-cards">'
-            f'<div class="compare-card tone-regressed"><span class="compare-card-k">'
-            f'Regressions</span><span class="compare-card-v">'
-            f'{int(cards.get("regressions") or 0)}</span></div>'
-            f'<div class="compare-card tone-improved"><span class="compare-card-k">'
-            f'Improvements</span><span class="compare-card-v">'
-            f'{int(cards.get("improvements") or 0)}</span></div>'
-            f'<div class="compare-card tone-warn"><span class="compare-card-k">'
-            f'Warnings</span><span class="compare-card-v">'
-            f'{int(cards.get("warnings") or 0)}</span></div>'
-            f'<div class="compare-card compare-card-mover"><span class="compare-card-k">'
-            f'Biggest mover</span><span class="compare-card-v">'
-            f'{_esc(_mover_text)}</span></div>'
-            "</div>"
-        )
-        if warn_html:
-            parts.append(warn_html)
-        parts.append('<h3 class="overview-sub">Comparison identity</h3>')
-        parts.append(
-            '<div class="table-scroll"><table><thead><tr>'
-            '<th></th><th class="col-baseline">Baseline A</th>'
-            '<th class="col-candidate">Candidate B</th></tr></thead><tbody>'
-            f'{_rows_html(ident_rows, 3, "No identity")}'
-            "</tbody></table></div>"
-        )
-        # Minimal Evidence refs when shared-pattern reasons carry time tokens.
-        ev_rows = []
-        for row in (tables.get("shared_patterns") or []):
+            '<p class="detail-note">Trace identity, scope, and comparability. Use this context when interpreting the Summary results.</p>'
+            '<h3 class="overview-sub">Comparison identity</h3>'
+            '<div class="table-scroll"><table><thead><tr><th>Item</th>'
+            '<th class="col-baseline">Baseline A</th><th class="col-candidate">Candidate B</th>'
+            '</tr></thead><tbody>' + _rows_html(rows, 3, 'No identity') + '</tbody></table></div>']
+        warnings = (notable.get('comparability') or {}).get('warnings') or []
+        if warnings:
+            parts.append('<div class="compare-comparability-warn"><div class="compare-comparability-head">'
+                '⚠ Traces may not be directly comparable</div><ul>'
+                + ''.join(f'<li>{_esc(w)}</li>' for w in warnings) + '</ul></div>')
+        parts.extend(f'<p class="warn-banner">{_esc(w)}</p>' for w in notable.get('warnings') or [])
+        return ''.join(parts) + '</section>'
+
+    def _notable_evidence() -> str:
+        badge = {'Regressed': 'badge-regressed', 'Improved': 'badge-ok', 'Changed': 'badge-changed'}
+        rows = []
+        for r in notable.get('rows') or []:
+            if not isinstance(r, dict):
+                continue
+            cls = badge.get(r.get('status'), 'badge-changed')
+            rows.append('<tr><td><span class="badge ' + cls + '">' + _esc(r.get('status')) + '</span></td>'
+                + ''.join(f'<td>{_esc(r.get(key))}</td>' for key in ('label', 'a', 'b', 'change')) + '</tr>')
+        body = ''.join(rows) or '<tr><td colspan="5" class="empty">No significant improvements or regressions above threshold</td></tr>'
+        parts = ['<h3 class="overview-sub">Notable Changes</h3>'
+            '<div class="table-scroll"><table><thead><tr><th>Status</th><th>Metric</th>'
+            '<th class="col-baseline">Baseline A</th><th class="col-candidate">Candidate B</th>'
+            '<th>Change</th></tr></thead><tbody>' + body + '</tbody></table></div>']
+        refs = []
+        for row in tables.get('shared_patterns') or []:
             if isinstance(row, dict):
-                reason = str(row.get("reason") or "")
-                task = str(row.get("task") or row.get("name") or "pattern")
+                task, reason = str(row.get('task') or row.get('name') or 'pattern'), str(row.get('reason') or '')
             elif isinstance(row, (list, tuple)) and len(row) >= 5:
-                task, reason = str(row[0] or "pattern"), str(row[4] or "")
+                task, reason = str(row[0] or 'pattern'), str(row[4] or '')
             else:
                 continue
-            low = reason.lower()
-            if any(u in low for u in (" ms", " µs", " us", " ns", "jump:")):
-                ev_rows.append([task, reason[:120]])
-            if len(ev_rows) >= 4:
+            if any(unit in reason.lower() for unit in (' ms', ' µs', ' us', ' ns', 'jump:')):
+                refs.append([task, reason[:120]])
+            if len(refs) >= 4:
                 break
-        if ev_rows:
-            parts.append('<h3 class="overview-sub">Evidence refs</h3>')
-            parts.append(
-                '<div class="table-scroll"><table><thead><tr>'
-                "<th>Finding</th><th>Evidence / Time</th></tr></thead><tbody>"
-                f'{_rows_html(ev_rows, 2, "No evidence refs")}'
-                "</tbody></table></div>"
-            )
-        parts.append('<h3 class="overview-sub">Notable Changes</h3>')
-        parts.append(
-            '<div class="table-scroll"><table><thead><tr>'
-            "<th>Status</th><th>Metric</th>"
-            '<th class="col-baseline">Baseline A</th>'
-            '<th class="col-candidate">Candidate B</th>'
-            "<th>Change</th></tr></thead><tbody>"
-            f"{_notable_rows_html()}"
-            "</tbody></table></div></section>"
-        )
-        return "".join(parts)
+        if refs:
+            parts.append('<h3 class="overview-sub">Evidence refs</h3>'
+                '<div class="table-scroll"><table><thead><tr><th>Finding</th><th>Evidence / Time</th>'
+                '</tr></thead><tbody>' + _rows_html(refs, 2, 'No evidence refs') + '</tbody></table></div>')
+        return ''.join(parts)
 
     shared_rows = [
         _shared_pattern_table_row(r) for r in (tables.get("shared_patterns") or [])
     ]
     trend_rows = list(tables.get("trends") or tables.get("trend") or [])
 
-    util_svg_fn = globals().get("compare_core_util_chart_svg")
-    util_rows_fn = globals().get("compare_core_util_chart_rows")
+    # Core Utilization and Core Migrations now use the HTML paired-bar and
+    # delta components, so only the diverging Summary / Response P99 charts
+    # stay as SVG.
     p99_svg_fn = globals().get("compare_p99_delta_chart_svg")
     p99_rows_fn = globals().get("compare_p99_delta_chart_rows")
     sum_svg_fn = globals().get("compare_summary_change_bars_svg")
     sum_rows_fn = globals().get("compare_summary_change_bar_rows")
-    heat_svg_fn = globals().get("compare_migration_heatmap_svg")
-    heat_rows_fn = globals().get("compare_migration_heatmap_rows")
     mig_filt_fn = globals().get("filter_compare_migration_rows")
     decision_fn = globals().get("compare_summary_decision_html")
+    paired_fn = globals().get("compare_paired_bars_html")
+    delta_fn = globals().get("compare_migration_delta_html")
     if any(fn is None for fn in (
-        util_svg_fn, util_rows_fn, p99_svg_fn, p99_rows_fn,
-        sum_svg_fn, sum_rows_fn, heat_svg_fn, heat_rows_fn, mig_filt_fn,
+        p99_svg_fn, p99_rows_fn, sum_svg_fn, sum_rows_fn, mig_filt_fn,
+        paired_fn, delta_fn,
     )):
         from .ux_explore import (
-            compare_core_util_chart_rows as util_rows_fn,
-            compare_core_util_chart_svg as util_svg_fn,
+            compare_migration_delta_html as delta_fn,
             compare_p99_delta_chart_rows as p99_rows_fn,
             compare_p99_delta_chart_svg as p99_svg_fn,
+            compare_paired_bars_html as paired_fn,
             compare_summary_change_bar_rows as sum_rows_fn,
             compare_summary_change_bars_svg as sum_svg_fn,
-            compare_migration_heatmap_rows as heat_rows_fn,
-            compare_migration_heatmap_svg as heat_svg_fn,
-            filter_compare_migration_rows as mig_filt_fn,
             compare_summary_decision_html as decision_fn,
+            filter_compare_migration_rows as mig_filt_fn,
         )
     elif decision_fn is None:
         from .ux_explore import compare_summary_decision_html as decision_fn
-    util_svg = util_svg_fn(util_rows_fn(tables or {}))
     p99_svg = p99_svg_fn(p99_rows_fn(tables or {}, 12))
     sum_svg = sum_svg_fn(sum_rows_fn(tables or {}, 8)) if sum_svg_fn and sum_rows_fn else ""
-    heat_svg = heat_svg_fn(heat_rows_fn(tables.get("migrations") or [], 12)) if heat_svg_fn and heat_rows_fn else ""
-    decision_html = decision_fn(tables or {}, name_a, name_b) if decision_fn else ""
-    util_lead = f'<div class="compare-chart">{util_svg}</div>' if util_svg else ""
+    decision_html = decision_fn(tables or {}, name_a, name_b, include_context=False) if decision_fn else ""
+    # Paired A/B bars replace the Core Utilization SVG and lead the ranked
+    # detail tables; the migration delta chart replaces the heatmap SVG.
+    _PAIRED_SPECS = (
+        ("core_util", "Core utilization",
+         "Per-core busy share for Baseline A and Candidate B on one scale.",
+         {"a_idx": 1, "b_idx": 2, "limit": 16}),
+        ("top", "Top CPU consumers",
+         "Largest CPU users, shown with the same scale for Baseline A and Candidate B.",
+         {"a_idx": 1, "b_idx": 2, "limit": 12}),
+        ("execution", "Largest execution-time changes",
+         "Tasks with the largest absolute change in maximum execution time.",
+         {"a_idx": 5, "b_idx": 6, "limit": 10, "sort_by_delta": True}),
+        ("blocking", "Largest blocking-time changes",
+         "Tasks with the largest absolute change in maximum off-CPU gap.",
+         {"a_idx": 5, "b_idx": 6, "limit": 10, "sort_by_delta": True}),
+        ("inter_arrival", "Largest inter-arrival changes",
+         "Tasks with the largest absolute change in average activation spacing.",
+         {"a_idx": 3, "b_idx": 4, "limit": 10, "sort_by_delta": True}),
+        ("mutex_block", "Largest mutex-blocking totals",
+         "Tasks with the most mutex-attributed blocking time.",
+         {"a_idx": 1, "b_idx": 2, "limit": 10}),
+    )
+    paired_leads = {
+        key: paired_fn(tables.get('evidence', {}).get('_charts', {}).get(key, tables.get(key) or []), title=title, subtitle=sub, **opts)
+        for key, title, sub, opts in _PAIRED_SPECS
+    }
+    util_lead = paired_leads.get("core_util") or ""
     p99_lead = f'<div class="compare-chart">{p99_svg}</div>' if p99_svg else ""
-    sum_lead = (decision_html or "") + (f'<div class="compare-chart">{sum_svg}</div>' if sum_svg else "")
-    heat_lead = f'<div class="compare-chart">{heat_svg}</div>' if heat_svg else ""
+    sum_lead = (decision_html or "") + (f'<div class="compare-chart">{sum_svg}</div>' if sum_svg else "") + _notable_evidence() + '<h3 class="overview-sub">All summary metrics</h3>'
+    heat_lead = delta_fn(tables.get("migrations") or [], 12)
     mig_top = mig_filt_fn(tables.get("migrations") or [], "count", "top", "", 10)
     mig_lead = heat_lead
     if mig_top.get("rows"):
@@ -7329,16 +7453,19 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
         )
 
     sections = [
-        _overview_card(),
         _card("Summary",
               ["Metric", "Baseline A", "Candidate B", "Δ"],
               tables.get("summary", []), "No data",
               lead_html=sum_lead,
               note="KPI-style totals and rates. Δ = Baseline A − Candidate B "
                    "(positive means A is numerically larger). " + _note_sigma),
+        _overview_card(),
+        _evidence_cards("summary", ["trace_comparability", "task_presence"]),
+        _evidence_cards("summary", ["relative_changes"]),
         _card("Top Tasks",
               ["Task", "CPU A (%)", "CPU B (%)", "Δ (pp)"],
               tables.get("top", []), "No user tasks in either trace",
+              lead_html=paired_leads.get("top", ""),
               note="Highest CPU consumers excluding IDLE/TICK. "
                    "Δ is percentage points (pp)."),
         _card("Core Utilization",
@@ -7355,16 +7482,19 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               lead_html=mig_lead,
               note="Migration count, rate, dwell, ping-pong, and primary-core "
                    "affinity for tasks that ran on more than one core. " + _note_mig),
+        _evidence_cards("migrations"),
         _card("Execution Time",
               ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B",
                "Δ max", "Shape Δ"],
               tables.get("execution", []), "No execution samples in either trace",
+              lead_html=paired_leads.get("execution", ""),
               note="Per-slice run durations between consecutive context switches. "
                    "Shape Δ is the two-sample KS statistic (0 = same distribution)."),
         _card("Blocking Time",
               ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Max A", "Max B",
                "Δ avg", "Shape Δ"],
               tables.get("blocking", []), "No blocking samples in either trace",
+              lead_html=paired_leads.get("blocking", ""),
               note="Off-CPU gaps between consecutive slices of the same task "
                    "(preemption, wait, or scheduling delay). "
                    "Shape Δ is the two-sample KS statistic (0 = same distribution)."),
@@ -7372,6 +7502,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B",
                "Δ avg", "Shape Δ"],
               tables.get("inter_arrival", []), "No inter-arrival samples in either trace",
+              lead_html=paired_leads.get("inter_arrival", ""),
               note="Time between consecutive activations of the same task "
                    "(slice start to next slice start). "
                    "Shape Δ is the two-sample KS statistic (0 = same distribution)."),
@@ -7390,9 +7521,11 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               lead_html=p99_lead,
               note="Heuristic ready→completion P99 from adjacent slices "
                    "(not an explicit BTF release/completion pair). " + _note_p99),
+        _evidence_cards("response"),
         _card("Mutex Blocking",
               ["Task", "Total A", "Total B", "Δ"],
               tables.get("mutex_block", []), "No mutex blocking in either trace",
+              lead_html=paired_leads.get("mutex_block", ""),
               note="Total mutex-attributed blocking time per task."),
         _card("Shared Patterns",
               ["Task", "Kind", "Count A", "Count B", "Description"],

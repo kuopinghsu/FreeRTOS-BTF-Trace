@@ -1,6 +1,7 @@
 """Timeline explore helpers: anomalies, worst events, scope, compare strip."""
 from __future__ import annotations
 
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -26,13 +27,13 @@ from btf_viewer_pkg.ux_explore import (  # noqa: E402
     compare_section_for_metric,
     compare_task_for_row,
     compare_core_util_chart_rows,
-    compare_core_util_chart_svg,
+    compare_migration_delta_html,
+    compare_paired_bars_html,
     compare_p99_delta_chart_rows,
     compare_p99_delta_chart_svg,
     compare_summary_change_bar_rows,
     compare_summary_change_bars_svg,
     compare_migration_heatmap_rows,
-    compare_migration_heatmap_svg,
     compare_row_delta_status,
     compare_directional_delta,
     compare_dumbbell_rows,
@@ -454,6 +455,35 @@ class UxExploreTest(unittest.TestCase):
         self.assertTrue(notable["comparability"]["warnings"])
         self.assertEqual(notable["verdict_label"], "SIMILAR")
 
+    def test_paired_bars_share_one_scale_and_carry_row_tooltips(self) -> None:
+        html = compare_paired_bars_html(
+            [["CS[15]", "14.0", "14.9", "+0.9"], ["CS[16]", "9.0", "3.0", "-6.0"]],
+            title="Top CPU consumers", subtitle="Largest CPU users.",
+        )
+        self.assertIn("Top CPU consumers", html)
+        self.assertIn('class="paired-fill a"', html)
+        self.assertIn('class="paired-fill b"', html)
+        # Widest value anchors the shared scale; A and B are comparable by eye.
+        self.assertIn("--w:100.0%", html)
+        self.assertIn("--w:94.0%", html)
+        self.assertRegex(html, r'<div class="paired-row" title="CS\[15\]: A 14\.0 \u00b7 B 14\.9">')
+        self.assertNotIn('class="paired-label" title=', html)
+        self.assertEqual(html.count('class="paired-row"'), 2)
+        self.assertEqual(compare_paired_bars_html([], title="x"), "")
+
+    def test_migration_delta_bars_diverge_around_zero(self) -> None:
+        html = compare_migration_delta_html([
+            {"name": "CS[19]", "migrationsA": 1, "migrationsB": 13, "delta": -12},
+            {"name": "CS[20]", "migrationsA": 40, "migrationsB": 2, "delta": 38},
+        ])
+        self.assertIn("migration-delta-unified", html)
+        self.assertIn("delta-zero", html)
+        self.assertIn('class="delta-fill minus"', html)
+        self.assertIn('class="delta-fill plus"', html)
+        self.assertIn("--w:100.0%", html)
+        self.assertRegex(html, r'<div class="delta-row" title="CS\[19\]: \u0394 \u221212">')
+        self.assertEqual(compare_migration_delta_html([]), "")
+
     def test_compare_charts_and_migration_views(self) -> None:
         util = compare_core_util_chart_rows({
             "core_util": [
@@ -462,10 +492,6 @@ class UxExploreTest(unittest.TestCase):
             ],
         })
         self.assertEqual(util[0]["label"], "Core_0")
-        svg = compare_core_util_chart_svg(util)
-        self.assertIn("Core_0", svg)
-        self.assertIn("#2a6fb2", svg)
-        self.assertIn("#6b4ea8", svg)
         p99 = compare_p99_delta_chart_rows({
             "response": [
                 ["QP[198]", "13 ms", "29 ms", "-16 ms"],
@@ -476,8 +502,16 @@ class UxExploreTest(unittest.TestCase):
         self.assertEqual(p99[0]["status"], "Regressed")
         self.assertEqual(p99[1]["status"], "Improved")
         p99_svg = compare_p99_delta_chart_svg(p99)
-        self.assertIn("#c0392b", p99_svg)
-        self.assertIn("#1f6b45", p99_svg)
+        # Paint comes from CSS classes: var() does not resolve inside an SVG
+        # presentation attribute, so fill="var(...)" would never re-theme.
+        # Bars use directional blue series (minus/plus), not green/red status.
+        self.assertIn('class="cmp-chart-bar plus"', p99_svg)
+        self.assertIn('class="cmp-chart-bar minus"', p99_svg)
+        self.assertNotIn('class="cmp-chart-bar regressed"', p99_svg)
+        self.assertNotIn('class="cmp-chart-bar improved"', p99_svg)
+        self.assertIn('class="cmp-chart-title"', p99_svg)
+        self.assertIn('class="cmp-chart-axis"', p99_svg)
+        self.assertNotRegex(p99_svg, r'(?:fill|stroke)="(?!none)')
         mig = [
             [f"QP[{i}]", 10 + i, 20 + i, -(10 + i), "1/s", "2/s", "-1/s",
              "1 ms", "2 ms", "-1 ms", 0, 1, 2, 2, "0 90%", "1 80%"]
@@ -502,7 +536,6 @@ class UxExploreTest(unittest.TestCase):
         self.assertEqual(rel["rows"][0][0], "CS[2]")
         heat = compare_migration_heatmap_rows(mig, 5)
         self.assertEqual(len(heat), 5)
-        self.assertIn("Migration Δ heatmap", compare_migration_heatmap_svg(heat))
         bars = compare_summary_change_bar_rows({
             "summary": [
                 ["Migrations (total)", 100, 200, "−100"],
@@ -511,12 +544,47 @@ class UxExploreTest(unittest.TestCase):
             ],
         })
         self.assertTrue(any(r["label"] == "Migrations (total)" for r in bars))
+        mig = next(r for r in bars if r["label"] == "Migrations (total)")
+        # 100 vs 200 with Δ −100 → B−A = +100 → +50.0% of max(A,B).
+        self.assertAlmostEqual(mig["rel_pct"], 50.0, places=4)
+        self.assertIn("/ +50.0%", mig["change"])
+        # % scale: Core gap (+20% of 40 µs) outranks Migrations /s (~4%).
+        # Labels must show the matching %.
+        mixed = compare_summary_change_bar_rows({
+            "summary": [
+                ["Blocking time /s", "1000 s/s", "1006.387 s/s", "−6.387 s/s"],
+                ["Core gap max", "32 µs", "40 µs", "−8 µs"],
+                ["Migrations /s", "7000000/s", "7298265.52/s", "−298265.52/s"],
+                ["Context switches /s", "1000000/s", "1022508.99/s", "−22508.99/s"],
+            ],
+        })
+        by_label = {r["label"]: r for r in mixed}
+        self.assertIn("%", by_label["Core gap max"]["change"])
+        self.assertIn("%", by_label["Migrations /s"]["change"])
+        self.assertGreater(
+            abs(by_label["Core gap max"]["cand"]),
+            abs(by_label["Migrations /s"]["cand"]),
+        )
+        mixed_svg = compare_summary_change_bars_svg(mixed)
+        self.assertIn("bar = % of max(A, B)", mixed_svg)
+        self.assertRegex(mixed_svg, r"Core gap max[\s\S]*?/ [+\-−]\d+\.\d+%")
+        gap_w = float(re.search(
+            r'class="cmp-chart-bar[^"]*"\s+x="[^"]+"\s+y="[^"]+"\s+width="([^"]+)"',
+            mixed_svg[mixed_svg.index("Core gap max"):],
+        ).group(1))
+        mig_w = float(re.search(
+            r'class="cmp-chart-bar[^"]*"\s+x="[^"]+"\s+y="[^"]+"\s+width="([^"]+)"',
+            mixed_svg[mixed_svg.index("Migrations /s"):],
+        ).group(1))
+        self.assertGreater(gap_w, mig_w)
         self.assertIn("Summary changes", compare_summary_change_bars_svg(bars))
         svg = compare_summary_change_bars_svg(bars)
         self.assertRegex(svg, r'y="16"[^>]*>Summary changes<')
-        self.assertRegex(svg, r'y="34"[^>]*>Improved<')
-        self.assertRegex(svg, r'y="34"[^>]*>Regressed<')
-        self.assertLess(svg.index("Summary changes"), svg.index(">Improved<"))
+        self.assertRegex(svg, r'y="34"[^>]*>B lower<')
+        self.assertRegex(svg, r'y="34"[^>]*>B higher<')
+        self.assertIn('class="cmp-chart-bar minus"', svg)
+        self.assertIn('class="cmp-chart-bar plus"', svg)
+        self.assertLess(svg.index("Summary changes"), svg.index(">B lower<"))
         decision = compare_summary_decision_html({
             "summary": [
                 ["Migrations (total)", 10, 25, "−15"],

@@ -13,6 +13,7 @@ from btf_viewer_pkg import _bootstrap  # noqa: E402
 
 _bootstrap.install()
 
+from btf_viewer_pkg.html_report import REPORT_THEME_CSS  # noqa: E402
 from btf_viewer_pkg.stats_html import (  # noqa: E402
     STATS_HTML_EXTRA_CSS,
     evidence_refs_from_findings,
@@ -161,9 +162,33 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         self.assertIn("_load_balance_gauge_html(_lb, width=600)", stats)
         self.assertIn("loadBalanceGaugeHtml(loadBalanceScore.value, { width: 600 })", vue)
         self.assertIn("tbody tr:hover td,", css_py)
-        self.assertIn("--data-bar: #0284C7", css_py)
-        self.assertIn("--data-5-bg: #0284C7", css_py)
-        self.assertIn("--data-5-bg: #38BDF8", css_py)
+        # The palette lives in the shared theme constant, not per-export CSS.
+        self.assertNotIn("--data-bar:", css_py)
+        self.assertIn("--data-bar: #0284C7", REPORT_THEME_CSS)
+        self.assertIn("--data-5-bg: #0284C7", REPORT_THEME_CSS)
+        self.assertIn("--data-5-bg: #38BDF8", REPORT_THEME_CSS)
+        self.assertIn("REPORT_THEME_CSS", stats)
+        self.assertIn("REPORT_THEME_CSS", vue)
+
+    def test_shared_report_theme_is_in_lockstep_and_used_by_both_exports(self):
+        """One palette drives the Statistics and Trace Compare exports."""
+        import re
+        chrome_py = (BTF_ROOT / "btf_viewer_pkg/html_report.py").read_text(encoding="utf-8")
+        chrome_js = (BTF_ROOT / "web/src/utils/htmlReport.js").read_text(encoding="utf-8")
+        theme_py = re.search(
+            r'REPORT_THEME_CSS = """(.*?)"""\.strip\(\)', chrome_py, re.S).group(1).strip()
+        theme_js = re.search(
+            r'export const REPORT_THEME_CSS = `(.*?)`\.trim\(\)', chrome_js, re.S).group(1).strip()
+        self.assertEqual(theme_py, theme_js)
+        self.assertEqual(theme_py, REPORT_THEME_CSS)
+        # Both exports pull it in; the AI conversation export is left alone.
+        parser_py = (BTF_ROOT / "btf_viewer_pkg/parser.py").read_text(encoding="utf-8")
+        compare_js = (BTF_ROOT / "web/src/utils/traceCompare.js").read_text(encoding="utf-8")
+        self.assertIn("REPORT_THEME_CSS", parser_py)
+        self.assertIn("REPORT_THEME_CSS", compare_js)
+        base_py = re.search(
+            r'_BTF_HTML_REPORT_CSS = """(.*?)"""\.strip\(\)', chrome_py, re.S).group(1)
+        self.assertNotIn("--data-bar", base_py)
 
     def test_report_components_are_defined_in_one_place(self):
         """Every statistics-export component lives in the shared helper module.
@@ -189,23 +214,24 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         css = STATS_HTML_EXTRA_CSS
         for name in (".util-bar {", ".rank-bar-track {", ".pct-bar .track {"):
             rule = css.split(name)[1].split("}")[0]
-            self.assertIn("height: 12px", rule, name)
-            self.assertIn("border-radius: 999px", rule, name)
+            self.assertIn("height: var(--std-bar-h)", rule, name)
+            self.assertIn("border-radius: var(--std-bar-r)", rule, name)
             self.assertIn("var(--bar-track-bg)", rule, name)
             self.assertIn("var(--bar-track-border)", rule, name)
         for name in (".util-bar-fill, .util-row-task .util-bar-fill {",
                      ".rank-bar-fill {", ".pct-bar .fill {"):
             rule = css.split(name)[1].split("}")[0]
             self.assertIn("height: 100%", rule, name)
-            self.assertIn("border-radius: 999px", rule, name)
+            self.assertIn("border-radius: calc(var(--std-bar-r) - 1px)", rule, name)
         # The heat legend key is a bar too, so it follows the same geometry.
         legend = css.split(".heat-legend-bar {")[1].split("}")[0]
-        self.assertIn("height: 12px", legend)
-        self.assertIn("border-radius: 999px", legend)
-        # No bar may reintroduce the old 8px/4px or 10px/6px geometry. The one
-        # remaining 4px radius belongs to the square heat-matrix cells.
+        self.assertIn("height: var(--std-bar-h)", legend)
+        self.assertIn("border-radius: var(--std-bar-r)", legend)
+        # One geometry, declared once in the shared theme.
+        self.assertIn("--std-bar-h: 10px;", REPORT_THEME_CSS)
+        self.assertIn("--std-bar-r: 5px;", REPORT_THEME_CSS)
         self.assertNotIn("height: 8px", css)
-        self.assertNotIn("height: 10px", css)
+        self.assertNotIn("height: 12px", css)
         self.assertEqual(css.count("border-radius: 4px"), 1)
         self.assertIn("border-radius: 4px", css.split(".heat-grid-cell {")[1].split("}")[0])
 
@@ -225,6 +251,7 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         """
         css = STATS_HTML_EXTRA_CSS
         self.assertNotIn("--heat-", css)
+        self.assertNotIn("--heat-", REPORT_THEME_CSS)
         for i in range(6):
             self.assertIn(f".heat-{i} {{ background: var(--data-{i}-bg); color: var(--data-{i}-ink); }}", css)
         # Every bin is defined in light, explicit dark and system dark.
@@ -233,7 +260,7 @@ class StatsHtmlHelpersTest(unittest.TestCase):
             ("dark", 'html[data-theme="dark"] {', "\n}"),
             ("system dark", 'html:not([data-theme="light"]) {', "\n  }"),
         ):
-            palette = css.split(marker)[1].split(end)[0]
+            palette = REPORT_THEME_CSS.split(marker)[1].split(end)[0]
             for i in range(6):
                 self.assertIn(f"--data-{i}-bg:", palette, f"{block} bin {i}")
                 self.assertIn(f"--data-{i}-ink:", palette, f"{block} bin {i}")
@@ -242,8 +269,8 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         self.assertIn("var(--data-0-bg), var(--data-1-bg), var(--data-2-bg)", legend)
         self.assertIn("var(--data-3-bg), var(--data-4-bg), var(--data-5-bg)", legend)
         # Light ends on Corporate Sky, dark on Vibrant Azure.
-        self.assertIn("--data-5-bg: #0284C7;", css)
-        self.assertIn("--data-5-bg: #38BDF8;", css)
+        self.assertIn("--data-5-bg: #0284C7;", REPORT_THEME_CSS)
+        self.assertIn("--data-5-bg: #38BDF8;", REPORT_THEME_CSS)
 
     def test_util_section_places_lead_html_after_the_heading(self):
         html = html_util_section(
@@ -347,13 +374,14 @@ class StatsHtmlProfessionalUiTest(unittest.TestCase):
         self.assertNotIn("background:", html)
         self.assertIn('class="fill" style="width:32%"', html)
         self.assertIn(
-            ".pct-bar .fill { height: 100%; border-radius: 999px; background: var(--data-bar); }",
+            ".pct-bar .fill { height: 100%; border-radius: calc(var(--std-bar-r) - 1px); "
+            "background: var(--data-bar); }",
             STATS_HTML_EXTRA_CSS,
         )
         # Same track geometry / palette as the ranked bars.
         track = STATS_HTML_EXTRA_CSS.split(".pct-bar .track {")[1].split("}")[0]
-        for prop in ("height: 12px", "border-radius: 999px", "var(--bar-track-bg)",
-                     "var(--bar-track-border)"):
+        for prop in ("height: var(--std-bar-h)", "border-radius: var(--std-bar-r)",
+                     "var(--bar-track-bg)", "var(--bar-track-border)"):
             self.assertIn(prop, track)
 
     def test_bar_rows_hover_and_carry_tooltips(self):
@@ -378,9 +406,12 @@ class StatsHtmlProfessionalUiTest(unittest.TestCase):
         self.assertIn("tbody tr:hover th,", css)
         self.assertIn(".table-scroll tbody tr:hover td:first-child,", css)
         self.assertIn(
-            ".table-scroll tbody tr:hover th:first-child { background: var(--accent-soft); }",
+            ".table-scroll tbody tr:hover th:first-child { background: var(--row-hover-bg); }",
             css,
         )
+        self.assertIn("inset 0 1px 0 var(--row-hover-edge)", css)
+        self.assertIn("--row-hover-bg: #F1F5F9;", REPORT_THEME_CSS)
+        self.assertIn("--row-hover-bg: #182235;", REPORT_THEME_CSS)
         # Declared after the stripe / sticky rules it has to win against.
         self.assertLess(css.index("tbody tr:nth-child(even) td {"), css.index("tbody tr:hover td,"))
         self.assertLess(
