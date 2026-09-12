@@ -199,114 +199,116 @@
       v-if="hasContextStrip"
       class="context-strip"
     >
-    <div
-      v-if="traceQualityReportData && !traceQualityReportData.ok"
-      class="trace-quality-banner ctx-row ctx-row--warn"
-      role="status"
-    >
-      <span>{{ traceQualityReportData.summary }}</span>
-      <button
-        type="button"
-        class="first-run-btn"
-        @click="traceQualityDetailsOpen = !traceQualityDetailsOpen"
-      >
-        Review details
-      </button>
-      <button
-        type="button"
-        class="first-run-btn"
-        @click="onTraceQualityContinue"
-      >
-        Continue with limitations
-      </button>
-      <a
-        class="first-run-btn"
-        href="WORKFLOWS.md#trace-quality"
-        target="_blank"
-        rel="noopener"
-      >Open capture guidance</a>
-    </div>
-    <div
-      v-if="traceQualityDetailsOpen && traceQualityReportData?.groups?.length"
-      class="trace-quality-details ctx-row ctx-row--warn"
-      role="region"
-      aria-label="Trace quality details"
-    >
       <div
-        v-for="grp in traceQualityReportData.groups"
-        :key="grp.id"
-        class="trace-quality-group"
+        v-if="traceQualityReportData && !traceQualityReportData.ok"
+        class="trace-quality-banner ctx-row ctx-row--warn"
+        role="status"
       >
-        <strong>{{ grp.title }}</strong>
-        <ul>
-          <li
-            v-for="(line, i) in grp.lines"
-            :key="i"
-          >{{ line }}</li>
-        </ul>
-        <div
-          v-if="grp.affected?.length"
-          class="trace-quality-affected"
+        <span>{{ traceQualityReportData.summary }}</span>
+        <button
+          type="button"
+          class="first-run-btn"
+          @click="traceQualityDetailsOpen = !traceQualityDetailsOpen"
         >
-          Affects: {{ grp.affected.join(', ') }}
+          Review details
+        </button>
+        <button
+          type="button"
+          class="first-run-btn"
+          @click="onTraceQualityContinue"
+        >
+          Continue with limitations
+        </button>
+        <a
+          class="first-run-btn"
+          href="WORKFLOWS.md#trace-quality"
+          target="_blank"
+          rel="noopener"
+        >Open capture guidance</a>
+      </div>
+      <div
+        v-if="traceQualityDetailsOpen && traceQualityReportData?.groups?.length"
+        class="trace-quality-details ctx-row ctx-row--warn"
+        role="region"
+        aria-label="Trace quality details"
+      >
+        <div
+          v-for="grp in traceQualityReportData.groups"
+          :key="grp.id"
+          class="trace-quality-group"
+        >
+          <strong>{{ grp.title }}</strong>
+          <ul>
+            <li
+              v-for="(line, i) in grp.lines"
+              :key="i"
+            >
+              {{ line }}
+            </li>
+          </ul>
+          <div
+            v-if="grp.affected?.length"
+            class="trace-quality-affected"
+          >
+            Affects: {{ grp.affected.join(', ') }}
+          </div>
         </div>
       </div>
-    </div>
 
-    <div
-      v-if="evidenceInspectorText"
-      class="evidence-inspector-bar ctx-row ctx-row--info"
-      role="status"
-      aria-label="Timeline evidence inspector"
-    >
-      <button
-        type="button"
-        class="first-run-btn"
-        :disabled="!evidenceNav.can_back"
-        title="Previous evidence jump"
-        @click="stepEvidenceBack"
+      <div
+        v-if="evidenceInspectorText"
+        class="evidence-inspector-bar ctx-row ctx-row--info"
+        role="status"
+        aria-label="Timeline evidence inspector"
       >
-        Back
-      </button>
-      <button
-        type="button"
-        class="first-run-btn"
-        :disabled="!evidenceNav.can_forward"
-        title="Next evidence jump"
-        @click="stepEvidenceForward"
-      >
-        Forward
-      </button>
-      <span class="evidence-inspector-text">{{ evidenceInspectorText }}</span>
-    </div>
+        <button
+          type="button"
+          class="first-run-btn"
+          :disabled="!evidenceNav.can_back"
+          title="Previous evidence jump"
+          @click="stepEvidenceBack"
+        >
+          Back
+        </button>
+        <button
+          type="button"
+          class="first-run-btn"
+          :disabled="!evidenceNav.can_forward"
+          title="Next evidence jump"
+          @click="stepEvidenceForward"
+        >
+          Forward
+        </button>
+        <span class="evidence-inspector-text">{{ evidenceInspectorText }}</span>
+      </div>
 
-    <div
-      v-if="showCursorScopeBanner"
-      class="cursor-scope-banner ctx-row ctx-row--info"
-      role="status"
-    >
-      <span>{{ useAsScopePrompt }}</span>
-      <button
-        type="button"
-        class="first-run-btn primary"
-        @click="applyCursorsAsScope"
+      <div
+        v-if="showCursorScopeBanner"
+        class="cursor-scope-banner ctx-row ctx-row--info"
+        role="status"
       >
-        Enable Limit to C1–Cn
-      </button>
-      <span
-        v-if="multiCursorWarning"
-        class="cursor-scope-warn"
-      >{{ multiCursorWarning }}</span>
-      <button
-        type="button"
-        class="cursor-scope-close"
-        title="Dismiss"
-        aria-label="Dismiss cursor scope helper"
-        @click="dismissCursorScopeBanner"
-      >
-        ×
-      </button>
-    </div>
+        <span>{{ useAsScopePrompt }}</span>
+        <button
+          type="button"
+          class="first-run-btn primary"
+          @click="applyCursorsAsScope"
+        >
+          Enable Limit to C1–Cn
+        </button>
+        <span
+          v-if="multiCursorWarning"
+          class="cursor-scope-warn"
+        >{{ multiCursorWarning }}</span>
+        <button
+          type="button"
+          class="cursor-scope-close"
+          title="Dismiss"
+          aria-label="Dismiss cursor scope helper"
+          @click="dismissCursorScopeBanner"
+        >
+          ×
+        </button>
+      </div>
     </div><!-- /context-strip -->
 
     <!-- Trace tabs -->
@@ -385,7 +387,37 @@
           data-demo-target="rail_heatmap"
           @click="onOpenHeatmap"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            aria-hidden="true"
+          ><rect
+            x="3.5"
+            y="3.5"
+            width="7"
+            height="7"
+            rx="1"
+          /><rect
+            x="13.5"
+            y="3.5"
+            width="7"
+            height="7"
+            rx="1"
+          /><rect
+            x="3.5"
+            y="13.5"
+            width="7"
+            height="7"
+            rx="1"
+          /><rect
+            x="13.5"
+            y="13.5"
+            width="7"
+            height="7"
+            rx="1"
+          /></svg>
           <span class="rail-tip act-tip">Migration &amp; Corridor Inspector</span>
         </button>
         <button
@@ -394,7 +426,14 @@
           data-demo-target="rail_analysis"
           @click="analysisOpen = true"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v5l-5 9.2A2 2 0 0 0 6.8 20h10.4a2 2 0 0 0 1.8-2.8L14 8V3"/></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          ><path d="M9 3h6M10 3v5l-5 9.2A2 2 0 0 0 6.8 20h10.4a2 2 0 0 0 1.8-2.8L14 8V3" /></svg>
           <span class="rail-tip act-tip">Analysis findings</span>
         </button>
         <button
@@ -403,7 +442,15 @@
           data-demo-target="rail_notebook"
           @click="openNotebookDialog"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M4 8h3M4 12h3M4 16h3M10 8h5M10 12h5"/></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          ><path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M4 8h3M4 12h3M4 16h3M10 8h5M10 12h5" /></svg>
           <span class="rail-tip act-tip">Investigation notebook</span>
         </button>
         <button
@@ -415,7 +462,23 @@
           :title="compareTabs.length < 2 ? 'Compare traces — open a second trace to enable' : 'Compare traces'"
           @click="onOpenTraceCompare"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 15.5V9a3 3 0 0 1 3-3h4M18 8.5V15a3 3 0 0 1-3 3h-4"/><path d="m11 4 2 2-2 2M13 20l-2-2 2-2"/></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          ><circle
+            cx="6"
+            cy="18"
+            r="2.5"
+          /><circle
+            cx="18"
+            cy="6"
+            r="2.5"
+          /><path d="M6 15.5V9a3 3 0 0 1 3-3h4M18 8.5V15a3 3 0 0 1-3 3h-4" /><path d="m11 4 2 2-2 2M13 20l-2-2 2-2" /></svg>
           <span class="rail-tip act-tip">{{ compareTabs.length < 2 ? 'Compare traces — open a second trace to enable' : 'Compare traces' }}</span>
         </button>
         <button
@@ -425,17 +488,43 @@
           data-demo-target="rail_snapshot"
           @click="onCopyScreenshot"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h2.5l1.6-2h5.8L18.5 6H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.5"/></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          ><path d="M3 8a2 2 0 0 1 2-2h2.5l1.6-2h5.8L18.5 6H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><circle
+            cx="12"
+            cy="12.5"
+            r="3.5"
+          /></svg>
           <span class="rail-tip act-tip">Snapshot Editor</span>
         </button>
-        <span class="act-spring" aria-hidden="true"></span>
+        <span
+          class="act-spring"
+          aria-hidden="true"
+        />
         <button
           type="button"
           class="rail-btn act-btn"
           data-demo-target="rail_help"
           @click="openHelpDialog"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.4 2.4 0 0 1 4.7.6c0 1.6-2.3 2-2.3 3.4"/><path d="M12 17h.01"/></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          ><circle
+            cx="12"
+            cy="12"
+            r="9"
+          /><path d="M9.6 9.2a2.4 2.4 0 0 1 4.7.6c0 1.6-2.3 2-2.3 3.4" /><path d="M12 17h.01" /></svg>
           <span class="rail-tip act-tip">Help</span>
         </button>
         <button
@@ -444,12 +533,27 @@
           data-demo-target="rail_settings"
           @click="openSettingsDialog"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.2a1.7 1.7 0 0 0-1.4 1z"/></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          ><circle
+            cx="12"
+            cy="12"
+            r="3"
+          /><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.2a1.7 1.7 0 0 0-1.4 1z" /></svg>
           <span class="rail-tip act-tip">Settings</span>
         </button>
       </nav>
 
-      <div ref="leftPaneRef" class="left-pane">
+      <div
+        ref="leftPaneRef"
+        class="left-pane"
+      >
         <div class="timeline-wrap">
           <!-- First-load skeleton: placeholder lanes so the layout is already
                the right shape when TimelinePanel takes over. -->
@@ -487,6 +591,8 @@
             :finding-hits="findingHits"
             :find-marker-ns="findMarkerNs"
             :persisted-viewport="timelineViewport"
+            :ai-enabled="appSettings.aiEnabled !== false"
+            :colorblind-safe="appSettings.colorblindSafe"
             @cursors-change="cursors = $event"
             @hover-time-change="cpuLoadHoverTime = $event"
             @viewport-change="onTimelineViewportChange"
@@ -508,8 +614,6 @@
             @explain-region="queryExplainRegionWithAi"
             @add-region-to-investigation="onAddRegionToInvestigation"
             @ask-ai-event="queryAskAiEvent"
-            :ai-enabled="appSettings.aiEnabled !== false"
-            :colorblind-safe="appSettings.colorblindSafe"
           />
         </div>
 
@@ -523,8 +627,8 @@
         />
 
         <CpuLoadPanel
-          ref="cpuLoadPanelRef"
           v-if="trace && timelineOptions.showCpuLoad"
+          ref="cpuLoadPanelRef"
           :style="{ height: cpuLoadPaneHeight + 'px', flexShrink: 0 }"
           :trace="trace"
           :viewport="timelineViewport"
@@ -569,268 +673,334 @@
         :class="{ collapsed: rightPanelCollapsed }"
         :style="{ width: (rightPanelCollapsed ? 44 : rightPanelWidth) + 'px' }"
       >
-        <div v-show="!rightPanelCollapsed" class="rp-main">
+        <div
+          v-show="!rightPanelCollapsed"
+          class="rp-main"
+        >
           <div class="rp-page-header">
-            <h2 class="rp-title">{{ rightPanelTitle }}</h2>
+            <h2 class="rp-title">
+              {{ rightPanelTitle }}
+            </h2>
           </div>
 
-        <div class="panel-page-wrap">
-          <div v-if="rightPanelTab === 'marks'" class="panel-page panel-page-marks">
-            <div class="rp-card" :class="{ collapsed: !marksSectionOpen.cursors }">
-              <button
-                type="button"
-                class="rp-card-head"
-                :aria-expanded="marksSectionOpen.cursors"
-                @click="toggleMarksSection('cursors')"
+          <div class="panel-page-wrap">
+            <div
+              v-if="rightPanelTab === 'marks'"
+              class="panel-page panel-page-marks"
+            >
+              <div
+                class="rp-card"
+                :class="{ collapsed: !marksSectionOpen.cursors }"
               >
-                <svg class="rp-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-                <span class="rp-card-title">Cursors</span>
-                <span v-if="placedCursorTimes.length" class="rp-card-count">{{ placedCursorTimes.length }}</span>
-              </button>
-              <div v-show="marksSectionOpen.cursors" class="rp-card-body">
-                <CursorPanel
-                  :cursors="cursors"
+                <button
+                  type="button"
+                  class="rp-card-head"
+                  :aria-expanded="marksSectionOpen.cursors"
+                  @click="toggleMarksSection('cursors')"
+                >
+                  <svg
+                    class="rp-chevron"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    aria-hidden="true"
+                  ><path d="M6 9l6 6 6-6" /></svg>
+                  <span class="rp-card-title">Cursors</span>
+                  <span
+                    v-if="placedCursorTimes.length"
+                    class="rp-card-count"
+                  >{{ placedCursorTimes.length }}</span>
+                </button>
+                <div
+                  v-show="marksSectionOpen.cursors"
+                  class="rp-card-body"
+                >
+                  <CursorPanel
+                    :cursors="cursors"
+                    :trace="trace"
+                    :time-scale="trace.timeScale"
+                    :core-filter-keys="timelineOptions.coreFilterKeys"
+                    @delete-cursor="onDeleteCursor"
+                    @jump-to-cursor="timelinePanelRef?.jumpToNs($event)"
+                    @clear-all="clearCursors"
+                    @core-filter-change="onCoreFilterChange"
+                  />
+                </div>
+              </div>
+
+              <div
+                class="rp-card"
+                :class="{ collapsed: !marksSectionOpen.range }"
+              >
+                <button
+                  type="button"
+                  class="rp-card-head"
+                  :aria-expanded="marksSectionOpen.range"
+                  @click="toggleMarksSection('range')"
+                >
+                  <svg
+                    class="rp-chevron"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    aria-hidden="true"
+                  ><path d="M6 9l6 6 6-6" /></svg>
+                  <span class="rp-card-title">Cursor Range</span>
+                  <span
+                    v-if="cursorRangeStats"
+                    class="rp-card-count"
+                  >A&ndash;B</span>
+                </button>
+                <div
+                  v-show="marksSectionOpen.range"
+                  class="rp-card-body"
+                >
+                  <div
+                    v-if="cursorRangeStats"
+                    class="cursor-range-body"
+                  >
+                    <div class="cursor-range-row">
+                      <span class="cursor-range-key">Span</span>
+                      <span class="cursor-range-val">{{ cursorRangeStats.span }}</span>
+                    </div>
+                    <div class="cursor-range-row">
+                      <span class="cursor-range-key">Slices</span>
+                      <span class="cursor-range-val">{{ cursorRangeStats.switches }}</span>
+                    </div>
+                    <div
+                      v-if="cursorRangeStats.topTask"
+                      class="cursor-range-row"
+                    >
+                      <span class="cursor-range-key">Top task</span>
+                      <span class="cursor-range-val">{{ cursorRangeStats.topTask }} ({{ cursorRangeStats.topPct }}%)</span>
+                    </div>
+                    <div
+                      v-if="cursorRangeStats.dMin"
+                      class="cursor-range-row"
+                    >
+                      <span class="cursor-range-key">Seg min</span>
+                      <span class="cursor-range-val">{{ cursorRangeStats.dMin }}</span>
+                    </div>
+                    <div
+                      v-if="cursorRangeStats.dAvg"
+                      class="cursor-range-row"
+                    >
+                      <span class="cursor-range-key">Seg avg</span>
+                      <span class="cursor-range-val">{{ cursorRangeStats.dAvg }}</span>
+                    </div>
+                    <div
+                      v-if="cursorRangeStats.dMax"
+                      class="cursor-range-row"
+                    >
+                      <span class="cursor-range-key">Seg max</span>
+                      <span class="cursor-range-val">{{ cursorRangeStats.dMax }}</span>
+                    </div>
+                  </div>
+                  <div
+                    v-else
+                    class="cursor-range-hint"
+                  >
+                    Place 2+ cursors to measure range
+                  </div>
+                </div>
+              </div>
+
+              <div
+                class="rp-card"
+                :class="{ collapsed: !marksSectionOpen.marks }"
+              >
+                <button
+                  type="button"
+                  class="rp-card-head"
+                  :aria-expanded="marksSectionOpen.marks"
+                  @click="toggleMarksSection('marks')"
+                >
+                  <svg
+                    class="rp-chevron"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    aria-hidden="true"
+                  ><path d="M6 9l6 6 6-6" /></svg>
+                  <span class="rp-card-title">Marks</span>
+                  <span
+                    v-if="marks.length"
+                    class="rp-card-count"
+                  >{{ marks.length }}</span>
+                </button>
+                <div
+                  v-show="marksSectionOpen.marks"
+                  class="rp-card-body"
+                >
+                  <MarksPanel
+                    ref="marksPanelRef"
+                    :marks="marks"
+                    :time-scale="trace.timeScale"
+                    :time-decimals="appSettings.timeDecimals"
+                    @delete-mark="onDeleteMark"
+                    @jump-to="onJumpToMark"
+                    @update-label="onUpdateMarkLabel"
+                    @import-marks="onImportMarks"
+                    @clear-bookmarks="onClearBookmarks"
+                    @clear-annotations="onClearAnnotations"
+                    @export-session="onExportSession"
+                    @export-evidence-pack="onExportEvidencePack"
+                    @import-session="onImportSession"
+                    @select-mark="timelineOptions.selectedMarkId = $event"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div
+              v-else-if="rightPanelTab === 'find'"
+              class="panel-page panel-page-find"
+            >
+              <div class="panel-section flex-fill">
+                <FindPanel
+                  ref="findPanelRef"
+                  :query="findQuery"
+                  :mode="findMode"
+                  :hit-count="findHits.length"
+                  :hit-index="findHitIdx"
+                  :error="findError"
+                  @update:query="onFindQueryChange"
+                  @update:mode="onFindModeChange"
+                  @recompute="recomputeFind"
+                  @next="() => stepFind(true)"
+                  @prev="() => stepFind(false)"
+                />
+              </div>
+            </div>
+
+            <div
+              v-else-if="rightPanelTab === 'legend' && appSettings.showLegend"
+              class="panel-page panel-page-legend"
+            >
+              <div class="panel-section flex-fill">
+                <LegendPanel
                   :trace="trace"
-                  :time-scale="trace.timeScale"
+                  :highlight-key="timelineOptions.highlightKey"
+                  :selected-key="pinnedHighlightKey"
+                  :task-filter-keys="timelineOptions.taskFilterKeys"
+                  :task-filter-text="timelineOptions.taskFilterText"
+                  :migrated-only-filter="timelineOptions.migratedOnlyFilter"
+                  :heatmap-filter-label="timelineOptions.heatmapFilterLabel"
+                  :view-mode="timelineOptions.viewMode"
                   :core-filter-keys="timelineOptions.coreFilterKeys"
-                  @delete-cursor="onDeleteCursor"
-                  @jump-to-cursor="timelinePanelRef?.jumpToNs($event)"
-                  @clear-all="clearCursors"
+                  :dark-mode="timelineOptions.darkMode"
+                  :colorblind-safe="appSettings.colorblindSafe"
+                  @highlight-change="(k) => { timelineOptions.highlightKey = k ?? pinnedHighlightKey; scheduleRender() }"
+                  @highlight-click="onHighlightClick"
+                  @migrated-filter-change="onMigratedFilterChange"
+                  @filter-change="onTaskFilterChange"
+                  @clear-task-filter="clearHeatmapTaskFilter"
                   @core-filter-change="onCoreFilterChange"
                 />
               </div>
             </div>
 
-            <div class="rp-card" :class="{ collapsed: !marksSectionOpen.range }">
-              <button
-                type="button"
-                class="rp-card-head"
-                :aria-expanded="marksSectionOpen.range"
-                @click="toggleMarksSection('range')"
-              >
-                <svg class="rp-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-                <span class="rp-card-title">Cursor Range</span>
-                <span v-if="cursorRangeStats" class="rp-card-count">A&ndash;B</span>
-              </button>
-              <div v-show="marksSectionOpen.range" class="rp-card-body">
-              <div
-                v-if="cursorRangeStats"
-                class="cursor-range-body"
-              >
-                <div class="cursor-range-row">
-                  <span class="cursor-range-key">Span</span>
-                  <span class="cursor-range-val">{{ cursorRangeStats.span }}</span>
-                </div>
-                <div class="cursor-range-row">
-                  <span class="cursor-range-key">Slices</span>
-                  <span class="cursor-range-val">{{ cursorRangeStats.switches }}</span>
-                </div>
-                <div
-                  v-if="cursorRangeStats.topTask"
-                  class="cursor-range-row"
-                >
-                  <span class="cursor-range-key">Top task</span>
-                  <span class="cursor-range-val">{{ cursorRangeStats.topTask }} ({{ cursorRangeStats.topPct }}%)</span>
-                </div>
-                <div
-                  v-if="cursorRangeStats.dMin"
-                  class="cursor-range-row"
-                >
-                  <span class="cursor-range-key">Seg min</span>
-                  <span class="cursor-range-val">{{ cursorRangeStats.dMin }}</span>
-                </div>
-                <div
-                  v-if="cursorRangeStats.dAvg"
-                  class="cursor-range-row"
-                >
-                  <span class="cursor-range-key">Seg avg</span>
-                  <span class="cursor-range-val">{{ cursorRangeStats.dAvg }}</span>
-                </div>
-                <div
-                  v-if="cursorRangeStats.dMax"
-                  class="cursor-range-row"
-                >
-                  <span class="cursor-range-key">Seg max</span>
-                  <span class="cursor-range-val">{{ cursorRangeStats.dMax }}</span>
-                </div>
-              </div>
-              <div
-                v-else
-                class="cursor-range-hint"
-              >
-                Place 2+ cursors to measure range
-              </div>
+            <div
+              v-else-if="rightPanelTab !== 'ai' || !aiTabVisible"
+              class="panel-page panel-page-stats"
+            >
+              <div class="panel-section flex-fill">
+                <StatisticsPanel
+                  ref="statsPanelRef"
+                  :trace="trace"
+                  :cursors="cursors"
+                  :tabs="tabs"
+                  :stats-paused="statsPaused"
+                  :open-plot="activeTab?.openPlot ?? null"
+                  :section-heights="statsSectionHeights"
+                  :scope-to-cursors="activeTab?.scopeToCursors !== false"
+                  :analysis-settings="appSettings"
+                  :section-collapsed-state="appSettings.statsSectionCollapsed"
+                  :section-pins="appSettings.statsPinnedSections || []"
+                  :section-order="appSettings.statsSectionOrder || []"
+                  :active-filter-label="activeFilterSummaryLabel"
+                  :trace-file-name="activeTab?.name || ''"
+                  :investigation="investigation"
+                  :on-clear-filters="clearAllActiveFilters"
+                  @update:open-plot="onOpenPlotChange"
+                  @update:section-heights="onSectionHeightsChange"
+                  @update:scope-to-cursors="onStatsScopeChange"
+                  @update:section-collapsed-state="onStatsSectionCollapsedChange"
+                  @update:section-pins="onStatsSectionPinsChange"
+                  @update:section-order="onStatsSectionOrderChange"
+                  @highlight-task="onHighlightClick"
+                  @plot-point-activate="onStatsPlotPointActivate"
+                  @explore-range="applyExploreRange"
+                  @segment-jump="onStatsSegmentJump"
+                  @open-pair-heatmap="onOpenPairHeatmap"
+                  @open-pair-chord="onOpenPairChord"
+                  @filter-timeline="onStatsFilterTimeline"
+                  @open-settings="openSettingsDialog"
+                  @query-ai="queryAnalysisWithAi"
+                  @clear-scope="onStatsScopeChange(false)"
+                  @clear-filter="clearAllActiveFilters"
+                  @stats-reference-requested="onStatsReferenceRequested"
+                />
+                <StatsReferenceViewer
+                  ref="statsReferenceViewerRef"
+                  :dark-mode="timelineOptions.darkMode"
+                />
               </div>
             </div>
 
-            <div class="rp-card" :class="{ collapsed: !marksSectionOpen.marks }">
-              <button
-                type="button"
-                class="rp-card-head"
-                :aria-expanded="marksSectionOpen.marks"
-                @click="toggleMarksSection('marks')"
-              >
-                <svg class="rp-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-                <span class="rp-card-title">Marks</span>
-                <span v-if="marks.length" class="rp-card-count">{{ marks.length }}</span>
-              </button>
-              <div v-show="marksSectionOpen.marks" class="rp-card-body">
-                <MarksPanel
-                  ref="marksPanelRef"
-                  :marks="marks"
-                  :time-scale="trace.timeScale"
-                  :time-decimals="appSettings.timeDecimals"
-                  @delete-mark="onDeleteMark"
-                  @jump-to="onJumpToMark"
-                  @update-label="onUpdateMarkLabel"
-                  @import-marks="onImportMarks"
-                  @clear-bookmarks="onClearBookmarks"
-                  @clear-annotations="onClearAnnotations"
-                  @export-session="onExportSession"
-                  @export-evidence-pack="onExportEvidencePack"
-                  @import-session="onImportSession"
-                  @select-mark="timelineOptions.selectedMarkId = $event"
+            <!-- Outside the v-if chain and only hidden, never destroyed, so the
+               conversation survives tab switches and a reply that arrives while
+               another tab is open still lands in the log. -->
+            <div
+              v-if="aiTabVisible"
+              v-show="rightPanelTab === 'ai'"
+              class="panel-page panel-page-ai"
+            >
+              <div class="panel-section flex-fill">
+                <AiAssistantPanel
+                  ref="aiPanelRef"
+                  :analysis-context="aiAnalysisContext"
+                  :notebook-collab="notebookCollab"
+                  :show-clear-filters="!!activeFilterSummaryLabel"
+                  :on-clear-filters="clearAllActiveFilters"
+                  :ai-enabled="appSettings.aiEnabled !== false"
+                  :ai-preset="appSettings.aiPreset"
+                  :ai-presets="appSettings.aiPresets"
+                  :response-language="appSettings.aiResponseLanguage"
+                  :ai-context-mode="appSettings.aiContextMode"
+                  :ai-redact-task-names="!!appSettings.aiRedactTaskNames"
+                  :ai-trace-sensitive="!!appSettings.aiTraceSensitive"
+                  :dark-mode="timelineOptions.darkMode"
+                  :get-context="buildAiContext"
+                  :get-loaded-tabs="listAiLoadedTabs"
+                  :build-compare-context="buildAiCompareContext"
+                  :execute-tools="onAiExecuteTools"
+                  :undo-tools="onAiUndoTools"
+                  :get-gui-state="aiGuiStateForReport"
+                  @open-settings="openSettingsDialog('ai')"
+                  @update:response-language="onAiResponseLanguage"
+                  @jump="onAiJump"
+                  @range="onAiRange"
+                  @highlight="onAiHighlight"
+                  @open-stats="onAiOpenStats"
+                  @status-message="onAiStatusMessage"
+                  @session-change="scheduleSessionSave"
+                  @clear-notebook-collab="notebookCollab = null"
+                  @notebook-proposal="onNotebookProposal"
                 />
               </div>
             </div>
           </div>
-
-          <div v-else-if="rightPanelTab === 'find'" class="panel-page panel-page-find">
-            <div class="panel-section flex-fill">
-              <FindPanel
-                ref="findPanelRef"
-                :query="findQuery"
-                :mode="findMode"
-                :hit-count="findHits.length"
-                :hit-index="findHitIdx"
-                :error="findError"
-                @update:query="onFindQueryChange"
-                @update:mode="onFindModeChange"
-                @recompute="recomputeFind"
-                @next="() => stepFind(true)"
-                @prev="() => stepFind(false)"
-              />
-            </div>
-          </div>
-
-          <div
-            v-else-if="rightPanelTab === 'legend' && appSettings.showLegend"
-            class="panel-page panel-page-legend"
-          >
-            <div class="panel-section flex-fill">
-              <LegendPanel
-                :trace="trace"
-                :highlight-key="timelineOptions.highlightKey"
-                :selected-key="pinnedHighlightKey"
-                :task-filter-keys="timelineOptions.taskFilterKeys"
-                :task-filter-text="timelineOptions.taskFilterText"
-                :migrated-only-filter="timelineOptions.migratedOnlyFilter"
-                :heatmap-filter-label="timelineOptions.heatmapFilterLabel"
-                :view-mode="timelineOptions.viewMode"
-                :core-filter-keys="timelineOptions.coreFilterKeys"
-                :dark-mode="timelineOptions.darkMode"
-                :colorblind-safe="appSettings.colorblindSafe"
-                @highlight-change="(k) => { timelineOptions.highlightKey = k ?? pinnedHighlightKey; scheduleRender() }"
-                @highlight-click="onHighlightClick"
-                @migrated-filter-change="onMigratedFilterChange"
-                @filter-change="onTaskFilterChange"
-                @clear-task-filter="clearHeatmapTaskFilter"
-                @core-filter-change="onCoreFilterChange"
-              />
-            </div>
-          </div>
-
-          <div
-            v-else-if="rightPanelTab !== 'ai' || !aiTabVisible"
-            class="panel-page panel-page-stats"
-          >
-            <div class="panel-section flex-fill">
-              <StatisticsPanel
-                ref="statsPanelRef"
-                :trace="trace"
-                :cursors="cursors"
-                :tabs="tabs"
-                :stats-paused="statsPaused"
-                :open-plot="activeTab?.openPlot ?? null"
-                :section-heights="statsSectionHeights"
-                :scope-to-cursors="activeTab?.scopeToCursors !== false"
-                :analysis-settings="appSettings"
-                :section-collapsed-state="appSettings.statsSectionCollapsed"
-                :section-pins="appSettings.statsPinnedSections || []"
-                :section-order="appSettings.statsSectionOrder || []"
-                :active-filter-label="activeFilterSummaryLabel"
-                :trace-file-name="activeTab?.name || ''"
-                :investigation="investigation"
-                :on-clear-filters="clearAllActiveFilters"
-                @update:open-plot="onOpenPlotChange"
-                @update:section-heights="onSectionHeightsChange"
-                @update:scope-to-cursors="onStatsScopeChange"
-                @update:section-collapsed-state="onStatsSectionCollapsedChange"
-                @update:section-pins="onStatsSectionPinsChange"
-                @update:section-order="onStatsSectionOrderChange"
-                @highlight-task="onHighlightClick"
-                @plot-point-activate="onStatsPlotPointActivate"
-                @explore-range="applyExploreRange"
-                @segment-jump="onStatsSegmentJump"
-                @open-pair-heatmap="onOpenPairHeatmap"
-                @open-pair-chord="onOpenPairChord"
-                @filter-timeline="onStatsFilterTimeline"
-                @open-settings="openSettingsDialog"
-                @query-ai="queryAnalysisWithAi"
-                @clear-scope="onStatsScopeChange(false)"
-                @clear-filter="clearAllActiveFilters"
-                @stats-reference-requested="onStatsReferenceRequested"
-              />
-              <StatsReferenceViewer ref="statsReferenceViewerRef" :dark-mode="timelineOptions.darkMode" />
-            </div>
-          </div>
-
-          <!-- Outside the v-if chain and only hidden, never destroyed, so the
-               conversation survives tab switches and a reply that arrives while
-               another tab is open still lands in the log. -->
-          <div
-            v-if="aiTabVisible"
-            v-show="rightPanelTab === 'ai'"
-            class="panel-page panel-page-ai"
-          >
-            <div class="panel-section flex-fill">
-              <AiAssistantPanel
-                ref="aiPanelRef"
-                :analysis-context="aiAnalysisContext"
-                :notebook-collab="notebookCollab"
-                :show-clear-filters="!!activeFilterSummaryLabel"
-                :on-clear-filters="clearAllActiveFilters"
-                :ai-enabled="appSettings.aiEnabled !== false"
-                :ai-preset="appSettings.aiPreset"
-                :ai-presets="appSettings.aiPresets"
-                :response-language="appSettings.aiResponseLanguage"
-                :ai-context-mode="appSettings.aiContextMode"
-                :ai-redact-task-names="!!appSettings.aiRedactTaskNames"
-                :ai-trace-sensitive="!!appSettings.aiTraceSensitive"
-                :dark-mode="timelineOptions.darkMode"
-                :get-context="buildAiContext"
-                :get-loaded-tabs="listAiLoadedTabs"
-                :build-compare-context="buildAiCompareContext"
-                :execute-tools="onAiExecuteTools"
-                :undo-tools="onAiUndoTools"
-                :get-gui-state="aiGuiStateForReport"
-                @open-settings="openSettingsDialog('ai')"
-                @update:response-language="onAiResponseLanguage"
-                @jump="onAiJump"
-                @range="onAiRange"
-                @highlight="onAiHighlight"
-                @open-stats="onAiOpenStats"
-                @status-message="onAiStatusMessage"
-                @session-change="scheduleSessionSave"
-                @clear-notebook-collab="notebookCollab = null"
-                @notebook-proposal="onNotebookProposal"
-              />
-            </div>
-          </div>
-        </div>
         </div><!-- /rp-main -->
 
-        <nav class="icon-rail" role="tablist" aria-label="Right panel navigation">
+        <nav
+          class="icon-rail"
+          role="tablist"
+          aria-label="Right panel navigation"
+        >
           <button
             v-if="appSettings.showStats"
             class="rail-btn"
@@ -840,7 +1010,13 @@
             :aria-selected="rightPanelTab === 'stats'"
             @click="selectRightPanelTab('stats')"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              aria-hidden="true"
+            ><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>
             <span class="rail-tip">Statistics</span>
           </button>
           <button
@@ -852,7 +1028,13 @@
             :aria-selected="rightPanelTab === 'marks'"
             @click="selectRightPanelTab('marks')"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              aria-hidden="true"
+            ><path d="M6 3h12v18l-6-4-6 4z" /></svg>
             <span class="rail-tip">Marks</span>
           </button>
           <button
@@ -864,7 +1046,17 @@
             :aria-selected="rightPanelTab === 'find'"
             @click="selectRightPanelTab('find')"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              aria-hidden="true"
+            ><circle
+              cx="11"
+              cy="11"
+              r="7"
+            /><path d="M21 21l-4.3-4.3" /></svg>
             <span class="rail-tip">Find</span>
           </button>
           <button
@@ -876,10 +1068,32 @@
             :aria-selected="rightPanelTab === 'legend'"
             @click="selectRightPanelTab('legend')"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="5" cy="6" r="1.6"/><circle cx="5" cy="12" r="1.6"/><circle cx="5" cy="18" r="1.6"/><path d="M10 6h11M10 12h11M10 18h11"/></svg>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              aria-hidden="true"
+            ><circle
+              cx="5"
+              cy="6"
+              r="1.6"
+            /><circle
+              cx="5"
+              cy="12"
+              r="1.6"
+            /><circle
+              cx="5"
+              cy="18"
+              r="1.6"
+            /><path d="M10 6h11M10 12h11M10 18h11" /></svg>
             <span class="rail-tip">Legend</span>
           </button>
-          <span v-if="aiTabVisible" class="rail-sep" aria-hidden="true"></span>
+          <span
+            v-if="aiTabVisible"
+            class="rail-sep"
+            aria-hidden="true"
+          />
           <button
             v-if="aiTabVisible"
             class="rail-btn"
@@ -889,7 +1103,13 @@
             :aria-selected="rightPanelTab === 'ai'"
             @click="selectRightPanelTab('ai')"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l1.8 4.9L19 9.6l-4.2 2.4L14 17l-2-3.6L8 17l.2-5-4.2-2.4 5.2-1.7z"/></svg>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              aria-hidden="true"
+            ><path d="M12 3l1.8 4.9L19 9.6l-4.2 2.4L14 17l-2-3.6L8 17l.2-5-4.2-2.4 5.2-1.7z" /></svg>
             <span class="rail-tip">AI</span>
           </button>
           <button
@@ -898,8 +1118,38 @@
             :aria-label="rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'"
             @click="toggleRightPanelCollapsed"
           >
-            <svg v-if="rightPanelCollapsed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/></svg>
-            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m8 9 3 3-3 3"/></svg>
+            <svg
+              v-if="rightPanelCollapsed"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            ><rect
+              x="3"
+              y="3"
+              width="18"
+              height="18"
+              rx="2"
+            /><path d="M15 3v18" /><path d="m10 15-3-3 3-3" /></svg>
+            <svg
+              v-else
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            ><rect
+              x="3"
+              y="3"
+              width="18"
+              height="18"
+              rx="2"
+            /><path d="M15 3v18" /><path d="m8 9 3 3-3 3" /></svg>
             <span class="rail-tip">{{ rightPanelCollapsed ? 'Expand panel' : 'Collapse panel' }}</span>
           </button>
         </nav>
@@ -942,7 +1192,10 @@
         </div>
 
         <div class="help-body">
-          <button type="button" class="help-reference-link" @click="openStatsReference">
+          <!-- eslint-disable-next-line vue/max-attributes-per-line -->
+          <button type="button" class="help-reference-link"
+            @click="openStatsReference"
+          >
             Statistics Reference — full documentation for every stat →
           </button>
           <div class="help-section">
@@ -1205,34 +1458,60 @@
             aria-hidden="true"
             v-html="aboutIconSvg"
           />
-          <div class="about-title">BTFViewer</div>
-          <div class="about-subtitle">Portable BTF trace analysis and evidence reports · v{{ appVersion }}</div>
+          <div class="about-title">
+            BTFViewer
+          </div>
+          <div class="about-subtitle">
+            Portable BTF trace analysis and evidence reports · v{{ appVersion }}
+          </div>
         </div>
 
         <div class="about-body">
           <div class="about-section">
-            <div class="about-section-title">View Modes</div>
+            <div class="about-section-title">
+              View Modes
+            </div>
             <div class="about-grid">
-              <div class="about-key">Task View</div><div>one row per task</div>
-              <div class="about-key">Core View</div><div>expandable rows per CPU core</div>
+              <div class="about-key">
+                Task View
+              </div><div>one row per task</div>
+              <div class="about-key">
+                Core View
+              </div><div>expandable rows per CPU core</div>
             </div>
           </div>
 
           <div class="about-section">
-            <div class="about-section-title">Application</div>
+            <div class="about-section-title">
+              Application
+            </div>
             <div class="about-grid">
-              <div class="about-key">Product</div><div>BTFViewer</div>
-              <div class="about-key">Purpose</div><div>Portable BTF trace analysis and evidence reports</div>
-              <div class="about-key">AI</div><div>Optional AI-assisted investigation</div>
-              <div class="about-key">Runtime</div><div>Vue 3 · Vite · Canvas-based timeline renderer</div>
-              <div class="about-key">Build Date</div><div>{{ buildDate }}</div>
+              <div class="about-key">
+                Product
+              </div><div>BTFViewer</div>
+              <div class="about-key">
+                Purpose
+              </div><div>Portable BTF trace analysis and evidence reports</div>
+              <div class="about-key">
+                AI
+              </div><div>Optional AI-assisted investigation</div>
+              <div class="about-key">
+                Runtime
+              </div><div>Vue 3 · Vite · Canvas-based timeline renderer</div>
+              <div class="about-key">
+                Build Date
+              </div><div>{{ buildDate }}</div>
             </div>
           </div>
 
           <div class="about-section">
-            <div class="about-section-title">License</div>
+            <div class="about-section-title">
+              License
+            </div>
             <div class="about-grid">
-              <div class="about-key">License</div><div>MIT License</div>
+              <div class="about-key">
+                License
+              </div><div>MIT License</div>
             </div>
           </div>
         </div>
@@ -1309,7 +1588,9 @@
             >{{ a.shortcut }}</span>
           </li>
         </ul>
-        <p class="palette-hint">Ctrl/Cmd+K · Esc to close</p>
+        <p class="palette-hint">
+          Ctrl/Cmd+K · Esc to close
+        </p>
       </div>
     </div>
 
@@ -1433,7 +1714,13 @@
       title="Exit Focus Mode (Shift+F or Esc)"
       @click="setFocusMode(false)"
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4"/></svg>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        aria-hidden="true"
+      ><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4" /></svg>
       Exit focus
     </button>
 
@@ -1441,7 +1728,10 @@
     <div class="status-bar">
       <template v-if="loading">
         <span class="status-loading">
-          <span class="status-loading-spin" aria-hidden="true" />
+          <span
+            class="status-loading-spin"
+            aria-hidden="true"
+          />
           <span class="status-loading-text">
             {{ loadingFileName || 'Loading trace' }} · {{ loadingMsg || 'please wait' }}<template v-if="loadingPctLabel"> · {{ loadingPctLabel }}%</template>
           </span>
@@ -1609,7 +1899,7 @@ import SettingsDialog from './components/SettingsDialog.vue'
 import DomSelect from './components/DomSelect.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { zoomStatusFromViewport } from './utils/timeFormat.js'
-import { taskDisplayName, taskMergeKey, setColorblindMode, setDarkMode, parseTaskName, isIdleTaskName } from './utils/colors.js'
+import { taskMergeKey, setColorblindMode, setDarkMode, parseTaskName, isIdleTaskName } from './utils/colors.js'
 import { buildTaskAliasMap, anonymizeBtfText, anonymizeJsonStrings } from './utils/anonymizeExport.js'
 import { taskPassesRowFilter, rawTaskNameMatchesTextFilter, normalizeTaskFilterText, coreFilterActive, taskRunsOnSelectedCore } from './utils/taskFilter.js'
 import {
@@ -1810,7 +2100,7 @@ import {
 } from './utils/investigationAi.js'
 import {
   exportTargets, defaultExportTarget, cursorRange as exportCursorRange,
-  perfettoFilename, workspaceFilename, btfSliceFilename,
+  perfettoFilename, workspaceFilename,
 } from './utils/exportActions.js'
 import { buildWorkspaceBlob, openWorkspaceBlob, WORKSPACE_EXT } from './utils/workspace.js'
 import { buildInvestigationFindings, investigationFindingExport } from './utils/investigationFindings.js'
@@ -2086,8 +2376,6 @@ const findHitIdx = computed(() => activeTab.value?.findHitIdx ?? -1)
 const findHitPos = computed(() => (findHitIdx.value >= 0 ? findHitIdx.value + 1 : 1))
 const findMarkerNs = computed(() => activeTab.value?.findMarkerNs ?? null)
 const findError = ref('')
-
-const traceQualityText = computed(() => traceQualitySummary(trace.value))
 
 // ---- Snapshot editor -------------------------------------------------------
 const snapshotEditorOpen = ref(false)
@@ -3506,8 +3794,6 @@ const notebookHistory = computed({
   get: () => activeTab.value?.notebookHistory ?? emptyNotebookHistory(),
   set: (v) => { if (activeTab.value) activeTab.value.notebookHistory = v },
 })
-const notebookState = computed(() => notebookHistoryState(notebookHistory.value))
-
 const notebookCursorRange = computed(() => {
   const placed = getPlacedCursors(cursors.value).map(Number).filter(Number.isFinite)
   if (placed.length < 2) return null
@@ -3929,11 +4215,6 @@ function paintLoadingProgress(pct, msg) {
   loadingPhase.value = 'parse'
   loadingPct.value = pct
   loadingMsg.value = formatLoadingMessage(msg)
-}
-
-async function flushLoadingProgress(pct, msg) {
-  paintLoadingProgress(pct, msg)
-  await new Promise(resolve => requestAnimationFrame(resolve))
 }
 
 async function attachParsedTrace(name, packedOrTrace, {
@@ -5295,7 +5576,7 @@ function dispatchAiTool(name, args) {
   if (name === AI_TOOL_CLUSTER_FINDINGS) return clusterFindingsTool(findings)
   if (name === AI_TOOL_GENERATE_FINGERPRINT) return generateFingerprintTool(findings)
   if (name === AI_TOOL_FIND_SIMILAR_INVESTIGATIONS) {
-    let hist = []
+    let hist
     try {
       hist = JSON.parse(localStorage.getItem('btf-experiment-outcomes') || '[]')
     } catch { hist = [] }
@@ -5390,7 +5671,7 @@ function dispatchAiTool(name, args) {
     return challengeConclusionTool(args.conclusion || '', { findings })
   }
   if (name === AI_TOOL_INVESTIGATION_MEMORY) {
-    let hist = []
+    let hist
     try {
       hist = JSON.parse(localStorage.getItem('btf-investigation-memory') || '[]')
     } catch { hist = [] }
@@ -6385,7 +6666,8 @@ function onCpuLoadToggleExpandAll() {
 
 function onTimelineViewportChange(vp) {
   if (!vp) return
-  const { programmatic: _programmatic, ...rest } = vp
+  const rest = { ...vp }
+  delete rest.programmatic
   if (activeTab.value) Object.assign(activeTab.value.timelineViewport, rest)
   refreshZoomPresetUi()
 }

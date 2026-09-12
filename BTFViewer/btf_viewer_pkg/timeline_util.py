@@ -4,6 +4,7 @@ from __future__ import annotations
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .parser import *  # noqa: F403,F401
+from .platform import _is_wsl
 
 # ===========================================================================
 
@@ -545,15 +546,6 @@ def _pixmap_to_png_bytes(pixmap: QPixmap, capture_dpr: float = 1.0) -> Tuple[byt
     buf_dev.close()
     return bytes(buf), buf
 
-def _is_wsl() -> bool:
-    if os.environ.get('WSL_DISTRO_NAME'):
-        return True
-    try:
-        with open('/proc/version', 'r', encoding='utf-8', errors='ignore') as f:
-            return 'microsoft' in f.read().lower()
-    except OSError:
-        return False
-
 def _copy_png_to_windows_clipboard(png_bytes: bytes) -> bool:
     """WSL helper: copy PNG bytes to the Windows clipboard as an image via PowerShell."""
     if not shutil.which('powershell.exe'):
@@ -985,4 +977,3 @@ class _SuspendRebuild:
         sc._rebuild_suspend = max(0, sc._rebuild_suspend - 1)
         if sc._rebuild_suspend == 0:
             sc.rebuild()
-

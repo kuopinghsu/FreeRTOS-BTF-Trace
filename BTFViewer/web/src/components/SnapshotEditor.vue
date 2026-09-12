@@ -1,9 +1,23 @@
 <template>
-  <div class="se-overlay" ref="overlayEl" @click.self="handleClose">
-    <div class="se-win" ref="winEl" tabindex="-1" :style="winStyle" @keydown.tab="trapFocus">
+  <div
+    ref="overlayEl"
+    class="se-overlay"
+    @click.self="handleClose"
+  >
+    <div
+      ref="winEl"
+      class="se-win"
+      tabindex="-1"
+      :style="winStyle"
+      @keydown.tab="trapFocus"
+    >
       <!-- ── Toolbar (history + zoom + shortcuts) ─────────────── -->
-      <div class="se-toolbar" role="toolbar" aria-label="Editor options" @mousedown="onWinDragStart">
-
+      <div
+        class="se-toolbar"
+        role="toolbar"
+        aria-label="Editor options"
+        @mousedown="onWinDragStart"
+      >
         <!-- Default style for the next shape (per-shape editing is in the inspector) -->
         <div class="se-style">
           <button
@@ -14,19 +28,31 @@
             :aria-expanded="colorPanelOpen"
             @click.stop="colorPanelOpen = !colorPanelOpen"
           />
-          <div v-if="colorPanelOpen" class="se-color-panel" @click.stop>
+          <div
+            v-if="colorPanelOpen"
+            class="se-color-panel"
+            @click.stop
+          >
             <div
-              v-for="c in PRESET_COLORS" :key="c"
+              v-for="c in PRESET_COLORS"
+              :key="c"
               class="se-color-dot"
               :class="{ active: color === c }"
               :style="{ background: c }"
               :title="c"
               @click="pickColor(c)"
             />
-            <label class="se-color-custom" title="Custom colour">
+            <label
+              class="se-color-custom"
+              title="Custom colour"
+            >
               <span v-html="ICON_PALETTE" />
-              <input type="color" :value="color" class="se-color-custom-input"
-                     @input="e => pickColor(e.target.value)" />
+              <input
+                type="color"
+                :value="color"
+                class="se-color-custom-input"
+                @input="e => pickColor(e.target.value)"
+              >
             </label>
             <button
               v-if="hasEyeDropper"
@@ -35,14 +61,26 @@
               aria-label="Pick a colour from the image"
               @click="eyeDrop(pickColor)"
             >
-              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
-                   stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <svg
+                viewBox="0 0 16 16"
+                width="13"
+                height="13"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <path d="M10.5 2.5a2 2 0 0 1 3 3L7 12l-3 1 1-3z" />
               </svg>
             </button>
-            <div v-if="recentColors.length" class="se-color-recent">
+            <div
+              v-if="recentColors.length"
+              class="se-color-recent"
+            >
               <div
-                v-for="c in recentColors" :key="'tr' + c"
+                v-for="c in recentColors"
+                :key="'tr' + c"
                 class="se-color-dot"
                 :class="{ active: color === c }"
                 :style="{ background: c }"
@@ -53,15 +91,36 @@
           </div>
 
           <span class="se-style-div" />
-          <button class="se-tbtn se-zoom-btn" aria-label="Thinner stroke"
-                  :disabled="lineWidth <= 1" @click="lineWidth = Math.max(1, lineWidth - 1)">&minus;</button>
-          <span class="se-style-val" title="Default stroke width">{{ lineWidth }}</span>
-          <button class="se-tbtn se-zoom-btn" aria-label="Thicker stroke"
-                  :disabled="lineWidth >= 20" @click="lineWidth = Math.min(20, lineWidth + 1)">+</button>
+          <button
+            class="se-tbtn se-zoom-btn"
+            aria-label="Thinner stroke"
+            :disabled="lineWidth <= 1"
+            @click="lineWidth = Math.max(1, lineWidth - 1)"
+          >
+            &minus;
+          </button>
+          <span
+            class="se-style-val"
+            title="Default stroke width"
+          >{{ lineWidth }}</span>
+          <button
+            class="se-tbtn se-zoom-btn"
+            aria-label="Thicker stroke"
+            :disabled="lineWidth >= 20"
+            @click="lineWidth = Math.min(20, lineWidth + 1)"
+          >
+            +
+          </button>
           <span class="se-style-div" />
-          <button class="se-tbtn se-style-dash" :class="{ on: dashChecked }"
-                  :aria-pressed="dashChecked" title="Dashed by default"
-                  @click="dashChecked = !dashChecked">Dash</button>
+          <button
+            class="se-tbtn se-style-dash"
+            :class="{ on: dashChecked }"
+            :aria-pressed="dashChecked"
+            title="Dashed by default"
+            @click="dashChecked = !dashChecked"
+          >
+            Dash
+          </button>
         </div>
 
         <!-- Undo / redo -->
@@ -85,33 +144,102 @@
         </div>
 
         <!-- Zoom / pan -->
-        <div class="se-zoom" title="Zoom — Ctrl+scroll to zoom, Space-drag to pan">
-          <button class="se-tbtn icon-btn" :disabled="isFit"
-                  @click="zoomBy(1 / 1.25)" title="Zoom out" aria-label="Zoom out">
-            <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor"
-                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="7" cy="7" r="4.3" /><path d="M10.2 10.2 14 14M5 7h4" />
+        <div
+          class="se-zoom"
+          title="Zoom — Ctrl+scroll to zoom, Space-drag to pan"
+        >
+          <button
+            class="se-tbtn icon-btn"
+            :disabled="isFit"
+            title="Zoom out"
+            aria-label="Zoom out"
+            @click="zoomBy(1 / 1.25)"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <circle
+                cx="7"
+                cy="7"
+                r="4.3"
+              /><path d="M10.2 10.2 14 14M5 7h4" />
             </svg>
           </button>
-          <button class="se-tbtn se-zoom-val" title="Reset to 100%"
-                  @click="zoomActual">{{ zoomPct }}%</button>
-          <button class="se-tbtn icon-btn" :disabled="zoom >= maxZoom - 1e-4"
-                  @click="zoomBy(1.25)" title="Zoom in" aria-label="Zoom in">
-            <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor"
-                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="7" cy="7" r="4.3" /><path d="M10.2 10.2 14 14M5 7h4M7 5v4" />
+          <button
+            class="se-tbtn se-zoom-val"
+            title="Reset to 100%"
+            @click="zoomActual"
+          >
+            {{ zoomPct }}%
+          </button>
+          <button
+            class="se-tbtn icon-btn"
+            :disabled="zoom >= maxZoom - 1e-4"
+            title="Zoom in"
+            aria-label="Zoom in"
+            @click="zoomBy(1.25)"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <circle
+                cx="7"
+                cy="7"
+                r="4.3"
+              /><path d="M10.2 10.2 14 14M5 7h4M7 5v4" />
             </svg>
           </button>
-          <button class="se-tbtn" :disabled="isFit" @click="zoomFit">Fit</button>
+          <button
+            class="se-tbtn"
+            :disabled="isFit"
+            @click="zoomFit"
+          >
+            Fit
+          </button>
         </div>
 
         <div class="se-spacer" />
 
         <!-- Shortcuts hint -->
-        <button class="se-hint" title="Keyboard shortcuts" @click="shortcutsOpen = true">
-          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
-               stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
+        <button
+          class="se-hint"
+          title="Keyboard shortcuts"
+          @click="shortcutsOpen = true"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="13"
+            height="13"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <rect
+              x="1.5"
+              y="4"
+              width="13"
+              height="8"
+              rx="1.5"
+            />
             <path d="M4 7h.01M6.5 7h.01M9 7h.01M11.5 7h.01M4.5 9.5h7" />
           </svg>
           Press <kbd>?</kbd> for shortcuts
@@ -120,13 +248,30 @@
 
       <!-- ── Status toast ────────────────────────────────────────────── -->
       <Transition name="se-toast">
-        <div v-if="statusVisible" class="se-status" :class="statusType">{{ statusMsg }}</div>
+        <div
+          v-if="statusVisible"
+          class="se-status"
+          :class="statusType"
+        >
+          {{ statusMsg }}
+        </div>
       </Transition>
 
       <!-- ── Tool rail ─────────────────────────────────────────────────── -->
-      <div class="se-rail" role="toolbar" aria-label="Annotation tools" aria-orientation="vertical">
-        <template v-for="(t, i) in TOOLS" :key="t.id">
-          <div v-if="RAIL_SEPS.includes(i)" class="se-rail-sep" />
+      <div
+        class="se-rail"
+        role="toolbar"
+        aria-label="Annotation tools"
+        aria-orientation="vertical"
+      >
+        <template
+          v-for="(t, i) in TOOLS"
+          :key="t.id"
+        >
+          <div
+            v-if="RAIL_SEPS.includes(i)"
+            class="se-rail-sep"
+          />
           <button
             class="se-rail-btn"
             :class="{ active: tool === t.id }"
@@ -140,20 +285,44 @@
       </div>
 
       <!-- ── Canvas ────────────────────────────────────────────────────── -->
-      <div class="se-body" ref="bodyEl" :class="{ 'se-panning': spaceDown }" @wheel="onWheel">
-
+      <div
+        ref="bodyEl"
+        class="se-body"
+        :class="{ 'se-panning': spaceDown }"
+        @wheel="onWheel"
+      >
         <!-- Applied-crop chip -->
-        <div v-if="crop" class="se-crop-chip">
-          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor"
-               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <div
+          v-if="crop"
+          class="se-crop-chip"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="12"
+            height="12"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
             <path d="M4.5 1.5v9.6a.9.9 0 0 0 .9.9H15M1 4.5h9.6a.9.9 0 0 1 .9.9V15" />
           </svg>
           <span>Cropped {{ Math.round(crop.w) }} &times; {{ Math.round(crop.h) }}</span>
-          <button title="Remove crop (restore full image)" aria-label="Remove crop"
-                  @click="clearCrop">&times;</button>
+          <button
+            title="Remove crop (restore full image)"
+            aria-label="Remove crop"
+            @click="clearCrop"
+          >
+            &times;
+          </button>
         </div>
 
-        <div class="se-canvas-wrap" :style="wrapStyle">
+        <div
+          class="se-canvas-wrap"
+          :style="wrapStyle"
+        >
           <canvas
             ref="canvasEl"
             :width="imgNW"
@@ -171,9 +340,9 @@
           <textarea
             v-if="textEdit.active"
             ref="textareaEl"
+            v-model="textEdit.value"
             class="se-text-input"
             :style="textInputStyle"
-            v-model="textEdit.value"
             rows="1"
             @keydown.enter.exact.prevent="commitText"
             @keydown.esc.stop.prevent="cancelText"
@@ -193,15 +362,24 @@
             <div class="se-insp-head">
               <span class="se-insp-title">{{ inspectorTitle }}</span>
               <span class="se-insp-dims">{{ inspectorDims }}</span>
-              <button class="se-insp-x se-insp-trash" title="Delete shape (Del)"
-                      aria-label="Delete shape" @click="deleteSelected" v-html="ICON_TRASH" />
+              <button
+                class="se-insp-x se-insp-trash"
+                title="Delete shape (Del)"
+                aria-label="Delete shape"
+                @click="deleteSelected"
+                v-html="ICON_TRASH"
+              />
             </div>
 
-            <div v-if="selectedShape.type !== 'blur'" class="se-insp-row">
+            <div
+              v-if="selectedShape.type !== 'blur'"
+              class="se-insp-row"
+            >
               <span class="se-insp-lbl">Color</span>
               <div class="se-insp-colors">
                 <button
-                  v-for="c in INSPECTOR_COLORS" :key="c"
+                  v-for="c in INSPECTOR_COLORS"
+                  :key="c"
                   class="se-insp-dot"
                   :class="{ active: selectedShape.color === c }"
                   :style="{ background: c }"
@@ -209,9 +387,15 @@
                   :aria-label="`Colour ${c}`"
                   @click="setShapeProp('color', c)"
                 />
-                <label class="se-insp-custom" title="Custom colour…">
-                  <input type="color" :value="selectedShape.color"
-                         @input="e => setShapeProp('color', e.target.value)" />
+                <label
+                  class="se-insp-custom"
+                  title="Custom colour…"
+                >
+                  <input
+                    type="color"
+                    :value="selectedShape.color"
+                    @input="e => setShapeProp('color', e.target.value)"
+                  >
                 </label>
                 <button
                   v-if="hasEyeDropper"
@@ -220,18 +404,35 @@
                   aria-label="Pick a colour from the image"
                   @click="eyeDrop(hex => setShapeProp('color', hex))"
                 >
-                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
-                       stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <svg
+                    viewBox="0 0 16 16"
+                    width="13"
+                    height="13"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
                     <path d="M10.5 2.5a2 2 0 0 1 3 3L7 12l-3 1 1-3z" />
                   </svg>
                 </button>
-                <input class="se-insp-hex" type="text" spellcheck="false"
-                       :value="selectedShape.color" aria-label="Hex colour"
-                       @change="e => applyHex(e.target.value)" />
+                <input
+                  class="se-insp-hex"
+                  type="text"
+                  spellcheck="false"
+                  :value="selectedShape.color"
+                  aria-label="Hex colour"
+                  @change="e => applyHex(e.target.value)"
+                >
               </div>
-              <div v-if="recentColors.length" class="se-insp-recent">
+              <div
+                v-if="recentColors.length"
+                class="se-insp-recent"
+              >
                 <button
-                  v-for="c in recentColors" :key="'r' + c"
+                  v-for="c in recentColors"
+                  :key="'r' + c"
                   class="se-insp-dot"
                   :class="{ active: selectedShape.color === c }"
                   :style="{ background: c }"
@@ -242,50 +443,103 @@
               </div>
             </div>
 
-            <div v-if="STROKE_TYPES.has(selectedShape.type)" class="se-insp-row">
+            <div
+              v-if="STROKE_TYPES.has(selectedShape.type)"
+              class="se-insp-row"
+            >
               <span class="se-insp-lbl">Stroke</span>
-              <input class="se-range" type="range" min="1" max="20" step="1"
-                     :value="selectedShape.width"
-                     @input="e => setShapeProp('width', +e.target.value)" />
+              <input
+                class="se-range"
+                type="range"
+                min="1"
+                max="20"
+                step="1"
+                :value="selectedShape.width"
+                @input="e => setShapeProp('width', +e.target.value)"
+              >
               <span class="se-insp-val">{{ selectedShape.width }}</span>
             </div>
 
-            <div v-if="DASHABLE.has(selectedShape.type)" class="se-insp-row">
+            <div
+              v-if="DASHABLE.has(selectedShape.type)"
+              class="se-insp-row"
+            >
               <span class="se-insp-lbl">Dash</span>
               <div class="se-insp-seg">
-                <button :class="{ on: !selectedShape.dashed }" @click="setShapeProp('dashed', false)">Solid</button>
-                <button :class="{ on: !!selectedShape.dashed }" @click="setShapeProp('dashed', true)">Dashed</button>
+                <button
+                  :class="{ on: !selectedShape.dashed }"
+                  @click="setShapeProp('dashed', false)"
+                >
+                  Solid
+                </button>
+                <button
+                  :class="{ on: !!selectedShape.dashed }"
+                  @click="setShapeProp('dashed', true)"
+                >
+                  Dashed
+                </button>
               </div>
             </div>
 
-            <div v-if="selectedShape.type === 'blur'" class="se-insp-row">
+            <div
+              v-if="selectedShape.type === 'blur'"
+              class="se-insp-row"
+            >
               <span class="se-insp-lbl">Strength</span>
-              <input class="se-range" type="range" min="1" max="10" step="1"
-                     :value="selectedShape.strength || 4"
-                     @input="e => setShapeProp('strength', +e.target.value)" />
+              <input
+                class="se-range"
+                type="range"
+                min="1"
+                max="10"
+                step="1"
+                :value="selectedShape.strength || 4"
+                @input="e => setShapeProp('strength', +e.target.value)"
+              >
               <span class="se-insp-val">{{ selectedShape.strength || 4 }}</span>
             </div>
 
-            <div v-if="selectedShape.type !== 'blur'" class="se-insp-row">
+            <div
+              v-if="selectedShape.type !== 'blur'"
+              class="se-insp-row"
+            >
               <span class="se-insp-lbl">Opacity</span>
-              <input class="se-range" type="range" min="10" max="100" step="5"
-                     :value="Math.round((selectedShape.opacity ?? 1) * 100)"
-                     @input="e => setShapeProp('opacity', +e.target.value / 100)" />
+              <input
+                class="se-range"
+                type="range"
+                min="10"
+                max="100"
+                step="5"
+                :value="Math.round((selectedShape.opacity ?? 1) * 100)"
+                @input="e => setShapeProp('opacity', +e.target.value / 100)"
+              >
               <span class="se-insp-val">{{ Math.round((selectedShape.opacity ?? 1) * 100) }}%</span>
             </div>
 
             <template v-if="DASHABLE.has(selectedShape.type)">
               <div class="se-insp-row">
                 <span class="se-insp-lbl">Label</span>
-                <input class="se-insp-text" type="text" :value="selectedShape.label || ''"
-                       placeholder="—"
-                       @input="e => setShapeProp('label', e.target.value)" />
+                <input
+                  class="se-insp-text"
+                  type="text"
+                  :value="selectedShape.label || ''"
+                  placeholder="—"
+                  @input="e => setShapeProp('label', e.target.value)"
+                >
               </div>
-              <div v-if="selectedShape.label" class="se-insp-row">
+              <div
+                v-if="selectedShape.label"
+                class="se-insp-row"
+              >
                 <span class="se-insp-lbl">Font</span>
-                <input class="se-range" type="range" min="10" max="72" step="2"
-                       :value="selectedShape.labelFontSize || fontSize"
-                       @input="e => setLabelFont(+e.target.value)" />
+                <input
+                  class="se-range"
+                  type="range"
+                  min="10"
+                  max="72"
+                  step="2"
+                  :value="selectedShape.labelFontSize || fontSize"
+                  @input="e => setLabelFont(+e.target.value)"
+                >
                 <span class="se-insp-val">{{ selectedShape.labelFontSize || fontSize }}</span>
               </div>
             </template>
@@ -293,14 +547,24 @@
             <template v-if="selectedShape.type === 'text'">
               <div class="se-insp-row">
                 <span class="se-insp-lbl">Text</span>
-                <input class="se-insp-text" type="text" :value="selectedShape.text"
-                       @input="e => setShapeProp('text', e.target.value)" />
+                <input
+                  class="se-insp-text"
+                  type="text"
+                  :value="selectedShape.text"
+                  @input="e => setShapeProp('text', e.target.value)"
+                >
               </div>
               <div class="se-insp-row">
                 <span class="se-insp-lbl">Font</span>
-                <input class="se-range" type="range" min="10" max="72" step="2"
-                       :value="selectedShape.fontSize"
-                       @input="e => setLabelFont(+e.target.value)" />
+                <input
+                  class="se-range"
+                  type="range"
+                  min="10"
+                  max="72"
+                  step="2"
+                  :value="selectedShape.fontSize"
+                  @input="e => setLabelFont(+e.target.value)"
+                >
                 <span class="se-insp-val">{{ selectedShape.fontSize }}</span>
               </div>
             </template>
@@ -308,11 +572,36 @@
             <div class="se-insp-row">
               <span class="se-insp-lbl">Arrange</span>
               <div class="se-insp-zrow">
-                <button title="Send to back" @click="zSelected('back')">⤓</button>
-                <button title="Send backward" @click="zSelected('backward')">‹</button>
-                <button title="Bring forward" @click="zSelected('forward')">›</button>
-                <button title="Bring to front" @click="zSelected('front')">⤒</button>
-                <button title="Duplicate (Ctrl+D)" @click="duplicateSelected">Dup</button>
+                <button
+                  title="Send to back"
+                  @click="zSelected('back')"
+                >
+                  ⤓
+                </button>
+                <button
+                  title="Send backward"
+                  @click="zSelected('backward')"
+                >
+                  ‹
+                </button>
+                <button
+                  title="Bring forward"
+                  @click="zSelected('forward')"
+                >
+                  ›
+                </button>
+                <button
+                  title="Bring to front"
+                  @click="zSelected('front')"
+                >
+                  ⤒
+                </button>
+                <button
+                  title="Duplicate (Ctrl+D)"
+                  @click="duplicateSelected"
+                >
+                  Dup
+                </button>
               </div>
             </div>
           </div>
@@ -338,32 +627,56 @@
           Save PNG…
         </button>
         <div class="se-spacer" />
-        <button class="se-btn secondary" title="Close editor" @click="handleClose">
+        <button
+          class="se-btn secondary"
+          title="Close editor"
+          @click="handleClose"
+        >
           Close
         </button>
       </div>
 
       <!-- ── Keyboard shortcuts overlay ────────────────────────────────── -->
       <Transition name="se-toast">
-        <div v-if="shortcutsOpen" class="se-sc-backdrop" @click.self="shortcutsOpen = false">
-          <div class="se-sc-card" role="dialog" aria-label="Keyboard shortcuts">
+        <div
+          v-if="shortcutsOpen"
+          class="se-sc-backdrop"
+          @click.self="shortcutsOpen = false"
+        >
+          <div
+            class="se-sc-card"
+            role="dialog"
+            aria-label="Keyboard shortcuts"
+          >
             <div class="se-sc-head">
               <span>Keyboard shortcuts</span>
-              <button class="se-insp-x" aria-label="Close" @click="shortcutsOpen = false" v-html="ICON_CLEAR" />
+              <button
+                class="se-insp-x"
+                aria-label="Close"
+                @click="shortcutsOpen = false"
+                v-html="ICON_CLEAR"
+              />
             </div>
             <div class="se-sc-grid">
-              <div v-for="row in SHORTCUTS" :key="row[1]" class="se-sc-row">
+              <div
+                v-for="row in SHORTCUTS"
+                :key="row[1]"
+                class="se-sc-row"
+              >
                 <kbd>{{ row[0] }}</kbd><span>{{ row[1] }}</span>
               </div>
             </div>
-            <button class="se-sc-clear" :disabled="!shapes.length" @click="clearAll(); shortcutsOpen = false">
+            <button
+              class="se-sc-clear"
+              :disabled="!shapes.length"
+              @click="clearAll(); shortcutsOpen = false"
+            >
               Clear all annotations
             </button>
           </div>
         </div>
       </Transition>
     </div>
-
   </div>
 </template>
 

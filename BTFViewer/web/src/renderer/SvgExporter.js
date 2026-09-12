@@ -312,12 +312,12 @@ export function renderToSvg(trace, viewport, options = {}) {
             defs.push(
               `<clipPath id="${currentClipId}">` +
               `<rect x="${textX}" y="${(row.y + 1).toFixed(1)}" width="${clipW}" height="${rowH - 2}" rx="1"/>` +
-              `</clipPath>`
+              '</clipPath>'
             )
             els.push(
               `<text x="${textX}" y="${textY.toFixed(1)}" ` +
               `fill="${darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'}" ` +
-              `font-family="sans-serif" font-size="10" dominant-baseline="middle" ` +
+              'font-family="sans-serif" font-size="10" dominant-baseline="middle" ' +
               `clip-path="url(#${currentClipId})">${esc(label)}</text>`
             )
           }
@@ -537,8 +537,8 @@ export function renderToSvg(trace, viewport, options = {}) {
     els.push(
       `<line x1="${x.toFixed(1)}" y1="${RULER_H}" x2="${x.toFixed(1)}" y2="${svgH}" ` +
       `stroke="${color}" stroke-width="${isAnnotation ? '1.0' : '1.2'}" ` +
-      (isAnnotation ? `stroke-dasharray="6,3" ` : '') +
-      `opacity="0.75"/>`
+      (isAnnotation ? 'stroke-dasharray="6,3" ' : '') +
+      'opacity="0.75"/>'
     )
 
     // Triangle flag at ruler edge
@@ -570,11 +570,11 @@ export function renderToSvg(trace, viewport, options = {}) {
   }
 
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" ` +
+    '<svg xmlns="http://www.w3.org/2000/svg" ' +
     `width="${svgW}" height="${svgH}" ` +
     `viewBox="0 0 ${svgW} ${svgH}">\n` +
     (defs.length ? `<defs>\n${defs.join('\n')}\n</defs>\n` : '') +
     els.join('\n') +
-    `\n</svg>`
+    '\n</svg>'
   )
 }

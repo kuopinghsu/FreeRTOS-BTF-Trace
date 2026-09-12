@@ -58,29 +58,6 @@ function mergeSignals(...signals) {
   return ctl.signal
 }
 
-function sleep(ms, signal) {
-  const n = Math.max(0, Number(ms) || 0)
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DemoAborted())
-      return
-    }
-    if (n <= 0) {
-      resolve()
-      return
-    }
-    const t = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }, n)
-    const onAbort = () => {
-      clearTimeout(t)
-      reject(new DemoAborted())
-    }
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
 function attr(el, name, vars, fallback = '') {
   if (!el?.attrib || el.attrib[name] == null) return fallback
   return expandVars(el.attrib[name], vars)

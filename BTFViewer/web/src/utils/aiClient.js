@@ -7,8 +7,6 @@
 
 import {
   AI_TOOL_PROMPT,
-  AI_TOOL_SYSTEM_ADDENDUM,
-  aiViewerTools,
   assistantMessageText,
   emptyChatCompletionError,
   ensureGeminiThoughtSignatures,
@@ -29,9 +27,7 @@ import {
   capabilityProbeBody,
   AI_CONTEXT_PROMPTS,
   AI_EMPTY_REPLY_NUDGE,
-  AI_TOOL_ROUND_LIMIT_PROMPT,
   aiLanguagePrompt,
-  contextModeSystemAddendum,
   formatCapabilityReport,
   inferModelCapability,
   mergeLiveCapability,
@@ -1724,7 +1720,7 @@ export async function aiChatCompletion({
   }, timeoutMs)
 
   async function post(bodyObj) {
-    const { resp, fetchBase } = await aiFetchChat(preset, urlBase, {
+    const { resp } = await aiFetchChat(preset, urlBase, {
       headers: aiRequestHeaders(key, urlBase),
       body: JSON.stringify(bodyObj),
       signal: chatCtrl.signal,
@@ -1745,7 +1741,7 @@ export async function aiChatCompletion({
 
   let data
   let useToolsActive = useTools
-  let turn = { content: '', calls: [], msg: {} }
+  let turn
   try {
     try {
       data = await post(payload)
@@ -2017,9 +2013,8 @@ export async function aiTestConnection({
   }
   const timer = setTimeout(() => chatCtrl.abort(), timeoutMs)
   let resp
-  let fetchBase
   try {
-    ;({ resp, fetchBase } = await aiFetchChat(preset, urlBase, {
+    ;({ resp } = await aiFetchChat(preset, urlBase, {
       headers: aiRequestHeaders(key, urlBase),
       signal: chatCtrl.signal,
       tlsVerify,

@@ -25,10 +25,25 @@
           :aria-label="`Load Balance Score ${scoreLabel}`"
         >
           <defs>
-            <linearGradient :id="scoreGradId" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" :stop-color="scoreZone === 'red' ? '#EF5350' : '#3B82F6'" />
-              <stop offset="55%" :stop-color="scoreZone === 'red' ? '#E53935' : '#14B8A6'" />
-              <stop offset="100%" :stop-color="scoreFillEnd" />
+            <linearGradient
+              :id="scoreGradId"
+              x1="0%"
+              y1="0%"
+              x2="100%"
+              y2="0%"
+            >
+              <stop
+                offset="0%"
+                :stop-color="scoreZone === 'red' ? '#EF5350' : '#3B82F6'"
+              />
+              <stop
+                offset="55%"
+                :stop-color="scoreZone === 'red' ? '#E53935' : '#14B8A6'"
+              />
+              <stop
+                offset="100%"
+                :stop-color="scoreFillEnd"
+              />
             </linearGradient>
           </defs>
           <path
@@ -71,7 +86,9 @@
             dominant-baseline="middle"
           >{{ scoreLabel }}</text>
         </svg>
-        <div class="lb-caption">100 = evenly distributed · 0 = highly uneven</div>
+        <div class="lb-caption">
+          100 = evenly distributed · 0 = highly uneven
+        </div>
       </div>
 
       <!-- σ gauge -->
@@ -96,10 +113,25 @@
           :aria-label="`Core Utilization sigma ${stddevLabel} percent`"
         >
           <defs>
-            <linearGradient :id="sigmaGradId" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" :stop-color="sigmaZone === 'red' ? '#EF5350' : '#3B82F6'" />
-              <stop offset="55%" :stop-color="sigmaZone === 'red' ? '#E53935' : '#14B8A6'" />
-              <stop offset="100%" :stop-color="sigmaFillEnd" />
+            <linearGradient
+              :id="sigmaGradId"
+              x1="0%"
+              y1="0%"
+              x2="100%"
+              y2="0%"
+            >
+              <stop
+                offset="0%"
+                :stop-color="sigmaZone === 'red' ? '#EF5350' : '#3B82F6'"
+              />
+              <stop
+                offset="55%"
+                :stop-color="sigmaZone === 'red' ? '#E53935' : '#14B8A6'"
+              />
+              <stop
+                offset="100%"
+                :stop-color="sigmaFillEnd"
+              />
             </linearGradient>
           </defs>
           <path
@@ -142,11 +174,16 @@
             dominant-baseline="middle"
           >{{ stddevLabel }}%</text>
         </svg>
-        <div class="lb-caption">0–{{ sigmaScale }}% · warn &gt; 30%</div>
+        <div class="lb-caption">
+          0–{{ sigmaScale }}% · warn &gt; 30%
+        </div>
       </div>
     </div>
 
-    <div v-if="zone === 'red'" class="lb-alert">
+    <div
+      v-if="zone === 'red'"
+      class="lb-alert"
+    >
       Red zone: score &lt; 70% — load is unbalanced
     </div>
 
@@ -204,8 +241,8 @@ const scoreLabel = computed(() => `${Math.max(0, Math.min(100, props.score)).toF
 const stddevLabel = computed(() => props.stddev.toFixed(1))
 const giniLabel = computed(() => props.gini.toFixed(3))
 const tooltip = computed(() => (
-  `Load Balance Score = 100% × (1 − Gini); σ = population stddev of core util %. `
-  + `Score red when < 70%. σ amber when > 30%. `
+  'Load Balance Score = 100% × (1 − Gini); σ = population stddev of core util %. '
+  + 'Score red when < 70%. σ amber when > 30%. '
   + `Current: ${scoreLabel.value}, σ=${stddevLabel.value}%, G=${giniLabel.value}.`
 ))
 </script>

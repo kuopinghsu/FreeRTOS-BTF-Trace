@@ -24,11 +24,15 @@
           aria-label="Close"
           @pointerdown.stop
           @click="emit('close')"
-        >×</button>
+        >
+          ×
+        </button>
       </div>
 
       <div class="ci-overview">
-        <div class="ci-overview-headline">{{ overview.headline }}</div>
+        <div class="ci-overview-headline">
+          {{ overview.headline }}
+        </div>
         <div class="ci-overview-grid">
           <span><strong>Scope</strong> {{ overview.scopeLabel }}</span>
           <span>
@@ -174,7 +178,9 @@
                   :class="treeSortClass(col.key)"
                   :title="col.tip || ('Sort by ' + col.label)"
                   @click="onHeadClick(col.key)"
-                >{{ col.label }}</button>
+                >
+                  {{ col.label }}
+                </button>
                 <span
                   class="ci-col-resizer"
                   title="Resize column"
@@ -385,8 +391,12 @@
               <div class="ci-card ci-evidence">
                 <template v-if="evidenceCard">
                   <div class="ci-card-body">
-                    <div class="ci-card-title">{{ evidenceCard.title }}</div>
-                    <div class="ci-card-text">{{ evidenceLinesText }}</div>
+                    <div class="ci-card-title">
+                      {{ evidenceCard.title }}
+                    </div>
+                    <div class="ci-card-text">
+                      {{ evidenceLinesText }}
+                    </div>
                     <div class="ci-card-block">
                       <strong>Assessment</strong>
                       {{ evidenceCard.assessment }}
@@ -990,19 +1000,6 @@ function selectTask(c, t) {
   scheduleGridDraw()
 }
 
-function jumpHotspot() {
-  const h = model.value.hotspot
-  if (!h) return
-  const c = model.value.allCorridors.find(
-    x => x.fromCore === h.fromCore && x.toCore === h.toCore,
-  )
-  if (!c) return
-  if (model.value.groupBySource) expandedGroups.add(c.fromCore)
-  expandedCorridors.add(c.label)
-  selectCorridor(c, c.peakBin ?? null)
-  showEvents(c, c.peakBin ?? null)
-}
-
 function showEvents(c, binIndex = null) {
   if (!c) return
   const { tMin, binW, timeBins, tMax } = model.value
@@ -1308,7 +1305,6 @@ function drawGrid() {
           ctx.lineWidth = 1
           const x0 = x + 0.5
           const y0 = y + 2
-          const x1 = x0 + cellW - 1
           const y1 = y0 + rowH - 4
           for (let s = -rowH; s < cellW + rowH; s += 3) {
             ctx.beginPath()

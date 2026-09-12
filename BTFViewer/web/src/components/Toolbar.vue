@@ -586,7 +586,13 @@
       data-demo-target="toolbar_filtered"
       @click="emit('clearFilters')"
     >
-      <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M1.5 3h13l-5 6v4l-3 1.5v-5.5z"/></svg>
+      <svg
+        viewBox="0 0 16 16"
+        width="12"
+        height="12"
+        fill="currentColor"
+        aria-hidden="true"
+      ><path d="M1.5 3h13l-5 6v4l-3 1.5v-5.5z" /></svg>
       Filtered
     </button>
 

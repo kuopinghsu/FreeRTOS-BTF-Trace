@@ -51,7 +51,13 @@
         v-else
         class="mark-empty"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          aria-hidden="true"
+        ><path d="M6 3h12v18l-6-4-6 4z" /></svg>
         <span>No marks yet. Right-click the timeline to add one, or press <b>B</b> / <b>A</b>.</span>
       </div>
     </div>

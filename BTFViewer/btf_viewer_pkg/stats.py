@@ -142,6 +142,8 @@ from .ux_explore import (
 )
 from .parser import *  # noqa: F403,F401
 from .parser import (  # private symbols are not pulled in by import *
+    _exec_slice_samples,
+    _inter_arrival_samples,
     _trim_time_pad,
     _gini_coefficient,
     _core_util_stddev,
@@ -12864,26 +12866,6 @@ class _StatsPanel(QWidget):
             _format_time(vals[p95_idx], scale),
         )
 
-    def _exec_slice_samples(self, segs: list,
-                            lo: Optional[int] = None, hi: Optional[int] = None) -> List[int]:
-        if lo is not None and hi is not None:
-            return [s.end - s.start for s in segs
-                    if (s.end - s.start) > 0 and _seg_fully_in_range(s, lo, hi)]
-        return [s.end - s.start for s in segs if (s.end - s.start) > 0]
-
-    def _inter_arrival_samples(self, segs: list,
-                               lo: Optional[int] = None, hi: Optional[int] = None) -> List[int]:
-        starts = sorted(s.start for s in segs)
-        samples: List[int] = []
-        for i in range(1, len(starts)):
-            gap = starts[i] - starts[i - 1]
-            if gap <= 0:
-                continue
-            if lo is not None and hi is not None and (starts[i] < lo or starts[i] > hi):
-                continue
-            samples.append(gap)
-        return samples
-
     def _exec_slice_rows(self, trace: "BtfTrace",
                          lo: Optional[int] = None,
                          hi: Optional[int] = None) -> List[tuple]:
@@ -12901,7 +12883,7 @@ class _StatsPanel(QWidget):
             _, _, tname = _parse_task_name(raw)
             if _is_idle_task_name(tname) or tname == "TICK":
                 continue
-            samples = self._exec_slice_samples(segs, lo, hi)
+            samples = _exec_slice_samples(segs, lo, hi)
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
@@ -12925,7 +12907,7 @@ class _StatsPanel(QWidget):
             _, _, tname = _parse_task_name(raw)
             if _is_idle_task_name(tname) or tname == "TICK":
                 continue
-            samples = self._inter_arrival_samples(segs, lo, hi)
+            samples = _inter_arrival_samples(segs, lo, hi)
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
@@ -13122,7 +13104,7 @@ class _StatsPanel(QWidget):
             _, _, tname = _parse_task_name(raw)
             if _is_idle_task_name(tname) or tname == "TICK":
                 continue
-            samples = self._exec_slice_samples(segs, lo, hi)
+            samples = _exec_slice_samples(segs, lo, hi)
             summary = self._summarize_samples_export(samples, trace.time_scale)
             if summary is None:
                 continue
@@ -13146,7 +13128,7 @@ class _StatsPanel(QWidget):
             _, _, tname = _parse_task_name(raw)
             if _is_idle_task_name(tname) or tname == "TICK":
                 continue
-            samples = self._inter_arrival_samples(segs, lo, hi)
+            samples = _inter_arrival_samples(segs, lo, hi)
             summary = self._summarize_samples_export(samples, trace.time_scale)
             if summary is None:
                 continue
@@ -14204,7 +14186,7 @@ class _StatsPanel(QWidget):
             _, _, tname = _parse_task_name(raw)
             if _is_idle_task_name(tname) or tname == "TICK":
                 continue
-            samples = self._exec_slice_samples(segs, lo, hi)
+            samples = _exec_slice_samples(segs, lo, hi)
             if len(samples) < 5:
                 continue
             avg_ns = sum(samples) / len(samples)

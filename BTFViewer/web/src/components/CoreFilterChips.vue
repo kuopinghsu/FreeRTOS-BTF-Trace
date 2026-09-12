@@ -18,14 +18,18 @@
       :aria-pressed="chip.on"
       :title="(chip.on ? 'Hide ' : 'Show ') + chip.name"
       @click="toggle(chip.name)"
-    >{{ chip.short }}</button>
+    >
+      {{ chip.short }}
+    </button>
     <button
       v-if="anyOff"
       type="button"
       class="core-chip-clear"
       title="Show all cores"
       @click="emit('coreFilterChange', null)"
-    >All</button>
+    >
+      All
+    </button>
   </div>
 </template>
 

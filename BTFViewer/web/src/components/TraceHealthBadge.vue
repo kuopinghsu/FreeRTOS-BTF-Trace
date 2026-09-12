@@ -97,7 +97,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { traceHealthStatusLabel } from '../utils/traceHealth.js'
+import { traceHealthStatusLabel, traceHealthSummary } from '../utils/traceHealth.js'
 
 const props = defineProps({
   result: { type: Object, default: null },
@@ -107,12 +107,7 @@ const props = defineProps({
 const open = ref(false)
 
 const label = computed(() => traceHealthStatusLabel(props.result?.status))
-const summary = computed(() => {
-  const n = Number(props.result?.issueCount || 0)
-  return n
-    ? `Trace health: ${label.value} · ${n} issue(s)`
-    : `Trace health: ${label.value}`
-})
+const summary = computed(() => traceHealthSummary(props.result))
 
 function rangeText(range) {
   if (!range) return ''

@@ -195,7 +195,6 @@ import {
   aggregateFilteredTaskBins,
   aggregateFilteredTaskCoreBins,
   CPU_LOAD_COLLAPSED_H,
-  CPU_LOAD_ROW_GAP,
   cursorRangeShade,
   cpuLoadRangeShadePaint,
   getPlacedCursorRange,

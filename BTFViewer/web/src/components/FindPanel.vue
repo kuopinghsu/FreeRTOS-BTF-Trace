@@ -4,7 +4,18 @@
       class="findbar"
       :class="{ error: !!error }"
     >
-      <svg class="findbar-lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+      <svg
+        class="findbar-lead"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        aria-hidden="true"
+      ><circle
+        cx="11"
+        cy="11"
+        r="7"
+      /><path d="M21 21l-4.3-4.3" /></svg>
       <input
         ref="inputRef"
         v-model="localQuery"
@@ -22,7 +33,9 @@
         class="findbar-clear"
         title="Clear (Esc)"
         @click="clearQuery"
-      >&times;</button>
+      >
+        &times;
+      </button>
       <span
         v-if="counterText"
         class="findbar-count"
@@ -34,7 +47,13 @@
         :disabled="!hitCount"
         @click="emit('prev')"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M18 15l-6-6-6 6" /></svg>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.2"
+          aria-hidden="true"
+        ><path d="M18 15l-6-6-6 6" /></svg>
       </button>
       <button
         type="button"
@@ -43,7 +62,13 @@
         :disabled="!hitCount"
         @click="emit('next')"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.2"
+          aria-hidden="true"
+        ><path d="M6 9l6 6 6-6" /></svg>
       </button>
     </div>
 
@@ -61,16 +86,30 @@
     <p
       v-if="error"
       class="find-note error"
-    >{{ error }}</p>
+    >
+      {{ error }}
+    </p>
     <p
       v-else-if="localQuery && !hitCount"
       class="find-note"
-    >No matches for &ldquo;{{ localQuery }}&rdquo;. Try a different Match mode.</p>
+    >
+      No matches for &ldquo;{{ localQuery }}&rdquo;. Try a different Match mode.
+    </p>
     <div
       v-else-if="!localQuery"
       class="find-empty"
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        aria-hidden="true"
+      ><circle
+        cx="11"
+        cy="11"
+        r="7"
+      /><path d="M21 21l-4.3-4.3" /></svg>
       <p>Search across tasks, annotations and migration events in the active trace.</p>
       <div class="find-examples">
         <button
@@ -78,7 +117,9 @@
           :key="ex"
           type="button"
           @click="applyExample(ex)"
-        >{{ ex }}</button>
+        >
+          {{ ex }}
+        </button>
       </div>
     </div>
   </div>

@@ -8,13 +8,11 @@ import { bisectLeft, bisectRight } from '../utils/bisect.js'
 let _wasm = null
 let _mem = null
 let _i32 = null
-let _f64 = null
 let _scratch = 0          // i32 pair / index output
 let _uploadBase = 4096    // uploaded trace arrays start here
 let _uploadEnd = 4096
 
 const SCRATCH_I32 = 0
-const SCRATCH_INDICES = 256  // byte offset; room for 4k u32 indices (16 KiB)
 const PARSE_UPLOAD_BASE = 65536  // parse-time uploads (LOD, gather) — above timeline scratch
 
 function align8(n) {
@@ -96,7 +94,6 @@ function ensureMem(bytes) {
   const pages = Math.ceil(need / 65536)
   _mem.grow(pages - Math.floor(_mem.buffer.byteLength / 65536))
   _i32 = new Int32Array(_mem.buffer)
-  _f64 = new Float64Array(_mem.buffer)
 }
 
 function startsArray(segs) {
@@ -215,7 +212,6 @@ function ensureParseMem(totalBytes) {
     const pages = Math.ceil(need / 65536)
     _mem.grow(pages - Math.floor(_mem.buffer.byteLength / 65536))
     _i32 = new Int32Array(_mem.buffer)
-    _f64 = new Float64Array(_mem.buffer)
   }
   return base
 }
@@ -275,7 +271,6 @@ export async function initWasmAccel() {
     _wasm = instance.exports
     _mem = _wasm.memory
     _i32 = new Int32Array(_mem.buffer)
-    _f64 = new Float64Array(_mem.buffer)
     _scratch = SCRATCH_I32
     return true
   } catch (err) {

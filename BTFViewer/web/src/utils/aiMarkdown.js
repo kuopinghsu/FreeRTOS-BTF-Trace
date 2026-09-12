@@ -4,10 +4,10 @@
  */
 
 import { mermaidBlockHtml } from './aiMermaid.js'
-import { btfHighlightHref, btfJumpHref, btfRangeHref, parseBtfHighlightHref, formatToolActionLabel, summariseToolCall } from './aiTools.js'
+import { btfHighlightHref, btfJumpHref, btfRangeHref, parseBtfHighlightHref, formatToolActionLabel } from './aiTools.js'
 import { btfHtmlReportDocument } from './htmlReport.js'
 
-import { evidencePanelLabels, evidencePanelSummaryLine, evidencePanelToggleLabel } from './aiInvestigation.js'
+import { evidencePanelLabels, evidencePanelToggleLabel } from './aiInvestigation.js'
 import {
   formatAnalysisStatus,
   formatToolUsageSummaryLine,
@@ -629,13 +629,13 @@ function toolCardsHtml(tools) {
     if (String(t.status || '') === 'failed') {
       const detail = String(t.result || t.error || '').trim()
       if (detail) {
-        html += `<p style="margin:2px 0 6px 1.2em;color:#6b7280;font-size:11px;">`
+        html += '<p style="margin:2px 0 6px 1.2em;color:#6b7280;font-size:11px;">'
           + `${escapeHtml(detail)}</p>`
       }
     }
     return html
   }).join('')
-  return `<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;`
+  return '<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;'
     + `border-left:3px solid #c9a227;background:#fff8e8;color:#6b5508;">${rows}</div>`
 }
 
@@ -683,7 +683,7 @@ export function formatAiConversationHtmlBody(entries, responseLanguage = DEFAULT
       return (
         `<section class="msg ${cls} ai-ev-panel">`
         + `<h3>${escapeHtml(label)} · `
-        + `<button type="button" class="ai-ev-panel-toggle" data-open="0" `
+        + '<button type="button" class="ai-ev-panel-toggle" data-open="0" '
         + `data-expand="${escapeAttr(expand)}" data-collapse="${escapeAttr(collapse)}">`
         + `${escapeHtml(expand)}</button></h3>`
         + `<div class="body">${bodyHtml}${cards}</div>`

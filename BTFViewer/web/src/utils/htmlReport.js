@@ -1067,7 +1067,7 @@ export function htmlTocNav(entries, groups = null) {
   const items = [...(entries || [])]
   const n = items.length
   const countLabel = n === 1 ? '1 section' : `${n} sections`
-  let groupedItems = ''
+  let groupedItems
   if (groups && groups.length) {
     let remaining = items
     const blocks = []
@@ -1092,7 +1092,7 @@ export function htmlTocNav(entries, groups = null) {
   } else {
     groupedItems = '<ul>' + items.map(t => `<li><a href="#${t.id}">${escapeHtml(t.title)}</a></li>`).join('') + '</ul>'
   }
-  return `<nav class="report-toc" aria-label="Table of Contents">`
+  return '<nav class="report-toc" aria-label="Table of Contents">'
     + '<div class="report-toc-head">'
     + '<div class="report-toc-title">'
     + '<h2>Table of Contents</h2>'
@@ -1112,7 +1112,6 @@ export function htmlMakeCollapsibleSections(docHtml, defaultExpanded = [], tocGr
   const prefixes = defaultExpanded || []
   const toc = []
   const used = new Set()
-  let counter = 0
   const newDoc = String(docHtml || '').replace(
     /<section class="(report-card[^"]*)"([^>]*)>([\s\S]*?)<\/section>/g,
     (_match, classes, attrs, inner) => {
@@ -1120,7 +1119,6 @@ export function htmlMakeCollapsibleSections(docHtml, defaultExpanded = [], tocGr
       const titleHtml = h2Match ? h2Match[0] : '<h2>Section</h2>'
       const titleText = titleHtml.replace(/<[^>]+>/g, '')
       const rest = h2Match ? inner.slice(h2Match.index + h2Match[0].length) : inner
-      counter++
       let id = attrValue(attrs, 'id')
       if (!id) {
         const slug = htmlSectionSlug(titleText)

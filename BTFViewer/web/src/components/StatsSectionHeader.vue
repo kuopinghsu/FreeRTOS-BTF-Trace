@@ -1,113 +1,113 @@
 <template>
   <div class="stats-section-header-wrap">
-  <div
-    class="stats-section-title collapsible"
-    :class="{ pinned }"
-    :data-demo-target="demoTarget || undefined"
-    @click="$emit('toggle')"
-  >
-    <span
-      class="stats-drag-handle"
-      draggable="true"
-      title="Drag to reorder"
-      aria-label="Drag to reorder section"
-      @click.stop
-      @dragstart.stop="onDragStart"
-      @dragend.stop="onDragEnd"
-    >⠿</span>
-    <svg
-      class="chevron"
-      :class="{ collapsed }"
-      viewBox="0 0 10 10"
-      width="10"
-      height="10"
-      aria-hidden="true"
+    <div
+      class="stats-section-title collapsible"
+      :class="{ pinned }"
+      :data-demo-target="demoTarget || undefined"
+      @click="$emit('toggle')"
     >
-      <polyline
-        points="2,3 5,7 8,3"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-    </svg>
-    <span class="stats-section-label"><slot /></span>
-    <span class="stats-header-meta">
       <span
-        v-if="effectiveScopeLabel"
-        class="stats-meta-chip scope"
-        :title="`Scope limited to ${effectiveScopeLabel}`"
-      >{{ effectiveScopeLabel }}</span>
-      <span
-        v-if="effectiveFilterLabel"
-        class="stats-meta-chip filtered"
-        :title="`Statistics reflect Filter: ${effectiveFilterLabel}`"
-      >Filtered</span>
-      <span
-        v-if="category"
-        class="stats-category-badge"
-        :class="categoryClass"
-        :title="categoryBadgeTitle"
-      >{{ category }}</span>
-      <span
-        v-if="helpText"
-        class="stats-section-help-icon"
-        :title="`Open in Statistics Reference — ${helpText}`"
-        role="button"
-        tabindex="0"
-        aria-label="Open Statistics Reference for this section"
-        @click.stop="$emit('openReference', sectionId)"
-        @keydown.enter.stop="$emit('openReference', sectionId)"
-        @keydown.space.stop.prevent="$emit('openReference', sectionId)"
-      >ⓘ</span>
-      <slot name="actions" />
-      <span
-        class="stats-pin-slot"
-        :style="{ width: `${STATS_PIN_SLOT_W}px`, height: `${STATS_PIN_SLOT_H}px` }"
+        class="stats-drag-handle"
+        draggable="true"
+        title="Drag to reorder"
+        aria-label="Drag to reorder section"
+        @click.stop
+        @dragstart.stop="onDragStart"
+        @dragend.stop="onDragEnd"
+      >⠿</span>
+      <svg
+        class="chevron"
+        :class="{ collapsed }"
+        viewBox="0 0 10 10"
+        width="10"
+        height="10"
+        aria-hidden="true"
       >
-        <button
-          type="button"
-          class="stats-pin-btn"
-          :class="{ active: pinned }"
+        <polyline
+          points="2,3 5,7 8,3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      <span class="stats-section-label"><slot /></span>
+      <span class="stats-header-meta">
+        <span
+          v-if="effectiveScopeLabel"
+          class="stats-meta-chip scope"
+          :title="`Scope limited to ${effectiveScopeLabel}`"
+        >{{ effectiveScopeLabel }}</span>
+        <span
+          v-if="effectiveFilterLabel"
+          class="stats-meta-chip filtered"
+          :title="`Statistics reflect Filter: ${effectiveFilterLabel}`"
+        >Filtered</span>
+        <span
+          v-if="category"
+          class="stats-category-badge"
+          :class="categoryClass"
+          :title="categoryBadgeTitle"
+        >{{ category }}</span>
+        <span
+          v-if="helpText"
+          class="stats-section-help-icon"
+          :title="`Open in Statistics Reference — ${helpText}`"
+          role="button"
+          tabindex="0"
+          aria-label="Open Statistics Reference for this section"
+          @click.stop="$emit('openReference', sectionId)"
+          @keydown.enter.stop="$emit('openReference', sectionId)"
+          @keydown.space.stop.prevent="$emit('openReference', sectionId)"
+        >ⓘ</span>
+        <slot name="actions" />
+        <span
+          class="stats-pin-slot"
           :style="{ width: `${STATS_PIN_SLOT_W}px`, height: `${STATS_PIN_SLOT_H}px` }"
-          :title="pinned ? 'Pinned — stays open with Collapse All' : 'Pin open'"
-          :aria-label="pinned ? 'Unpin' : 'Pin open'"
-          :aria-pressed="pinned ? 'true' : 'false'"
-          @click.stop="$emit('togglePin')"
         >
-          <!-- outline thumbtack when unpinned -->
-          <svg
-            v-if="!pinned"
-            class="pin-icon"
-            viewBox="0 0 16 16"
-            :width="STATS_PIN_ICON_PX"
-            :height="STATS_PIN_ICON_PX"
-            aria-hidden="true"
+          <button
+            type="button"
+            class="stats-pin-btn"
+            :class="{ active: pinned }"
+            :style="{ width: `${STATS_PIN_SLOT_W}px`, height: `${STATS_PIN_SLOT_H}px` }"
+            :title="pinned ? 'Pinned — stays open with Collapse All' : 'Pin open'"
+            :aria-label="pinned ? 'Unpin' : 'Pin open'"
+            :aria-pressed="pinned ? 'true' : 'false'"
+            @click.stop="$emit('togglePin')"
           >
-            <path
-              fill="currentColor"
-              d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25zm0 1.5A1.25 1.25 0 0 0 6.75 4c0 .5.28.93.7 1.15l.3.14v6.1l.25-.27.25.27V5.29l.3-.14c.42-.22.7-.65.7-1.15A1.25 1.25 0 0 0 8 2.75z"
-            />
-          </svg>
-          <!-- filled thumbtack when pinned -->
-          <svg
-            v-else
-            class="pin-icon"
-            viewBox="0 0 16 16"
-            :width="STATS_PIN_ICON_PX"
-            :height="STATS_PIN_ICON_PX"
-            aria-hidden="true"
-          >
-            <path
-              fill="currentColor"
-              d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25z"
-            />
-          </svg>
-        </button>
+            <!-- outline thumbtack when unpinned -->
+            <svg
+              v-if="!pinned"
+              class="pin-icon"
+              viewBox="0 0 16 16"
+              :width="STATS_PIN_ICON_PX"
+              :height="STATS_PIN_ICON_PX"
+              aria-hidden="true"
+            >
+              <path
+                fill="currentColor"
+                d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25zm0 1.5A1.25 1.25 0 0 0 6.75 4c0 .5.28.93.7 1.15l.3.14v6.1l.25-.27.25.27V5.29l.3-.14c.42-.22.7-.65.7-1.15A1.25 1.25 0 0 0 8 2.75z"
+              />
+            </svg>
+            <!-- filled thumbtack when pinned -->
+            <svg
+              v-else
+              class="pin-icon"
+              viewBox="0 0 16 16"
+              :width="STATS_PIN_ICON_PX"
+              :height="STATS_PIN_ICON_PX"
+              aria-hidden="true"
+            >
+              <path
+                fill="currentColor"
+                d="M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25z"
+              />
+            </svg>
+          </button>
+        </span>
       </span>
-    </span>
-  </div>
+    </div>
   </div>
 </template>
 

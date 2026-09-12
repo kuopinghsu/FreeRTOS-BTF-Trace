@@ -285,8 +285,8 @@ export function histogramBarTooltip(bar, n, formatValue) {
 }
 
 function buildXTicks(binSpec, plotW, margin, formatValue) {
-  const { displayMin, displayMax, xScale, hasOverflowBin, hasUnderflowBin } = binSpec
-  const { slotCount, slotW, leading, regularSlots, regularW } = histSlotLayout(binSpec, plotW)
+  const { displayMin, displayMax, xScale, hasOverflowBin } = binSpec
+  const { slotW, leading, regularSlots, regularW } = histSlotLayout(binSpec, plotW)
   const regionLeft = margin.left + leading * slotW
 
   if (xScale === 'log') {

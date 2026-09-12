@@ -24,7 +24,9 @@
           aria-label="Close settings"
           @pointerdown.stop
           @click="emit('close')"
-        >×</button>
+        >
+          ×
+        </button>
       </div>
 
       <div class="settings-body">
@@ -58,7 +60,9 @@
             v-show="activeTab === 'appearance'"
             class="settings-page"
           >
-            <h3 class="settings-section">Appearance</h3>
+            <h3 class="settings-section">
+              Appearance
+            </h3>
             <label class="settings-row">
               <span class="settings-label">Theme</span>
               <DomSelect
@@ -75,7 +79,9 @@
               Colorblind-safe colors (Okabe-Ito palette)
             </label>
 
-            <h3 class="settings-section">Font sizes</h3>
+            <h3 class="settings-section">
+              Font sizes
+            </h3>
             <label class="settings-row">
               <span class="settings-label">Timeline labels</span>
               <input
@@ -113,7 +119,9 @@
             v-show="activeTab === 'display'"
             class="settings-page"
           >
-            <h3 class="settings-section">Panels</h3>
+            <h3 class="settings-section">
+              Panels
+            </h3>
             <label class="settings-check indent">
               <input
                 v-model="draft.showLegend"
@@ -171,7 +179,9 @@
               Link A/B timeline zoom when switching compare tabs
             </label>
 
-            <h3 class="settings-section">Timeline overlays</h3>
+            <h3 class="settings-section">
+              Timeline overlays
+            </h3>
             <label class="settings-check indent">
               <input
                 v-model="draft.showSti"
@@ -194,7 +204,9 @@
               Highlight segments on label hover
             </label>
 
-            <h3 class="settings-section">Analysis thresholds</h3>
+            <h3 class="settings-section">
+              Analysis thresholds
+            </h3>
             <label class="settings-row">
               <span class="settings-label">CPU budget</span>
               <input
@@ -223,7 +235,9 @@
             v-show="activeTab === 'layout'"
             class="settings-page"
           >
-            <h3 class="settings-section">Timeline</h3>
+            <h3 class="settings-section">
+              Timeline
+            </h3>
             <label class="settings-row">
               <span class="settings-label">Label column</span>
               <input
@@ -261,7 +275,9 @@
               <span class="settings-unit">px</span>
             </label>
 
-            <h3 class="settings-section">STI rows</h3>
+            <h3 class="settings-section">
+              STI rows
+            </h3>
             <label class="settings-row">
               <span class="settings-label">Collapsed height</span>
               <input
@@ -295,7 +311,9 @@
               />
             </label>
 
-            <h3 class="settings-section">Zoom &amp; cursors</h3>
+            <h3 class="settings-section">
+              Zoom &amp; cursors
+            </h3>
             <label class="settings-row">
               <span class="settings-label">1:1 zoom level</span>
               <input
@@ -332,7 +350,9 @@
               <span class="settings-unit">digits</span>
             </label>
 
-            <h3 class="settings-section">CPU load graph</h3>
+            <h3 class="settings-section">
+              CPU load graph
+            </h3>
             <label class="settings-row">
               <span class="settings-label">Row height</span>
               <input
@@ -352,13 +372,15 @@
             v-show="activeTab === 'ai'"
             class="settings-page settings-page--ai"
           >
-            <h3 class="settings-section">AI connection</h3>
+            <h3 class="settings-section">
+              AI connection
+            </h3>
             <div class="settings-form">
               <div class="settings-form-row settings-form-row--check settings-form-row--top">
                 <span
                   class="settings-form-label"
                   aria-hidden="true"
-                ></span>
+                />
                 <div class="settings-form-field">
                   <label
                     class="settings-check"
@@ -393,7 +415,7 @@
                 <span
                   class="settings-form-label"
                   aria-hidden="true"
-                ></span>
+                />
                 <label
                   class="settings-check"
                   title="When the endpoint is not local, replace task names with Task-N aliases before Findings leave the machine."
@@ -409,7 +431,7 @@
                 <span
                   class="settings-form-label"
                   aria-hidden="true"
-                ></span>
+                />
                 <label
                   class="settings-check"
                   title="Disables cloud AI for this machine. Local endpoints still work."
@@ -611,7 +633,7 @@
                 <span
                   class="settings-form-label"
                   aria-hidden="true"
-                ></span>
+                />
                 <div class="settings-ai-actions">
                   <button
                     type="button"

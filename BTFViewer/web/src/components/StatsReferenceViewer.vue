@@ -1,5 +1,9 @@
 <template>
-  <div v-if="visible" class="stats-ref-scrim" @click.self="close">
+  <div
+    v-if="visible"
+    class="stats-ref-scrim"
+    @click.self="close"
+  >
     <div class="stats-ref-panel">
       <div class="stats-ref-chrome">
         <button
@@ -9,7 +13,18 @@
           :disabled="!canGoBack"
           @click="goBack"
         >
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 16 16"
+            fill="none"
+          ><path
+            d="M10 3L5 8l5 5"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          /></svg>
         </button>
         <button
           type="button"
@@ -18,10 +33,23 @@
           :disabled="!canGoForward"
           @click="goForward"
         >
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 16 16"
+            fill="none"
+          ><path
+            d="M6 3l5 5-5 5"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          /></svg>
         </button>
 
-        <div class="stats-ref-breadcrumb">{{ breadcrumb }}</div>
+        <div class="stats-ref-breadcrumb">
+          {{ breadcrumb }}
+        </div>
 
         <input
           v-model="searchQuery"
@@ -36,7 +64,9 @@
           class="stats-ref-lang-btn"
           :title="lang === 'en' ? 'Switch to 繁體中文' : 'Switch to English'"
           @click="toggleLang"
-        >{{ lang === 'en' ? 'EN' : '繁中' }}</button>
+        >
+          {{ lang === 'en' ? 'EN' : '繁中' }}
+        </button>
 
         <button
           type="button"
@@ -44,20 +74,61 @@
           title="Open in system browser"
           @click="openInNewTab"
         >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6.5 3H3v10h10V9.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 3h4v4M13 3L7 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+          ><path
+            d="M6.5 3H3v10h10V9.5"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          /><path
+            d="M9 3h4v4M13 3L7 9"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          /></svg>
         </button>
-        <button type="button" class="stats-ref-chrome-btn" title="Close" @click="close">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <button
+          type="button"
+          class="stats-ref-chrome-btn"
+          title="Close"
+          @click="close"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+          ><path
+            d="M4 4l8 8M12 4l-8 8"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+          /></svg>
         </button>
       </div>
 
       <div class="stats-ref-body">
         <div class="stats-ref-toc">
-          <template v-for="cat in STATS_SECTION_CATEGORIES" :key="cat">
-            <div v-if="tocByCategory[cat].length" class="stats-ref-toc-cat">
+          <template
+            v-for="cat in STATS_SECTION_CATEGORIES"
+            :key="cat"
+          >
+            <div
+              v-if="tocByCategory[cat].length"
+              class="stats-ref-toc-cat"
+            >
               {{ STATS_CATEGORY_LABELS[cat] || cat }}
             </div>
-            <template v-for="row in tocByCategory[cat]" :key="row.id">
+            <template
+              v-for="row in tocByCategory[cat]"
+              :key="row.id"
+            >
               <div
                 class="stats-ref-toc-row"
                 :class="{ active: row.id === currentSection }"
@@ -67,7 +138,9 @@
                 @click="openSection(row.id)"
                 @keydown.enter="openSection(row.id)"
                 @keydown.space.prevent="openSection(row.id)"
-              >{{ row.title }}</div>
+              >
+                {{ row.title }}
+              </div>
               <template v-if="row.id === currentSection">
                 <div
                   v-for="sub in activeSubsections"
@@ -78,7 +151,9 @@
                   @click="navigateToSub(sub.id)"
                   @keydown.enter="navigateToSub(sub.id)"
                   @keydown.space.prevent="navigateToSub(sub.id)"
-                >{{ sub.title }}</div>
+                >
+                  {{ sub.title }}
+                </div>
               </template>
             </template>
           </template>

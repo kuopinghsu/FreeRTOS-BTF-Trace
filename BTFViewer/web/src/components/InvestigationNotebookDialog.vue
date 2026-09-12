@@ -1358,7 +1358,9 @@
               v-if="proposalReview.ok && (proposalModel.model || proposalModel.provider)"
               class="nb-prop-model"
             >
-              Proposed by {{ proposalModel.provider || 'AI' }}<template v-if="proposalModel.model"> · {{ proposalModel.model }}</template>. Added cards keep this provenance.
+              Proposed by {{ proposalModel.provider || 'AI' }}<template v-if="proposalModel.model">
+                · {{ proposalModel.model }}
+              </template>. Added cards keep this provenance.
             </p>
 
             <div class="nb-prop-actions">

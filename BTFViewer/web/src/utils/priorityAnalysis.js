@@ -2,7 +2,7 @@
  * Priority inheritance / inversion analysis from create pri:N and set_priority STI events.
  */
 import { formatTime } from './timeFormat.js'
-import { taskMergeKey, taskDisplayName, taskLabelForMergeKey } from './colors.js'
+import { taskMergeKey, taskLabelForMergeKey } from './colors.js'
 
 export const BOOST_BAND_COLOR = '#F39C12'
 export const INVERSION_BAND_COLOR = '#E74C3C'

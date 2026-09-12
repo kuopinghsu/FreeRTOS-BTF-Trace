@@ -5,7 +5,18 @@
         Tasks
       </div>
       <div class="legend-search-wrap">
-        <svg class="legend-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+        <svg
+          class="legend-search-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          aria-hidden="true"
+        ><circle
+          cx="11"
+          cy="11"
+          r="7"
+        /><path d="M21 21l-4.3-4.3" /></svg>
         <input
           :value="taskFilterText"
           class="legend-search"
@@ -63,7 +74,9 @@
       <p
         v-else
         class="legend-empty"
-      >No tasks match the current filter.</p>
+      >
+        No tasks match the current filter.
+      </p>
     </div>
 
     <div
@@ -86,7 +99,9 @@
           Clear
         </button>
       </div>
-      <p class="legend-cores-hint">Shared filter — also scopes the timeline &amp; Cursors panel.</p>
+      <p class="legend-cores-hint">
+        Shared filter — also scopes the timeline &amp; Cursors panel.
+      </p>
       <CoreFilterChips
         :core-names="trace.coreNames"
         :core-filter-keys="coreFilterKeys"

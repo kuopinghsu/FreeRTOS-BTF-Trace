@@ -2194,7 +2194,7 @@ export function formatEvidencePanelMarkdown(data, responseLanguage = 'English') 
   ) {
     confLabel = labels.low || 'Low'
   }
-  let covPct = 0
+  let covPct
   try { covPct = Number(coverage.percent) || 0 } catch { covPct = 0 }
   const covLabel = covPct >= 80
     ? (labels.coverage_complete || 'Complete')
@@ -2495,7 +2495,7 @@ export function evaluateRegression(candidate, baseline, { rules = DEFAULT_REGRES
     const mid = String(rule.metric || '')
     const a = cand[mid]
     const b = base[mid]
-    let status = 'skip'
+    let status
     let detail = 'missing metric'
     let delta = null
     if (a == null || b == null) {
@@ -3370,7 +3370,7 @@ function openStatisticsNextCheck(finding) {
   const task = String(finding.task || '').trim()
   const fid = String(finding.id || '').trim()
   const sid = findingStatsSection(fid)
-  let label = ''
+  let label
   if (inspect && task) {
     const section = inspect.split(' (', 2)[0].trim() || inspect
     label = `Open ${section} → ${task}`
@@ -3843,7 +3843,7 @@ export function estimateWhatIf({
     : null
   let effect = '≈'
   let reason = 'Insufficient correlated evidence for a directional estimate'
-  let confidence = 'Low'
+  let confidence
   if (/pin|affin|core/.test(blob)) {
     effect = '↓ migrations / cache miss risk'
     reason = 'Affinity reduces cross-core bounce when thrashing dominates'
@@ -4083,7 +4083,7 @@ export function simulateWhatIf({
   let simBlock = baseBlock
   const simUtil = { ...utilMap }
   const notes = []
-  let confidence = 'Low'
+  let confidence
   const kind = action.kind
 
   if (kind === 'pin') {

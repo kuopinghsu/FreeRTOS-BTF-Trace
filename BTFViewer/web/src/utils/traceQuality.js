@@ -11,6 +11,7 @@ export function collectTraceQualityWarnings(trace) {
   if (meta._versionWarning) out.push(meta._versionWarning)
   if (meta._version_warning) out.push(meta._version_warning)
   if (meta._traceQualityWarning) out.push(meta._traceQualityWarning)
+  if (meta._trace_quality_warning) out.push(meta._trace_quality_warning)
 
   const flags = meta.traceQuality || meta.trace_quality
   if (flags && typeof flags === 'object') {
@@ -29,7 +30,7 @@ export function collectTraceQualityWarnings(trace) {
 
   for (const key of ['ringOverflow', 'taskTableOverflow', 'truncated']) {
     const v = meta[key]
-    if (v === true || v === '1' || String(v).toLowerCase() === 'true') {
+    if (v === true || v === 1 || ['1', 'true', 'yes'].includes(String(v).trim().toLowerCase())) {
       if (key === 'ringOverflow') out.push('Trace ring buffer overflow — oldest events may be missing.')
       if (key === 'taskTableOverflow') out.push('Task table overflow — tracing was disabled for new tasks.')
       if (key === 'truncated') out.push('Trace was truncated before normal stop.')

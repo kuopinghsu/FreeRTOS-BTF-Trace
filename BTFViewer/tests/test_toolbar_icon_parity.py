@@ -22,9 +22,10 @@ def _js_icon_paths() -> dict:
     src = (BTF_ROOT / "web" / "src" / "utils" / "toolbarIcons.js").read_text(encoding="utf-8")
     aliases = {"ONE_TO_ONE": "1TO1"}
     out = {}
-    for m in re.finditer(r"^\s*(\w+):\s*(\".*?\")\s*,?\s*$", src, re.M):
+    pattern = r"^\s*(\w+):\s*(?P<quote>[\"'])(?P<value>.*?)(?P=quote)\s*,?\s*$"
+    for m in re.finditer(pattern, src, re.M):
         key = re.sub(r"([A-Z])", r"_\1", m.group(1)).upper()
-        out[aliases.get(key, key)] = json.loads(m.group(2))
+        out[aliases.get(key, key)] = m.group("value")
     return out
 
 

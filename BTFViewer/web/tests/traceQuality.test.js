@@ -17,6 +17,18 @@ describe('collectTraceQualityWarnings', () => {
     assert.match(warnings[0], /ring buffer overflow/)
   })
 
+  it('normalizes numeric and yes quality flags', () => {
+    assert.equal(collectTraceQualityWarnings(trace({ ringOverflow: 1 })).length, 1)
+    assert.equal(collectTraceQualityWarnings(trace({ ringOverflow: 'yes' })).length, 1)
+  })
+
+  it('reads snake-case parser quality warnings', () => {
+    const warnings = collectTraceQualityWarnings(trace({
+      _trace_quality_warning: 'Capture integrity is uncertain.',
+    }))
+    assert.deepEqual(warnings, ['Capture integrity is uncertain.'])
+  })
+
   it('reads all three BTF quality flags', () => {
     const warnings = collectTraceQualityWarnings(trace({
       ringOverflow: 'true',

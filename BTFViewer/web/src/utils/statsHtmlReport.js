@@ -449,7 +449,7 @@ export function htmlScopeIdentityCard({
   ]
   const body = rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')
   const note = sampleNote ? `<p class="detail-note">${esc(sampleNote)}</p>` : ''
-  return `<section class="report-card" id="sec-analysis-scope"><h2>Analysis Scope</h2>`
+  return '<section class="report-card" id="sec-analysis-scope"><h2>Analysis Scope</h2>'
     + `<table class="meta-table scope-table"><tbody>${body}</tbody></table>${note}</section>`
 }
 
@@ -502,7 +502,7 @@ export function htmlEvidenceRefsCard(refs) {
     `<tr><td>${esc(r.label || 'Finding')}</td>`
     + `<td>${esc(r.time_text || r.timeText || '—')}</td></tr>`
   )).join('')
-  return `<section class="report-card" id="sec-evidence-refs"><h2>Evidence Refs</h2>`
+  return '<section class="report-card" id="sec-evidence-refs"><h2>Evidence Refs</h2>'
     + '<p class="detail-note">Timestamps and measured evidence from Analysis Findings '
     + '(export context; does not jump back into BTFViewer).</p>'
     + '<table class="meta-table"><thead><tr><th>Finding</th><th>Evidence / Time</th>'
@@ -522,7 +522,7 @@ export function htmlTraceMetadataCard({
   if (coreGapAvg) rows.push([`Core gap avg${scopeTitle}`, coreGapAvg])
   if (coreGapMax) rows.push([`Core gap max${scopeTitle}`, coreGapMax])
   const body = rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')
-  return `<section class="report-card"><h2>Trace Metadata</h2>`
+  return '<section class="report-card"><h2>Trace Metadata</h2>'
     + '<p class="detail-note">Trace-size counts. Diagnostic KPIs above summarise health.</p>'
     + `<table class="meta-table"><tbody>${body}</tbody></table></section>`
 }
@@ -664,7 +664,7 @@ export function htmlSchedulingBalanceChart(samples) {
     + '<div class="metric-chart-title">Load balance over time</div>'
     + '<div class="metric-chart-subtitle">Lower scores indicate more uneven '
     + 'core utilization during that sample window.</div></div>'
-    + `<div class="chart-callout"><span class="chart-callout-label">Lowest</span>`
+    + '<div class="chart-callout"><span class="chart-callout-label">Lowest</span>'
     + `<strong>${lowScore.toFixed(0)}</strong>`
     + `<span class="chart-callout-note">at ${esc(lowTime)}</span></div></div>`
     + `<svg class="trend-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Load balance score over time">`
@@ -717,7 +717,7 @@ export function htmlFindingCards(findings, scopeTitle = '') {
       + (conf ? `<div class="finding-meta"><strong>Confidence:</strong> ${esc(conf)}</div>` : '')
       + '</article>'
   }).join('')
-  return `<section class="report-card notes analysis-findings">`
+  return '<section class="report-card notes analysis-findings">'
     + `<h2>Analysis Findings${esc(scopeTitle)}</h2>`
     + '<p class="detail-note">Heuristic summary of load balance, CPU consumers, off-CPU gaps, thrashing, deadlines, tick health, and sync. Exported links open the matching report section; they do not jump back into BTFViewer.</p>'
     + `<div class="finding-cards">${cards}</div></section>`
@@ -792,8 +792,6 @@ const BM_TYPE_LABELS = {
   verification: 'Verification step',
   conclusion: 'Conclusion',
 }
-const FACT_TYPES = ['observation', 'supporting', 'verification']
-
 function fmtRef(ref, formatNs) {
   const kind = String(ref.kind || '')
   const f = (v) => {
@@ -955,7 +953,7 @@ function heatBin(value, maxV) {
  * heat-scaled readings.
  */
 export function htmlMatrixHeatmap(rowLabels, colLabels, cells, {
-  title, subtitle = '', unit = '%', width = 640, diagonalDash = false,
+  title, subtitle = '', unit = '%', diagonalDash = false,
   tooltipSep = '→', maxValueOverride = null, extraCol = null,
 } = {}) {
   const rows = rowLabels || []
@@ -1204,7 +1202,7 @@ export function htmlGlossary({ rangeNote = '' } = {}) {
     '<strong>P50 (Median):</strong> Half the samples are at or below this value.',
     '<strong>P95 / P99:</strong> Percentile of the observed distribution. Usefulness depends on the deadline or acceptance criterion; P95 is not universally the best user-experience metric for real-time systems.',
   ].filter(Boolean)
-  return `<section class="report-card notes"><h2>Statistics Notes</h2>`
+  return '<section class="report-card notes"><h2>Statistics Notes</h2>'
     + '<p class="detail-note">Glossary of metric definitions used in this report.</p>'
     + `<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></section>`
 }

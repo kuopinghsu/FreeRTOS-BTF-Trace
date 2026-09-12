@@ -482,7 +482,7 @@ export function decomposeResponseTime(findings = [], { task = '' } = {}) {
 export function rankRootCauses(findings = [], { hypotheses = [] } = {}) {
   const list = items(findings)
   const hyps = (hypotheses || []).filter((h) => h && typeof h === 'object')
-  let ranked = []
+  let ranked
   if (hyps.length) {
     ranked = hyps.map((h, i) => {
       const text = String(h.hypothesis || h.description || '')

@@ -20,6 +20,7 @@ import {
   traceHealthStatusLabel,
   traceHealthSummary,
 } from '../src/utils/traceHealth.js'
+import { collectTraceQualityWarnings } from '../src/utils/traceQuality.js'
 import { htmlTraceHealthCard } from '../src/utils/statsHtmlReport.js'
 
 function seg(start, end, core = 'Core_0') {
@@ -148,6 +149,19 @@ describe('buildTraceHealthResult', () => {
     const chk = byId(r, CHECK_CAPTURE_TRUNCATION)
     assert.equal(chk.severity, 'warning')
     assert.match(chk.summary, /ring buffer overflow/)
+  })
+
+  it('uses the shared trace-quality normalization', () => {
+    for (const value of [1, 'yes']) {
+      const trace = makeTrace({
+        segments: [seg(0, 10, 'Core_0')],
+        meta: { ringOverflow: value },
+      })
+      const warnings = collectTraceQualityWarnings(trace)
+      const chk = byId(buildTraceHealthResult(trace), CHECK_CAPTURE_TRUNCATION)
+      assert.equal(warnings.length, 1)
+      assert.equal(chk.summary, warnings[0])
+    }
   })
 
   it('treats an unknown timestamp unit as an error', () => {

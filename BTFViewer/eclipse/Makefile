@@ -14,6 +14,7 @@ PLUGIN_SOURCES := $(shell find $(PLUGIN)/src -name '*.java' -print)
 .PHONY: sync-viewer check-viewer package check-package clean-package
 
 sync-viewer: $(VIEWER)
+	mkdir -p $(dir $(EMBEDDED))
 	cp $(VIEWER) $(EMBEDDED)
 
 check-viewer:

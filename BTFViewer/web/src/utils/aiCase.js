@@ -141,9 +141,9 @@ export const AI_CONTEXT_MODE_SETTINGS_LINES = {
   ),
 }
 export const AI_CONTEXT_PROMPTS = {
-  [AI_CONTEXT_MODE_COMPACT]: "MODE: COMPACT\n- Fast triage; target 250\u2013500 answer tokens.\n- Use the scope summary and up to three actionable findings.\n- Use at most two evidence calls unless the user requests more work.\n- Do not run planning, graphs, simulation, optimization, memory, clustering, or\n  reports unless requested.\n- Preserve viewer state. Do not create diagrams unless requested.\n- If evidence is insufficient, return Inconclusive and name what is missing.\n- Still include concrete Evidence (names, values with units, jump:TIME when\n  known). Do not answer with a one-line summary only.\n- Output: Assessment; Evidence; Confidence/quality; Next check.",
-  [AI_CONTEXT_MODE_BALANCED]: "MODE: BALANCED\n- Default mode; target 600\u20131200 answer tokens.\n- Use relevant scoped findings and tables; fetch exact evidence when needed.\n- Test the leading explanation and one credible alternative.\n- Prefer at most four evidence calls for ad-hoc questions. Follow Preferred tools\n  on Start Investigation / template workflows even when that needs more calls.\n  Exceed the preference whenever another result could change the verdict.\n  Verify before a High-confidence causal conclusion.\n- Change viewer state only for an explicit action or a workflow that promises to\n  focus evidence.\n- Use one small diagram only when it materially improves understanding.\n- Write a full engineering answer: Verdict; Evidence with jump:TIME / values;\n  Interpretation; Alternative/falsification; Confidence/quality/coverage;\n  Next action. Do not over-compress into a stub.",
-  [AI_CONTEXT_MODE_FULL]: "MODE: FULL EVIDENCE\n- Use all relevant scoped evidence and compact investigation history.\n- Rank hypotheses for broad questions; skip planning for an explicit finding,\n  task, and window.\n- Build causal or dependency chains only as far as evidence supports.\n- Examine contradictions and credible alternatives. Assess sufficiency before\n  opening another branch; stop when more tools will not change the verdict.\n- Verify and challenge before a High-confidence root-cause conclusion.\n- Distinguish observed, derived, heuristic, and simulated results.\n- Preserve unrelated viewer marks. Use diagrams only for supported relationships.\n- State each material fact once. Return Inconclusive when evidence remains\n  incomplete or contradictory.\n- Target a thorough write-up (about 1000\u20132000 answer tokens) when evidence\n  supports it. Output: Scope; Verdict; Evidence chain with times/values;\n  Contradictions/alternatives; Root cause or leading explanation;\n  Confidence/quality/coverage; Requested mitigation; Next verification;\n  Viewer changes.",
+  [AI_CONTEXT_MODE_COMPACT]: 'MODE: COMPACT\n- Fast triage; target 250\u2013500 answer tokens.\n- Use the scope summary and up to three actionable findings.\n- Use at most two evidence calls unless the user requests more work.\n- Do not run planning, graphs, simulation, optimization, memory, clustering, or\n  reports unless requested.\n- Preserve viewer state. Do not create diagrams unless requested.\n- If evidence is insufficient, return Inconclusive and name what is missing.\n- Still include concrete Evidence (names, values with units, jump:TIME when\n  known). Do not answer with a one-line summary only.\n- Output: Assessment; Evidence; Confidence/quality; Next check.',
+  [AI_CONTEXT_MODE_BALANCED]: 'MODE: BALANCED\n- Default mode; target 600\u20131200 answer tokens.\n- Use relevant scoped findings and tables; fetch exact evidence when needed.\n- Test the leading explanation and one credible alternative.\n- Prefer at most four evidence calls for ad-hoc questions. Follow Preferred tools\n  on Start Investigation / template workflows even when that needs more calls.\n  Exceed the preference whenever another result could change the verdict.\n  Verify before a High-confidence causal conclusion.\n- Change viewer state only for an explicit action or a workflow that promises to\n  focus evidence.\n- Use one small diagram only when it materially improves understanding.\n- Write a full engineering answer: Verdict; Evidence with jump:TIME / values;\n  Interpretation; Alternative/falsification; Confidence/quality/coverage;\n  Next action. Do not over-compress into a stub.',
+  [AI_CONTEXT_MODE_FULL]: 'MODE: FULL EVIDENCE\n- Use all relevant scoped evidence and compact investigation history.\n- Rank hypotheses for broad questions; skip planning for an explicit finding,\n  task, and window.\n- Build causal or dependency chains only as far as evidence supports.\n- Examine contradictions and credible alternatives. Assess sufficiency before\n  opening another branch; stop when more tools will not change the verdict.\n- Verify and challenge before a High-confidence root-cause conclusion.\n- Distinguish observed, derived, heuristic, and simulated results.\n- Preserve unrelated viewer marks. Use diagrams only for supported relationships.\n- State each material fact once. Return Inconclusive when evidence remains\n  incomplete or contradictory.\n- Target a thorough write-up (about 1000\u20132000 answer tokens) when evidence\n  supports it. Output: Scope; Verdict; Evidence chain with times/values;\n  Contradictions/alternatives; Root cause or leading explanation;\n  Confidence/quality/coverage; Requested mitigation; Next verification;\n  Viewer changes.',
 }
 
 export const AI_LANGUAGE_PROMPT_TEMPLATE = (
@@ -1493,7 +1493,7 @@ export function falsificationChecks(finding = null) {
   const title = finding && typeof finding === 'object'
     ? String(finding.title || 'this finding')
     : 'the conclusion'
-  let checks = []
+  let checks
   let nextCheck = 'Inspect the strongest jump:TIME on the timeline'
   if (blob.includes('migrat') || blob.includes('thrash') || blob.includes('bounc')) {
     checks = [
@@ -2235,7 +2235,7 @@ export function validateExperiment(expected = {}, actual = {}) {
     const aN = a == null || a === '' ? null : Number(a)
     const eOk = eN != null && Number.isFinite(eN)
     const aOk = aN != null && Number.isFinite(aN)
-    let status = 'missing'
+    let status
     if (!eOk && !aOk) status = 'missing'
     else if (!eOk) status = 'unspecified'
     else if (!aOk) status = 'unmeasured'
@@ -2630,7 +2630,7 @@ export function applyExperimentToHypotheses(hypotheses = [], result = null) {
 }
 
 export function parseUserHistoricalKnowledge(raw) {
-  let items = []
+  let items
   if (Array.isArray(raw)) items = raw
   else {
     const text = String(raw || '').trim()
@@ -3551,4 +3551,3 @@ export function runOfflineBenchmark(dataset, { failUnder = 0 } = {}) {
     ok: failed.length === 0,
   }
 }
-

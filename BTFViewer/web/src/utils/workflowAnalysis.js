@@ -380,14 +380,6 @@ export function buildWorkflowAnalysisFindings({
   return enrichFindingsWithIds(findings)
 }
 
-function escHtml(v) {
-  return String(v)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
 /** @param {{severity: string, title: string, text: string}[]} findings */
 export function formatAnalysisFindingsText(findings, scopeSuffix = '', {
   triageState = null,

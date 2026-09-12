@@ -532,7 +532,7 @@ function annotateOp(inv, op, { traceHash, allowOtherTrace }) {
   return out
 }
 
-export function validateProposal(inv, proposal, { findings = null, allowOtherTrace = false } = {}) {
+export function validateProposal(inv, proposal, { findings: _findings = null, allowOtherTrace = false } = {}) {
   inv = loadInvestigation(inv)
   const traceHash = String((inv.trace_identity || {}).hash || '')
   const raw = proposal && typeof proposal === 'object' ? proposal : {}

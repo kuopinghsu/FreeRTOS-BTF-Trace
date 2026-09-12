@@ -3,10 +3,10 @@
  */
 
 import { bisectLeft, bisectRight } from './bisect.js'
-import { parseTaskName, taskLabelForMergeKey, taskReprGet, isIdleTaskName, taskMergeKey, taskDisplayName } from './colors.js'
+import { parseTaskName, taskLabelForMergeKey, taskReprGet, isIdleTaskName } from './colors.js'
 import { computeFindHits } from './findAnalysis.js'
 import { blockingTimeSamples, schedulingStats } from './statsAnalysis.js'
-import { segFullyInRange, segOverlapsRange } from './statsRange.js'
+import { segOverlapsRange } from './statsRange.js'
 import { formatMigrationGapTime, formatTime } from './timeFormat.js'
 import { prepareUxEvents } from './uxExplore.js'
 import { classifyLoadBalance, loadBalanceMetrics } from './loadBalanceGauge.js'
@@ -610,7 +610,7 @@ export function chordLabelNiceStep(raw) {
  */
 export function chordLabelStep(nCores, minPx = 0, spanPx = 0) {
   const n = Math.floor(Number(nCores) || 0)
-  let step = 1
+  let step
   if (n <= 16) step = 1
   else if (n <= 32) step = 2
   else if (n <= 64) step = 5
@@ -1641,7 +1641,7 @@ export function applyCorridorSort(model, sortBy = 'rate', descending = null) {
 export function applyCorridorDirectionFilter(model, mode = 'all', selected = null) {
   if (!model || mode === 'all' || !selected) return model
   const src = model.corridors || []
-  let corridors = src
+  let corridors
   if (mode === 'egress' && selected.fromCore) {
     corridors = src.filter(c => c.fromCore === selected.fromCore)
   } else if (mode === 'ingress' && selected.toCore) {
@@ -1904,7 +1904,7 @@ export function classifyCorridorConcern(corridor) {
   const best = candidates.find(c => c.score >= c.min)
   if (!best) return { id: 'none', label: 'None', detail: '' }
   const task = corridor.primaryTask
-  let detail = ''
+  let detail
   if (best.id === 'pingpong' && task) {
     detail = `${task.label} repeatedly moves between ${corridor.fromCore} and ${corridor.toCore}`
   } else if (best.id === 'burst') {

@@ -80,6 +80,8 @@ __pycache__
 # Web viewer build artifacts
 BTFViewer/web/node_modules/
 BTFViewer/web/dist/
+# Generated copy used by PDE development and Eclipse packaging.
+BTFViewer/eclipse/com.btfviewer.eclipse/web/btf_viewer.html
 
 # Build-tools-only Node deps (STATISTICS.md -> HTML math rendering)
 BTFViewer/scripts/node_modules/
@@ -96,4 +98,3 @@ BTFViewer/builds/mermaid-cache/
 BTFViewer/scripts/fonts/*.otf
 
 /BTFViewer/dist
-

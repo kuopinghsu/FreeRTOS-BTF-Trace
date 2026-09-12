@@ -12,7 +12,7 @@ export function snapToBoundary(trace, ns, nsPerPx, windowPx = 8) {
   let bestNs = ns
   let bestDist = window + 1
 
-  for (const [mk, segs] of trace.segByMergeKey || []) {
+  for (const [, segs] of trace.segByMergeKey || []) {
     const starts = []
     for (const s of segs) starts.push(s.start)
     if (!starts.length) continue

@@ -12,6 +12,8 @@
  * always produces the same result.
  */
 
+import { collectTraceQualityWarnings } from './traceQuality.js'
+
 export const STATUS_PASS = 'pass'
 export const STATUS_CAUTION = 'caution'
 export const STATUS_INSUFFICIENT = 'insufficient'
@@ -241,39 +243,8 @@ function checkSyncPairing(trace, formatNs) {
     })
 }
 
-function collectQualityWarnings(trace) {
-  const meta = trace?.meta || {}
-  const out = []
-  if (meta._versionWarning) out.push(String(meta._versionWarning).trim())
-  if (meta._version_warning) out.push(String(meta._version_warning).trim())
-  if (meta._traceQualityWarning) out.push(String(meta._traceQualityWarning).trim())
-  const flags = meta.traceQuality || meta.trace_quality
-  if (flags && typeof flags === 'object') {
-    if (flags.ringOverflow || flags.ring_overflow) out.push('Trace ring buffer overflow — oldest events may be missing.')
-    if (flags.taskTableOverflow || flags.task_table_overflow) out.push('Task table overflow — tracing was disabled for new tasks.')
-    if (flags.truncated) out.push('Trace was truncated before normal stop.')
-  } else if (typeof flags === 'string' && flags.trim()) {
-    out.push(flags.trim())
-  }
-  for (const key of ['ringOverflow', 'taskTableOverflow', 'truncated']) {
-    if (truthyMeta(meta[key])) {
-      if (key === 'ringOverflow') out.push('Trace ring buffer overflow — oldest events may be missing.')
-      if (key === 'taskTableOverflow') out.push('Task table overflow — tracing was disabled for new tasks.')
-      if (key === 'truncated') out.push('Trace was truncated before normal stop.')
-    }
-  }
-  if (meta.comment) {
-    const c = String(meta.comment).toLowerCase()
-    if (c.includes('overflow') || c.includes('truncat')) {
-      const line = String(meta.comment).trim()
-      if (!out.includes(line)) out.push(line)
-    }
-  }
-  return [...new Set(out)].filter(Boolean)
-}
-
 function checkTruncation(trace) {
-  const warnings = collectQualityWarnings(trace)
+  const warnings = collectTraceQualityWarnings(trace)
   if (!warnings.length) return null
   return mkCheck(CHECK_CAPTURE_TRUNCATION, 'warning', warnings.join(' '), {
     metricLimitations: [

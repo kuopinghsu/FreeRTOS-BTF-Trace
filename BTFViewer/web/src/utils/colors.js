@@ -115,8 +115,6 @@ function crc32(str) {
 const TASK_BRACKET_RE = /^\[((?:0[xX][0-9a-fA-F]+|\d+))\/((?:0[xX][0-9a-fA-F]+|\d+))\](.+)$/
 const TASK_SUFFIX_BRACKET_RE = /^(.+?)\[((?:0[xX][0-9a-fA-F]+|\d+))\]$/
 const TASK_SUFFIX_PAREN_RE = /^(.+?)\(((?:0[xX][0-9a-fA-F]+|\d+))\)$/
-/** @deprecated alias */
-const TASK_RE = TASK_BRACKET_RE
 // Matches: idle, idle0, idle 0, idle(0x...), idle 0(0x...), idle0(0x...)
 const IDLE_RE = /^idle(?:\s*(\d+))?\s*(?:\((?:0[xX][0-9a-fA-F]+|\d+)\))?$/i
 

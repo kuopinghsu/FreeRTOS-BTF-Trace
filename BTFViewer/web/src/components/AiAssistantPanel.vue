@@ -214,244 +214,252 @@
         <div
           class="ai-mermaid-zoom-body"
           :style="{ '--mm-scale': mermaidZoom.scale }"
-          v-html="mermaidZoom.html"
           @click="onMsgClick"
           @wheel.prevent="onMermaidZoomWheel"
+          v-html="mermaidZoom.html"
         />
         <p
           v-if="mermaidZoom.links"
           class="ai-mermaid-zoom-links"
-          v-html="mermaidZoom.links"
           @click="onMsgClick"
+          v-html="mermaidZoom.links"
         />
       </div>
     </div>
 
     <div class="ai-split">
-    <div class="ai-split-top">
-    <div
-      class="ai-guide"
-    >
-      <!-- BTFVIEWER_DESIGN_AND_AI_PROMPT_TODO §5/§15 — the AI guided stages are
+      <div class="ai-split-top">
+        <div
+          class="ai-guide"
+        >
+          <!-- BTFVIEWER_DESIGN_AND_AI_PROMPT_TODO §5/§15 — the AI guided stages are
            an internal prompt-orchestration detail (`guideStage`), not a
            user-facing workflow. The stage stepper rail is not shown; the
            Investigation Notebook is the only visible persistent-investigation
            model. -->
-      <div
-        v-if="guideStage === 'idle' && !messages.length"
-        class="ai-start-inv"
-      >
-        <button
-          type="button"
-          class="ai-btn primary"
-          :disabled="busy || !aiEnabled"
-          title="Triage findings, scope the top issue, gather evidence, and verify the cause"
-          @click="startInvestigation"
-        >
-          Start Investigation
-        </button>
-      </div>
-      <div
-        v-else-if="issueCardText"
-        class="ai-issue-card"
-      >{{ issueCardText }}</div>
-      <div
-        v-if="guideStage === 'investigate' || guideStage === 'verify'"
-        class="ai-verify-hint"
-      >
-        {{ verifyHint }}
-      </div>
-      <div
-        v-if="estimateBanner"
-        class="ai-estimate-banner"
-      >
-        {{ estimateBannerText }}
-      </div>
-    </div>
-    <div
-      ref="logRef"
-      class="ai-log"
-      @contextmenu.prevent="onLogContextMenu"
-    >
-      <div
-        v-if="!messages.length"
-        class="ai-empty"
-      >
-        <div class="ai-intent-context">
-          <div><strong>Trace:</strong> {{ intentContext.trace }}</div>
-          <div><strong>Scope:</strong> {{ intentContext.scope }}</div>
-          <div><strong>Filters:</strong> {{ intentContext.filters }}</div>
-        </div>
-        <div class="ai-intent-prompt">What do you want to investigate?</div>
-        <div
-          v-for="group in intentTemplateGroups"
-          :key="group.label"
-          class="ai-intent-group"
-        >
-          <div class="ai-intent-group-label">{{ group.label }}</div>
-          <div class="ai-intent-chips">
-            <button
-              v-for="t in group.templates"
-              :key="t.id"
-              type="button"
-              class="ai-chip"
-              :disabled="busy || !aiEnabled || templateDisabled(t)"
-              :title="templateTitle(t)"
-              @click="onTemplate(t)"
-            >
-              {{ t.label }}
-            </button>
-          </div>
-        </div>
-        <span
-          class="ai-empty-hint"
-          title="Replies use the current Analysis Findings for the Statistics scope (limit to C1–Cn by setting timeline cursors). Configure the endpoint in Settings → AI."
-        >
-          Replies use the current Analysis Findings. Set the endpoint in Settings → AI.
-        </span>
-      </div>
-      <template
-        v-for="(m, i) in messages"
-        :key="i"
-      >
-      <div
-        v-if="!queryHidden(i)"
-        class="ai-msg"
-        :class="m.role"
-      >
-        <div
-          v-if="m.role === 'evidence'"
-          class="ai-msg evidence ai-ev-panel"
-        >
-          <div class="ai-ev-panel-head">
-            <div class="ai-msg-role">
-              {{ aiRoleLabel(m.role, responseLanguage) }}
-            </div>
+          <div
+            v-if="guideStage === 'idle' && !messages.length"
+            class="ai-start-inv"
+          >
             <button
               type="button"
-              class="ai-ev-panel-toggle"
-              :title="evidenceSubfoldsExpanded ? evidenceCollapseAllLabel : evidenceExpandAllLabel"
-              :aria-label="evidenceSubfoldsExpanded ? evidenceCollapseAllLabel : evidenceExpandAllLabel"
-              :aria-expanded="evidenceSubfoldsExpanded"
-              @click="toggleEvidenceSubfolds"
+              class="ai-btn primary"
+              :disabled="busy || !aiEnabled"
+              title="Triage findings, scope the top issue, gather evidence, and verify the cause"
+              @click="startInvestigation"
             >
-              {{ evidenceSubfoldsExpanded ? '⊟' : '⊞' }}
+              Start Investigation
             </button>
           </div>
           <div
-            class="ai-msg-body markdown ai-ev-panel-body"
-            v-html="formatMessage(m.role, m.content)"
-            @click="onMsgClick"
-          />
-        </div>
-        <template v-else>
-          <div class="ai-msg-role">
-            {{ aiRoleLabel(m.role, responseLanguage) }}
+            v-else-if="issueCardText"
+            class="ai-issue-card"
+          >
+            {{ issueCardText }}
           </div>
-          <!-- AI_RESPONSE_FLOW_TODO: one clean block per query — status line +
-               collapsed Tool usage summary, right before the final answer. -->
-          <template v-if="queryMeta(i)">
-            <div class="ai-analysis-line">
-              ✨ {{ analysisStatusText(queryMeta(i).elapsedS) }}
+          <div
+            v-if="guideStage === 'investigate' || guideStage === 'verify'"
+            class="ai-verify-hint"
+          >
+            {{ verifyHint }}
+          </div>
+          <div
+            v-if="estimateBanner"
+            class="ai-estimate-banner"
+          >
+            {{ estimateBannerText }}
+          </div>
+        </div>
+        <div
+          ref="logRef"
+          class="ai-log"
+          @contextmenu.prevent="onLogContextMenu"
+        >
+          <div
+            v-if="!messages.length"
+            class="ai-empty"
+          >
+            <div class="ai-intent-context">
+              <div><strong>Trace:</strong> {{ intentContext.trace }}</div>
+              <div><strong>Scope:</strong> {{ intentContext.scope }}</div>
+              <div><strong>Filters:</strong> {{ intentContext.filters }}</div>
+            </div>
+            <div class="ai-intent-prompt">
+              What do you want to investigate?
             </div>
             <div
-              v-if="queryMeta(i).tools.length"
-              class="ai-tool-card ai-tool-usage"
+              v-for="group in intentTemplateGroups"
+              :key="group.label"
+              class="ai-intent-group"
             >
-              <details class="ai-tool-fold">
-                <summary>{{ toolUsageSummary(queryMeta(i)) }}</summary>
-                <div
-                  v-for="g in toolUsageGroups(queryMeta(i))"
-                  :key="g.name"
-                  class="ai-tool-detail"
+              <div class="ai-intent-group-label">
+                {{ group.label }}
+              </div>
+              <div class="ai-intent-chips">
+                <button
+                  v-for="t in group.templates"
+                  :key="t.id"
+                  type="button"
+                  class="ai-chip"
+                  :disabled="busy || !aiEnabled || templateDisabled(t)"
+                  :title="templateTitle(t)"
+                  @click="onTemplate(t)"
                 >
-                  <p>{{ g.name }} ×{{ g.count }}<span
-                    v-if="g.failed"
-                    class="ai-tool-st"
-                  > ({{ g.failed }} {{ failedWord }})</span></p>
-                  <p
-                    v-if="g.brief"
-                    class="ai-tool-usage-brief"
-                  >
-                    {{ g.brief }}
-                  </p>
-                </div>
-              </details>
-              <button
-                v-if="queryMeta(i).batchIds.length"
-                type="button"
-                class="ai-link-btn"
-                @click="undoMergedTools(queryMeta(i).batchIds)"
-              >
-                Undo
-              </button>
+                  {{ t.label }}
+                </button>
+              </div>
             </div>
-          </template>
-          <div
-            class="ai-msg-body"
-            :class="{ markdown: m.role === 'assistant' }"
-            v-html="formatMessage(m.role, m.content)"
-            @click="onMsgClick"
-          />
-        </template>
-        <button
-          v-if="m.role === 'assistant' && m.requestContext"
-          type="button"
-          class="ai-link-btn ai-view-context"
-          @click="showRequestContext(m)"
-        >
-          View request context
-        </button>
-        <!-- No per-round tool cards in the chat: GUI actions auto-apply and the
+            <span
+              class="ai-empty-hint"
+              title="Replies use the current Analysis Findings for the Statistics scope (limit to C1–Cn by setting timeline cursors). Configure the endpoint in Settings → AI."
+            >
+              Replies use the current Analysis Findings. Set the endpoint in Settings → AI.
+            </span>
+          </div>
+          <template
+            v-for="(m, i) in messages"
+            :key="i"
+          >
+            <div
+              v-if="!queryHidden(i)"
+              class="ai-msg"
+              :class="m.role"
+            >
+              <div
+                v-if="m.role === 'evidence'"
+                class="ai-msg evidence ai-ev-panel"
+              >
+                <div class="ai-ev-panel-head">
+                  <div class="ai-msg-role">
+                    {{ aiRoleLabel(m.role, responseLanguage) }}
+                  </div>
+                  <button
+                    type="button"
+                    class="ai-ev-panel-toggle"
+                    :title="evidenceSubfoldsExpanded ? evidenceCollapseAllLabel : evidenceExpandAllLabel"
+                    :aria-label="evidenceSubfoldsExpanded ? evidenceCollapseAllLabel : evidenceExpandAllLabel"
+                    :aria-expanded="evidenceSubfoldsExpanded"
+                    @click="toggleEvidenceSubfolds"
+                  >
+                    {{ evidenceSubfoldsExpanded ? '⊟' : '⊞' }}
+                  </button>
+                </div>
+                <div
+                  class="ai-msg-body markdown ai-ev-panel-body"
+                  @click="onMsgClick"
+                  v-html="formatMessage(m.role, m.content)"
+                />
+              </div>
+              <template v-else>
+                <div class="ai-msg-role">
+                  {{ aiRoleLabel(m.role, responseLanguage) }}
+                </div>
+                <!-- AI_RESPONSE_FLOW_TODO: one clean block per query — status line +
+               collapsed Tool usage summary, right before the final answer. -->
+                <template v-if="queryMeta(i)">
+                  <div class="ai-analysis-line">
+                    ✨ {{ analysisStatusText(queryMeta(i).elapsedS) }}
+                  </div>
+                  <div
+                    v-if="queryMeta(i).tools.length"
+                    class="ai-tool-card ai-tool-usage"
+                  >
+                    <details class="ai-tool-fold">
+                      <summary>{{ toolUsageSummary(queryMeta(i)) }}</summary>
+                      <div
+                        v-for="g in toolUsageGroups(queryMeta(i))"
+                        :key="g.name"
+                        class="ai-tool-detail"
+                      >
+                        <p>
+                          {{ g.name }} ×{{ g.count }}<span
+                            v-if="g.failed"
+                            class="ai-tool-st"
+                          > ({{ g.failed }} {{ failedWord }})</span>
+                        </p>
+                        <p
+                          v-if="g.brief"
+                          class="ai-tool-usage-brief"
+                        >
+                          {{ g.brief }}
+                        </p>
+                      </div>
+                    </details>
+                    <button
+                      v-if="queryMeta(i).batchIds.length"
+                      type="button"
+                      class="ai-link-btn"
+                      @click="undoMergedTools(queryMeta(i).batchIds)"
+                    >
+                      Undo
+                    </button>
+                  </div>
+                </template>
+                <div
+                  class="ai-msg-body"
+                  :class="{ markdown: m.role === 'assistant' }"
+                  @click="onMsgClick"
+                  v-html="formatMessage(m.role, m.content)"
+                />
+              </template>
+              <button
+                v-if="m.role === 'assistant' && m.requestContext"
+                type="button"
+                class="ai-link-btn ai-view-context"
+                @click="showRequestContext(m)"
+              >
+                View request context
+              </button>
+              <!-- No per-round tool cards in the chat: GUI actions auto-apply and the
              only tool surface is the one "Tool Usage" block on completion
              (queryMeta above). Live progress shows in the status bar. -->
-      </div>
-      </template>
-    </div>
+            </div>
+          </template>
+        </div>
 
-    <div
-      v-if="investigationPlan"
-      class="ai-plan-status"
-      :title="planStatusText"
-    >
-      {{ planStatusText }}
-    </div>
-
-    <div class="ai-templates">
-      <button
-        v-for="t in visibleTemplates"
-        :key="t.id"
-        type="button"
-        class="ai-tpl-btn"
-        :class="{
-          gray: templateDisabled(t),
-          suggested: t.id === suggestedPrimaryId && !templateDisabled(t),
-        }"
-        :title="templateTitle(t)"
-        :disabled="busy || !aiEnabled || templateDisabled(t)"
-        @click="onTemplate(t)"
-      >
-        {{ t.label }}
-      </button>
-      <div class="ai-more-wrap">
-        <button
-          ref="moreBtnEl"
-          type="button"
-          class="ai-tpl-btn"
-          title="Uses Analysis Findings for the current Statistics scope. Configure the endpoint in Settings → AI."
-          @click="toggleMore"
+        <div
+          v-if="investigationPlan"
+          class="ai-plan-status"
+          :title="planStatusText"
         >
-          More…
-        </button>
-      </div>
-    </div>
-    <p
-      v-if="inlinePrerequisite"
-      class="ai-tpl-prereq"
-    >
-      {{ inlinePrerequisite }}
-    </p>
-    <Teleport to="body">
+          {{ planStatusText }}
+        </div>
+
+        <div class="ai-templates">
+          <button
+            v-for="t in visibleTemplates"
+            :key="t.id"
+            type="button"
+            class="ai-tpl-btn"
+            :class="{
+              gray: templateDisabled(t),
+              suggested: t.id === suggestedPrimaryId && !templateDisabled(t),
+            }"
+            :title="templateTitle(t)"
+            :disabled="busy || !aiEnabled || templateDisabled(t)"
+            @click="onTemplate(t)"
+          >
+            {{ t.label }}
+          </button>
+          <div class="ai-more-wrap">
+            <button
+              ref="moreBtnEl"
+              type="button"
+              class="ai-tpl-btn"
+              title="Uses Analysis Findings for the current Statistics scope. Configure the endpoint in Settings → AI."
+              @click="toggleMore"
+            >
+              More…
+            </button>
+          </div>
+        </div>
+        <p
+          v-if="inlinePrerequisite"
+          class="ai-tpl-prereq"
+        >
+          {{ inlinePrerequisite }}
+        </p>
+        <Teleport to="body">
           <div
             v-if="moreOpen"
             ref="moreMenuEl"
@@ -517,77 +525,77 @@
               </button>
             </div>
           </div>
-    </Teleport>
+        </Teleport>
 
-    <div
-      v-if="toolBarFallback"
-      class="ai-tool-bar"
-    >
-      <button
-        type="button"
-        class="ai-link-btn"
-        @click="undoBatch(appliedBatchId)"
-      >
-        Undo last actions
-      </button>
-    </div>
-    </div>
-
-    <div
-      class="ai-split-handle"
-      title="Drag to resize the input box"
-      @mousedown.prevent="onSplitPointerDown"
-    />
-
-    <div
-      class="ai-split-bottom"
-      :style="{ height: `${splitBottom}px` }"
-    >
-    <div class="ai-composer">
-      <textarea
-        v-model="draft"
-        class="ai-input"
-        rows="3"
-        placeholder="Ask about this trace… (Enter to send, Shift+Enter for a new line)"
-        :disabled="busy || !aiEnabled"
-        @keydown.enter.exact.prevent="send()"
-      />
-      <div class="ai-composer-icons">
-        <button
-          type="button"
-          class="ai-icon-btn primary"
-          :title="busy ? 'Stop the current query' : 'Send the question (Enter; Shift+Enter for a new line)'"
-          :aria-label="busy ? 'Stop' : 'Send'"
-          :disabled="!busy && (!aiEnabled || !draft.trim())"
-          @click="onComposerAction"
+        <div
+          v-if="toolBarFallback"
+          class="ai-tool-bar"
         >
-          <svg
-            v-if="busy"
-            viewBox="0 0 16 16"
-            width="14"
-            height="14"
-            fill="currentColor"
-            aria-hidden="true"
+          <button
+            type="button"
+            class="ai-link-btn"
+            @click="undoBatch(appliedBatchId)"
           >
-            <path d="M5 5h6v6H5z" />
-          </svg>
-          <svg
-            v-else
-            viewBox="0 0 16 16"
-            width="14"
-            height="14"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fill-rule="evenodd"
-              d="M8 2.5l4.5 5H9.25v6.5h-2.5V7.5H3.5L8 2.5z"
-            />
-          </svg>
-        </button>
+            Undo last actions
+          </button>
+        </div>
       </div>
-    </div>
-    </div>
+
+      <div
+        class="ai-split-handle"
+        title="Drag to resize the input box"
+        @mousedown.prevent="onSplitPointerDown"
+      />
+
+      <div
+        class="ai-split-bottom"
+        :style="{ height: `${splitBottom}px` }"
+      >
+        <div class="ai-composer">
+          <textarea
+            v-model="draft"
+            class="ai-input"
+            rows="3"
+            placeholder="Ask about this trace… (Enter to send, Shift+Enter for a new line)"
+            :disabled="busy || !aiEnabled"
+            @keydown.enter.exact.prevent="send()"
+          />
+          <div class="ai-composer-icons">
+            <button
+              type="button"
+              class="ai-icon-btn primary"
+              :title="busy ? 'Stop the current query' : 'Send the question (Enter; Shift+Enter for a new line)'"
+              :aria-label="busy ? 'Stop' : 'Send'"
+              :disabled="!busy && (!aiEnabled || !draft.trim())"
+              @click="onComposerAction"
+            >
+              <svg
+                v-if="busy"
+                viewBox="0 0 16 16"
+                width="14"
+                height="14"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M5 5h6v6H5z" />
+              </svg>
+              <svg
+                v-else
+                viewBox="0 0 16 16"
+                width="14"
+                height="14"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path
+                  fill-rule="evenodd"
+                  d="M8 2.5l4.5 5H9.25v6.5h-2.5V7.5H3.5L8 2.5z"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div
@@ -730,13 +738,11 @@ import {
   parseBtfJumpHref,
   parseBtfRangeHref,
   parseBtfStatsHref,
-  summariseToolCall,
   toolResultMessage,
   validateToolCall,
   canonicalToolName,
   looksLikeNextstepPseudoTool,
   AI_VIEWER_TOOL_NAMES,
-  btfJumpHref,
 } from '../utils/aiTools.js'
 import { isTraceQueryTool } from '../utils/aiToolUsage.js'
 import {
@@ -747,7 +753,6 @@ import {
 } from '../utils/aiResponseFlow.js'
 import {
   INVESTIGATION_MODE_LABELS,
-  INVESTIGATION_MODES,
   accumulateCost,
   buildValidationCatalog,
   builtinInvestigationTemplates,
@@ -790,11 +795,9 @@ import {
   emptyInvestigationCase,
   validateAiResponse,
   VALIDATE_EXPERIMENT_PROMPT,
-  GUIDED_STAGES,
   GUIDED_STAGE_LABELS,
   ESTIMATE_BANNER,
   VERIFY_HINT,
-  guideStageNeedles,
   investigationGuideStage,
   investigationIssueCard,
   formatInvestigationIssueCard,
@@ -815,7 +818,6 @@ import {
   formatEvidencePanelMarkdown,
   formatSnsFallbackReply,
   ensureNextstepLines,
-  evidencePanelSummaryLine,
   evidencePanelToggleLabel,
   syncEvidenceSubfolds,
   mergeEvidencePanelPayload,
@@ -1003,12 +1005,11 @@ function bumpEvidence() {
 const planStatusText = computed(() =>
   formatInvestigationPlanStatus(investigationPlan.value, props.responseLanguage))
 
-const guidedStages = GUIDED_STAGES
 const verifyHint = VERIFY_HINT
 const estimateBannerText = ESTIMATE_BANNER
 const guideStage = computed(() => {
   void evidenceRev.value
-  let cursors = 0
+  let cursors
   try {
     const gui = typeof props.getGuiState === 'function' ? (props.getGuiState() || {}) : {}
     cursors = (gui.cursors || []).filter(t => t != null && t !== '').length
@@ -1030,31 +1031,8 @@ const estimateBanner = computed(() => {
   void evidenceRev.value
   return guideStage.value === 'experiment'
 })
-function stageDone(sid) {
-  return GUIDED_STAGES.indexOf(sid) < GUIDED_STAGES.indexOf(guideStage.value)
-}
-function stageMark(sid) {
-  if (stageDone(sid)) return '✓'
-  if (guideStage.value === sid) return '●'
-  return '○'
-}
 function guidedStageLabel(sid) {
   return GUIDED_STAGE_LABELS[sid] || sid
-}
-function jumpGuideStage(sid) {
-  const needles = guideStageNeedles(sid).map(n => String(n).toLowerCase())
-  const el = logRef.value
-  if (!el || !needles.length) return
-  const nodes = el.querySelectorAll('.ai-msg')
-  for (let i = nodes.length - 1; i >= 0; i -= 1) {
-    const t = String(nodes[i].innerText || '').toLowerCase()
-    if (needles.some(n => t.includes(n))) {
-      nodes[i].scrollIntoView({ block: 'nearest' })
-      nodes[i].classList.add('ai-msg-flash')
-      window.setTimeout(() => nodes[i].classList.remove('ai-msg-flash'), 1400)
-      return
-    }
-  }
 }
 
 async function startInvestigation() {
@@ -1077,13 +1055,6 @@ function syncEvidenceLogEntry(data, language = props.responseLanguage) {
 function toggleEvidenceSubfolds() {
   evidenceSubfoldsExpanded.value = !evidenceSubfoldsExpanded.value
   nextTick(() => syncEvidenceSubfolds(logRef.value, evidenceSubfoldsExpanded.value))
-}
-
-function removeEvidenceLogEntry() {
-  const before = messages.value.length
-  messages.value = messages.value.filter(m => m.role !== 'evidence')
-  if (messages.value.length !== before) scrollLog()
-  bumpEvidence()
 }
 
 function updateEvidenceFromToolResult(name, res) {
@@ -1156,7 +1127,7 @@ function addFindingToInvestigationCase(finding) {
 function attachResponseValidation(text) {
   const src = String(text || '').trim()
   if (!src) return
-  let ctx = {}
+  let ctx
   try {
     ctx = normalizeAiContext(props.getContext?.() || {})
   } catch {
@@ -1562,14 +1533,10 @@ function onSignInCta() {
   emit('openSettings')
 }
 
-function evidencePanelSummary(content) {
-  return evidencePanelSummaryLine(content)
-}
-
 function formatMessage(role, text) {
   try {
     return formatAiMessageHtml(role, text, { dark: props.darkMode !== false })
-  } catch (err) {
+  } catch {
     return `<p>${String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</p>`
   }
 }
@@ -2481,7 +2448,7 @@ function completeFinalAssistantReply(text) {
   // a wrap-up from Evidence so the log is never tools + Evidence only.
   const source = String(text || '').trim() || snsFallbackReply()
   if (source) {
-    let content = source
+    let content
     try {
       content = finalizeAssistantText(source)
     } catch {
@@ -2894,6 +2861,7 @@ defineExpose({
   askTemplate,
   askCompare,
   askValidateExperiment,
+  onInvestigationMode,
   clear,
   saveConversationAs,
   scrollLog,

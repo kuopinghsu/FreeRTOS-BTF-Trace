@@ -26,7 +26,9 @@
           aria-label="Close"
           @pointerdown.stop
           @click="emit('close')"
-        >×</button>
+        >
+          ×
+        </button>
       </div>
       <AnalysisContextStrip
         :context="analysisContext"
@@ -126,11 +128,15 @@
               ]"
               @click="selectedId = row.id || ''"
             >
-              <div class="finding-title">{{ severityGlyph(row) }}{{ clusterPrefix(row) }}{{ row.observation || row.title }}</div>
+              <div class="finding-title">
+                {{ severityGlyph(row) }}{{ clusterPrefix(row) }}{{ row.observation || row.title }}
+              </div>
               <div
                 v-if="rowMeta(row)"
                 class="finding-meta"
-              >{{ rowMeta(row) }}</div>
+              >
+                {{ rowMeta(row) }}
+              </div>
             </li>
           </template>
         </ul>
@@ -159,27 +165,41 @@
               class="analysis-detail-title"
               :class="[`sev-${selectedFinding.severity || 'info'}`,
                        { 'sev-ok': selectedFinding.id === 'load_balance_ok' }]"
-            >{{ clusterPrefix(selectedFinding) }}{{ selectedFinding.observation || selectedFinding.title }}</div>
-            <div class="analysis-detail-body">{{ selectedFinding.why_it_matters || selectedFinding.text }}</div>
+            >
+              {{ clusterPrefix(selectedFinding) }}{{ selectedFinding.observation || selectedFinding.title }}
+            </div>
+            <div class="analysis-detail-body">
+              {{ selectedFinding.why_it_matters || selectedFinding.text }}
+            </div>
             <div
               v-if="selectedFinding.evidence_strength_label"
               class="analysis-detail-meta"
-            >Evidence strength: {{ selectedFinding.evidence_strength_label }}</div>
+            >
+              Evidence strength: {{ selectedFinding.evidence_strength_label }}
+            </div>
             <div
               v-if="selectedFinding.evidence_text"
               class="analysis-detail-meta mono"
-            >Evidence: {{ selectedFinding.evidence_text }}</div>
+            >
+              Evidence: {{ selectedFinding.evidence_text }}
+            </div>
             <div
               v-if="selectedFinding.check_next"
               class="analysis-detail-checknext"
-            >Check next: {{ selectedFinding.check_next }}</div>
+            >
+              Check next: {{ selectedFinding.check_next }}
+            </div>
             <div
               v-if="dismissReason(selectedFinding)"
               class="analysis-detail-meta italic"
-            >Dismissed: {{ dismissReason(selectedFinding) }}</div>
+            >
+              Dismissed: {{ dismissReason(selectedFinding) }}
+            </div>
 
             <hr class="analysis-detail-rule">
-            <div class="analysis-scope-text">{{ scopeHint }}</div>
+            <div class="analysis-scope-text">
+              {{ scopeHint }}
+            </div>
             <div class="analysis-detail-actions">
               <button
                 type="button"
@@ -217,20 +237,26 @@
                 class="analysis-btn"
                 :disabled="!selectedFinding?.id"
                 @click="toggleDone"
-              >{{ isDone ? 'Undo' : 'Done' }}</button>
+              >
+                {{ isDone ? 'Undo' : 'Done' }}
+              </button>
               <button
                 type="button"
                 class="analysis-btn"
                 :disabled="!selectedFinding?.id"
                 @click="toggleDismiss"
-              >{{ isDismissed ? 'Restore' : 'Dismiss…' }}</button>
+              >
+                {{ isDismissed ? 'Restore' : 'Dismiss…' }}
+              </button>
               <button
                 type="button"
                 class="analysis-btn"
                 :disabled="!selectedFinding?.id"
                 title="Add this finding as an observation in the Investigation notebook"
                 @click="addToInvestigation"
-              >Add to investigation</button>
+              >
+                Add to investigation
+              </button>
             </div>
           </template>
         </div>
@@ -283,11 +309,34 @@
         :style="askAiMenuStyle"
         @click.stop
       >
-        <button type="button" class="analysis-popup-item" role="menuitem" @click="askAi('findings')">Query findings…</button>
-        <button type="button" class="analysis-popup-item" role="menuitem" @click="askAi('investigate')">Investigate…</button>
-        <button type="button" class="analysis-popup-item" role="menuitem" @click="askAi({ template: 'verify', findingId: selectedId })">Verify…</button>
+        <button
+          type="button"
+          class="analysis-popup-item"
+          role="menuitem"
+          @click="askAi('findings')"
+        >
+          Query findings…
+        </button>
+        <button
+          type="button"
+          class="analysis-popup-item"
+          role="menuitem"
+          @click="askAi('investigate')"
+        >
+          Investigate…
+        </button>
+        <button
+          type="button"
+          class="analysis-popup-item"
+          role="menuitem"
+          @click="askAi({ template: 'verify', findingId: selectedId })"
+        >
+          Verify…
+        </button>
         <div class="analysis-popup-group">
-          <div class="analysis-popup-label">Explain</div>
+          <div class="analysis-popup-label">
+            Explain
+          </div>
           <button
             v-for="lv in explainLevels"
             :key="lv.id"
@@ -295,9 +344,18 @@
             class="analysis-popup-item"
             role="menuitem"
             @click="explainFinding(lv.id)"
-          >{{ lv.label }}</button>
+          >
+            {{ lv.label }}
+          </button>
         </div>
-        <button type="button" class="analysis-popup-item" role="menuitem" @click="askAi({ template: 'auto_investigate', findingId: selectedId })">Auto investigate…</button>
+        <button
+          type="button"
+          class="analysis-popup-item"
+          role="menuitem"
+          @click="askAi({ template: 'auto_investigate', findingId: selectedId })"
+        >
+          Auto investigate…
+        </button>
       </div>
       <div
         v-if="moreOpen"
@@ -307,9 +365,30 @@
         :style="moreMenuStyle"
         @click.stop
       >
-        <button type="button" class="analysis-popup-item" role="menuitem" @click="moreAction('save-recipe')">Save recipe…</button>
-        <button type="button" class="analysis-popup-item" role="menuitem" @click="moreAction('save-story')">Story…</button>
-        <button type="button" class="analysis-popup-item" role="menuitem" @click="moreAction('save-text')">Save as text…</button>
+        <button
+          type="button"
+          class="analysis-popup-item"
+          role="menuitem"
+          @click="moreAction('save-recipe')"
+        >
+          Save recipe…
+        </button>
+        <button
+          type="button"
+          class="analysis-popup-item"
+          role="menuitem"
+          @click="moreAction('save-story')"
+        >
+          Story…
+        </button>
+        <button
+          type="button"
+          class="analysis-popup-item"
+          role="menuitem"
+          @click="moreAction('save-text')"
+        >
+          Save as text…
+        </button>
       </div>
     </Teleport>
   </div>

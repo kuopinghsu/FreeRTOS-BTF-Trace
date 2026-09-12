@@ -20,7 +20,7 @@
 import { hitTestSti, hitTestRow, hitTestStiVertical, hitTestColumn,
          hitTestSegment, hitTestSegmentVertical,
          findNearestCursorIndex, findNearestMark,
-         RULER_H, RULER_W, HEADER_H, COL_W } from './TimelineRenderer.js'
+         RULER_H, RULER_W, HEADER_H } from './TimelineRenderer.js'
 import { wheelGesturePlan, applyWheelPlanToViewport } from '../utils/viewportWheel.js'
 import { taskMergeKey } from '../utils/colors.js'
 import { snapToBoundary } from '../utils/snapBoundary.js'
@@ -975,4 +975,3 @@ export class InteractionHandler {
     this._canvas.style.cursor = 'crosshair'
   }
 }
-

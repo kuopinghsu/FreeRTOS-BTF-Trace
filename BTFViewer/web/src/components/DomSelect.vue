@@ -79,10 +79,9 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'change'])
 const attrs = useAttrs()
-const passthroughAttrs = computed(() => {
-  const { class: _cls, ...rest } = attrs
-  return rest
-})
+const passthroughAttrs = computed(() => Object.fromEntries(
+  Object.entries(attrs).filter(([key]) => key !== 'class'),
+))
 
 const rootEl = ref(null)
 const triggerEl = ref(null)

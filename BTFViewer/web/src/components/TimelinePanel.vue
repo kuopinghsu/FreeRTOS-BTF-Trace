@@ -6,8 +6,8 @@
   >
     <!-- Left: sticky label column (horizontal mode only) -->
     <LabelColumn
-      ref="labelColRef"
       v-if="orientation === 'h'"
+      ref="labelColRef"
       :key="options.layoutRev"
       :trace="trace"
       :label-width="labelWidth"
@@ -36,8 +36,8 @@
 
     <!-- Top: column headers (vertical mode — sibling above canvas, not an overlay) -->
     <ColumnHeaderRow
-      ref="headerRowRef"
       v-if="orientation === 'v' && trace"
+      ref="headerRowRef"
       :key="options.layoutRev"
       :column-layout="cachedColumnLayout"
       :scroll-x="viewport.scrollX"
@@ -64,8 +64,14 @@
       ref="canvasWrapEl"
       class="canvas-wrap"
     >
-      <div ref="pixiHostEl" class="pixi-host" />
-      <canvas ref="canvasEl" class="chrome-canvas" />
+      <div
+        ref="pixiHostEl"
+        class="pixi-host"
+      />
+      <canvas
+        ref="canvasEl"
+        class="chrome-canvas"
+      />
       <!-- Overlay canvas: hover line only — redraws without triggering a full repaint -->
       <canvas
         ref="overlayEl"
@@ -94,181 +100,181 @@
           @contextmenu.prevent.stop
           @mouseleave="contextMenu.visible = false"
         >
-        <div
-          class="ctx-item"
-          :class="{ disabled: !hasMarks }"
-          :title="hasMarks
-            ? 'Clear all cursors, bookmarks, and annotations'
-            : 'No cursors, bookmarks, or annotations to clear'"
-          @click="onCtxClearAllMarks"
-        >
-          Clear all marks
-        </div>
-        <div
-          class="ctx-sep"
-          role="separator"
-        />
-        <template v-if="contextMenu.segment">
           <div
             class="ctx-item"
-            @click="onCtxCopyTaskName"
+            :class="{ disabled: !hasMarks }"
+            :title="hasMarks
+              ? 'Clear all cursors, bookmarks, and annotations'
+              : 'No cursors, bookmarks, or annotations to clear'"
+            @click="onCtxClearAllMarks"
           >
-            Copy task name{{ ctxSegmentTaskName ? `  "${ctxSegmentTaskName}"` : '' }}
+            Clear all marks
           </div>
+          <div
+            class="ctx-sep"
+            role="separator"
+          />
+          <template v-if="contextMenu.segment">
+            <div
+              class="ctx-item"
+              @click="onCtxCopyTaskName"
+            >
+              Copy task name{{ ctxSegmentTaskName ? `  "${ctxSegmentTaskName}"` : '' }}
+            </div>
+            <div
+              class="ctx-item"
+              @click="onCtxZoomToSegment"
+            >
+              Zoom to this segment
+            </div>
+            <div
+              class="ctx-item"
+              @click="onCtxSelectInLegend"
+            >
+              Select in Legend
+            </div>
+            <div
+              class="ctx-item"
+              :class="{ disabled: !aiFeatureEnabled }"
+              :title="aiFeatureEnabled
+                ? ''
+                : 'Enable AI Assistant in Settings → AI'"
+              @click="onCtxAskAiEvent"
+            >
+              Ask AI about this event
+            </div>
+            <div
+              class="ctx-sep"
+              role="separator"
+            />
+          </template>
           <div
             class="ctx-item"
-            @click="onCtxZoomToSegment"
+            @click="onCtxPlaceCursor"
           >
-            Zoom to this segment
+            Place cursor here{{ ctxTimeLabel ? `  (${ctxTimeLabel})` : '' }}
           </div>
           <div
+            v-if="hasPlacedCursors"
             class="ctx-item"
-            @click="onCtxSelectInLegend"
+            @click="onCtxRemoveNearestCursor"
           >
-            Select in Legend
+            Remove nearest cursor
           </div>
           <div
+            v-if="hasPlacedCursors"
+            class="ctx-item"
+            @click="onCtxClearCursors"
+          >
+            Clear all cursors
+          </div>
+          <div
+            v-if="hasTwoCursors"
             class="ctx-item"
             :class="{ disabled: !aiFeatureEnabled }"
             :title="aiFeatureEnabled
               ? ''
               : 'Enable AI Assistant in Settings → AI'"
-            @click="onCtxAskAiEvent"
+            @click="onCtxExplainRegion"
           >
-            Ask AI about this event
+            Explain this region with AI
+          </div>
+          <div
+            v-if="hasTwoCursors"
+            class="ctx-item"
+            title="Bookmark the C1–Cn range as an observation in the Investigation notebook"
+            @click="onCtxAddRegionToInvestigation"
+          >
+            Add region to investigation
           </div>
           <div
             class="ctx-sep"
             role="separator"
           />
-        </template>
-        <div
-          class="ctx-item"
-          @click="onCtxPlaceCursor"
-        >
-          Place cursor here{{ ctxTimeLabel ? `  (${ctxTimeLabel})` : '' }}
-        </div>
-        <div
-          v-if="hasPlacedCursors"
-          class="ctx-item"
-          @click="onCtxRemoveNearestCursor"
-        >
-          Remove nearest cursor
-        </div>
-        <div
-          v-if="hasPlacedCursors"
-          class="ctx-item"
-          @click="onCtxClearCursors"
-        >
-          Clear all cursors
-        </div>
-        <div
-          v-if="hasTwoCursors"
-          class="ctx-item"
-          :class="{ disabled: !aiFeatureEnabled }"
-          :title="aiFeatureEnabled
-            ? ''
-            : 'Enable AI Assistant in Settings → AI'"
-          @click="onCtxExplainRegion"
-        >
-          Explain this region with AI
-        </div>
-        <div
-          v-if="hasTwoCursors"
-          class="ctx-item"
-          title="Bookmark the C1–Cn range as an observation in the Investigation notebook"
-          @click="onCtxAddRegionToInvestigation"
-        >
-          Add region to investigation
-        </div>
-        <div
-          class="ctx-sep"
-          role="separator"
-        />
-        <div
-          class="ctx-item"
-          @click="onAddBookmark"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="12"
-            height="12"
-            fill="currentColor"
-            style="flex-shrink:0"
+          <div
+            class="ctx-item"
+            @click="onAddBookmark"
           >
-            <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.26-2.325a.5.5 0 0 1 .48 0L12 14.566V2a1 1 0 0 0-1-1H4z" />
-          </svg>
-          Add Bookmark here{{ ctxTimeLabel ? `  (${ctxTimeLabel})` : '' }}
-        </div>
-        <div
-          class="ctx-item"
-          @click="onAddAnnotation"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="12"
-            height="12"
-            fill="currentColor"
-            style="flex-shrink:0"
+            <svg
+              viewBox="0 0 16 16"
+              width="12"
+              height="12"
+              fill="currentColor"
+              style="flex-shrink:0"
+            >
+              <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.26-2.325a.5.5 0 0 1 .48 0L12 14.566V2a1 1 0 0 0-1-1H4z" />
+            </svg>
+            Add Bookmark here{{ ctxTimeLabel ? `  (${ctxTimeLabel})` : '' }}
+          </div>
+          <div
+            class="ctx-item"
+            @click="onAddAnnotation"
           >
-            <path d="M8 0 12 4 8 8 4 4 8 0zm0 9 4 4-4 3-4-3 4-4z" />
-          </svg>
-          Add Annotation here{{ ctxTimeLabel ? `  (${ctxTimeLabel})` : '' }}
-        </div>
-        <template v-if="hasBookmarks || hasAnnotations">
+            <svg
+              viewBox="0 0 16 16"
+              width="12"
+              height="12"
+              fill="currentColor"
+              style="flex-shrink:0"
+            >
+              <path d="M8 0 12 4 8 8 4 4 8 0zm0 9 4 4-4 3-4-3 4-4z" />
+            </svg>
+            Add Annotation here{{ ctxTimeLabel ? `  (${ctxTimeLabel})` : '' }}
+          </div>
+          <template v-if="hasBookmarks || hasAnnotations">
+            <div
+              class="ctx-sep"
+              role="separator"
+            />
+            <div
+              v-if="hasBookmarks"
+              class="ctx-item"
+              @click="onCtxClearBookmarks"
+            >
+              Clear all bookmarks
+            </div>
+            <div
+              v-if="hasAnnotations"
+              class="ctx-item"
+              @click="onCtxClearAnnotations"
+            >
+              Clear all annotations
+            </div>
+          </template>
           <div
             class="ctx-sep"
             role="separator"
           />
           <div
-            v-if="hasBookmarks"
             class="ctx-item"
-            @click="onCtxClearBookmarks"
+            @click="onCopyCursorTime"
           >
-            Clear all bookmarks
+            <svg
+              viewBox="0 0 16 16"
+              width="12"
+              height="12"
+              fill="currentColor"
+              style="flex-shrink:0"
+            >
+              <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1zM5 0h6a1 1 0 0 1 1 1v3H4V1a1 1 0 0 1 1-1z" />
+            </svg>
+            Copy Time
           </div>
           <div
-            v-if="hasAnnotations"
             class="ctx-item"
-            @click="onCtxClearAnnotations"
+            @click="onCopyScreenshot"
           >
-            Clear all annotations
+            <svg
+              viewBox="0 0 16 16"
+              width="12"
+              height="12"
+              fill="currentColor"
+              style="flex-shrink:0"
+            >
+              <path d="M3 3.5A1.5 1.5 0 0 1 4.5 2h7A1.5 1.5 0 0 1 13 3.5V5h1a1 1 0 0 1 1 1v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5V6a1 1 0 0 1 1-1h1V3.5zm1 0V5h8V3.5a.5.5 0 0 0-.5-.5h-7a.5.5 0 0 0-.5.5zM8 7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z" />
+            </svg>
+            Copy Screenshot
           </div>
-        </template>
-        <div
-          class="ctx-sep"
-          role="separator"
-        />
-        <div
-          class="ctx-item"
-          @click="onCopyCursorTime"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="12"
-            height="12"
-            fill="currentColor"
-            style="flex-shrink:0"
-          >
-            <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1zM5 0h6a1 1 0 0 1 1 1v3H4V1a1 1 0 0 1 1-1z" />
-          </svg>
-          Copy Time
-        </div>
-        <div
-          class="ctx-item"
-          @click="onCopyScreenshot"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="12"
-            height="12"
-            fill="currentColor"
-            style="flex-shrink:0"
-          >
-            <path d="M3 3.5A1.5 1.5 0 0 1 4.5 2h7A1.5 1.5 0 0 1 13 3.5V5h1a1 1 0 0 1 1 1v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5V6a1 1 0 0 1 1-1h1V3.5zm1 0V5h8V3.5a.5.5 0 0 0-.5-.5h-7a.5.5 0 0 0-.5.5zM8 7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z" />
-          </svg>
-          Copy Screenshot
-        </div>
         </div>
       </Teleport>
 

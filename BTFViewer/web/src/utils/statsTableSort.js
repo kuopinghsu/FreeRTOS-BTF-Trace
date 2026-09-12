@@ -32,7 +32,7 @@ export function sortStatsRows(rows, sortState, accessors) {
   return [...rows].sort((a, b) => {
     const av = acc(a)
     const bv = acc(b)
-    let cmp = 0
+    let cmp
     if (typeof av === 'number' && typeof bv === 'number') {
       cmp = av - bv
     } else {

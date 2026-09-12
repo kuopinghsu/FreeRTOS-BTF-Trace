@@ -28,86 +28,86 @@
             :style="labelRowStyle(row)"
             @click="toggleExpand(row.key)"
           >
-          <span
-            class="core-dot"
-            :style="{ background: row.color }"
-          />
-          <span class="expand-arrow">{{ expanded.has(row.key) ? '▼' : '▶' }}</span>
-          <span class="label-text">{{ row.label }}</span>
-        </div>
+            <span
+              class="core-dot"
+              :style="{ background: row.color }"
+            />
+            <span class="expand-arrow">{{ expanded.has(row.key) ? '▼' : '▶' }}</span>
+            <span class="label-text">{{ row.label }}</span>
+          </div>
 
-        <!-- Core sub-task row -->
-        <div
-          v-else-if="row.type === 'core-task'"
-          class="label-row label-core-task"
-          :style="labelRowStyle(row)"
-          :class="[stripeClassForBand(row), { highlighted: highlightKey === taskRowKey(row) }]"
-          @mouseenter="emit('highlightChange', taskRowKey(row))"
-          @mouseleave="emit('highlightChange', null)"
-          @click="emit('highlightClick', taskRowKey(row))"
-        >
-          <span
-            class="task-swatch"
-            :style="{ background: row.color }"
-          />
-          <span class="label-text sub">{{ row.label }}</span>
-        </div>
+          <!-- Core sub-task row -->
+          <div
+            v-else-if="row.type === 'core-task'"
+            class="label-row label-core-task"
+            :style="labelRowStyle(row)"
+            :class="[stripeClassForBand(row), { highlighted: highlightKey === taskRowKey(row) }]"
+            @mouseenter="emit('highlightChange', taskRowKey(row))"
+            @mouseleave="emit('highlightChange', null)"
+            @click="emit('highlightClick', taskRowKey(row))"
+          >
+            <span
+              class="task-swatch"
+              :style="{ background: row.color }"
+            />
+            <span class="label-text sub">{{ row.label }}</span>
+          </div>
 
-        <!-- Task row -->
-        <div
-          v-else-if="row.type === 'task'"
-          class="label-row label-task"
-          :style="labelRowStyle(row)"
-          :class="[stripeClassForBand(row), { highlighted: highlightKey === row.key }]"
-          @mouseenter="emit('highlightChange', row.key)"
-          @mouseleave="emit('highlightChange', null)"
-          @click="emit('highlightClick', row.key)"
-        >
-          <span
-            class="task-swatch"
-            :style="{ background: row.color }"
-          />
-          <span class="label-text">{{ row.label }}</span>
-        </div>
+          <!-- Task row -->
+          <div
+            v-else-if="row.type === 'task'"
+            class="label-row label-task"
+            :style="labelRowStyle(row)"
+            :class="[stripeClassForBand(row), { highlighted: highlightKey === row.key }]"
+            @mouseenter="emit('highlightChange', row.key)"
+            @mouseleave="emit('highlightChange', null)"
+            @click="emit('highlightClick', row.key)"
+          >
+            <span
+              class="task-swatch"
+              :style="{ background: row.color }"
+            />
+            <span class="label-text">{{ row.label }}</span>
+          </div>
 
-        <!-- STI channel row (regular, non-tag) -->
-        <div
-          v-else-if="row.type === 'sti' && !row.isTag"
-          class="label-row label-sti"
-          :class="stripeClassForBand(row)"
-          :style="labelRowStyle(row)"
-        >
-          <span class="sti-dot">◆</span>
-          <span class="label-text sti">{{ row.label }}</span>
-        </div>
+          <!-- STI channel row (regular, non-tag) -->
+          <div
+            v-else-if="row.type === 'sti' && !row.isTag"
+            class="label-row label-sti"
+            :class="stripeClassForBand(row)"
+            :style="labelRowStyle(row)"
+          >
+            <span class="sti-dot">◆</span>
+            <span class="label-text sti">{{ row.label }}</span>
+          </div>
 
-        <!-- STI tag-event channel row (expandable waveform) -->
-        <div
-          v-else-if="row.type === 'sti' && row.isTag"
-          class="label-row label-sti label-sti-tag"
-          :class="stripeClassForBand(row)"
-          :style="labelRowStyle(row)"
-          @click="emit('stiExpandToggle', row.key)"
-        >
-          <span class="expand-arrow">{{ row.isExpanded ? '▼' : '▶' }}</span>
-          <span class="sti-wave-icon">〰</span>
-          <span class="label-text sti">{{ row.label }}</span>
-        </div>
+          <!-- STI tag-event channel row (expandable waveform) -->
+          <div
+            v-else-if="row.type === 'sti' && row.isTag"
+            class="label-row label-sti label-sti-tag"
+            :class="stripeClassForBand(row)"
+            :style="labelRowStyle(row)"
+            @click="emit('stiExpandToggle', row.key)"
+          >
+            <span class="expand-arrow">{{ row.isExpanded ? '▼' : '▶' }}</span>
+            <span class="sti-wave-icon">〰</span>
+            <span class="label-text sti">{{ row.label }}</span>
+          </div>
 
-        <!-- Interval span row -->
-        <div
-          v-else-if="row.type === 'interval'"
-          class="label-row label-interval"
-          :class="stripeClassForBand(row)"
-          :style="labelRowStyle(row)"
-        >
-          <span
-            class="task-swatch interval-swatch"
-            :style="{ background: row.color }"
-          />
-          <span class="label-text">{{ row.label }}</span>
-        </div>
-      </template>
+          <!-- Interval span row -->
+          <div
+            v-else-if="row.type === 'interval'"
+            class="label-row label-interval"
+            :class="stripeClassForBand(row)"
+            :style="labelRowStyle(row)"
+          >
+            <span
+              class="task-swatch interval-swatch"
+              :style="{ background: row.color }"
+            />
+            <span class="label-text">{{ row.label }}</span>
+          </div>
+        </template>
       </div>
     </div>
   </div>

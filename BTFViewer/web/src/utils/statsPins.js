@@ -364,7 +364,7 @@ export function normalizeStatsPins(raw) {
   const allowed = new Set(STATS_PINNABLE_SECTIONS)
   const out = []
   const seen = new Set()
-  let items = []
+  let items
   if (raw == null) return out
   if (typeof raw === 'string') {
     items = raw.replace(/;/g, ',').split(',')

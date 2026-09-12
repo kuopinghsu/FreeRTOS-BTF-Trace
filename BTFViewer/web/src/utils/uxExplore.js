@@ -1070,7 +1070,7 @@ export function compareCoreUtilChartRows(tables) {
   const rows = tables?.core_util || tables?.coreUtil || []
   const out = []
   for (const row of rows) {
-    let label = ''
+    let label
     let aRaw
     let bRaw
     if (row && typeof row === 'object' && !Array.isArray(row)) {
@@ -1093,7 +1093,7 @@ export function compareP99DeltaChartRows(tables, limit = 12) {
   const rows = tables?.response || []
   const out = []
   for (const row of rows) {
-    let label = ''
+    let label
     let delta
     if (row && typeof row === 'object' && !Array.isArray(row)) {
       label = String(row.name || row.label || '')
@@ -1363,7 +1363,7 @@ export function compareSummaryChangeBarRows(tables, limit = 8) {
   const lim = Math.max(1, Math.min(16, Number(limit) || 8))
   const out = []
   for (const row of tables?.summary || []) {
-    let label = ''
+    let label
     let delta
     let aRaw
     let bRaw

@@ -8,15 +8,15 @@ import { btfHighlightHref, btfJumpHref } from './aiTools.js'
 const PARTICIPANT_RE = /^participant\s+(\S+)(?:\s+as\s+(.+))?$/i
 const ARROW_RE = /^(\S+)\s*(-->>|->>|->|--x|-x|-->)\s*(\S+)\s*:\s*(.*)$/
 const NOTE_RE = /^Note\s+(?:over|left of|right of)\s+([^:]+):\s*(.*)$/i
-const NODE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\)|\{\{([^}]+)\}\}|\{([^}]+)\})?\s*$/
+const NODE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^)]+)\)|\{\{([^}]+)\}\}|\{([^}]+)\})?\s*$/
 // Supports A --> B, A -->|lab| B, and A -- lab --> B (models often emit the last).
-const EDGE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*(?:-->\|([^|]+)\||--\s+(.+?)\s+-->|-->)\s*([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*$/
+const EDGE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^)]+)\))?\s*(?:-->\|([^|]+)\||--\s+(.+?)\s+-->|-->)\s*([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^)]+)\))?\s*$/
 
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
 const GRAPH_NODE_ID_RE = /^[A-Za-z]\d{0,3}$/
 const TASK_ID_RE = /\[[0-9]+\]|\[[0-9a-fA-FxX]+\]/
 const CORE_LABEL_RE = /^Core[_\s]?\d+$/i
-const TASK_TOKEN_RE = /^[A-Za-z][A-Za-z0-9_.\-]{0,47}$/
+const TASK_TOKEN_RE = /^[A-Za-z][A-Za-z0-9_.-]{0,47}$/
 
 /** Highlight target when *label* can resolve to a task or core (not finding prose). */
 export function actionableDiagramHighlight(label) {

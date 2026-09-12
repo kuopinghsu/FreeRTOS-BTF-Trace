@@ -364,7 +364,7 @@ export async function classifyPickedOpen(files, xmlHandle = null) {
   const btfw = [...(files?.values?.() || [])].find(f => isBtfwOpenName(f.name))
     || [...(files?.entries?.() || [])].find(([k]) => isBtfwOpenName(k))?.[1]
   if (btfw) {
-    let ws = null
+    let ws
     try {
       ws = openWorkspaceBlob(new Uint8Array(await btfw.arrayBuffer()))
     } catch {

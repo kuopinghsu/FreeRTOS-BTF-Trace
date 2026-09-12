@@ -566,12 +566,9 @@ export function render(ctx, trace, viewport, options = {}) {
   const {
     viewMode    = 'task',
     expanded    = new Set(),
-    cursors     = [],
     highlightKey = null,
     showGrid    = true,
     darkMode    = true,
-    hoverTime   = null,
-    marks       = [],
     showSti     = true,
     stiExpanded = new Set(),
     stiLogScale = false,
@@ -649,7 +646,6 @@ export function render(ctx, trace, viewport, options = {}) {
   for (let ri = i0; ri < i1; ri++) {
     const row = rows[ri]
     const rowY = row.y + yOff
-    const rowH = rowBandHeight(row)
     const rowBudget = {
       n: 0, max: budgetSpec.max, fast: budgetSpec.fast, skipDecor: budgetSpec.skipDecor,
     }
@@ -887,6 +883,7 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
   // Fast path: batch same-color fills (Canvas Path2D or WebGL rects).
   if (!drawTint && !drawOutlines && !isHighlighted && !hlSeg) {
     let count = 0
+    const path = gpuBatch ? null : new Path2D()
     const addSeg = (seg) => {
       if (count >= budget.max) return false
       const x1raw = (seg.start - timeStart) * pxPerNs
@@ -905,7 +902,6 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
         if (!addSeg(seg)) break
       }
     } else {
-      const path = new Path2D()
       for (const seg of drawList) {
         if (!addSeg(seg)) break
       }
@@ -1092,9 +1088,6 @@ function drawLockedSegmentVert(ctx, trace, cols, hlSeg, timeStart, timeEnd, pxPe
   const mk = taskMergeKey(hlSeg.task)
   for (const col of cols) {
     if (!rowMatchesLockedSegment(col, mk, hlSeg)) continue
-    const colX      = col.x
-    const segX      = colX + 1
-    const segW      = COL_W - 2
     const y1        = headerH + (hlSeg.start - timeStart) * pxPerNs
     const y2        = headerH + (hlSeg.end   - timeStart) * pxPerNs
     const h         = Math.max(1, y2 - y1)
@@ -1615,7 +1608,6 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
         const prevEv = slice[i - 1]
         const prevVal = evVal(prevEv)
         if (!isNaN(prevVal)) {
-          const prevCx = (prevEv.time - timeStart) * pxPerNs
           const prevCy = valToY(prevVal)
           ctx.lineTo(cx, prevCy)
         }
@@ -3105,12 +3097,9 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   const {
     viewMode     = 'task',
     expanded     = new Set(),
-    cursors      = [],
     highlightKey = null,
     showGrid     = true,
     darkMode     = true,
-    hoverTime    = null,
-    marks        = [],
     showSti      = true,
     stiExpanded  = new Set(),
     migratedOnlyFilter = false,
@@ -3298,4 +3287,3 @@ export function hitTestColumn(trace, viewport, options, cx, _cy) {
   }
   return null
 }
-

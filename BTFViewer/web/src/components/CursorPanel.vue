@@ -50,7 +50,17 @@
       v-else
       class="cursor-empty-msg"
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/><circle cx="12" cy="12" r="3"/></svg>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        aria-hidden="true"
+      ><path d="M12 3v4M12 17v4M3 12h4M17 12h4" /><circle
+        cx="12"
+        cy="12"
+        r="3"
+      /></svg>
       <span>Click the timeline to place a cursor. Add a second to measure a range.</span>
     </div>
 
