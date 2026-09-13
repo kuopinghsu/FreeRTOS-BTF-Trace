@@ -161,6 +161,9 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         # Load-balance gauge is emitted at the same size by both exporters.
         self.assertIn("_load_balance_gauge_html(_lb, width=600)", stats)
         self.assertIn("loadBalanceGaugeHtml(loadBalanceScore.value, { width: 600 })", vue)
+        self.assertIn('class="lb-value-arc" pathLength="100"', stats)
+        self.assertIn("lb-gauge-active", css_py)
+        self.assertIn("@keyframes lb-needle-in", css_py)
         self.assertIn("tbody tr:hover td,", css_py)
         # The palette lives in the shared theme constant, not per-export CSS.
         self.assertNotIn("--data-bar:", css_py)

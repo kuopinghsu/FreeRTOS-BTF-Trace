@@ -262,6 +262,34 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 60
 .lb-gauge-svg .lb-chip-red { fill: var(--danger-soft); stroke: var(--danger); }
 .lb-gauge-svg .lb-chip-text-amber { fill: var(--warning); }
 .lb-gauge-svg .lb-chip-text-red { fill: var(--danger); }
+.lb-gauge-svg .lb-value-arc { stroke-dasharray: 100; stroke-dashoffset: 100; }
+.lb-gauge-svg .lb-needle { transform: scale(0); }
+.lb-gauge-svg .lb-value-ok, .lb-gauge-svg .lb-value-amber, .lb-gauge-svg .lb-value-red {
+  opacity: 0; transform-box: fill-box; transform-origin: center;
+}
+.lb-gauge-svg.lb-gauge-active .lb-value-arc {
+  animation: lb-arc-in 0.85s cubic-bezier(.2,.8,.2,1) forwards;
+}
+.lb-gauge-svg.lb-gauge-active .lb-needle {
+  animation: lb-needle-in 0.58s cubic-bezier(.2,1.35,.35,1) 0.34s forwards;
+}
+.lb-gauge-svg.lb-gauge-active .lb-value-ok,
+.lb-gauge-svg.lb-gauge-active .lb-value-amber,
+.lb-gauge-svg.lb-gauge-active .lb-value-red {
+  animation: lb-value-in 0.35s ease-out 0.62s forwards;
+}
+@keyframes lb-arc-in { to { stroke-dashoffset: 0; } }
+@keyframes lb-needle-in { from { transform: scale(0); } to { transform: scale(1); } }
+@keyframes lb-value-in {
+  from { opacity: 0; transform: translateY(3px) scale(.92); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lb-gauge-svg .lb-value-arc { stroke-dashoffset: 0; }
+  .lb-gauge-svg .lb-needle { transform: none; }
+  .lb-gauge-svg .lb-value-ok, .lb-gauge-svg .lb-value-amber,
+  .lb-gauge-svg .lb-value-red { opacity: 1; transform: none; }
+}
 .pctile-svg { display: block; max-width: 100%; height: auto; }
 .pctile-title { fill: var(--ink); }
 .pctile-sub { fill: var(--muted); }

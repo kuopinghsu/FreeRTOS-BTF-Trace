@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  HTML_REPORT_INTERACTIVE_SCRIPT,
   HTML_REPORT_TOC_SCRIPT,
   htmlApplyCollapsibleToc,
   htmlSectionSlug,
@@ -9,6 +10,19 @@ import {
 import { STATS_TOC_GROUPS } from '../src/utils/statsHtmlReport.js'
 
 describe('htmlReport TOC', () => {
+  it('ships modern report-wide navigation and accessible table controls', () => {
+    for (const marker of [
+      'report-command-bar', 'Search report sections', 'report-match-count',
+      'data-report-expand', 'data-report-reset', 'data-report-print',
+      'section-link', 'back-to-top', "e.key === '/'", "e.key === 'Escape'",
+      'aria-label="Search table rows"', "th.setAttribute('role', 'button')",
+      'scroll-progress', 'IntersectionObserver', 'motion-ready', 'animateMetrics',
+      'hydrateStatisticsCharts', 'addLineChart', 'addDonutChart',
+      'Core utilization trend', 'Task CPU share', 'Migration flow share',
+      'sec-core-pair-migration-summary', 'chart-active',
+    ]) assert.match(HTML_REPORT_INTERACTIVE_SCRIPT, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  })
+
   it('statistics export TOC includes expand / collapse all', () => {
     const body = [
       '<!--TOC-->',

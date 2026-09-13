@@ -3035,8 +3035,169 @@ details.report-appendix > summary {
   white-space: nowrap;
 }
 .theme-toggle:hover { background: rgba(255, 255, 255, 0.22); }
+.report-command-bar {
+  position: sticky; top: 10px; z-index: 20;
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 14px; padding: 9px 10px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--paper);
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
+  box-shadow: 0 8px 24px rgba(15, 35, 60, 0.12);
+  backdrop-filter: blur(12px);
+}
+.report-search-wrap { position: relative; flex: 1 1 260px; min-width: 160px; }
+.report-search-icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); pointer-events: none;
+}
+.report-search {
+  width: 100%; min-height: 36px; padding: 7px 32px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--paper-2); color: var(--ink); font: inherit; font-size: 13px;
+}
+.report-search:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
+}
+.report-search-key {
+  position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
+  padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px;
+  color: var(--muted); background: var(--paper); font-size: 10px;
+}
+.report-match-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.report-tool-btn {
+  min-height: 34px; padding: 6px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--paper); color: var(--ink);
+  font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.report-tool-btn:hover { border-color: var(--accent); color: var(--accent); }
+.section-link {
+  float: right; margin: -2px 0 0 8px; padding: 3px 7px;
+  border: 1px solid transparent; border-radius: 6px; background: transparent;
+  color: var(--muted); font: inherit; font-size: 11px; cursor: pointer;
+}
+.section-link:hover { color: var(--accent); border-color: var(--line); background: var(--paper-2); }
+.report-empty-results {
+  margin: 14px 0; padding: 24px; border: 1px dashed var(--line-strong);
+  border-radius: 14px; color: var(--muted); background: var(--paper); text-align: center;
+}
+.back-to-top {
+  position: fixed; right: 22px; bottom: 22px; z-index: 30;
+  width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 50%;
+  background: var(--paper); color: var(--accent); font-size: 18px; cursor: pointer;
+  box-shadow: 0 8px 24px rgba(15, 35, 60, 0.18);
+  opacity: 0; transform: translateY(8px); pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.back-to-top.visible { opacity: 1; transform: none; pointer-events: auto; }
+.scroll-progress {
+  position: fixed; inset: 0 0 auto; z-index: 100; height: 3px;
+  background: transparent; pointer-events: none;
+}
+.scroll-progress-fill {
+  display: block; width: 100%; height: 100%; background: var(--accent);
+  transform: scaleX(0); transform-origin: left center; transition: transform 0.08s linear;
+}
+.report-card.motion-ready {
+  opacity: 0; transform: translateY(12px);
+  transition: opacity 0.38s ease, transform 0.38s ease, box-shadow 0.2s ease;
+}
+.report-card.motion-ready.motion-in { opacity: 1; transform: none; }
+details.report-card[open] > :not(summary) { animation: report-content-in 0.24s ease both; }
+.report-toc a.active {
+  color: var(--ink); font-weight: 700; text-decoration: none;
+}
+.report-toc a.active::after { content: " •"; color: var(--accent); }
+.metric-animate { transform-origin: left center; transform: scaleX(0); }
+.metric-animate.metric-in { animation: report-bar-in 0.65s cubic-bezier(.2,.8,.2,1) both; }
+.chart-line.metric-animate { transform: none; stroke-dasharray: 1400; stroke-dashoffset: 1400; }
+.chart-line.metric-animate.metric-in { animation: report-line-in 0.9s ease-out both; }
+.chart-point.metric-animate, .pctile-bar.metric-animate { transform: none; opacity: 0; }
+.chart-point.metric-animate.metric-in, .pctile-bar.metric-animate.metric-in {
+  animation: report-point-in 0.35s ease-out both;
+}
+.auto-chart-grid { display: grid; gap: 12px; margin: 10px 0 16px; }
+.auto-chart-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.auto-chart {
+  min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--paper-2); overflow: hidden;
+}
+.auto-chart-title { margin: 0 0 2px; color: var(--ink); font-size: 13px; font-weight: 700; }
+.auto-chart-subtitle { margin: 0 0 10px; color: var(--muted); font-size: 10px; }
+.auto-line-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.auto-grid-line { stroke: var(--chart-grid, var(--line)); stroke-width: 1; }
+.auto-axis-label { fill: var(--muted); font-size: 9px; }
+.auto-series { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.auto-series-0 { stroke: var(--accent); }
+.auto-series-1 { stroke: var(--success); }
+.auto-series-2 { stroke: var(--warning); }
+.auto-series-3 { stroke: var(--danger); }
+.auto-series-4 { stroke: var(--violet); }
+.auto-dot { stroke: var(--paper); stroke-width: 1.5; }
+.auto-dot-0 { fill: var(--accent); }.auto-dot-1 { fill: var(--success); }
+.auto-dot-2 { fill: var(--warning); }.auto-dot-3 { fill: var(--danger); }
+.auto-dot-4 { fill: var(--violet); }
+.auto-chart-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 7px; }
+.auto-legend-item { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+.auto-swatch { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.auto-swatch-1 { background: var(--success); }.auto-swatch-2 { background: var(--warning); }
+.auto-swatch-3 { background: var(--danger); }.auto-swatch-4 { background: var(--violet); }
+.auto-donut-layout { display: flex; align-items: center; gap: 16px; min-height: 150px; }
+.auto-donut {
+  flex: 0 0 136px; width: 136px; height: 136px; border-radius: 50%;
+  position: relative; transform: rotate(-90deg) scale(.82); opacity: 0;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.auto-donut::after {
+  content: ""; position: absolute; inset: 30px; border-radius: 50%;
+  background: var(--paper-2); box-shadow: 0 0 0 1px var(--line);
+}
+.auto-donut-legend { min-width: 0; display: grid; gap: 4px; flex: 1; }
+.auto-donut-row { display: grid; grid-template-columns: 9px minmax(0,1fr) auto; gap: 6px; align-items: center; font-size: 10px; }
+.auto-donut-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.auto-donut-value { color: var(--ink); font-variant-numeric: tabular-nums; }
+.auto-chart.chart-active .auto-series { stroke-dasharray: 1200; animation: auto-line-draw .85s ease-out both; }
+.auto-chart.chart-active .auto-dot { animation: auto-dot-in .3s ease-out both; }
+.auto-chart.chart-active .auto-donut { animation: auto-donut-in .65s cubic-bezier(.2,.9,.2,1) both; }
+.compare-chart-active .paired-fill,
+.compare-chart-active .delta-fill,
+.compare-chart-active .cmp-chart-bar {
+  transform-box: fill-box; transform-origin: left center;
+  animation: compare-bar-in .72s cubic-bezier(.2,.9,.2,1) both;
+}
+.compare-chart-active .paired-row:nth-child(2n) .paired-fill,
+.compare-chart-active .delta-row:nth-child(2n) .delta-fill { animation-delay: 70ms; }
+.compare-chart-active .compare-chart svg { animation: compare-chart-rise .5s ease-out both; }
+@keyframes auto-line-draw { from { stroke-dashoffset: 1200; } to { stroke-dashoffset: 0; } }
+@keyframes auto-dot-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes auto-donut-in { to { opacity: 1; transform: rotate(-90deg) scale(1); } }
+@keyframes compare-bar-in { from { transform: scaleX(0); opacity: .35; } to { transform: scaleX(1); opacity: 1; } }
+@keyframes compare-chart-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes report-content-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes report-bar-in { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes report-line-in { to { stroke-dashoffset: 0; } }
+@keyframes report-point-in { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 700px) {
+  .report-command-bar { position: static; flex-wrap: wrap; }
+  .report-search-wrap { flex-basis: 100%; }
+  .report-match-count { margin-right: auto; }
+  .back-to-top { right: 14px; bottom: 14px; }
+  .auto-chart-grid.two { grid-template-columns: 1fr; }
+  .auto-donut-layout { align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+  .report-card.motion-ready { opacity: 1; transform: none; }
+  .metric-animate { transform: none; opacity: 1; stroke-dashoffset: 0; }
+  .auto-chart .auto-series { stroke-dashoffset: 0; }
+  .auto-chart .auto-dot { opacity: 1; }
+  .auto-chart .auto-donut { opacity: 1; transform: rotate(-90deg) scale(1); }
+}
 @media print {
-  .theme-toggle { display: none !important; }
+  .theme-toggle, .report-command-bar, .section-link, .back-to-top, .scroll-progress,
+  .report-empty-results { display: none !important; }
 }
 html[data-theme="dark"] body { background: #12161b; }
 html[data-theme="dark"] h2 { color: #cfe1f7; }
@@ -3526,6 +3687,347 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     var v = Number(m[1]), u = m[2].toLowerCase();
     return v * (u === 's' ? 1e9 : u === 'ms' ? 1e6 : (u === 'us' || u === 'µs') ? 1e3 : 1);
   }
+  function compactVal(v, duration) {
+    if (!isFinite(v)) return '—';
+    if (duration) {
+      if (v >= 1e9) return (v / 1e9).toFixed(1) + ' s';
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + ' ms';
+      if (v >= 1e3) return (v / 1e3).toFixed(1) + ' µs';
+      return Math.round(v) + ' ns';
+    }
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+    return v >= 100 ? Math.round(v).toString() : v.toFixed(v < 10 ? 1 : 0);
+  }
+  function tableData(card, requiredHead) {
+    var tables = Array.prototype.slice.call(card ? card.querySelectorAll('table') : []);
+    var table = tables.find(function (t) {
+      if (!t.tHead || !t.tBodies.length) return false;
+      return !requiredHead || textOf(t.tHead).indexOf(requiredHead) >= 0;
+    });
+    if (!table) return null;
+    return {
+      heads: Array.prototype.map.call(table.tHead.rows[0].cells, textOf),
+      rows: Array.prototype.map.call(table.tBodies[0].rows, function (tr) {
+        return Array.prototype.map.call(tr.cells, textOf);
+      }).filter(function (row) { return row.length > 1 && row.join('').indexOf('No data') < 0; })
+    };
+  }
+  function chartHost(card, title, subtitle) {
+    if (!card) return null;
+    var grid = card.querySelector('.auto-chart-grid');
+    if (!grid) {
+      grid = document.createElement('div'); grid.className = 'auto-chart-grid';
+      var summary = card.querySelector('summary'); summary.parentNode.insertBefore(grid, summary.nextSibling);
+    } else { grid.classList.add('two'); }
+    var host = document.createElement('div'); host.className = 'auto-chart';
+    var h = document.createElement('div'); h.className = 'auto-chart-title'; h.textContent = title;
+    var sub = document.createElement('div'); sub.className = 'auto-chart-subtitle'; sub.textContent = subtitle;
+    host.appendChild(h); host.appendChild(sub); grid.appendChild(host); return host;
+  }
+  function addLineChart(card, title, subtitle, labels, series, duration) {
+    var valid = series.some(function (s) { return s.values.some(isFinite); });
+    if (!card || labels.length < 2 || !valid) return;
+    var step = Math.max(1, Math.ceil(labels.length / 64));
+    var keep = labels.map(function (_v, i) { return i; }).filter(function (i) {
+      return i % step === 0 || i === labels.length - 1;
+    });
+    labels = keep.map(function (i) { return labels[i]; });
+    series = series.slice(0, 5).map(function (s) {
+      return { name: s.name, values: keep.map(function (i) { return s.values[i]; }) };
+    });
+    var all = [];
+    series.forEach(function (s) { s.values.forEach(function (v) { if (isFinite(v)) all.push(v); }); });
+    var max = Math.max.apply(Math, all.concat([1]));
+    var host = chartHost(card, title, subtitle); if (!host) return;
+    var NS = 'http://www.w3.org/2000/svg', w = 720, h = 220, l = 54, r = 14, t = 12, b = 30;
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('class', 'auto-line-svg'); svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+    function add(tag, attrs, value) {
+      var el = document.createElementNS(NS, tag);
+      Object.keys(attrs || {}).forEach(function (k) { el.setAttribute(k, attrs[k]); });
+      if (value != null) el.textContent = value; svg.appendChild(el); return el;
+    }
+    for (var g = 0; g <= 4; g += 1) {
+      var y = t + (h - t - b) * g / 4;
+      add('line', { x1: l, x2: w - r, y1: y, y2: y, class: 'auto-grid-line' });
+      add('text', { x: l - 7, y: y + 3, 'text-anchor': 'end', class: 'auto-axis-label' }, compactVal(max * (4 - g) / 4, duration));
+    }
+    var xAt = function (i) { return l + (w - l - r) * i / Math.max(1, labels.length - 1); };
+    var yAt = function (v) { return t + (h - t - b) * (1 - Math.max(0, v) / max); };
+    series.forEach(function (s, si) {
+      var pts = s.values.map(function (v, i) { return isFinite(v) ? xAt(i) + ',' + yAt(v) : ''; }).filter(Boolean);
+      if (pts.length > 1) add('polyline', { points: pts.join(' '), class: 'auto-series auto-series-' + si });
+      s.values.forEach(function (v, i) {
+        if (!isFinite(v) || (labels.length > 24 && i % Math.ceil(labels.length / 18))) return;
+        var dot = add('circle', { cx: xAt(i), cy: yAt(v), r: 3, class: 'auto-dot auto-dot-' + si });
+        var tip = document.createElementNS(NS, 'title'); tip.textContent = labels[i] + ' · ' + s.name + ': ' + compactVal(v, duration); dot.appendChild(tip);
+      });
+    });
+    [0, Math.floor((labels.length - 1) / 2), labels.length - 1].forEach(function (i) {
+      add('text', { x: xAt(i), y: h - 9, 'text-anchor': i === 0 ? 'start' : (i === labels.length - 1 ? 'end' : 'middle'), class: 'auto-axis-label' }, labels[i]);
+    });
+    host.appendChild(svg);
+    var legend = document.createElement('div'); legend.className = 'auto-chart-legend';
+    series.forEach(function (s, i) {
+      var item = document.createElement('span'); item.className = 'auto-legend-item';
+      item.innerHTML = '<i class="auto-swatch auto-swatch-' + i + '"></i>'; item.appendChild(document.createTextNode(s.name)); legend.appendChild(item);
+    });
+    host.appendChild(legend);
+  }
+  function addDonutChart(card, title, subtitle, items, duration) {
+    items = items.filter(function (it) { return isFinite(it.value) && it.value > 0; })
+      .sort(function (a, b) { return b.value - a.value; });
+    if (!card || !items.length) return;
+    if (items.length > 7) {
+      var other = items.slice(7).reduce(function (n, it) { return n + it.value; }, 0);
+      items = items.slice(0, 7).concat([{ label: 'Other', value: other }]);
+    }
+    var total = items.reduce(function (n, it) { return n + it.value; }, 0);
+    var host = chartHost(card, title, subtitle), layout = document.createElement('div');
+    layout.className = 'auto-donut-layout';
+    var donut = document.createElement('div'); donut.className = 'auto-donut';
+    var at = 0, stops = items.map(function (it, i) {
+      var from = at; at += 100 * it.value / total;
+      return 'var(--auto-c' + i + ') ' + from.toFixed(2) + '% ' + at.toFixed(2) + '%';
+    });
+    var colors = ['var(--accent)', 'var(--success)', 'var(--warning)', 'var(--danger)', 'var(--violet)', '#64748b', '#14b8a6', '#f97316'];
+    colors.forEach(function (c, i) { donut.style.setProperty('--auto-c' + i, c); });
+    donut.style.background = 'conic-gradient(' + stops.join(',') + ')'; layout.appendChild(donut);
+    var legend = document.createElement('div'); legend.className = 'auto-donut-legend';
+    items.forEach(function (it, i) {
+      var row = document.createElement('div'); row.className = 'auto-donut-row';
+      var sw = document.createElement('i'); sw.className = 'auto-swatch'; sw.style.background = colors[i];
+      var lab = document.createElement('span'); lab.className = 'auto-donut-label'; lab.textContent = it.label;
+      var val = document.createElement('span'); val.className = 'auto-donut-value'; val.textContent = compactVal(it.value, duration) + ' · ' + (100 * it.value / total).toFixed(1) + '%';
+      row.appendChild(sw); row.appendChild(lab); row.appendChild(val); legend.appendChild(row);
+    });
+    layout.appendChild(legend); host.appendChild(layout);
+  }
+  function hydrateTraceCompareCharts() {
+    if (!document.querySelector('.report-compare')) return;
+    function compareLine(id, title, subtitle, labelHead, aHead, bHead, duration) {
+      var c = document.getElementById(id), d = tableData(c, labelHead); if (!d || d.rows.length < 2) return;
+      var li = d.heads.indexOf(labelHead), ai = d.heads.indexOf(aHead), bi = d.heads.indexOf(bHead);
+      if (li < 0 || ai < 0 || bi < 0) return;
+      addLineChart(c, title, subtitle, d.rows.map(function (row) { return row[li]; }), [
+        { name: 'Baseline A', values: d.rows.map(function (row) { return parseVal(row[ai]); }) },
+        { name: 'Candidate B', values: d.rows.map(function (row) { return parseVal(row[bi]); }) }
+      ], duration);
+    }
+    function trendLine(title, valueHead) {
+      var c = document.getElementById('sec-trends'), d = tableData(c, 'Trace'); if (!d || d.rows.length < 2) return;
+      var li = d.heads.indexOf('Trace'), vi = d.heads.indexOf(valueHead); if (li < 0 || vi < 0) return;
+      addLineChart(c, title, 'Trace order follows the multi-trace summary',
+        d.rows.map(function (row) { return row[li]; }),
+        [{ name: valueHead, values: d.rows.map(function (row) { return parseVal(row[vi]); }) }], false);
+    }
+    compareLine('sec-preemption-chains', 'Preemption count profile', 'Victim order follows the comparison table', 'Victim', 'Count A', 'Count B', false);
+    compareLine('sec-preemption-chains', 'Preemption duration profile', 'Total preempted time by victim', 'Victim', 'Total A', 'Total B', true);
+    compareLine('sec-sync-objects', 'Synchronization activity profile', 'Instrumented object metrics on a shared scale', 'Metric', 'Baseline A', 'Candidate B', false);
+    trendLine('Task-count trend', 'Tasks');
+    trendLine('Migration trend', 'Migrations');
+    trendLine('Load-balance trend', 'Load balance');
+  }
+  function hydrateStatisticsCharts() {
+    hydrateTraceCompareCharts();
+    function card(id) { return document.getElementById(id); }
+    function line(id, title, subtitle, labelHead, valueHeads, duration, requiredHead) {
+      var c = card(id), d = tableData(c, requiredHead || labelHead); if (!d || !d.rows.length) return;
+      var li = d.heads.indexOf(labelHead);
+      var ss = valueHeads.map(function (name) {
+        var ci = d.heads.indexOf(name);
+        return { name: name, values: d.rows.map(function (row) { return parseVal(row[ci]); }) };
+      }).filter(function (s) { return s.values.some(isFinite); });
+      addLineChart(c, title, subtitle, d.rows.map(function (row) { return row[li]; }), ss, duration);
+    }
+    var cu = card('sec-core-utilization-over-time'), cud = tableData(cu, 'Time');
+    if (cud) line('sec-core-utilization-over-time', 'Core utilization trend', 'Per-core utilization across exported windows', 'Time', cud.heads.slice(1).filter(function (h) { return h !== 'Spread'; }), false);
+    line('sec-scheduling-load-over-time', 'Scheduling activity trend', 'Context-switch volume and rate by window', 'Time', ['Ctx sw', 'Ctx sw/s'], false);
+    line('sec-scheduling-load-over-time', 'Balance health trend', 'Utilization spread and Load Balance Score', 'Time', ['Util σ', 'LB score'], false);
+    line('sec-response-time', 'Response latency profile', 'Task order follows the exported statistics table', 'Task', ['p50', 'p95', 'p99'], true);
+    line('sec-dispatch-scheduling-latency', 'Dispatch latency profile', 'p50, p95, and p99 by task', 'Task', ['p50', 'p95', 'p99'], true);
+    line('sec-activation-latency', 'Activation latency profile', 'p50, p95, and p99 by task', 'Task', ['p50', 'p95', 'p99'], true);
+    line('sec-idle-analysis', 'Idle-duration profile', 'Total, longest, and p95 idle spans by core', 'Core', ['Idle total', 'Longest', 'p95'], true);
+    line('sec-queue-backlog-semaphore-level', 'Queue / semaphore level profile', 'Peak and ending level by object', 'Object', ['Peak', 'End level'], false);
+    line('sec-trace-health-tick', 'TICK gap trend', 'Observed large gaps in timestamp order', 'Start', ['Gap'], true, 'Gap');
+    line('sec-trace-health-tick', 'Estimated missed TICKs', 'Estimated misses for each large gap', 'Start', ['Missed'], false, 'Gap');
+    function columnDonut(id, title, subtitle, names, duration) {
+      var c = card(id), d = tableData(c, names[0]); if (!d) return;
+      addDonutChart(c, title, subtitle, names.map(function (name) {
+        var ci = d.heads.indexOf(name);
+        return { label: name, value: d.rows.reduce(function (n, row) { var v = parseVal(row[ci]); return n + (isFinite(v) ? v : 0); }, 0) };
+      }), duration);
+    }
+    columnDonut('sec-core-time-breakdown', 'Core time composition', 'Aggregate share across all cores', ['Active %', 'Idle %', 'Tick %', 'Gap %'], false);
+    columnDonut('sec-switch-reason-breakdown', 'Switch reason composition', 'Aggregate scheduler transition reasons', ['Preempted', 'Blocked', 'Suspended', 'Period', 'Other'], false);
+    var top = card('sec-top-tasks-by-cpu-excl-idle-tick');
+    if (top) addDonutChart(top, 'Task CPU share', 'Top tasks plus an Other remainder when needed', Array.prototype.map.call(top.querySelectorAll('.util-row-task'), function (row) {
+      return { label: textOf(row.querySelector('.util-label')), value: parseVal(textOf(row.querySelector('.util-pct'))) };
+    }), false);
+    var mig = card('sec-core-pair-migration-summary'), md = tableData(mig, 'From');
+    if (md) addDonutChart(mig, 'Migration flow share', 'Busiest source → destination routes', md.rows.map(function (row) {
+      return { label: row[0] + ' → ' + row[1], value: parseVal(row[2]) };
+    }), false);
+    var mutex = card('sec-mutex-blocking'), mud = tableData(mutex, 'Object');
+    if (mud) {
+      var oi = mud.heads.indexOf('Object'), ti = mud.heads.indexOf('Total'), byObj = {};
+      mud.rows.forEach(function (row) { var v = parseVal(row[ti]); if (isFinite(v)) byObj[row[oi]] = (byObj[row[oi]] || 0) + v; });
+      addDonutChart(mutex, 'Blocking-time composition', 'Total blocking time grouped by synchronization object', Object.keys(byObj).map(function (k) { return { label: k, value: byObj[k] }; }), true);
+    }
+  }
+  function enhanceReportNavigation() {
+    var report = document.querySelector('.report');
+    var cards = Array.prototype.slice.call(document.querySelectorAll('details.report-card'));
+    if (!report || !cards.length) return;
+    var toc = report.querySelector('.report-toc');
+    hydrateStatisticsCharts();
+    var tools = document.createElement('div');
+    tools.className = 'report-command-bar';
+    tools.setAttribute('role', 'search');
+    tools.innerHTML = '<label class="report-search-wrap"><span class="report-search-icon" aria-hidden="true">⌕</span>'
+      + '<input type="search" class="report-search" aria-label="Search report sections" placeholder="Search sections and values…">'
+      + '<span class="report-search-key" aria-hidden="true">/</span></label>'
+      + '<span class="report-match-count" aria-live="polite"></span>'
+      + '<button type="button" class="report-tool-btn" data-report-expand>Expand results</button>'
+      + '<button type="button" class="report-tool-btn" data-report-reset>Reset</button>'
+      + '<button type="button" class="report-tool-btn" data-report-print>Print</button>';
+    report.insertBefore(tools, toc || cards[0]);
+    var input = tools.querySelector('.report-search');
+    var count = tools.querySelector('.report-match-count');
+    var empty = document.createElement('div');
+    empty.className = 'report-empty-results';
+    empty.textContent = 'No report sections match this search.';
+    empty.hidden = true;
+    tools.parentNode.insertBefore(empty, tools.nextSibling);
+    cards.forEach(function (card) {
+      card._reportSearchText = textOf(card).toLowerCase();
+      var summary = card.querySelector('summary');
+      if (!summary || !card.id) return;
+      var link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'section-link';
+      link.textContent = 'Copy link';
+      link.title = 'Copy a direct link to this section';
+      link.addEventListener('click', function (e) {
+        e.preventDefault(); e.stopPropagation();
+        try { history.replaceState(null, '', '#' + card.id); } catch (err) {}
+        var done = function () {
+          link.textContent = 'Copied';
+          setTimeout(function () { link.textContent = 'Copy link'; }, 1200);
+        };
+        var legacyCopy = function () {
+          var field = document.createElement('textarea');
+          field.value = location.href; field.style.position = 'fixed'; field.style.opacity = '0';
+          document.body.appendChild(field); field.select();
+          var ok = false;
+          try { ok = document.execCommand('copy'); } catch (err) {}
+          field.remove();
+          if (ok) done(); else link.textContent = 'Link ready';
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(location.href).then(done, legacyCopy);
+        } else { legacyCopy(); }
+      });
+      summary.appendChild(link);
+    });
+    function applySearch() {
+      var terms = String(input.value || '').toLowerCase().trim().split(/\\s+/).filter(Boolean);
+      var visible = 0;
+      cards.forEach(function (card) {
+        var hit = !terms.length || terms.every(function (term) {
+          return card._reportSearchText.indexOf(term) >= 0;
+        });
+        card.hidden = !hit;
+        if (hit) { visible += 1; if (terms.length) card.open = true; }
+        var navLink = toc && toc.querySelector('a[href="#' + card.id + '"]');
+        var li = navLink && navLink.closest('li');
+        if (li) li.hidden = !hit;
+      });
+      if (toc) toc.querySelectorAll('.toc-group').forEach(function (group) {
+        group.hidden = !group.querySelector('li:not([hidden])');
+      });
+      count.textContent = visible + ' of ' + cards.length + ' sections';
+      empty.hidden = visible !== 0;
+    }
+    input.addEventListener('input', applySearch);
+    tools.querySelector('[data-report-expand]').addEventListener('click', function () {
+      cards.forEach(function (card) { if (!card.hidden) card.open = true; });
+    });
+    tools.querySelector('[data-report-reset]').addEventListener('click', function () {
+      input.value = ''; applySearch(); input.focus();
+    });
+    tools.querySelector('[data-report-print]').addEventListener('click', function () { window.print(); });
+    document.addEventListener('keydown', function (e) {
+      var tag = String(e.target && e.target.tagName || '').toLowerCase();
+      if (e.key === '/' && tag !== 'input' && tag !== 'textarea' && !e.target.isContentEditable) {
+        e.preventDefault(); input.focus();
+      } else if (e.key === 'Escape' && document.activeElement === input) {
+        input.value = ''; applySearch(); input.blur();
+      }
+    });
+    var top = document.createElement('button');
+    top.type = 'button'; top.className = 'back-to-top'; top.textContent = '↑';
+    top.title = 'Back to top'; top.setAttribute('aria-label', 'Back to top');
+    top.addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+    document.body.appendChild(top);
+    var progress = document.createElement('div');
+    progress.className = 'scroll-progress';
+    progress.innerHTML = '<span class="scroll-progress-fill"></span>';
+    document.body.appendChild(progress);
+    var progressFill = progress.firstElementChild;
+    function syncScrollUi() {
+      top.classList.toggle('visible', window.scrollY > 500);
+      var max = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+      progressFill.style.transform = 'scaleX(' + Math.min(1, window.scrollY / max) + ')';
+    }
+    window.addEventListener('scroll', syncScrollUi, { passive: true });
+    window.addEventListener('resize', syncScrollUi);
+    function animateMetrics(root) {
+      root.classList.remove('compare-chart-active');
+      root.getBoundingClientRect();
+      requestAnimationFrame(function () { root.classList.add('compare-chart-active'); });
+      root.querySelectorAll(
+        '.util-bar-fill, .rank-bar-fill, .pct-bar .fill, .chart-line, .chart-point, .pctile-bar'
+      ).forEach(function (el, i) {
+        el.classList.remove('metric-in'); el.classList.add('metric-animate');
+        el.style.animationDelay = Math.min(i * 24, 240) + 'ms';
+        requestAnimationFrame(function () { el.classList.add('metric-in'); });
+      });
+      root.querySelectorAll('.lb-gauge-svg').forEach(function (gauge) {
+        gauge.classList.remove('lb-gauge-active');
+        gauge.getBoundingClientRect();
+        requestAnimationFrame(function () { gauge.classList.add('lb-gauge-active'); });
+      });
+      root.querySelectorAll('.auto-chart').forEach(function (chart) {
+        chart.classList.remove('chart-active'); chart.getBoundingClientRect();
+        requestAnimationFrame(function () { chart.classList.add('chart-active'); });
+      });
+    }
+    cards.forEach(function (card) {
+      card.addEventListener('toggle', function () { if (card.open) animateMetrics(card); });
+    });
+    if ('IntersectionObserver' in window) {
+      var reveal = new IntersectionObserver(function (entries, observer) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add('motion-in'); animateMetrics(entry.target); observer.unobserve(entry.target);
+        });
+      }, { rootMargin: '0px 0px -8% 0px', threshold: 0.04 });
+      cards.forEach(function (card) { card.classList.add('motion-ready'); reveal.observe(card); });
+      var spy = new IntersectionObserver(function (entries) {
+        var current = entries.filter(function (entry) { return entry.isIntersecting; })
+          .sort(function (a, b) { return Math.abs(a.boundingClientRect.top) - Math.abs(b.boundingClientRect.top); })[0];
+        if (!current || !toc) return;
+        toc.querySelectorAll('a.active').forEach(function (a) { a.classList.remove('active'); });
+        var active = toc.querySelector('a[href="#' + current.target.id + '"]');
+        if (active) active.classList.add('active');
+      }, { rootMargin: '-12% 0px -72% 0px', threshold: 0 });
+      cards.forEach(function (card) { spy.observe(card); });
+    } else { cards.forEach(animateMetrics); }
+    syncScrollUi();
+    applySearch();
+  }
   function enhanceTable(table, idx) {
     if (!table.tHead || !table.tBodies.length) return;
     if (table.closest('.kpi-grid, .finding-card, .meta-table, .scope-table')) return;
@@ -3542,7 +4044,7 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     scroll.appendChild(table);
     var bar = document.createElement('div');
     bar.className = 'table-toolbar';
-    bar.innerHTML = '<input type="search" class="table-search" placeholder="Search table…">'
+    bar.innerHTML = '<input type="search" class="table-search" aria-label="Search table rows" placeholder="Search table…">'
       + (hasProblems ? '<label class="table-check"><input type="checkbox" data-problems> Problems only</label>' : '')
       + '<label class="table-check"><input type="checkbox" data-all> Show all</label>'
       + '<span class="table-count"></span>'
@@ -3567,10 +4069,14 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     var lastFiltered = rows;
     Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, i) {
       th.tabIndex = 0;
+      th.setAttribute('role', 'button');
       th.classList.add('sortable');
       th.addEventListener('click', function () {
         if (sortCol === i) sortDir = -sortDir; else { sortCol = i; sortDir = 1; }
         page = 0; apply();
+      });
+      th.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); th.click(); }
       });
     });
     function apply() {
@@ -3651,6 +4157,7 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     });
     apply();
   }
+  enhanceReportNavigation();
   document.querySelectorAll('details.report-card table').forEach(enhanceTable);
   document.querySelectorAll('.report-tabs').forEach(function (tabs) {
     var btns = tabs.querySelectorAll('[data-tab]');
@@ -4074,6 +4581,34 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 60
 .lb-gauge-svg .lb-chip-red { fill: var(--danger-soft); stroke: var(--danger); }
 .lb-gauge-svg .lb-chip-text-amber { fill: var(--warning); }
 .lb-gauge-svg .lb-chip-text-red { fill: var(--danger); }
+.lb-gauge-svg .lb-value-arc { stroke-dasharray: 100; stroke-dashoffset: 100; }
+.lb-gauge-svg .lb-needle { transform: scale(0); }
+.lb-gauge-svg .lb-value-ok, .lb-gauge-svg .lb-value-amber, .lb-gauge-svg .lb-value-red {
+  opacity: 0; transform-box: fill-box; transform-origin: center;
+}
+.lb-gauge-svg.lb-gauge-active .lb-value-arc {
+  animation: lb-arc-in 0.85s cubic-bezier(.2,.8,.2,1) forwards;
+}
+.lb-gauge-svg.lb-gauge-active .lb-needle {
+  animation: lb-needle-in 0.58s cubic-bezier(.2,1.35,.35,1) 0.34s forwards;
+}
+.lb-gauge-svg.lb-gauge-active .lb-value-ok,
+.lb-gauge-svg.lb-gauge-active .lb-value-amber,
+.lb-gauge-svg.lb-gauge-active .lb-value-red {
+  animation: lb-value-in 0.35s ease-out 0.62s forwards;
+}
+@keyframes lb-arc-in { to { stroke-dashoffset: 0; } }
+@keyframes lb-needle-in { from { transform: scale(0); } to { transform: scale(1); } }
+@keyframes lb-value-in {
+  from { opacity: 0; transform: translateY(3px) scale(.92); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lb-gauge-svg .lb-value-arc { stroke-dashoffset: 0; }
+  .lb-gauge-svg .lb-needle { transform: none; }
+  .lb-gauge-svg .lb-value-ok, .lb-gauge-svg .lb-value-amber,
+  .lb-gauge-svg .lb-value-red { opacity: 1; transform: none; }
+}
 .pctile-svg { display: block; max-width: 100%; height: auto; }
 .pctile-title { fill: var(--ink); }
 .pctile-sub { fill: var(--muted); }
@@ -5366,8 +5901,6 @@ def html_glossary(*, range_note: str = "") -> str:
         '<p class="detail-note">Glossary of metric definitions used in this report.</p>'
         f"<ul>{lis}</ul></section>"
     )
-
-
 COMPARE_EVIDENCE = [
     ('task_presence', 'New / Missing Tasks', 'summary', ['Task', 'Present in A', 'Present in B', 'CPU A', 'CPU B', 'Runs A', 'Runs B', 'Notes']),
     ('relative_changes', 'Largest Relative Changes', 'summary', ['Metric / Task', 'Baseline A', 'Candidate B', 'Absolute Δ', 'Relative Δ %', 'Direction']),
@@ -69727,10 +70260,11 @@ def _lb_gauge_svg_body(
         f'font-family="{sans}" font-size="10" font-weight="600">{title}</text>'
         f'<path d="{bg}" fill="none" class="lb-track" stroke-width="{stroke_w:.0f}" '
         f'stroke-linecap="round"/>'
-        f'<path d="{fill}" fill="none" stroke="url(#{uid})" stroke-width="{stroke_w:.0f}" '
-        f'stroke-linecap="round"/>'
+        f'<path d="{fill}" fill="none" class="lb-value-arc" pathLength="100" '
+        f'stroke="url(#{uid})" stroke-width="{stroke_w:.0f}" stroke-linecap="round"/>'
         f'<line x1="{cx}" y1="{cy}" x2="{tip_x:.2f}" y2="{tip_y:.2f}" '
-        f'class="lb-needle" stroke-width="2" stroke-linecap="round"/>'
+        f'class="lb-needle" style="transform-origin:{cx}px {cy}px" '
+        f'stroke-width="2" stroke-linecap="round"/>'
         f'<circle cx="{cx}" cy="{cy}" r="3.5" class="lb-hub" stroke-width="1.75"/>'
         f'<text x="{cx}" y="{value_y:.0f}" text-anchor="middle" class="{value_cls}" '
         f'font-family="{sans}" font-size="12" font-weight="700">'

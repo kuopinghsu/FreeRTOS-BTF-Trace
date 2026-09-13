@@ -64,6 +64,8 @@ describe('loadBalanceGauge', () => {
     assert.match(svg, /Load Balance Score/)
     assert.match(svg, /Std Deviation/)
     assert.match(svg, /12\.0%/)
+    assert.match(svg, /class="lb-value-arc" pathLength="100"/)
+    assert.match(svg, /class="lb-needle" style="transform-origin:70px 88px"/)
     assert.doesNotMatch(svg, /system-ui/)
   })
 

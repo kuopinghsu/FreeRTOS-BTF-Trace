@@ -14,6 +14,7 @@ from btf_viewer_pkg import _bootstrap  # noqa: E402
 _bootstrap.install()
 
 from btf_viewer_pkg.html_report import (  # noqa: E402
+    HTML_REPORT_INTERACTIVE_SCRIPT,
     HTML_REPORT_TOC_SCRIPT,
     html_apply_collapsible_toc,
     html_section_slug,
@@ -22,6 +23,20 @@ from btf_viewer_pkg.stats_html import STATS_TOC_GROUPS  # noqa: E402
 
 
 class HtmlReportTocTests(unittest.TestCase):
+    def test_interactive_report_has_modern_navigation_controls(self):
+        script = HTML_REPORT_INTERACTIVE_SCRIPT
+        for marker in (
+                "report-command-bar", "Search report sections", "report-match-count",
+                "data-report-expand", "data-report-reset", "data-report-print",
+                "section-link", "back-to-top", "e.key === '/'", "e.key === 'Escape'",
+                "aria-label=\"Search table rows\"", "th.setAttribute('role', 'button')",
+                "scroll-progress", "IntersectionObserver", "motion-ready", "animateMetrics",
+                "hydrateStatisticsCharts", "addLineChart", "addDonutChart",
+                "Core utilization trend", "Task CPU share", "Migration flow share",
+                "sec-core-pair-migration-summary", "chart-active",
+        ):
+            self.assertIn(marker, script)
+
     def test_statistics_html_toc_has_expand_collapse_all(self):
         body = (
             "<!--TOC-->\n"

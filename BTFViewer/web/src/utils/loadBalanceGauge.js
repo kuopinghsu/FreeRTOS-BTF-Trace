@@ -191,8 +191,8 @@ function _gaugeSvgBody({
   </defs>
   <text x="${cx}" y="18" text-anchor="middle" class="lb-title" font-family="sans-serif" font-size="10" font-weight="600">${title}</text>
   <path d="${bg}" fill="none" class="lb-track" stroke-width="${strokeW}" stroke-linecap="round"/>
-  <path d="${fill}" fill="none" stroke="url(#${uid})" stroke-width="${strokeW}" stroke-linecap="round"/>
-  <line x1="${cx}" y1="${cy}" x2="${tip.x.toFixed(2)}" y2="${tip.y.toFixed(2)}" class="lb-needle" stroke-width="2" stroke-linecap="round"/>
+  <path d="${fill}" fill="none" class="lb-value-arc" pathLength="100" stroke="url(#${uid})" stroke-width="${strokeW}" stroke-linecap="round"/>
+  <line x1="${cx}" y1="${cy}" x2="${tip.x.toFixed(2)}" y2="${tip.y.toFixed(2)}" class="lb-needle" style="transform-origin:${cx}px ${cy}px" stroke-width="2" stroke-linecap="round"/>
   <circle cx="${cx}" cy="${cy}" r="3.5" class="lb-hub" stroke-width="1.75"/>
   <text x="${cx}" y="${valueY}" text-anchor="middle" class="${valueCls}" font-family="sans-serif" font-size="12" font-weight="700">${valueLabel}</text>
   <text x="${cx}" y="${cy + 16}" text-anchor="middle" class="lb-muted" font-family="sans-serif" font-size="9">${legend}</text>`

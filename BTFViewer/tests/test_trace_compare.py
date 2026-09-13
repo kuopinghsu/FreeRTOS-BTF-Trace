@@ -152,6 +152,12 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("Max A", csv)
         self.assertRegex(html, r'<details class="report-card" id="sec-overview" open>')
         self.assertIn("compare-chart", html)
+        self.assertIn("hydrateTraceCompareCharts", html)
+        self.assertIn("Preemption count profile", html)
+        self.assertIn("Synchronization activity profile", html)
+        self.assertIn("Load-balance trend", html)
+        self.assertIn("compare-chart-active", html)
+        self.assertIn("compare-bar-in", html)
         self.assertIn("Core Utilization", html)
         self.assertIn("Summary changes", html)
         # Paired A/B bars lead the ranked tables and replace the Core
