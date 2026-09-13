@@ -820,7 +820,7 @@ static BaseType_t prvT8Create( TaskFunction_t fn, const char *name,
      * timeline row geometry viewers expect for classic inversion. */
 #if ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 )
     return xTaskCreateAffinitySet( fn, name, TASK_STACK_WORDS, NULL, pri,
-                                   ( UBaseType_t )( 1u << 0 ), NULL );
+                                   taskCORE_AFFINITY_BIT( 0 ), NULL );
 #else
     return xTaskCreate( fn, name, TASK_STACK_WORDS, NULL, pri, NULL );
 #endif
@@ -1073,7 +1073,7 @@ static BaseType_t prvT9CreateSubject( TaskFunction_t fn, const char *name,
                                       UBaseType_t core_idx )
 {
 #if ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 )
-    UBaseType_t mask = ( UBaseType_t )( 1u << ( core_idx % configNUMBER_OF_CORES ) );
+    TaskCoreAffinityMask_t mask = taskCORE_AFFINITY_BIT( core_idx % configNUMBER_OF_CORES );
     return xTaskCreateAffinitySet( fn, name, TASK_STACK_WORDS, arg,
                                    BOOST_PRIORITY, mask, out );
 #else
@@ -1370,7 +1370,7 @@ static volatile uint32_t  t10_mig_fail;
 static void vAffPinned( void *pvArg )
 {
     int core = (int)(intptr_t)pvArg;
-    UBaseType_t mask = ( UBaseType_t )( 1u << core );
+    TaskCoreAffinityMask_t mask = taskCORE_AFFINITY_BIT( core );
     int i;
 
     /* Emit affinity STI (create-time mask is not traced by FreeRTOS V11). */
@@ -1393,8 +1393,8 @@ static void vAffPinned( void *pvArg )
 static void vAffMigrate( void *pvArg )
 {
     const int last = (int)configNUMBER_OF_CORES - 1;
-    UBaseType_t mask0 = ( UBaseType_t )( 1u << 0 );
-    UBaseType_t maskN = ( UBaseType_t )( 1u << last );
+    TaskCoreAffinityMask_t mask0 = taskCORE_AFFINITY_BIT( 0 );
+    TaskCoreAffinityMask_t maskN = taskCORE_AFFINITY_BIT( last );
     int i;
     (void)pvArg;
 
@@ -1445,7 +1445,7 @@ static int run_test10( void )
 
     for( c = 0; c < n_pin; ++c )
     {
-        UBaseType_t mask = ( UBaseType_t )( 1u << c );
+        TaskCoreAffinityMask_t mask = taskCORE_AFFINITY_BIT( c );
         configASSERT( xTaskCreateAffinitySet(
                           vAffPinned, "Aff",
                           TASK_STACK_WORDS, (void *)(intptr_t)c,

@@ -420,10 +420,9 @@
 #define configNUMBER_OF_CORES                     1
 #endif
 
-/* FreeRTOS V11.3.0 tasks.c builds core masks with (1U << configNUMBER_OF_CORES),
- * which is undefined for N >= 32 (1U is typically a 32-bit unsigned int). */
-#if ( configNUMBER_OF_CORES < 1 ) || ( configNUMBER_OF_CORES >= 32 )
-#error "configNUMBER_OF_CORES must be in the range 1 .. 31"
+/* The local FreeRTOS V11.3.1 affinity patch provides a dedicated mask type. */
+#if ( configNUMBER_OF_CORES < 1 ) || ( configNUMBER_OF_CORES > 128 )
+#error "configNUMBER_OF_CORES must be in the range 1 .. 128"
 #endif
 
 /* When using SMP (i.e. configNUMBER_OF_CORES is greater than one), set
@@ -504,7 +503,7 @@
 #define INCLUDE_vTaskDelay                     1
 #define INCLUDE_xTaskGetSchedulerState         1
 #define INCLUDE_xTaskGetCurrentTaskHandle      1
-#define INCLUDE_uxTaskGetStackHighWaterMark    0
+#define INCLUDE_uxTaskGetStackHighWaterMark    1
 #define INCLUDE_xTaskGetIdleTaskHandle         0
 #define INCLUDE_eTaskGetState                  0
 #define INCLUDE_xTimerPendFunctionCall         0

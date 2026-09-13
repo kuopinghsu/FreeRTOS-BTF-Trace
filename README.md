@@ -60,12 +60,64 @@ make CORES=2 run    # 2-core SMP
 make CORES=8 run    # 8-core SMP
 ```
 
-On the first run, the build clones **FreeRTOS-Kernel V11.3.0**. After the simulator exits, `gentrace` creates:
+On the first run, the build clones **FreeRTOS-Kernel V11.3.1**. After the simulator exits, `gentrace` creates:
 
 ```text
 tracedata/trace.btf
 tracedata/trace.vcd
 ```
+
+### Experimental 128-core build
+
+FreeRTOS-Kernel V11.3.1 and current upstream `main` store task affinity in
+`UBaseType_t`; upstream therefore does not provide a portable 128-core affinity
+API. This repository carries an experimental patch that replaces that field and
+the existing affinity API parameters with `TaskCoreAffinityMask_t` and adds
+`taskCORE_AFFINITY_BIT(core)`.
+
+Apply the patch only when starting from a clean official V11.3.1 checkout:
+
+```bash
+git -C FreeRTOS-Kernel checkout V11.3.1
+git -C FreeRTOS-Kernel apply \
+  ../patches/freertos-kernel-v11.3.1-128-core-affinity.patch
+```
+
+Build the dedicated 128-core synchronization workload without running it:
+
+```bash
+make -C Demo/examples CORES=128 \
+  ../../build/demo/examples/cores128-tickless0/stress_128.elf
+```
+
+Build the simulator, rebuild the ELF, and start 128 simulated harts:
+
+```bash
+make clean && make CORES=128 -C Demo/examples stress_128
+```
+
+The stress program creates one affinity-pinned worker per core and exercises
+queues, mutex pairs, a counting semaphore, and event-group barriers. See
+[`Demo/examples/stress_128/README.md`](Demo/examples/stress_128/README.md).
+
+Current limitations:
+
+- This is a local experimental patch, not an official FreeRTOS feature.
+- Above 64 cores it requires GCC/Clang `__int128`, or an integer-like 128-bit
+  `portTASK_CORE_AFFINITY_TYPE` supplied by the port.
+- The affinity API/TCB ABI changes above 32 cores; all kernel, application,
+  trace-hook, debugger, and port objects must be rebuilt together.
+- The BTF v1.4 affinity event stores only 32 mask bits. Core IDs 0–127 and
+  scheduling events can be recorded, but affinity bits 32–127 are truncated in
+  `affinity_set` trace events and cannot yet be verified by BTFViewer.
+- The bundled simulator now accepts 128 harts, but simulation is extremely slow.
+  The ELF compiles and links; completion of all stress rounds is not currently a
+  fast CI test and has not been qualified as production-grade 128-core runtime
+  support.
+- Kernel algorithms still scan core arrays in several scheduler paths, so their
+  latency and lock contention grow significantly at 128 cores.
+
+See [`patches/README.md`](patches/README.md) for API and integration details.
 
 ### 3. Open the BTF trace
 
@@ -178,4 +230,3 @@ See **[TRACE_FORMAT.md](TRACE_FORMAT.md)** for the binary layout, event encoding
 ## License
 
 MIT
-

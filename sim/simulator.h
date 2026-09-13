@@ -36,7 +36,7 @@ constexpr uint64_t kClintBase = 0x02000000ull;
 constexpr uint64_t kMtimeBase = kClintBase + 0xBFF8ull;
 constexpr uint64_t kMtimecmpBase = kClintBase + 0x4000ull;
 constexpr uint64_t kPageSize = 4096ull;
-constexpr int kMaxHarts = 64;
+constexpr int kMaxHarts = 128;
 /** Sweeps per outer-loop iteration when GDB is off (reduces poll/fflush overhead). */
 constexpr unsigned kRunSweepBatch = 4;
 

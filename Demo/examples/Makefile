@@ -13,9 +13,9 @@ LDFLAGS += $(ARCH_FLAGS) -nostartfiles -Wl,--no-relax \
 LDLIBS  += -lc -lgcc
 
 CORES ?= 1
-# FreeRTOS V11.3.0 affinity masking uses (1U << CORES); N >= 32 is undefined.
-ifeq ($(shell [ "$(CORES)" -ge 1 ] 2>/dev/null && [ "$(CORES)" -le 31 ] 2>/dev/null && echo ok),)
-$(error CORES must be an integer in 1 .. 31 (got '$(CORES)'))
+# The local V11.3.1 affinity patch provides a 128-bit task affinity mask.
+ifeq ($(shell [ "$(CORES)" -ge 1 ] 2>/dev/null && [ "$(CORES)" -le 128 ] 2>/dev/null && echo ok),)
+$(error CORES must be an integer in 1 .. 128 (got '$(CORES)'))
 endif
 SIM   ?= ../../build/sim/riscv64-sim
 
@@ -53,6 +53,9 @@ FREERTOS_TRACE   := ../../FreeRTOS-Trace
 GENTRACE         ?= ../../build/tools/gentrace
 TRACEDATA        := ../../tracedata
 TRACE_BIN        := trace.bin
+STRESS_TRACE_BIN := $(TRACEDATA)/stress-128-trace.bin
+STRESS_TRACE_BTF := $(TRACEDATA)/stress-128.btf
+STRESS_TRACE_VCD := $(TRACEDATA)/stress-128.vcd
 
 # Override btf_trace.h default (4096). Passed on the compile line so the trace
 # library and firmware agree on TRACE_DATA layout without editing FreeRTOSConfig.h.
@@ -91,7 +94,7 @@ FREERTOS_OBJS := $(patsubst %.c,$(OBJDIR)/freertos/%.o,$(notdir $(FREERTOS_C_SRC
 # Tell make where to find FreeRTOS C sources for pattern rules.
 vpath %.c $(FREERTOS_KERNEL) $(FREERTOS_MEMMANG) $(FREERTOS_CHIPS) $(FREERTOS_TRACE)
 
-.PHONY: all clean list run $(EXAMPLES)
+.PHONY: all clean list run stress_128 $(EXAMPLES)
 
 all: $(TARGETS)
 
@@ -111,6 +114,25 @@ run: $(OUTDIR)/freertos_test.elf
 		rm -f $(TRACE_BIN); \
 	fi
 
+# Always rebuild and run this dedicated target with the required topology.
+stress_128:
+	$(MAKE) -C ../../sim
+	$(MAKE) -C ../../tools BUILD_DIR=$(abspath ../../build/tools)
+	$(MAKE) CORES=128 TICKLESS=$(TICKLESS) \
+		../../build/demo/examples/cores128-tickless$(TICKLESS)/stress_128.elf
+	@echo "[stress128] launching 128-hart simulator (startup may take several minutes)"
+	@rm -f $(TRACE_BIN)
+	$(SIM) --cores 128 \
+		../../build/demo/examples/cores128-tickless$(TICKLESS)/stress_128.elf
+	@test -f $(TRACE_BIN) || { echo "[stress128] error: $(TRACE_BIN) was not dumped" >&2; exit 1; }
+	@mkdir -p $(TRACEDATA)
+	$(GENTRACE) $(TRACE_BIN) $(STRESS_TRACE_BTF)
+	$(GENTRACE) -v $(TRACE_BIN) $(STRESS_TRACE_VCD)
+	@mv $(TRACE_BIN) $(STRESS_TRACE_BIN)
+	@echo "[stress128] raw trace: $(STRESS_TRACE_BIN)"
+	@echo "[stress128] BTF trace: $(STRESS_TRACE_BTF)"
+	@echo "[stress128] VCD trace: $(STRESS_TRACE_VCD)"
+
 # Shortcut: `make [CORES=N] freertos_test` builds the ELF then runs.
 $(EXAMPLES): %: $(OUTDIR)/%.elf
 	$(SIM) --cores $(CORES) $<
@@ -124,8 +146,17 @@ $(OUTDIR)/freertos_test.elf: \
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+$(OUTDIR)/stress_128.elf: \
+    $(OBJDIR)/stress_128/main.o \
+    $(COMMON_OBJS) \
+    $(FREERTOS_OBJS) \
+    $(FREERTOS_PORT_OBJ)
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 # freertos_test/main.c needs FreeRTOS and trace headers.
 $(OBJDIR)/freertos_test/main.o: CPPFLAGS += $(FREERTOS_CPPFLAGS)
+$(OBJDIR)/stress_128/main.o: CPPFLAGS += $(FREERTOS_CPPFLAGS)
 
 # ── Common object rules ────────────────────────────────────────────────────────
 $(OBJDIR)/common/crt0.o: ../Common/crt0.S
