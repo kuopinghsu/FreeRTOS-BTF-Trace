@@ -1191,13 +1191,12 @@
           </button>
         </div>
 
+        <!-- eslint-disable vue/max-attributes-per-line -->
         <div class="help-body">
-          <!-- eslint-disable-next-line vue/max-attributes-per-line -->
-          <button type="button" class="help-reference-link"
-            @click="openStatsReference"
-          >
+          <button type="button" class="help-reference-link" @click="openStatsReference">
             Statistics Reference — full documentation for every stat →
           </button>
+          <!-- eslint-enable vue/max-attributes-per-line -->
           <div class="help-section">
             <div class="help-section-title">
               Keyboard

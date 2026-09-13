@@ -1975,7 +1975,10 @@ class AiWebParityTests(unittest.TestCase):
             encoding="utf-8")
         # Explain is an Ask AI submenu (not a standalone "Explain…" button).
         self.assertIn('ask_menu.addMenu("Explain")', stats)
-        self.assertIn(">Explain</div>", dlg)
+        self.assertRegex(
+            dlg,
+            r'<div class="analysis-popup-label">\s*Explain\s*</div>',
+        )
         self.assertIn('"explain_finding"', stats)
         self.assertIn("'explain_finding'", dlg)
         # Desktop Tool window ↔ Web floating tool host (not modal overlay / right dock).
