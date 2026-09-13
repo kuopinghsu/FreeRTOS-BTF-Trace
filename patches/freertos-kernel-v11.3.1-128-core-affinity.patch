@@ -1,0 +1,307 @@
+diff --git a/include/FreeRTOS.h b/include/FreeRTOS.h
+index 1a7e6e70d..a8c10cb93 100644
+--- a/include/FreeRTOS.h
++++ b/include/FreeRTOS.h
+@@ -516,6 +516,26 @@
+     #define configUSE_CORE_AFFINITY    0
+ #endif /* configUSE_CORE_AFFINITY */
+ 
++/* Core affinity is independent of UBaseType_t so SMP ports can expose up to
++ * 128 cores. A port may override the integer-like storage type. */
++#if ( configNUMBER_OF_CORES > 128 )
++    #error configNUMBER_OF_CORES must not exceed 128
++#endif
++#ifndef portTASK_CORE_AFFINITY_TYPE
++    #if ( configNUMBER_OF_CORES > 64 )
++        #if defined( __SIZEOF_INT128__ )
++            #define portTASK_CORE_AFFINITY_TYPE    unsigned __int128
++        #else
++            #error Define portTASK_CORE_AFFINITY_TYPE for more than 64 cores
++        #endif
++    #elif ( configNUMBER_OF_CORES > 32 )
++        #define portTASK_CORE_AFFINITY_TYPE    uint64_t
++    #else
++        #define portTASK_CORE_AFFINITY_TYPE    UBaseType_t
++    #endif
++#endif
++typedef portTASK_CORE_AFFINITY_TYPE TaskCoreAffinityMask_t;
++
+ #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+     #ifndef configTASK_DEFAULT_CORE_AFFINITY
+         #define configTASK_DEFAULT_CORE_AFFINITY    tskNO_AFFINITY
+@@ -3180,7 +3200,7 @@ typedef struct xSTATIC_TCB
+         xMPU_SETTINGS xDummy2;
+     #endif
+     #if ( configUSE_CORE_AFFINITY == 1 ) && ( configNUMBER_OF_CORES > 1 )
+-        UBaseType_t uxDummy26;
++        TaskCoreAffinityMask_t uxDummy26;
+     #endif
+     StaticListItem_t xDummy3[ 2 ];
+     UBaseType_t uxDummy5;
+diff --git a/include/task.h b/include/task.h
+index 09f18751e..6c6fc531a 100644
+--- a/include/task.h
++++ b/include/task.h
+@@ -162,6 +162,9 @@ typedef struct xTASK_PARAMETERS
+     #endif
+ } TaskParameters_t;
+ 
++#define taskCORE_AFFINITY_BIT( uxCore ) \
++    ( ( TaskCoreAffinityMask_t ) 1U << ( UBaseType_t ) ( uxCore ) )
++
+ /* Used with the uxTaskGetSystemState() function to return the state of each task
+  * in the system. */
+ typedef struct xTASK_STATUS
+@@ -180,7 +183,7 @@ typedef struct xTASK_STATUS
+     #endif
+     configSTACK_DEPTH_TYPE usStackHighWaterMark;  /* The minimum amount of stack space that has remained for the task since the task was created.  The closer this value is to zero the closer the task has come to overflowing its stack. */
+     #if ( ( configUSE_CORE_AFFINITY == 1 ) && ( configNUMBER_OF_CORES > 1 ) )
+-        UBaseType_t uxCoreAffinityMask;           /* The core affinity mask for the task */
++        TaskCoreAffinityMask_t uxCoreAffinityMask;           /* The core affinity mask for the task */
+     #endif
+ } TaskStatus_t;
+ 
+@@ -214,7 +217,7 @@ typedef enum
+  *
+  * \ingroup TaskUtils
+  */
+-#define tskNO_AFFINITY      ( ( UBaseType_t ) -1 )
++#define tskNO_AFFINITY      ( ( TaskCoreAffinityMask_t ) -1 )
+ 
+ /**
+  * task. h
+@@ -407,7 +410,7 @@ typedef enum
+                                        const configSTACK_DEPTH_TYPE uxStackDepth,
+                                        void * const pvParameters,
+                                        UBaseType_t uxPriority,
+-                                       UBaseType_t uxCoreAffinityMask,
++                                       TaskCoreAffinityMask_t uxCoreAffinityMask,
+                                        TaskHandle_t * const pxCreatedTask ) PRIVILEGED_FUNCTION;
+ #endif
+ 
+@@ -537,7 +540,7 @@ typedef enum
+                                                UBaseType_t uxPriority,
+                                                StackType_t * const puxStackBuffer,
+                                                StaticTask_t * const pxTaskBuffer,
+-                                               UBaseType_t uxCoreAffinityMask ) PRIVILEGED_FUNCTION;
++                                               TaskCoreAffinityMask_t uxCoreAffinityMask ) PRIVILEGED_FUNCTION;
+ #endif
+ 
+ /**
+@@ -628,7 +631,7 @@ typedef enum
+ 
+ #if ( ( portUSING_MPU_WRAPPERS == 1 ) && ( configSUPPORT_DYNAMIC_ALLOCATION == 1 ) && ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+     BaseType_t xTaskCreateRestrictedAffinitySet( const TaskParameters_t * const pxTaskDefinition,
+-                                                 UBaseType_t uxCoreAffinityMask,
++                                                 TaskCoreAffinityMask_t uxCoreAffinityMask,
+                                                  TaskHandle_t * pxCreatedTask ) PRIVILEGED_FUNCTION;
+ #endif
+ 
+@@ -732,7 +735,7 @@ typedef enum
+ 
+ #if ( ( portUSING_MPU_WRAPPERS == 1 ) && ( configSUPPORT_STATIC_ALLOCATION == 1 ) && ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+     BaseType_t xTaskCreateRestrictedStaticAffinitySet( const TaskParameters_t * const pxTaskDefinition,
+-                                                       UBaseType_t uxCoreAffinityMask,
++                                                       TaskCoreAffinityMask_t uxCoreAffinityMask,
+                                                        TaskHandle_t * pxCreatedTask ) PRIVILEGED_FUNCTION;
+ #endif
+ 
+@@ -1420,7 +1423,7 @@ BaseType_t xTaskResumeFromISR( TaskHandle_t xTaskToResume ) PRIVILEGED_FUNCTION;
+  * void vAFunction( void )
+  * {
+  * TaskHandle_t xHandle;
+- * UBaseType_t uxCoreAffinityMask;
++ * TaskCoreAffinityMask_t uxCoreAffinityMask;
+  *
+  *      // Create a task, storing the handle.
+  *      xTaskCreate( vTaskCode, "NAME", STACK_SIZE, NULL, tskIDLE_PRIORITY, &( xHandle ) );
+@@ -1434,7 +1437,7 @@ BaseType_t xTaskResumeFromISR( TaskHandle_t xTaskToResume ) PRIVILEGED_FUNCTION;
+  * }
+  */
+     void vTaskCoreAffinitySet( const TaskHandle_t xTask,
+-                               UBaseType_t uxCoreAffinityMask );
++                               TaskCoreAffinityMask_t uxCoreAffinityMask );
+ #endif
+ 
+ #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+@@ -1485,7 +1488,7 @@ BaseType_t xTaskResumeFromISR( TaskHandle_t xTaskToResume ) PRIVILEGED_FUNCTION;
+  *     }
+  * }
+  */
+-    UBaseType_t vTaskCoreAffinityGet( ConstTaskHandle_t xTask );
++    TaskCoreAffinityMask_t vTaskCoreAffinityGet( ConstTaskHandle_t xTask );
+ #endif
+ 
+ #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+diff --git a/tasks.c b/tasks.c
+index c2c01dbd0..3a655c562 100644
+--- a/tasks.c
++++ b/tasks.c
+@@ -383,7 +383,7 @@ typedef struct tskTaskControlBlock       /* The old naming convention is used to
+     #endif
+ 
+     #if ( configUSE_CORE_AFFINITY == 1 ) && ( configNUMBER_OF_CORES > 1 )
+-        UBaseType_t uxCoreAffinityMask; /**< Used to link the task to certain cores.  UBaseType_t must have greater than or equal to the number of bits as configNUMBER_OF_CORES. */
++        TaskCoreAffinityMask_t uxCoreAffinityMask; /**< Used to link the task to any configured core. */
+     #endif
+ 
+     ListItem_t xStateListItem;                  /**< The list that the state list item of a task is reference from denotes the state of that task (Ready, Blocked, Suspended ). */
+@@ -926,7 +926,7 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+                         if( xCurrentCoreTaskPriority <= xLowestPriorityToPreempt )
+                         {
+                             #if ( configUSE_CORE_AFFINITY == 1 )
+-                                if( ( pxTCB->uxCoreAffinityMask & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) != 0U )
++                                if( ( pxTCB->uxCoreAffinityMask & taskCORE_AFFINITY_BIT( xCoreID ) ) != 0U )
+                             #endif
+                             {
+                                 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+@@ -1075,7 +1075,7 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+                     if( pxTCB->xTaskRunState == taskTASK_NOT_RUNNING )
+                     {
+                         #if ( configUSE_CORE_AFFINITY == 1 )
+-                            if( ( pxTCB->uxCoreAffinityMask & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) != 0U )
++                            if( ( pxTCB->uxCoreAffinityMask & taskCORE_AFFINITY_BIT( xCoreID ) ) != 0U )
+                         #endif
+                         {
+                             /* If the task is not being executed by any core swap it in. */
+@@ -1093,7 +1093,7 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+                         configASSERT( ( pxTCB->xTaskRunState == xCoreID ) || ( pxTCB->xTaskRunState == taskTASK_SCHEDULED_TO_YIELD ) );
+ 
+                         #if ( configUSE_CORE_AFFINITY == 1 )
+-                            if( ( pxTCB->uxCoreAffinityMask & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) != 0U )
++                            if( ( pxTCB->uxCoreAffinityMask & taskCORE_AFFINITY_BIT( xCoreID ) ) != 0U )
+                         #endif
+                         {
+                             /* The task is already running on this core, mark it as scheduled. */
+@@ -1174,7 +1174,7 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+                 {
+                     /* A ready task was just evicted from this core. See if it can be
+                      * scheduled on any other core. */
+-                    UBaseType_t uxCoreMap = pxPreviousTCB->uxCoreAffinityMask;
++                    TaskCoreAffinityMask_t uxCoreMap = pxPreviousTCB->uxCoreAffinityMask;
+                     BaseType_t xLowestPriority = ( BaseType_t ) pxPreviousTCB->uxPriority;
+                     BaseType_t xLowestPriorityCore = -1;
+                     BaseType_t x;
+@@ -1184,7 +1184,7 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+                         xLowestPriority = xLowestPriority - 1;
+                     }
+ 
+-                    if( ( uxCoreMap & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) != 0U )
++                    if( ( uxCoreMap & taskCORE_AFFINITY_BIT( xCoreID ) ) != 0U )
+                     {
+                         /* pxPreviousTCB was removed from this core and this core is not excluded
+                          * from it's core affinity mask.
+@@ -1213,14 +1213,14 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+                          * new core affinity mask to find a core on which it can run. */
+                     }
+ 
+-                    uxCoreMap &= ( ( 1U << configNUMBER_OF_CORES ) - 1U );
++                    /* Bits above configNUMBER_OF_CORES are ignored by the scan below. */
+ 
+                     for( x = ( ( BaseType_t ) configNUMBER_OF_CORES - 1 ); x >= ( BaseType_t ) 0; x-- )
+                     {
+                         UBaseType_t uxCore = ( UBaseType_t ) x;
+                         BaseType_t xTaskPriority;
+ 
+-                        if( ( uxCoreMap & ( ( UBaseType_t ) 1U << uxCore ) ) != 0U )
++                        if( ( uxCoreMap & taskCORE_AFFINITY_BIT( uxCore ) ) != 0U )
+                         {
+                             xTaskPriority = ( BaseType_t ) pxCurrentTCBs[ uxCore ]->uxPriority;
+ 
+@@ -1229,7 +1229,7 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+                                 xTaskPriority = xTaskPriority - ( BaseType_t ) 1;
+                             }
+ 
+-                            uxCoreMap &= ~( ( UBaseType_t ) 1U << uxCore );
++                            uxCoreMap &= ~taskCORE_AFFINITY_BIT( uxCore );
+ 
+                             if( ( xTaskPriority < xLowestPriority ) &&
+                                 ( taskTASK_IS_RUNNING( pxCurrentTCBs[ uxCore ] ) != pdFALSE ) &&
+@@ -1362,7 +1362,7 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+                                                    UBaseType_t uxPriority,
+                                                    StackType_t * const puxStackBuffer,
+                                                    StaticTask_t * const pxTaskBuffer,
+-                                                   UBaseType_t uxCoreAffinityMask )
++                                                   TaskCoreAffinityMask_t uxCoreAffinityMask )
+         {
+             TaskHandle_t xReturn = NULL;
+             TCB_t * pxNewTCB;
+@@ -1474,7 +1474,7 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+ 
+     #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+         BaseType_t xTaskCreateRestrictedStaticAffinitySet( const TaskParameters_t * const pxTaskDefinition,
+-                                                           UBaseType_t uxCoreAffinityMask,
++                                                           TaskCoreAffinityMask_t uxCoreAffinityMask,
+                                                            TaskHandle_t * pxCreatedTask )
+         {
+             TCB_t * pxNewTCB;
+@@ -1593,7 +1593,7 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+ 
+     #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+         BaseType_t xTaskCreateRestrictedAffinitySet( const TaskParameters_t * const pxTaskDefinition,
+-                                                     UBaseType_t uxCoreAffinityMask,
++                                                     TaskCoreAffinityMask_t uxCoreAffinityMask,
+                                                      TaskHandle_t * pxCreatedTask )
+         {
+             TCB_t * pxNewTCB;
+@@ -1769,7 +1769,7 @@ STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+                                            const configSTACK_DEPTH_TYPE uxStackDepth,
+                                            void * const pvParameters,
+                                            UBaseType_t uxPriority,
+-                                           UBaseType_t uxCoreAffinityMask,
++                                           TaskCoreAffinityMask_t uxCoreAffinityMask,
+                                            TaskHandle_t * const pxCreatedTask )
+         {
+             TCB_t * pxNewTCB;
+@@ -3056,7 +3056,7 @@ STATIC void prvInitialiseNewTask( TaskFunction_t pxTaskCode,
+ 
+ #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+     void vTaskCoreAffinitySet( const TaskHandle_t xTask,
+-                               UBaseType_t uxCoreAffinityMask )
++                               TaskCoreAffinityMask_t uxCoreAffinityMask )
+     {
+         TCB_t * pxTCB;
+         BaseType_t xCoreID;
+@@ -3078,7 +3078,7 @@ STATIC void prvInitialiseNewTask( TaskFunction_t pxTaskCode,
+ 
+                     /* If the task can no longer run on the core it was running,
+                      * request the core to yield. */
+-                    if( ( uxCoreAffinityMask & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) == 0U )
++                    if( ( uxCoreAffinityMask & taskCORE_AFFINITY_BIT( xCoreID ) ) == 0U )
+                     {
+                         prvYieldCore( xCoreID );
+                     }
+@@ -3112,10 +3112,10 @@ STATIC void prvInitialiseNewTask( TaskFunction_t pxTaskCode,
+ /*-----------------------------------------------------------*/
+ 
+ #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+-    UBaseType_t vTaskCoreAffinityGet( ConstTaskHandle_t xTask )
++    TaskCoreAffinityMask_t vTaskCoreAffinityGet( ConstTaskHandle_t xTask )
+     {
+         const TCB_t * pxTCB;
+-        UBaseType_t uxCoreAffinityMask;
++        TaskCoreAffinityMask_t uxCoreAffinityMask;
+ 
+         traceENTER_vTaskCoreAffinityGet( xTask );
+ 
+@@ -3726,7 +3726,7 @@ STATIC BaseType_t prvCreateIdleTasks( void )
+                 pxCurrentTCBs[ xCoreID ] = xIdleTaskHandles[ xCoreID ];
+                 #if ( ( configIDLE_AFFINITY == 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+                 {
+-                    xIdleTaskHandles[ xCoreID ]->uxCoreAffinityMask = ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID );
++                    xIdleTaskHandles[ xCoreID ]->uxCoreAffinityMask = taskCORE_AFFINITY_BIT( xCoreID );
+                 }
+                 #endif /* #if ( ( configIDLE_AFFINITY == 1 ) && ( configUSE_CORE_AFFINITY == 1 ) ) */
+             }
+@@ -3747,9 +3747,8 @@ void vTaskStartScheduler( void )
+ 
+     #if ( configUSE_CORE_AFFINITY == 1 ) && ( configNUMBER_OF_CORES > 1 )
+     {
+-        /* Sanity check that the UBaseType_t must have greater than or equal to
+-         * the number of bits as confNUMBER_OF_CORES. */
+-        configASSERT( ( sizeof( UBaseType_t ) * taskBITS_PER_BYTE ) >= configNUMBER_OF_CORES );
++        /* The affinity type must contain one bit for every configured core. */
++        configASSERT( ( sizeof( TaskCoreAffinityMask_t ) * taskBITS_PER_BYTE ) >= configNUMBER_OF_CORES );
+     }
+     #endif /* #if ( configUSE_CORE_AFFINITY == 1 ) && ( configNUMBER_OF_CORES > 1 ) */
+ 
