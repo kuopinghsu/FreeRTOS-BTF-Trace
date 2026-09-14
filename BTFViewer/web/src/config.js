@@ -36,7 +36,6 @@ export const DARK_MODE = true
 export const COLORBLIND_SAFE = false
 export const VIEW_MODE = 'task'          // 'task' | 'core'
 export const ORIENTATION = 'h'           // 'h' | 'v'
-export const STI_LOG_SCALE = false
 export const CPU_BUDGET_PCT = 0          // 0 = off
 
 // ---- Cursors --------------------------------------------------------------

@@ -607,6 +607,7 @@
             @clear-all-marks="onClearAllMarks"
             @mark-move="onMoveMark"
             @copy-screenshot="onCopyScreenshot"
+            @tag-representation-change="onTagRepresentationChange"
             @export-svg="onExportSvg"
             @before-cursor-change="pushUndoSnapshot"
             @before-mark-change="pushUndoSnapshot"
@@ -918,6 +919,7 @@
                   :section-heights="statsSectionHeights"
                   :scope-to-cursors="activeTab?.scopeToCursors !== false"
                   :analysis-settings="appSettings"
+                  :tag-representations="timelineOptions.tagRepresentations"
                   :section-collapsed-state="appSettings.statsSectionCollapsed"
                   :section-pins="appSettings.statsPinnedSections || []"
                   :section-order="appSettings.statsSectionOrder || []"
@@ -943,6 +945,7 @@
                   @clear-scope="onStatsScopeChange(false)"
                   @clear-filter="clearAllActiveFilters"
                   @stats-reference-requested="onStatsReferenceRequested"
+                  @tag-representation-change="onTagRepresentationChange"
                 />
                 <StatsReferenceViewer
                   ref="statsReferenceViewerRef"
@@ -2050,7 +2053,6 @@ import {
   SHOW_CPU_LOAD,
   SHOW_GRID,
   SHOW_STI,
-  STI_LOG_SCALE,
   VIEW_MODE,
   COMMAND_PALETTE_ACTIONS,
   COMMAND_PALETTE_META,
@@ -3247,7 +3249,7 @@ const timelineOptions = reactive({
   showGrid:        SHOW_GRID,
   showSti:         SHOW_STI,
   showCpuLoad:     SHOW_CPU_LOAD,
-  stiLogScale:     STI_LOG_SCALE,
+  tagRepresentations: {},
   orientation:     ORIENTATION,
   highlightKey:    null,
   marks:           [],
@@ -3282,7 +3284,6 @@ function syncTimelineOptionsFromSettings(s = appSettings) {
   timelineOptions.showHoverHighlight = s.hoverHighlight
   timelineOptions.viewMode = s.viewMode === 'core' ? 'core' : 'task'
   timelineOptions.orientation = s.orientation === 'v' ? 'v' : 'h'
-  timelineOptions.stiLogScale = !!s.stiLogScale
   timelineOptions.layoutRev += 1
   ensureRightPanelTabVisible(s)
 }
@@ -3320,16 +3321,19 @@ function persistTimelineViewPrefs() {
     appSettings.orientation = orientation
     dirty = true
   }
-  if (appSettings.stiLogScale !== !!timelineOptions.stiLogScale) {
-    appSettings.stiLogScale = !!timelineOptions.stiLogScale
-    dirty = true
-  }
   if (dirty) saveSettings(appSettings)
 }
 
 function onToolbarOptionsUpdate(v) {
   Object.assign(timelineOptions, v || {})
   persistTimelineViewPrefs()
+}
+
+function onTagRepresentationChange(channel, representation) {
+  timelineOptions.tagRepresentations = {
+    ...(timelineOptions.tagRepresentations || {}),
+    [channel]: representation,
+  }
 }
 
 /** Show Statistics when opening a new trace (desktop focuses Stats on load only). */

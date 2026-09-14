@@ -7,6 +7,7 @@ import {
   recommendTagRepresentation,
   tagPlotPoints,
   tagStatsRows,
+  tagSampleDetailRows,
 } from '../src/utils/tagAnalysis.js'
 
 test('tag payloads reinterpret the same 32-bit word', () => {
@@ -39,4 +40,9 @@ test('wide sparse unsigned ranges recommend log2 uint32', () => {
     tagPlotPoints(trace, 'tag3_event', null, null).map(point => point.yValue),
     [1, Math.log2(1025), Math.log2(1048577)],
   )
+})
+
+test('export samples honor the selected format', () => {
+  const trace = { ...buildTagData([{ target: 'tag0_event', time: 0, note: '1065353216', core: 'Core_0' }]), timeScale: 'ns' }
+  assert.equal(tagSampleDetailRows(trace, null, null, 0, { tag0_event: 'float32' })[0].valueNum, 1)
 })

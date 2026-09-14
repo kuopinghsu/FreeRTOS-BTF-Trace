@@ -1,6 +1,8 @@
 """BTF Viewer — parser module (source). Do not edit btf_viewer.py; run make bundle."""
 from __future__ import annotations
 
+import struct
+
 from .compare_evidence import COMPARE_EVIDENCE, build_comparison_evidence, format_evidence_cell
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
@@ -80,6 +82,8 @@ class TagSample:
     time_ns: int
     value: float
     core: str = ""
+    raw_value: str = ""
+    raw_uint32: int = 0
 
 @dataclass
 class PriorityEpisode:
@@ -885,15 +889,55 @@ def _interval_plot_points(
     return pts
 
 def _parse_tag_value(note: str) -> Optional[float]:
-    raw = (note or "").strip()
+    value = _tag_raw_uint32(note)
+    return float(value) if value is not None else None
+
+_TAG_REPRESENTATIONS = ("uint32", "int32", "float32", "log2-uint32")
+_TAG_REPRESENTATION_LABELS = {
+    "uint32": "uint32", "int32": "int32", "float32": "float32",
+    "log2-uint32": "log₂ uint32",
+}
+
+def _tag_raw_uint32(note) -> Optional[int]:
+    raw = str(note or "").strip()
     if not raw:
         return None
     try:
-        if raw.lower().startswith("0x"):
-            return float(int(raw, 16))
-        return float(raw)
-    except ValueError:
+        value = int(raw, 0) if raw.lower().startswith(("0x", "+0x", "-0x")) else int(float(raw))
+        return value & 0xFFFFFFFF
+    except (ValueError, OverflowError):
         return None
+
+def _interpret_tag_value(note, representation: str = "uint32") -> Optional[float]:
+    bits = _tag_raw_uint32(note)
+    if bits is None:
+        return None
+    if representation == "int32":
+        return float(bits if bits < 0x80000000 else bits - 0x100000000)
+    if representation == "float32":
+        value = struct.unpack(">f", bits.to_bytes(4, "big"))[0]
+        return float(value) if math.isfinite(value) else None
+    if representation == "log2-uint32":
+        return math.log2(1.0 + bits)
+    return float(bits)
+
+def _recommend_tag_representation(trace: "BtfTrace", channel: str,
+                                  lo: Optional[int] = None,
+                                  hi: Optional[int] = None) -> str:
+    values = [s.raw_uint32 for s in trace.tag_samples_by_channel.get(channel, [])
+              if _tag_overlaps_range(s, lo, hi) and s.raw_uint32 > 0]
+    if len(values) >= 3 and max(values) / min(values) >= 256:
+        return "log2-uint32"
+    return "uint32"
+
+def _tag_representation(trace: "BtfTrace", channel: str,
+                        lo: Optional[int] = None,
+                        hi: Optional[int] = None) -> str:
+    selected = getattr(trace, "tag_representations", {}).get(channel)
+    return selected if selected in _TAG_REPRESENTATIONS else _recommend_tag_representation(trace, channel, lo, hi)
+
+def _tag_sample_value(sample: TagSample, representation: str) -> Optional[float]:
+    return _interpret_tag_value(sample.raw_value or sample.raw_uint32, representation)
 
 def _tag_channel_label(channel: str) -> str:
     m = _STI_EXPANDABLE_RE.match(channel or "")
@@ -927,6 +971,8 @@ def _build_tag_data(
             time_ns=ev.time,
             value=val,
             core=ev.core or "",
+            raw_value=ev.note,
+            raw_uint32=int(val),
         ))
     for lst in by_ch.values():
         lst.sort(key=lambda s: (s.time_ns, s.value))
@@ -983,6 +1029,8 @@ def _build_sti_derived(
                         time_ns=ev.time,
                         value=val,
                         core=ev.core or "",
+                        raw_value=ev.note,
+                        raw_uint32=int(val),
                     ))
 
     sti_channels = sorted(channel_set, key=_sti_channel_sort_key)
@@ -1073,11 +1121,13 @@ def _tag_stats_rows(
     """
     rows = []
     for ch in trace.tag_channels:
+        representation = _tag_representation(trace, ch, lo, hi)
         samples = [
-            s.value
+            _tag_sample_value(s, representation)
             for s in trace.tag_samples_by_channel.get(ch, [])
             if _tag_overlaps_range(s, lo, hi)
         ]
+        samples = [value for value in samples if value is not None]
         if not samples:
             continue
         samples.sort()
@@ -1560,10 +1610,13 @@ def _tag_plot_points(
     hi: Optional[int] = None,
 ) -> List[Tuple[int, int, TagSample]]:
     pts: List[Tuple[int, int, TagSample]] = []
+    representation = _tag_representation(trace, channel, lo, hi)
     for sample in trace.tag_samples_by_channel.get(channel, []):
         if not _tag_overlaps_range(sample, lo, hi):
             continue
-        pts.append((sample.time_ns, sample.value, sample))
+        value = _tag_sample_value(sample, representation)
+        if value is not None:
+            pts.append((sample.time_ns, value, sample))
     return pts
 
 def _tag_interval_plot_points(
@@ -1602,13 +1655,16 @@ def _tag_sample_detail_rows(
         for sample in trace.tag_samples_by_channel.get(ch, []):
             if not _tag_overlaps_range(sample, lo, hi):
                 continue
+            value = _tag_sample_value(sample, _tag_representation(trace, ch, lo, hi))
+            if value is None or not math.isfinite(value):
+                continue
             rows.append({
                 "channel": ch,
                 "label": _tag_channel_label(ch),
                 "time_ns": sample.time_ns,
                 "time": _format_time(sample.time_ns, scale),
-                "value": _format_tag_value(sample.value),
-                "value_num": sample.value,
+                "value": _format_tag_value(value),
+                "value_num": value,
                 "core": sample.core,
             })
     rows.sort(key=lambda r: (-r["value_num"], r["time_ns"]))
@@ -2630,6 +2686,7 @@ class BtfTrace:
     interval_unmatched_starts: int                                          = 0
     tag_channels: List[str]                                                 = field(default_factory=list)
     tag_samples_by_channel: Dict[str, List["TagSample"]]                    = field(default_factory=dict)
+    tag_representations: Dict[str, str]                                     = field(default_factory=dict)
     task_base_priority: Dict[str, int]                                     = field(default_factory=dict)
     priority_episodes: List[PriorityEpisode]                                = field(default_factory=list)
     priority_episodes_by_mk: Dict[str, List[PriorityEpisode]]                 = field(default_factory=dict)

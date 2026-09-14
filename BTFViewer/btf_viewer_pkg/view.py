@@ -2056,9 +2056,6 @@ class TimelineView(QGraphicsView):
     def set_show_grid(self, show: bool) -> None:
         self._scene.set_show_grid(show)
 
-    def set_sti_log_scale(self, enabled: bool) -> None:
-        self._scene.set_sti_log_scale(enabled)
-
     def set_sti_line_style(self, style: str) -> None:
         self._scene.set_sti_line_style(style)
 

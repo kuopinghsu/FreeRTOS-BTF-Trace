@@ -54,14 +54,24 @@ export function detectHistogramScaleMode(values, summary) {
   return 'linear'
 }
 
-function freedmanDiaconisBinCount(values, minVal, maxVal) {
+/** A strictly-positive (hi - lo). Duration/time data floors at 1 (whole
+ * nanosecond); a free-form value (e.g. a float32 tag payload) keeps its real
+ * span so small-magnitude data doesn't collapse into a single bin. */
+function positiveSpan(lo, hi, valueAsTime = true) {
+  const span = hi - lo
+  if (valueAsTime) return Math.max(1, span)
+  if (span > 0) return span
+  return Math.abs(hi) * 1e-6 || 1e-9
+}
+
+function freedmanDiaconisBinCount(values, minVal, maxVal, valueAsTime = true) {
   const n = values.length
   if (n < 2) return DEFAULT_BIN_COUNT
   const p25 = percentile(values, 0.25)
   const p75 = percentile(values, 0.75)
-  const iqr = Math.max(1, p75 - p25)
+  const iqr = positiveSpan(p25, p75, valueAsTime)
   const binWidth = (2 * iqr) / Math.cbrt(n)
-  const span = Math.max(1, maxVal - minVal)
+  const span = positiveSpan(minVal, maxVal, valueAsTime)
   return Math.min(MAX_BIN_COUNT, Math.max(MIN_BIN_COUNT, Math.round(span / binWidth)))
 }
 
@@ -75,8 +85,11 @@ function shouldUseLogY(counts) {
 }
 
 function logSpacedEdges(minVal, maxVal, binCount) {
-  const lo = Math.max(minVal, 1)
-  const hi = Math.max(lo + 1, maxVal)
+  // Callers only reach here once minVal > 0 is already established; a floor
+  // of 1 would wrongly discard legitimate sub-1 positive values (e.g. a
+  // float32 tag payload measured in fractions).
+  const lo = minVal > 0 ? minVal : 1
+  const hi = maxVal > lo ? maxVal : lo * (1 + 1e-6) + 1e-300
   const logLo = Math.log10(lo)
   const logHi = Math.log10(hi)
   const edges = []
@@ -96,7 +109,7 @@ function binIndexForValue(value, edges) {
   return last
 }
 
-function buildBins(values, scaleMode, summary) {
+function buildBins(values, scaleMode, summary, valueAsTime = true) {
   const min = summary.min
   const max = summary.max
   const p5 = summary.p5
@@ -104,8 +117,8 @@ function buildBins(values, scaleMode, summary) {
 
   if (scaleMode === 'percentile') {
     const lo = Math.min(p5, p95)
-    const hi = Math.max(lo + 1, p95)
-    const regularBins = freedmanDiaconisBinCount(values, lo, hi)
+    const hi = lo + positiveSpan(lo, Math.max(p5, p95), valueAsTime)
+    const regularBins = freedmanDiaconisBinCount(values, lo, hi, valueAsTime)
     const edges = []
     const step = (hi - lo) / regularBins
     for (let i = 0; i <= regularBins; i++) edges.push(lo + step * i)
@@ -151,9 +164,9 @@ function buildBins(values, scaleMode, summary) {
   }
 
   const lo = min
-  const hi = max
-  const span = Math.max(1, hi - lo)
-  const binCount = freedmanDiaconisBinCount(values, lo, hi)
+  const span = positiveSpan(min, max, valueAsTime)
+  const hi = lo + span
+  const binCount = freedmanDiaconisBinCount(values, lo, hi, valueAsTime)
   const step = span / binCount
   const edges = []
   for (let i = 0; i <= binCount; i++) edges.push(lo + step * i)
@@ -183,7 +196,7 @@ function histSlotLayout(binSpec, plotW) {
   return { slotCount, slotW, leading, regularSlots, regularW: regularSlots * slotW }
 }
 
-function valueToX(value, binSpec, plotW, marginLeft) {
+function valueToX(value, binSpec, plotW, marginLeft, valueAsTime = true) {
   const { displayMin, displayMax, xScale, hasOverflowBin, hasUnderflowBin } = binSpec
   const { slotW, leading, regularSlots, regularW } = histSlotLayout(binSpec, plotW)
   const regionLeft = marginLeft + leading * slotW
@@ -198,13 +211,14 @@ function valueToX(value, binSpec, plotW, marginLeft) {
 
   let t
   if (xScale === 'log') {
-    const lo = Math.max(displayMin, 1)
-    const hi = Math.max(lo + 1, displayMax)
+    // xScale is only ever 'log' once displayMin > 0 is established.
+    const lo = displayMin > 0 ? displayMin : 1
+    const hi = displayMax > lo ? displayMax : lo * (1 + 1e-6) + 1e-300
     const logLo = Math.log10(lo)
     const logHi = Math.log10(hi)
     t = (Math.log10(Math.max(value, lo)) - logLo) / Math.max(1e-9, logHi - logLo)
   } else {
-    const span = Math.max(1, displayMax - displayMin)
+    const span = positiveSpan(displayMin, displayMax, valueAsTime)
     t = (value - displayMin) / span
   }
   return regionLeft + t * regularW
@@ -290,8 +304,9 @@ function buildXTicks(binSpec, plotW, margin, formatValue) {
   const regionLeft = margin.left + leading * slotW
 
   if (xScale === 'log') {
-    const lo = Math.max(displayMin, 1)
-    const hi = Math.max(lo + 1, displayMax)
+    // xScale is only ever 'log' once displayMin > 0 is established.
+    const lo = displayMin > 0 ? displayMin : 1
+    const hi = displayMax > lo ? displayMax : lo * (1 + 1e-6) + 1e-300
     const logLo = Math.log10(lo)
     const logHi = Math.log10(hi)
     const ticks = []
@@ -339,7 +354,7 @@ function buildXTicks(binSpec, plotW, margin, formatValue) {
   return ticks
 }
 
-function buildCdfPoints(values, binSpec, plotW, plotH, margin) {
+function buildCdfPoints(values, binSpec, plotW, plotH, margin, valueAsTime = true) {
   const n = values.length
   if (n < 2) return { points: [], ticks: [] }
 
@@ -348,7 +363,7 @@ function buildCdfPoints(values, binSpec, plotW, plotH, margin) {
   for (let i = 0; i < n; i++) {
     const pct = ((i + 1) / n) * 100
     raw.push({
-      x: valueToX(sorted[i], binSpec, plotW, margin.left),
+      x: valueToX(sorted[i], binSpec, plotW, margin.left, valueAsTime),
       y: margin.top + plotH - (pct / 100) * plotH,
       pct,
     })
@@ -436,14 +451,14 @@ export function buildHistogramModel(values, options = {}) {
     : scaleMode
 
   const effectiveMode = (resolvedMode === 'log' && summary.min <= 0) ? 'percentile' : resolvedMode
-  const binSpec = buildBins(sorted, effectiveMode, summary)
+  const binSpec = buildBins(sorted, effectiveMode, summary, valueAsTime)
   const margin = { left: 72, right: 44, top: 28, bottom: 38 }
   const plotW = width - margin.left - margin.right
   const plotH = height - margin.top - margin.bottom
   const logY = shouldUseLogY([...binSpec.counts, binSpec.overflow, binSpec.underflow])
   const { bars, maxCount } = buildBarLayout(binSpec, plotW, plotH, margin, logY, summary)
 
-  const scaleX = value => valueToX(value, binSpec, plotW, margin.left)
+  const scaleX = value => valueToX(value, binSpec, plotW, margin.left, valueAsTime)
   const xTicks = buildXTicks(binSpec, plotW, margin, formatValue)
   const yTicks = Array.from({ length: 5 }, (_, index) => {
     const ratio = 1 - index / 4
@@ -460,7 +475,7 @@ export function buildHistogramModel(values, options = {}) {
     }
   })
 
-  const cdf = buildCdfPoints(sorted, binSpec, plotW, plotH, margin)
+  const cdf = buildCdfPoints(sorted, binSpec, plotW, plotH, margin, valueAsTime)
   const refs = [
     { label: 'avg', value: summary.avg, color: '#CE93D8' },
     { label: 'p5', value: summary.p5, color: '#29B6F6' },

@@ -14,6 +14,7 @@
       :view-mode="options.viewMode"
       :expanded="expanded"
       :sti-expanded="stiExpanded"
+      :tag-representations="options.tagRepresentations"
       :scroll-y="viewport.scrollY"
       :body-h="labelBodyH"
       :row-layout="cachedRowLayout"
@@ -24,6 +25,7 @@
       @highlight-change="(k) => emit('highlightChange', k)"
       @highlight-click="(k) => emit('highlightClick', k)"
       @sti-expand-toggle="onStiExpandToggle"
+      @tag-representation-change="onTagRepresentationChange"
     />
 
     <div
@@ -45,10 +47,13 @@
       :header-h="vertLabelHeaderH"
       :highlight-key="options.highlightKey"
       :expanded="expanded"
+      :trace="trace"
+      :tag-representations="options.tagRepresentations"
       @expand-toggle="onExpandToggle"
       @highlight-change="(k) => emit('highlightChange', k)"
       @highlight-click="(k) => emit('highlightClick', k)"
       @sti-expand-toggle="onStiExpandToggle"
+      @tag-representation-change="onTagRepresentationChange"
     />
 
     <div
@@ -82,6 +87,8 @@
         :x="stiHoverPos.x"
         :y="stiHoverPos.y"
         :time-scale="trace?.timeScale || 'ns'"
+        :trace="trace"
+        :tag-representations="options.tagRepresentations"
       />
       <SegmentTooltip
         :lines="segmentTooltipLines"
@@ -346,6 +353,7 @@ import { isRestorableViewport } from '../utils/sessionStore.js'
 import { lodReduce } from '../utils/lod.js'
 import { collectSegmentStarts } from '../utils/snapBoundary.js'
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
+import { interpretTagValue, tagRepresentationFor } from '../utils/tagAnalysis.js'
 import { pixiTimelineHost } from '../renderer/pixi/PixiTimelineHost.js'
 import {
   initWasmAccel,
@@ -383,6 +391,7 @@ const emit = defineEmits([
   'segmentClick', 'clearSelection', 'addBookmark', 'addAnnotation', 'markMove', 'copyScreenshot',
   'beforeCursorChange', 'beforeMarkChange', 'labelWidthChange', 'explainRegion', 'askAiEvent',
   'clearBookmarks', 'clearAnnotations', 'clearAllMarks', 'addRegionToInvestigation',
+  'tagRepresentationChange',
 ])
 
 const aiFeatureEnabled = computed(() => props.aiEnabled !== false)
@@ -820,7 +829,7 @@ function paint() {
     highlightInterval: props.options.highlightInterval ?? null,
     showGrid:         props.options.showGrid,
     showSti:          props.options.showSti !== false,
-    stiLogScale:      !!props.options.stiLogScale,
+    tagRepresentations: props.options.tagRepresentations || {},
     darkMode:         props.options.darkMode,
     migratedOnlyFilter: !!props.options.migratedOnlyFilter,
     taskFilterKeys:     props.options.taskFilterKeys || null,
@@ -1197,7 +1206,7 @@ function captureAsSvg() {
     showGrid: props.options.showGrid,
     showSti:     props.options.showSti !== false,
     stiExpanded,
-    stiLogScale: !!props.options.stiLogScale,
+    tagRepresentations: props.options.tagRepresentations || {},
     cursors:     props.cursors || [],
     highlightInterval: props.options.highlightInterval ?? null,
     marks:    (props.options.marks || []).map(m => [
@@ -2043,6 +2052,11 @@ function onStiExpandToggle(channelName) {
   scheduleRender()
 }
 
+function onTagRepresentationChange(channelName, representation) {
+  emit('tagRepresentationChange', channelName, representation)
+  scheduleRender()
+}
+
 function expandCore(coreName) {
   if (!props.trace || !coreName) return
   expanded.add(coreName)
@@ -2282,7 +2296,7 @@ watch([() => props.options.orientation, () => props.options.viewMode], () => {
   scheduleRender(true)
 })
 // Other visual options that affect segment rendering → full repaint
-watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.highlightInterval, () => props.options.showGrid, () => props.options.showSti, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.taskFilterText, () => props.options.lockedTaskKey], () => {
+watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.highlightInterval, () => props.options.showGrid, () => props.options.showSti, () => props.options.tagRepresentations, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.taskFilterText, () => props.options.lockedTaskKey], () => {
   _ovBgCanvas = null
   scheduleRender()
   if (overviewVisible.value) scheduleOverviewPaint()
@@ -2808,10 +2822,15 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
       const y  = mainAreaH + i * stiRowH
       const rh = Math.max(2, stiRowH - 0.5)
       if (isExpanded) {
-        // Use precomputed value range from parser (O(1)) instead of scanning
-        const range = tr.stiValRange?.get(ch)
-        const vMin = range?.min ?? Infinity
-        const vMax = range?.max ?? -Infinity
+        const representation = tagRepresentationFor(ch, props.options.tagRepresentations, tr)
+        let vMin = Infinity
+        let vMax = -Infinity
+        for (const ev of evs) {
+          const value = interpretTagValue(ev.note !== '' ? ev.note : ev.event, representation)
+          if (!Number.isFinite(value)) continue
+          if (value < vMin) vMin = value
+          if (value > vMax) vMax = value
+        }
         // Use the same waveform colours as drawStiWaveformRow in TimelineRenderer.js.
         const wfLineColor = dark ? '#5BC8FF' : '#0070CC'
         const wfDotColor  = dark ? '#80DFFF' : '#0050AA'
@@ -2826,8 +2845,8 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
           let firstPt = true
           for (let j = 0; j < evs.length; j++) {
             const ev = evs[j]
-            const v  = parseFloat(ev.note !== '' ? ev.note : ev.event)
-            if (isNaN(v)) continue
+            const v = interpretTagValue(ev.note !== '' ? ev.note : ev.event, representation)
+            if (!Number.isFinite(v)) continue
             const cx = (ev.time - lo) * pxPerNs
             const cy = y + rh - (v - vMin) / vRng * rh
             if (firstPt) { ctx.moveTo(cx, cy); firstPt = false }

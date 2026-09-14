@@ -92,6 +92,15 @@
             <span class="expand-arrow">{{ row.isExpanded ? '▼' : '▶' }}</span>
             <span class="sti-wave-icon">〰</span>
             <span class="label-text sti">{{ row.label }}</span>
+            <DomSelect
+              class="tag-representation-select"
+              :model-value="tagRepresentation(row.key)"
+              :options="TAG_REPRESENTATION_OPTIONS"
+              :aria-label="`Data representation for ${row.label}`"
+              @click.stop
+              @keydown.stop
+              @update:model-value="emit('tagRepresentationChange', row.key, $event)"
+            />
           </div>
 
           <!-- Interval span row -->
@@ -114,11 +123,13 @@
 </template>
 
 <script setup>
+import DomSelect from './DomSelect.vue'
 import { computed, ref } from 'vue'
 import { rowBandHeight, visibleRowIndexRange, orthRowBuffer, RULER_H } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { taskMergeKey } from '../utils/colors.js'
 import { stripeClassForBand } from '../utils/timelineStripes.js'
+import { TAG_REPRESENTATION_OPTIONS, tagRepresentationFor } from '../utils/tagAnalysis.js'
 
 function layout() {
   return getTimelineLayout()
@@ -130,6 +141,7 @@ const props = defineProps({
   viewMode:     { type: String, default: 'task' },
   expanded:     { type: Object, default: () => new Set() },   // Set
   stiExpanded:  { type: Object, default: () => new Set() },   // Set of expanded tag-event STI channels
+  tagRepresentations: { type: Object, default: () => ({}) },
   scrollY:      { type: Number, default: 0 },
   bodyH:        { type: Number, default: 400 },
   rowLayout:    { type: Object, default: null },
@@ -138,7 +150,11 @@ const props = defineProps({
   migratedOnlyFilter: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['expandToggle', 'highlightChange', 'highlightClick', 'stiExpandToggle'])
+const emit = defineEmits(['expandToggle', 'highlightChange', 'highlightClick', 'stiExpandToggle', 'tagRepresentationChange'])
+
+function tagRepresentation(channel) {
+  return tagRepresentationFor(channel, props.tagRepresentations, props.trace)
+}
 
 const colEl = ref(null)
 defineExpose({ colEl })
@@ -206,6 +222,18 @@ function taskRowKey(row) {
 .labels-scroll {
   position: relative;
   will-change: transform;
+}
+
+.tag-representation-select {
+  margin-left: auto;
+  min-width: 70px;
+  max-width: 88px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  color: var(--fg);
+  font-size: 10px;
 }
 
 .label-row {
@@ -308,6 +336,16 @@ function taskRowKey(row) {
 
 .label-text.sti {
   font-style: italic;
+  font-size: 10px;
+}
+</style>
+
+<style scoped>
+.tag-representation-select :deep(.dom-select-trigger) {
+  min-height: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
   font-size: 10px;
 }
 </style>

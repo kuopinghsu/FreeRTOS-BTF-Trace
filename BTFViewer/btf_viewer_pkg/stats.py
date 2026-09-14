@@ -142,6 +142,10 @@ from .ux_explore import (
 )
 from .parser import *  # noqa: F403,F401
 from .parser import (  # private symbols are not pulled in by import *
+    _TAG_REPRESENTATIONS,
+    _TAG_REPRESENTATION_LABELS,
+    _recommend_tag_representation,
+    _tag_representation,
     _exec_slice_samples,
     _inter_arrival_samples,
     _trim_time_pad,
@@ -1420,6 +1424,18 @@ class _ScatterWidget(QWidget):
         self._is_dark = is_dark
         self.update()
 
+    def _y_axis_bounds(self, ys: list) -> tuple:
+        """Y-axis (min, max). Durations conventionally start at 0; a free-form
+        value (e.g. a float32 tag payload) is auto-ranged to its own min/max
+        so a narrow band far from zero isn't squashed against the baseline."""
+        if self._y_as_time:
+            return 0, (max(ys) if max(ys) > 0 else 1)
+        y0, y1 = min(ys), max(ys)
+        if y1 <= y0:
+            pad = abs(y0) * 0.5 or 0.5
+            return y0 - pad, y0 + pad
+        return y0, y1
+
     def _screen_coords(self, w: int, h: int, ml: int, mr: int, mt: int, mb: int):
         """Return (sx_list, sy_list) mapping each point to widget pixels."""
         if not self._points:
@@ -1427,9 +1443,9 @@ class _ScatterWidget(QWidget):
         xs = [p[0] for p in self._points]
         ys = [p[1] for p in self._points]
         x0, x1 = min(xs), max(xs)
-        y0, y1 = 0, max(ys) if max(ys) > 0 else 1
+        y0, y1 = self._y_axis_bounds(ys)
         xspan = max(x1 - x0, 1)
-        yspan = max(y1 - y0, 1)
+        yspan = max(y1 - y0, 1) if self._y_as_time else (y1 - y0)
         pw = w - ml - mr
         ph = h - mt - mb
         sx = [ml + int((x - x0) / xspan * pw) for x in xs]
@@ -1464,9 +1480,9 @@ class _ScatterWidget(QWidget):
         xs = [pt[0] for pt in self._points]
         ys = [pt[1] for pt in self._points]
         x0, x1 = min(xs), max(xs)
-        y0, y1 = 0, max(ys) if ys else 1
+        y0, y1 = self._y_axis_bounds(ys)
         xspan = max(x1 - x0, 1)
-        yspan = max(y1 - y0, 1)
+        yspan = max(y1 - y0, 1) if self._y_as_time else (y1 - y0)
 
         def sx(x): return ML + int((x - x0) / xspan * pw)
         def sy(y): return MT + ph - int((y - y0) / yspan * ph)
@@ -1645,9 +1661,9 @@ class _ScatterWidget(QWidget):
         xs = [p[0] for p in self._points]
         ys = [p[1] for p in self._points]
         x0, x1 = min(xs), max(xs)
-        y0, y1 = 0, max(ys) if max(ys) > 0 else 1
+        y0, y1 = self._y_axis_bounds(ys)
         xspan = max(x1 - x0, 1)
-        yspan = max(y1 - y0, 1)
+        yspan = max(y1 - y0, 1) if self._y_as_time else (y1 - y0)
 
         def sx(x): return ml + int((x - x0) / xspan * pw)
         def sy(y): return mt + ph - int((y - y0) / yspan * ph)
@@ -1756,15 +1772,27 @@ def _hist_detect_scale_mode(values: list, summary: dict) -> str:
         return "percentile"
     return "linear"
 
-def _hist_fd_bin_count(values: list, min_val: float, max_val: float) -> int:
+def _hist_positive_span(lo: float, hi: float, *, value_as_time: bool = True) -> float:
+    """A strictly-positive (hi - lo). Duration/time data floors at 1 (whole
+    nanosecond); a free-form value (e.g. a float32 tag payload) keeps its
+    real span so small-magnitude data doesn't collapse into a single bin."""
+    span = hi - lo
+    if value_as_time:
+        return max(1.0, span)
+    if span > 0:
+        return span
+    return abs(hi) * 1e-6 or 1e-9
+
+def _hist_fd_bin_count(values: list, min_val: float, max_val: float,
+                       *, value_as_time: bool = True) -> int:
     n = len(values)
     if n < 2:
         return 40
     p25 = _hist_percentile(values, 0.25)
     p75 = _hist_percentile(values, 0.75)
-    iqr = max(1.0, p75 - p25)
+    iqr = _hist_positive_span(p25, p75, value_as_time=value_as_time)
     bin_w = (2 * iqr) / (n ** (1 / 3))
-    span = max(1.0, max_val - min_val)
+    span = _hist_positive_span(min_val, max_val, value_as_time=value_as_time)
     return min(80, max(12, int(round(span / bin_w))))
 
 def _hist_should_use_log_y(counts: list) -> bool:
@@ -1777,8 +1805,11 @@ def _hist_should_use_log_y(counts: list) -> bool:
     return max_count >= 12 and median > 0 and max_count / median >= 8
 
 def _hist_log_spaced_edges(min_val: float, max_val: float, bin_count: int) -> list:
-    lo = max(min_val, 1.0)
-    hi = max(lo + 1.0, max_val)
+    # Callers only reach here once min_val > 0 is already established; a
+    # floor of 1.0 would wrongly discard legitimate sub-1.0 positive values
+    # (e.g. a float32 tag payload measured in fractions).
+    lo = min_val if min_val > 0 else 1.0
+    hi = max_val if max_val > lo else lo * (1 + 1e-6) + 1e-300
     log_lo = math.log10(lo)
     log_hi = math.log10(hi)
     return [10 ** (log_lo + (log_hi - log_lo) * i / bin_count) for i in range(bin_count + 1)]
@@ -1794,15 +1825,16 @@ def _hist_bin_index_for_value(value: float, edges: list) -> int:
             return i
     return last
 
-def _hist_build_bins(values: list, scale_mode: str, summary: dict) -> dict:
+def _hist_build_bins(values: list, scale_mode: str, summary: dict,
+                     *, value_as_time: bool = True) -> dict:
     min_v = summary["min"]
     max_v = summary["max"]
     p5 = summary["p5"]
     p95 = summary["p95"]
     if scale_mode == "percentile":
         lo = min(p5, p95)
-        hi = max(lo + 1.0, p95)
-        regular_bins = _hist_fd_bin_count(values, lo, hi)
+        hi = lo + _hist_positive_span(lo, max(p5, p95), value_as_time=value_as_time)
+        regular_bins = _hist_fd_bin_count(values, lo, hi, value_as_time=value_as_time)
         step = (hi - lo) / regular_bins
         edges = [lo + step * i for i in range(regular_bins + 1)]
         counts = [0] * regular_bins
@@ -1833,9 +1865,9 @@ def _hist_build_bins(values: list, scale_mode: str, summary: dict) -> dict:
             "x_scale": "log",
         }
     lo = min_v
-    hi = max_v
-    span = max(1.0, hi - lo)
-    bin_count = _hist_fd_bin_count(values, lo, hi)
+    span = _hist_positive_span(min_v, max_v, value_as_time=value_as_time)
+    hi = lo + span
+    bin_count = _hist_fd_bin_count(values, lo, hi, value_as_time=value_as_time)
     step = span / bin_count
     edges = [lo + step * i for i in range(bin_count + 1)]
     counts = [0] * bin_count
@@ -1857,7 +1889,8 @@ def _hist_slot_layout(bin_spec: dict, plot_w: int) -> tuple:
     regular_w = regular_slots * slot_w
     return slot_count, slot_w, leading, regular_slots, regular_w
 
-def _hist_value_to_x(value: float, bin_spec: dict, plot_w: int, margin_left: int) -> int:
+def _hist_value_to_x(value: float, bin_spec: dict, plot_w: int, margin_left: int,
+                     *, value_as_time: bool = True) -> int:
     display_min = bin_spec["display_min"]
     display_max = bin_spec["display_max"]
     _slot_count, slot_w, leading, regular_slots, regular_w = _hist_slot_layout(bin_spec, plot_w)
@@ -1870,13 +1903,14 @@ def _hist_value_to_x(value: float, bin_spec: dict, plot_w: int, margin_left: int
         return margin_left + int(slot * slot_w + slot_w * 0.5)
 
     if bin_spec["x_scale"] == "log":
-        lo = max(display_min, 1.0)
-        hi = max(lo + 1.0, display_max)
+        # x_scale is only ever "log" once display_min > 0 is established.
+        lo = display_min if display_min > 0 else 1.0
+        hi = display_max if display_max > lo else lo * (1 + 1e-6) + 1e-300
         log_lo = math.log10(lo)
         log_hi = math.log10(hi)
         t = (math.log10(max(value, lo)) - log_lo) / max(1e-9, log_hi - log_lo)
         return region_left + int(t * regular_w)
-    span = max(1.0, display_max - display_min)
+    span = _hist_positive_span(display_min, display_max, value_as_time=value_as_time)
     t = (value - display_min) / span
     return region_left + int(t * regular_w)
 
@@ -1970,7 +2004,7 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
     summary = _hist_summarize(sorted_vals)
     resolved = _hist_detect_scale_mode(sorted_vals, summary) if scale_mode == "auto" else scale_mode
     effective = "percentile" if resolved == "log" and summary["min"] <= 0 else resolved
-    bin_spec = _hist_build_bins(sorted_vals, effective, summary)
+    bin_spec = _hist_build_bins(sorted_vals, effective, summary, value_as_time=value_as_time)
     margin_left, margin_right, margin_top, margin_bottom = 56, 44, 28, 36
     plot_w = 820 - margin_left - margin_right
     plot_h = 240 - margin_top - margin_bottom
@@ -1982,12 +2016,13 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
     region_left = margin_left + int(leading * _sw)
 
     def scale_x(val: float) -> int:
-        return _hist_value_to_x(val, bin_spec, plot_w, margin_left)
+        return _hist_value_to_x(val, bin_spec, plot_w, margin_left, value_as_time=value_as_time)
 
     x_ticks = []
     if bin_spec["x_scale"] == "log":
-        lo = max(bin_spec["display_min"], 1.0)
-        hi = max(lo + 1.0, bin_spec["display_max"])
+        # x_scale is only ever "log" once display_min > 0 is established.
+        lo = bin_spec["display_min"] if bin_spec["display_min"] > 0 else 1.0
+        hi = bin_spec["display_max"] if bin_spec["display_max"] > lo else lo * (1 + 1e-6) + 1e-300
         log_lo = math.log10(lo)
         log_hi = math.log10(hi)
         for d in range(int(math.floor(log_lo)), int(math.ceil(log_hi)) + 1):
@@ -2037,7 +2072,7 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
         raw_cdf = []
         for i, val in enumerate(sorted_vals):
             pct = (i + 1) / n
-            gx = _hist_value_to_x(val, bin_spec, plot_w, margin_left)
+            gx = _hist_value_to_x(val, bin_spec, plot_w, margin_left, value_as_time=value_as_time)
             gy = margin_top + plot_h - int(pct * plot_h)
             raw_cdf.append((gx, gy))
         for gx, gy in raw_cdf:
@@ -2350,6 +2385,9 @@ class _MetricsPlotDialog(QDialog):
                  on_open_chord=None,
                  ai_enabled: bool = True,
                  on_query_ai=None,
+                 tag_representation: Optional[str] = None,
+                 tag_representation_options: Optional[Sequence[Tuple[str, str]]] = None,
+                 on_tag_representation_change=None,
                  parent=None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self._title        = title
@@ -2359,6 +2397,7 @@ class _MetricsPlotDialog(QDialog):
         self._on_open_heatmap = on_open_heatmap
         self._on_open_chord = on_open_chord
         self._on_query_ai = on_query_ai
+        self._on_tag_representation_change = on_tag_representation_change
         self._btn_open_heatmap: Optional[QPushButton] = None
         self._btn_open_chord: Optional[QPushButton] = None
         self._btn_query_ai: Optional[QPushButton] = None
@@ -2369,6 +2408,20 @@ class _MetricsPlotDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(4)
+
+        if tag_representation is not None and tag_representation_options:
+            representation_row = QHBoxLayout()
+            representation_row.addWidget(QLabel("Representation"))
+            self._tag_representation = QComboBox()
+            for value, label in tag_representation_options:
+                self._tag_representation.addItem(label, value)
+            index = self._tag_representation.findData(tag_representation)
+            self._tag_representation.setCurrentIndex(max(0, index))
+            self._tag_representation.currentIndexChanged.connect(
+                self._on_tag_representation_selected)
+            representation_row.addWidget(self._tag_representation)
+            representation_row.addStretch(1)
+            root.addLayout(representation_row)
 
         self._tab_buttons: Dict[str, QPushButton] = {}
         self._active_tab = active_tab
@@ -2571,6 +2624,12 @@ class _MetricsPlotDialog(QDialog):
         modes = ("auto", "linear", "percentile", "log")
         if 0 <= index < len(modes):
             self._histogram.set_scale_mode(modes[index])
+
+    def _on_tag_representation_selected(self, index: int) -> None:
+        combo = getattr(self, "_tag_representation", None)
+        if combo is None or self._on_tag_representation_change is None:
+            return
+        self._on_tag_representation_change(str(combo.itemData(index)))
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -10068,6 +10127,7 @@ class _StatsPanel(QWidget):
     # Collapse map; persist to btf_viewer.rc
     section_collapsed_changed = Signal(dict)
     query_ai_requested = Signal(str, str)  # template_id, extra prompt text
+    tag_representation_changed = Signal(str, str)  # channel, representation
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -10598,10 +10658,20 @@ class _StatsPanel(QWidget):
             return
         if not hasattr(self, "_scroll") or self._scroll is None:
             return
-        try:
-            self._scroll.verticalScrollBar().setValue(int(y))
-        except RuntimeError:
-            pass
+        # Deferred section sizing (table column resize, lazy section bodies)
+        # can still be settling when this first fires, leaving the scrollbar's
+        # range temporarily short and clamping *y* low with nothing to
+        # re-correct it afterward. Reassert across the same settle marks
+        # scroll_to_section uses so the final value reflects the fully-grown
+        # content height.
+        def _apply() -> None:
+            try:
+                self._scroll.verticalScrollBar().setValue(int(y))
+            except RuntimeError:
+                pass
+        _apply()
+        for mark in (50, 150, 280):
+            QTimer.singleShot(mark, _apply)
     def apply_section_table_heights(self, heights: Dict[str, int]) -> None:
         """Apply persisted max heights for collapsible stats tables."""
         for key, val in heights.items():
@@ -12108,6 +12178,12 @@ class _StatsPanel(QWidget):
             return
         title, pts, _color = built
         scoped, badge, detail = self._plot_scope_banner()
+        if self._plot_kind == "tag" and hasattr(dlg, "_tag_representation"):
+            combo = dlg._tag_representation
+            index = combo.findData(_tag_representation(self._trace, self._plot_mk))
+            combo.blockSignals(True)
+            combo.setCurrentIndex(max(0, index))
+            combo.blockSignals(False)
         dlg.update_data(title, pts, scope_scoped=scoped,
                         scope_badge=badge, scope_detail=detail)
 
@@ -12170,10 +12246,28 @@ class _StatsPanel(QWidget):
             on_open_chord=on_ch,
             ai_enabled=self._ai_enabled,
             on_query_ai=self._query_plot_distribution_ai,
+            tag_representation=(_tag_representation(trace, mk) if kind == "tag" else None),
+            tag_representation_options=(
+                [(value, _TAG_REPRESENTATION_LABELS[value]
+                  + (" (recommended)" if value == _recommend_tag_representation(trace, mk) else ""))
+                 for value in _TAG_REPRESENTATIONS]
+                if kind == "tag" else None),
+            on_tag_representation_change=(
+                lambda value, tr=trace, ch=mk: self._set_tag_representation(tr, ch, value)
+                if kind == "tag" else None),
             parent=self.window(),
         )
         self._plot_dlg.closed.connect(self._on_plot_dialog_closed)
         self._plot_dlg.show()
+
+    def _set_tag_representation(self, trace: "BtfTrace", channel: str,
+                                representation: str) -> None:
+        if representation not in _TAG_REPRESENTATIONS:
+            return
+        trace.tag_representations[channel] = representation
+        self.tag_representation_changed.emit(channel, representation)
+        self.rebuild(trace)
+        self._refresh_open_plot()
 
     def _on_plot_tab_changed(self, new_kind: str) -> None:
         """Switch the open migration plot dialog to a different metric tab in place."""
@@ -14017,6 +14111,15 @@ class _StatsPanel(QWidget):
             elif app is not None:
                 app.processEvents()
             self.scroll_section_into_view(sid, prefer_top=True)
+        # _scroll_to_section_requested only makes sense for the rebuild that
+        # immediately follows this jump (e.g. an Evidence/Investigate/Find
+        # click that also changes scope). Any real pairing consumes it within
+        # this settle window; past that, let it expire so an unrelated later
+        # rebuild (e.g. changing a tag's representation) still restores scroll.
+        QTimer.singleShot(500, self._expire_scroll_to_section_flag)
+
+    def _expire_scroll_to_section_flag(self) -> None:
+        self._scroll_to_section_requested = False
 
     def scroll_to_category(self, category: str) -> None:
         """Expand every section in *category* and scroll to the first one.
@@ -14345,7 +14448,7 @@ class _StatsPanel(QWidget):
         ] if trace.has_sync_object_instrumentation else []
         sync_holds = _sync_object_hold_detail_rows(trace, lo, hi)
         interval_inst = _interval_instance_detail_rows(trace, lo, hi)
-        tag_samples = _tag_sample_detail_rows(trace, lo, hi)
+        tag_samples = _tag_sample_detail_rows(trace, lo, hi, limit=0)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
         _anon, _ = self._make_export_anonymizer()
@@ -14600,12 +14703,12 @@ class _StatsPanel(QWidget):
     <tbody>{inst_body}</tbody></table></section>"""
 
         tag_body = "".join(
-            f"<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])}</td><td>{r[2]}</td>"
+            f"<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])}</td><td><span style='display:inline-block;padding:2px 8px;border:1px solid #94a3b8;border-radius:999px;font-size:12px'>{_esc(_tag_representation(trace, r[0], lo, hi))}</span></td><td>{r[2]}</td>"
             f"<td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td>"
             f"<td>{_esc(r[6])}</td><td>{_esc(r[7])}</td><td>{_esc(r[8])}</td>"
             f"<td>{_esc(r[9])}</td><td>{_esc(r[10])}</td></tr>"
             for r in tag_rows
-        ) or '<tr><td colspan="11" class="empty">No tag data</td></tr>'
+        ) or '<tr><td colspan="12" class="empty">No tag data</td></tr>'
         tag_sample_body = "".join(
             f"<tr><td>{_esc(s['label'])}</td><td>{_esc(s['time'])}</td>"
             f"<td>{_esc(s['value'])}</td><td>{_esc(s['core'] or '—')}</td></tr>"
@@ -14615,7 +14718,7 @@ class _StatsPanel(QWidget):
                     if len(tag_samples) >= 200 else "")
         tag_html = f"""
     <section class=\"report-card\"><h2>Tag Analysis{_esc(scope_title)}</h2>
-    <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>
+    <table><thead><tr><th>Channel</th><th>Label</th><th>Representation</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>
     <tbody>{tag_body}</tbody></table>
     <h3 class=\"sub\">Tag channels over time</h3>
     {html_tag_overview(tag_samples, time_fmt=lambda s: s.get("time") or "")}</section>"""

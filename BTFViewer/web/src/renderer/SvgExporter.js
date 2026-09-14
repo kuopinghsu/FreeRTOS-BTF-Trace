@@ -26,6 +26,7 @@ import {
 } from '../utils/intervalAnalysis.js'
 import { cursorSortedPlaced } from '../utils/cursorAnalysis.js'
 import { stripeColorForBand } from '../utils/timelineStripes.js'
+import { formatTagValue, interpretTagValue, tagRepresentationFor } from '../utils/tagAnalysis.js'
 
 function L() {
   return getTimelineLayout()
@@ -202,7 +203,7 @@ export function renderToSvg(trace, viewport, options = {}) {
     marks     = [],
     showSti     = true,
     stiExpanded = new Set(),
-    stiLogScale = false,
+    tagRepresentations = {},
     highlightInterval = null,
   } = options
 
@@ -350,7 +351,8 @@ export function renderToSvg(trace, viewport, options = {}) {
       const chartBottom = row.y + rowH - PAD
       const chartHt     = chartBottom - chartTop
 
-      const evVal = ev => parseFloat(ev.note !== '' ? ev.note : ev.event)
+      const representation = tagRepresentationFor(row.key, tagRepresentations, trace)
+      const evVal = ev => interpretTagValue(ev.note !== '' ? ev.note : ev.event, representation)
 
       let valMin = Infinity, valMax = -Infinity
       for (const ev of evs) {
@@ -360,11 +362,8 @@ export function renderToSvg(trace, viewport, options = {}) {
       if (!isFinite(valMin)) continue
       if (valMin === valMax) { valMin -= 1; valMax += 1 }
 
-      const signedLog2  = v => Math.sign(v) * Math.log2(1 + Math.abs(v))
-      const mappedMin   = stiLogScale ? signedLog2(valMin) : valMin
-      const mappedMax   = stiLogScale ? signedLog2(valMax) : valMax
-      const mappedRange = mappedMax - mappedMin
-      const valToY      = v => chartBottom - (((stiLogScale ? signedLog2(v) : v) - mappedMin) / mappedRange) * chartHt
+      const mappedRange = valMax - valMin
+      const valToY      = v => chartBottom - ((v - valMin) / mappedRange) * chartHt
 
       // Axis dashed lines (span timeline area only)
       const axisColor = darkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'
@@ -372,13 +371,13 @@ export function renderToSvg(trace, viewport, options = {}) {
       els.push(`<line x1="${OX}" y1="${chartTop.toFixed(1)}" x2="${svgW}" y2="${chartTop.toFixed(1)}" stroke="${axisColor}" stroke-width="0.5" stroke-dasharray="3,3"/>`)
 
       // Axis value labels
-      const fmtVal   = v => Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : Math.abs(v) >= 1e3 ? (v / 1e3).toFixed(1) + 'k' : String(Math.round(v))
+      const fmtVal   = value => formatTagValue(value)
       const dimColor = darkMode ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'
       els.push(`<text x="${svgW - 2}" y="${(chartTop + 10).toFixed(1)}" text-anchor="end" fill="${dimColor}" font-family="monospace" font-size="9">${esc(fmtVal(valMax))}</text>`)
       els.push(`<text x="${svgW - 2}" y="${(chartBottom - 2).toFixed(1)}" text-anchor="end" fill="${dimColor}" font-family="monospace" font-size="9">${esc(fmtVal(valMin))}</text>`)
-      if (stiLogScale) {
+      if (representation === 'log2-uint32') {
         const scaleColor = darkMode ? 'rgba(91,200,255,0.55)' : 'rgba(0,100,200,0.55)'
-        els.push(`<text x="${OX + 4}" y="${(chartTop + 2).toFixed(1)}" dominant-baseline="hanging" fill="${scaleColor}" font-family="monospace" font-size="9">log&#x2082;</text>`)
+        els.push(`<text x="${OX + 4}" y="${(chartTop + 2).toFixed(1)}" dominant-baseline="hanging" fill="${scaleColor}" font-family="monospace" font-size="9">log&#x2082; uint32</text>`)
       }
 
       // Clip region (timeline area only)

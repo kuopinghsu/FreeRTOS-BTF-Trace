@@ -42,6 +42,7 @@ import html
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ssl
+import struct
 import itertools
 import json
 import math

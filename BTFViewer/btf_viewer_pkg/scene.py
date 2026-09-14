@@ -4,7 +4,12 @@ from __future__ import annotations
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .parser import *  # noqa: F403,F401
-from .parser import _task_runs_on_selected_core  # underscore: not re-exported by *
+from .parser import (  # underscore: not re-exported by *
+    _TAG_REPRESENTATIONS,
+    _TAG_REPRESENTATION_LABELS,
+    _tag_representation,
+    _task_runs_on_selected_core,
+)
 from .timeline_util import *  # noqa: F403,F401
 from .graphics_items import *  # noqa: F403,F401
 
@@ -24,6 +29,7 @@ class TimelineScene(QGraphicsScene):
     Paint performance is recovered via the 3-tier LOD system in _BatchRowItem.
     """
 
+    tag_representation_changed = Signal(str, str)
     scene_rebuilt    = Signal()          # emitted after every rebuild()
     highlight_changed = Signal(object, bool) # (task_name_or_None, locked)
     task_filter_changed = Signal()     # legend / heatmap / migrated filter changed
@@ -51,7 +57,6 @@ class TimelineScene(QGraphicsScene):
         self._view_mode   = "task"       # "task" or "core"
         self._core_expanded: Dict[str, bool] = {}   # True = task sub-rows visible
         self._sti_expanded: set = set()             # channels with expanded waveform
-        self._sti_log_scale: bool = False           # log2 scale for STI waveform
         self._sti_line_style: str = STI_LINE_STYLE  # waveform draw style: "step" or "linear"
         self._sti_row_h_val:      int = STI_ROW_H       # collapsed STI row height (px)
         self._sti_waveform_h_val: int = STI_WAVEFORM_H  # expanded STI waveform height (px)
@@ -301,11 +306,17 @@ class TimelineScene(QGraphicsScene):
             self._sti_expanded.add(channel)
         self.rebuild()
 
-    def set_sti_log_scale(self, enabled: bool) -> None:
-        """Switch the STI waveform y-axis between linear and log2 scale."""
-        self._sti_log_scale = bool(enabled)
-        if self._sti_expanded:
-            self.rebuild()
+    def tag_representation(self, channel: str) -> str:
+        if self._trace is None:
+            return "uint32"
+        return _tag_representation(self._trace, channel)
+
+    def set_tag_representation(self, channel: str, representation: str) -> None:
+        if self._trace is None or representation not in _TAG_REPRESENTATIONS:
+            return
+        self._trace.tag_representations[channel] = representation
+        self.rebuild()
+        self.tag_representation_changed.emit(channel, representation)
 
     def set_sti_line_style(self, style: str) -> None:
         """Switch STI waveform draw style (\"step\" or \"linear\") and rebuild."""
@@ -2442,7 +2453,7 @@ class TimelineScene(QGraphicsScene):
             # Label with expand/collapse indicator (only for expandable channels)
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
+                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.TextElideMode.ElideRight, max(0, lw - 98))
             else:
                 _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
@@ -2463,7 +2474,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(lw, y_top, timeline_w, row_h),
                     _sti_evs_h, trace.time_scale,
                     time_min=_time_min, px_per_ns=_px_per_ns, x_offset=lw,
-                    log_scale=self._sti_log_scale,
+                    representation=self.tag_representation(channel),
                     line_style=self._sti_line_style)
                 _wf.setZValue(2)
                 self.addItem(_wf)
@@ -2637,7 +2648,7 @@ class TimelineScene(QGraphicsScene):
 
             lbl_color    = _complementary_color(col_color) if is_hl else _lbl_color
             lbl_font     = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
-            _lbl_avail_v = max(0, label_row_h - 14)
+            _lbl_avail_v = max(0, label_row_h - (38 if expandable else 14))
             _lbl_fm_v    = QFontMetrics(lbl_font) if is_hl else fm
             _lbl_disp_v  = _lbl_fm_v.elidedText(disp, Qt.TextElideMode.ElideRight, _lbl_avail_v)
             lbl = _make_rotated_label(self, _lbl_disp_v, lbl_font, lbl_color,
@@ -2712,12 +2723,12 @@ class TimelineScene(QGraphicsScene):
             self._frozen_top_items.append((lbl_bg, 0))
 
             # Rotated label with optional expand indicator
-            _ind_txt  = ("▼ " if is_exp else "▶ ") if expandable else ""
-            _lbl_avail_v = max(0, label_row_h - 14)
+            _ind_txt = ("▼ " if is_exp else "▶ ") if expandable else ""
+            _lbl_avail_v = max(0, label_row_h - (38 if expandable else 14))
             _lbl_txt  = fm.elidedText(_ind_txt + channel, Qt.TextElideMode.ElideRight, _lbl_avail_v)
             lbl = _make_rotated_label(self, _lbl_txt, font, self._c_sti_lbl,
                                       x_ctr,
-                                      label_row_h - LABEL_BOTTOM_MARGIN, 37)
+                                      label_row_h - LABEL_BOTTOM_MARGIN - (24 if expandable else 0), 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
 
             _sti_evs_v  = trace.sti_events_by_target.get(channel, [])
@@ -2730,7 +2741,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(x_left, label_row_h, cw_sti, timeline_h),
                     _sti_evs_clipped_v, _sti_evs_v,
                     trace.time_scale, trace.time_min, _px_per_ns, label_row_h,
-                    log_scale=self._sti_log_scale,
+                    representation=self.tag_representation(channel),
                     line_style=self._sti_line_style)
                 _wf_col.setZValue(2)
                 self.addItem(_wf_col)
@@ -3094,7 +3105,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(lw, y_top, timeline_w, row_h),
                     _sti_evs_ch, trace.time_scale,
                     time_min=_time_min, px_per_ns=_px_per_ns, x_offset=lw,
-                    log_scale=self._sti_log_scale,
+                    representation=self.tag_representation(channel),
                     line_style=self._sti_line_style)
                 _wf.setZValue(2)
                 self.addItem(_wf)
@@ -3405,7 +3416,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(x_left, label_row_h, cw_sti_vc, timeline_h),
                     _sti_evs_clipped_vc, _sti_evs_vc,
                     trace.time_scale, trace.time_min, _px_per_ns, label_row_h,
-                    log_scale=self._sti_log_scale,
+                    representation=self.tag_representation(channel),
                     line_style=self._sti_line_style)
                 _wf_col_vc.setZValue(2)
                 self.addItem(_wf_col_vc)
@@ -3439,4 +3450,3 @@ class TimelineScene(QGraphicsScene):
         _vc_corner.setZValue(40)
         self._frozen_items.append((_vc_corner, 0))
         self._frozen_top_items.append((_vc_corner, 0))
-

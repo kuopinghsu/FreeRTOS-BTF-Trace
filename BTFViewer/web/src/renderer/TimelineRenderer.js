@@ -25,6 +25,7 @@ import { formatTime, formatMigrationGapTime } from '../utils/timeFormat.js'
 import { cursorSortedPlaced } from '../utils/cursorAnalysis.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { CURSOR_COLORS } from '../utils/cursorColors.js'
+import { formatTagValue, interpretTagValue, tagRepresentationFor } from '../utils/tagAnalysis.js'
 import {
   intervalColor,
   isIntervalMarkerChannel,
@@ -571,7 +572,7 @@ export function render(ctx, trace, viewport, options = {}) {
     darkMode    = true,
     showSti     = true,
     stiExpanded = new Set(),
-    stiLogScale = false,
+    tagRepresentations = {},
     migratedOnlyFilter = false,
     lockedTaskKey = null,
     fastPaint   = false,
@@ -659,7 +660,7 @@ export function render(ctx, trace, viewport, options = {}) {
     } else if (row.type === 'core-task') {
       drawCoreTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, lockedTaskKey, rowBudget, showHoverHighlight, gpuBatch)
     } else if (row.type === 'sti') {
-      drawStiRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, stiLogScale)
+      drawStiRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, tagRepresentationFor(row.key, tagRepresentations, trace))
     } else if (row.type === 'interval') {
       drawIntervalRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, options.highlightInterval ?? null)
     }
@@ -1407,9 +1408,9 @@ function drawIntervalColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvas
   ctx.restore()
 }
 
-function drawStiRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, logScale = false) {
+function drawStiRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, representation = 'uint32') {
   if (row.isExpanded) {
-    drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, logScale)
+    drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, representation)
     return
   }
 
@@ -1454,7 +1455,7 @@ function drawStiRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, ca
  * Points outside [0,100] are clamped. The line holds the last value (step-hold)
  * until the next event.
  */
-function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, logScale = false) {
+function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, representation = 'uint32') {
   const rowY = canvasRowY
   const rowH = L().stiWaveformH
 
@@ -1490,12 +1491,12 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
   // Helper: extract numeric value from an event (note field holds the value,
   // e.g. "12345,Core_0,0,STI,tag0_event,0,trigger,42" → note="42")
   function evVal(ev) {
-    return parseFloat(ev.note !== '' ? ev.note : ev.event)
+    return interpretTagValue(ev.note !== '' ? ev.note : ev.event, representation)
   }
 
   // Use precomputed min/max from the parser (O(1)) so every render frame
   // avoids an O(N) scan over the full event list.
-  const preRange = trace.stiValRange?.get(row.key)
+  const preRange = null // Representation-specific ranges are inexpensive and avoid stale raw-value bounds.
   let valMin, valMax
   if (preRange) {
     valMin = preRange.min
@@ -1516,20 +1517,11 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
   // If all values are identical give a tiny ±1 padding so the line is visible
   if (valMin === valMax) { valMin -= 1; valMax += 1 }
 
-  // Log₂ transform: signed log2 so it handles zero and negatives gracefully.
-  // signedLog2(v) = sign(v) * log2(1 + |v|)
-  function signedLog2(v) {
-    return Math.sign(v) * Math.log2(1 + Math.abs(v))
-  }
-
-  const mappedMin = logScale ? signedLog2(valMin) : valMin
-  const mappedMax = logScale ? signedLog2(valMax) : valMax
-  const mappedRange = mappedMax - mappedMin
+  const mappedRange = valMax - valMin
 
   // Helper: map a numeric value to canvas Y (valMin = bottom, valMax = top)
   function valToY(v) {
-    const mapped = logScale ? signedLog2(v) : v
-    return chartBottom - ((mapped - mappedMin) / mappedRange) * chartH
+    return chartBottom - ((v - valMin) / mappedRange) * chartH
   }
 
   // Find events in the visible range (extend one step before/after for step-hold)
@@ -1545,9 +1537,7 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
 
   // Draw axis labels now that we know the real scale
   function fmtVal(v) {
-    if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(2) + 'M'
-    if (Math.abs(v) >= 1e3) return (v / 1e3).toFixed(1) + 'k'
-    return String(Math.round(v))
+    return formatTagValue(v)
   }
   ctx.font = '9px monospace'
   ctx.textAlign = 'right'
@@ -1556,11 +1546,11 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
   ctx.fillText(fmtVal(valMax), canvasW - 2, chartTop + 10)
   ctx.textBaseline = 'top'
   ctx.fillText(fmtVal(valMin), canvasW - 2, chartBottom - 10)
-  if (logScale) {
+  if (representation === 'log2-uint32') {
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
     ctx.fillStyle = darkMode ? 'rgba(91,200,255,0.55)' : 'rgba(0,100,200,0.55)'
-    ctx.fillText('log₂', 4, chartTop + 2)
+    ctx.fillText('log₂ uint32', 4, chartTop + 2)
   }
 
   ctx.save()

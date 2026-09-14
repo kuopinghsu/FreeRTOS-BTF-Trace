@@ -5585,6 +5585,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         view._scene.task_filter_changed.connect(_on_task_filter_changed)
 
+        def _on_tag_representation_changed(_channel, _representation):
+            if view is self._view and hasattr(self, "_stats_panel"):
+                self._stats_panel.rebuild(view._scene._trace)
+                self._stats_panel._refresh_open_plot()
+
+        view._scene.tag_representation_changed.connect(_on_tag_representation_changed)
+
         def _on_cpu_expand_all_toggled(_expanded: bool) -> None:
             if view is self._view and not self._cpu_splitter_user_sized:
                 self._autofit_cpu_load_height()
@@ -9045,6 +9052,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.section_collapsed_changed.connect(
             self._on_section_collapsed_changed)
         self._stats_panel.query_ai_requested.connect(self._on_stats_query_ai)
+        self._stats_panel.tag_representation_changed.connect(
+            lambda _channel, _representation: self._view._scene.rebuild())
         self._stats_panel.set_ai_enabled(self._ai_feature_enabled())
         self._stats_panel._scope_cb.toggled.connect(
             lambda _checked=False: (self._update_cursor_scope_banner(),
@@ -9166,12 +9175,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _grid_act.setShortcut(QKeySequence("G"))
         _sti_act  = vm.addAction("Toggle &STI events", lambda: self._set_show_sti(not self._show_sti))
         _sti_act.setShortcut(QKeySequence("I"))
-        self._act_sti_log2 = vm.addAction(
-            "STI Waveform &Log\u2082 Scale", self._toggle_sti_log_scale_from_menu)
-        self._act_sti_log2.setCheckable(True)
-        self._act_sti_log2.setToolTip(
-            "STI waveform y-axis: toggle between linear and log\u2082 scale\n"
-            "(only active when an STI row is expanded)")
         vm.addSeparator()
         # "Focus &Mode" (not "&Focus"): 'F' is already the View-menu mnemonic
         # for "Show &Find Panel", and bare 'F' is the "Fit Trace" shortcut —
@@ -9375,18 +9378,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if _saw:
             _saw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             _saw.setAutoExclusive(False)
-        tb.addSeparator()
-
-        # --- STI waveform scale toggle ---
-        self._tb_log2_btn = tb.addAction("Log₂", self._toggle_sti_log_scale)
-        self._tb_log2_btn.setCheckable(True)
-        self._tb_log2_btn.setChecked(False)
-        self._tb_log2_btn.setToolTip(
-            "STI waveform y-axis: toggle between linear and log₂ scale\n"
-            "(only active when an STI row is expanded)")
-        _l2w = tb.widgetForAction(self._tb_log2_btn)
-        if _l2w:
-            _l2w.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         tb.addSeparator()
 
         # --- Theme and settings ---
@@ -10003,23 +9994,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._grid_toggle_cb.blockSignals(False)
         if persist:
             self._settings.set("view", "show_grid", str(self._show_grid).lower())
-
-    def _toggle_sti_log_scale(self) -> None:
-        """Toggle the STI waveform y-axis between linear and log2 scale."""
-        enabled = self._tb_log2_btn.isChecked()
-        if hasattr(self, "_act_sti_log2"):
-            self._act_sti_log2.blockSignals(True)
-            self._act_sti_log2.setChecked(enabled)
-            self._act_sti_log2.blockSignals(False)
-        self._view.set_sti_log_scale(enabled)
-
-    def _toggle_sti_log_scale_from_menu(self) -> None:
-        """View-menu counterpart of the toolbar Log\u2082 toggle — kept in sync."""
-        enabled = self._act_sti_log2.isChecked()
-        self._tb_log2_btn.blockSignals(True)
-        self._tb_log2_btn.setChecked(enabled)
-        self._tb_log2_btn.blockSignals(False)
-        self._view.set_sti_log_scale(enabled)
 
     def _set_colorblind_safe(self, enabled: bool) -> None:
         """Switch the task/core colour palette to/from the Okabe-Ito colorblind-safe set."""
@@ -14188,15 +14162,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._tb_cpu_load_btn.blockSignals(True)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)
             self._tb_cpu_load_btn.blockSignals(False)
-        if hasattr(self, "_tb_log2_btn"):
-            log2 = bool(self._view._scene._sti_log_scale)
-            self._tb_log2_btn.blockSignals(True)
-            self._tb_log2_btn.setChecked(log2)
-            self._tb_log2_btn.blockSignals(False)
-            if hasattr(self, "_act_sti_log2"):
-                self._act_sti_log2.blockSignals(True)
-                self._act_sti_log2.setChecked(log2)
-                self._act_sti_log2.blockSignals(False)
         if hasattr(self, "_tb_expand_all_btn") and self._view_mode == "core":
             scene = self._view._scene
             trace = scene._trace
@@ -17303,4 +17268,3 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self, is_dark=self._is_dark,
                 ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE)),
             self)
-

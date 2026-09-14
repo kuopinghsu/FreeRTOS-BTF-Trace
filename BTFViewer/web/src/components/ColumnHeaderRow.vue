@@ -46,6 +46,16 @@
             :style="labelStyle(col)"
             :title="col.label"
           >{{ col.label }}</span>
+          <DomSelect
+            v-if="col.type === 'sti' && col.isExpandable"
+            class="tag-representation-select"
+            :model-value="tagRepresentation(col.key)"
+            :options="TAG_REPRESENTATION_OPTIONS"
+            :aria-label="`Data representation for ${col.label}`"
+            @click.stop
+            @keydown.stop
+            @update:model-value="emit('tagRepresentationChange', col.key, $event)"
+          />
         </div>
       </div>
     </div>
@@ -53,10 +63,12 @@
 </template>
 
 <script setup>
+import DomSelect from './DomSelect.vue'
 import { computed, ref } from 'vue'
 import { colBandWidth, visibleColumnIndexRange, RULER_W } from '../renderer/TimelineRenderer.js'
 import { taskMergeKey } from '../utils/colors.js'
 import { stripeClassForBand } from '../utils/timelineStripes.js'
+import { TAG_REPRESENTATION_OPTIONS, tagRepresentationFor } from '../utils/tagAnalysis.js'
 
 const LABEL_TOP = 16
 const LABEL_BOTTOM = 8
@@ -68,9 +80,15 @@ const props = defineProps({
   headerH:      { type: Number, default: 160 },
   highlightKey: { type: [String, null], default: null },
   expanded:     { type: Object, default: () => new Set() },
+  tagRepresentations: { type: Object, default: () => ({}) },
+  trace: { type: Object, default: null },
 })
 
-const emit = defineEmits(['expandToggle', 'stiExpandToggle', 'highlightChange', 'highlightClick'])
+const emit = defineEmits(['expandToggle', 'stiExpandToggle', 'highlightChange', 'highlightClick', 'tagRepresentationChange'])
+
+function tagRepresentation(channel) {
+  return tagRepresentationFor(channel, props.tagRepresentations, props.trace)
+}
 
 const totalWidth = computed(() => props.columnLayout?.totalWidth ?? 0)
 const bodyWidth = computed(() => Math.max(0, totalWidth.value - RULER_W))
@@ -162,6 +180,20 @@ defineExpose({ rowEl })
   display: flex;
   overflow: hidden;
   pointer-events: auto;
+}
+
+.tag-representation-select {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  width: calc(100% - 4px);
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  color: var(--fg);
+  font-size: 9px;
 }
 
 .ruler-corner {
@@ -260,5 +292,15 @@ defineExpose({ rowEl })
 
 .col-sti .col-label {
   color: #88aabb;
+}
+</style>
+
+<style scoped>
+.tag-representation-select :deep(.dom-select-trigger) {
+  min-height: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-size: 10px;
 }
 </style>

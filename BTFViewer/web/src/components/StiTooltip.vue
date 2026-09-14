@@ -22,6 +22,12 @@
     >
       <span class="sti-key">Note</span><span class="sti-val">{{ stiEvent.note }}</span>
     </div>
+    <div
+      v-if="interpretedValue != null"
+      class="sti-row"
+    >
+      <span class="sti-key">Value</span><span class="sti-val">{{ formatTagValue(interpretedValue) }} ({{ representationLabel }})</span>
+    </div>
     <div class="sti-row">
       <span class="sti-key">Core</span><span class="sti-val">{{ stiEvent.core }}</span>
     </div>
@@ -29,13 +35,26 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
+import { formatTagValue, interpretTagValue, isTagChannel, tagRepresentationFor, TAG_REPRESENTATION_OPTIONS } from '../utils/tagAnalysis.js'
 
-defineProps({
+const props = defineProps({
   stiEvent:  { type: Object, default: null },
   x:         { type: Number, default: 0 },
   y:         { type: Number, default: 0 },
   timeScale: { type: String, default: 'ns' },
+  trace: { type: Object, default: null },
+  tagRepresentations: { type: Object, default: () => ({}) },
+})
+
+const representation = computed(() => tagRepresentationFor(
+  props.stiEvent?.target, props.tagRepresentations, props.trace))
+const representationLabel = computed(() =>
+  TAG_REPRESENTATION_OPTIONS.find(option => option.value === representation.value)?.label || 'uint32')
+const interpretedValue = computed(() => {
+  if (!props.stiEvent || !isTagChannel(props.stiEvent.target)) return null
+  return interpretTagValue(props.stiEvent.note, representation.value)
 })
 </script>
 

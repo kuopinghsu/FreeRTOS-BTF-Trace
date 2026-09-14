@@ -5614,6 +5614,7 @@
                         >
                           Tag
                         </th>
+                        <th>Representation</th>
                         <th
                           :class="thSortClass('tags', 'count')"
                           @click="toggleTableSort('tags', 'count')"
@@ -5683,6 +5684,17 @@
                       >
                         <td class="task-col">
                           {{ row.label }}
+                        </td>
+                        <td
+                          @click.stop
+                          @keydown.stop
+                        >
+                          <DomSelect
+                            :model-value="tagRepresentation(row.channel)"
+                            class="tag-representation-select"
+                            :options="tagRepresentationOptions(row.channel)"
+                            @update:model-value="setTagRepresentation(row.channel, $event)"
+                          />
                         </td>
                         <td>{{ row.count }}</td>
                         <td>{{ row.min }}</td>
@@ -5787,6 +5799,18 @@
         <div class="plot-dialog-title">
           {{ plotData?.title }}
         </div>
+        <label
+          v-if="openPlotRef?.kind === 'tag'"
+          class="plot-scale-label"
+        >
+          Representation
+          <DomSelect
+            :model-value="tagRepresentation(openPlotRef.tagChannel)"
+            class="plot-scale-select"
+            :options="tagRepresentationOptions(openPlotRef.tagChannel)"
+            @update:model-value="setTagRepresentation(openPlotRef.tagChannel, $event)"
+          />
+        </label>
         <button
           type="button"
           class="plot-close-btn"
@@ -6365,6 +6389,9 @@ import {
   tagChannelLabel,
   formatTagValue,
   tagSampleDetailRows,
+  TAG_REPRESENTATION_OPTIONS,
+  tagRepresentationFor,
+  recommendTagRepresentation,
 } from '../utils/tagAnalysis.js'
 import { priorityStatsRows, priorityEpisodePlotPoints, priorityEpisodeDetailRows, priorityEpisodeNote, BOOST_BAND_COLOR, INVERSION_BAND_COLOR } from '../utils/priorityAnalysis.js'
 import {
@@ -6528,6 +6555,7 @@ const props = defineProps({
   sectionHeights: { type: Object, default: null },
   scopeToCursors: { type: Boolean, default: true },
   analysisSettings: { type: Object, default: () => ({}) },
+  tagRepresentations: { type: Object, default: () => ({}) },
   sectionCollapsedState: { type: Object, default: null },
   sectionPins: { type: Array, default: () => [] },
   sectionOrder: { type: Array, default: () => [] },
@@ -6546,7 +6574,26 @@ const emit = defineEmits([
   'exploreRange', 'query-ai', 'filterTimeline',
   'clear-scope', 'clear-filter',
   'statsReferenceRequested',
+  'tagRepresentationChange',
 ])
+
+function tagRepresentation(channel) {
+  const range = statsRange.value
+  return tagRepresentationFor(channel, props.tagRepresentations, props.trace, range?.lo ?? null, range?.hi ?? null)
+}
+
+function tagRepresentationOptions(channel) {
+  const range = statsRange.value
+  const recommended = recommendTagRepresentation(props.trace, channel, range?.lo ?? null, range?.hi ?? null)
+  return TAG_REPRESENTATION_OPTIONS.map(option => ({
+    ...option,
+    label: `${option.label}${option.value === recommended ? ' (recommended)' : ''}`,
+  }))
+}
+
+function setTagRepresentation(channel, representation) {
+  emit('tagRepresentationChange', channel, representation)
+}
 
 function onOpenReference(sectionId) {
   emit('statsReferenceRequested', sectionId)
@@ -8110,7 +8157,7 @@ const tagStats = computed(() => {
   const r = statsRange.value
   const lo = r?.lo ?? null
   const hi = r?.hi ?? null
-  return tagStatsRows(tr, lo, hi)
+  return tagStatsRows(tr, lo, hi, props.tagRepresentations)
 })
 
 const sortedTagStats = computed(() =>
@@ -9005,7 +9052,7 @@ function _buildTagPlot(trace, channel, range) {
   const lo = range?.lo ?? null
   const hi = range?.hi ?? null
   const label = tagChannelLabel(channel)
-  const rawPoints = tagPlotPoints(trace, channel, lo, hi)
+  const rawPoints = tagPlotPoints(trace, channel, lo, hi, props.tagRepresentations)
   const points = rawPoints.map((pt, index) => ({
     index,
     xNs: pt.xNs,
@@ -9452,25 +9499,45 @@ const scatterModel = computed(() => {
   const ys = plot.points.map(point => point.yValue)
   const x0 = Math.min(...xs)
   const x1 = Math.max(...xs)
-  const yMax = Math.max(1, ...ys)
+  // Durations conventionally start at 0; a free-form value (e.g. a float32
+  // tag payload) is auto-ranged to its own min/max so a narrow band far from
+  // zero isn't squashed against the baseline.
+  const isTagValue = plot.kind === 'tag'
+  let yMin = 0
+  let yMax
+  if (isTagValue) {
+    const rawMin = Math.min(...ys)
+    const rawMax = Math.max(...ys)
+    if (rawMax > rawMin) {
+      yMin = rawMin
+      yMax = rawMax
+    } else {
+      const pad = Math.abs(rawMin) * 0.5 || 0.5
+      yMin = rawMin - pad
+      yMax = rawMin + pad
+    }
+  } else {
+    yMax = Math.max(1, ...ys)
+  }
+  const ySpan = yMax - yMin
   const xSpan = Math.max(1, x1 - x0)
   const plotW = width - margin.left - margin.right
   const plotH = height - margin.top - margin.bottom
   const summary = _summarizeNumericSamples(ys)
   const showVariability = ['exec', 'block', 'inter', 'dispatch', 'switch_overhead'].includes(plot.kind)
   const yFormat = plot.kind === 'tag'
-    ? (v) => formatTagValue(Math.round(v))
+    ? (v) => formatTagValue(v)
     : (v) => formatTime(Math.round(v), props.trace.timeScale)
 
   const scaleX = value => margin.left + ((value - x0) / xSpan) * plotW
-  const scaleY = value => margin.top + plotH - (value / yMax) * plotH
+  const scaleY = value => margin.top + plotH - ((value - yMin) / ySpan) * plotH
 
   const sigmaLo = summary
-    ? Math.max(0, summary.avg - summary.stddev)
-    : 0
+    ? Math.max(yMin, summary.avg - summary.stddev)
+    : yMin
   const sigmaHi = summary
     ? Math.min(yMax, summary.avg + summary.stddev)
-    : 0
+    : yMin
   const refs = summary ? [
     { label: 'avg', y: scaleY(summary.avg), color: '#CE93D8' },
     { label: 'p5', y: scaleY(summary.p5), color: '#29B6F6' },
@@ -9488,8 +9555,8 @@ const scatterModel = computed(() => {
       return { index, x: scaleX(value), label: formatTime(value, props.trace.timeScale) }
     }),
     yTicks: Array.from({ length: 5 }, (_, index) => {
-      const value = yMax * (1 - index / 4)
-      return { index, y: scaleY(value), label: yFormat(Math.round(value)) }
+      const value = yMin + ySpan * (1 - index / 4)
+      return { index, y: scaleY(value), label: yFormat(value) }
     }),
     sigmaBand: (summary && showVariability) ? {
       y: scaleY(sigmaHi),
@@ -10231,15 +10298,15 @@ function _renderIntervalReportHtml(tr, lo, hi, suffix) {
 }
 
 function _renderTagReportHtml(tr, lo, hi, suffix) {
-  const tagHtmlRows = tagStatsRows(tr, lo, hi)
-  const samples = tagSampleDetailRows(tr, lo, hi, 200)
+  const tagHtmlRows = tagStatsRows(tr, lo, hi, props.tagRepresentations)
+  const samples = tagSampleDetailRows(tr, lo, hi, 0, props.tagRepresentations)
   const summaryBody = tagHtmlRows.length
     ? tagHtmlRows.map(row =>
-        `<tr><td>${_htmlCell(row.channel)}</td><td>${_htmlCell(row.label)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.jitter)}</td><td>${_htmlCell(row.sigma)}</td><td>${_htmlCell(row.p50)}</td><td>${_htmlCell(row.p95)}</td><td>${_htmlCell(row.p99)}</td></tr>`,
+        `<tr><td>${_htmlCell(row.channel)}</td><td>${_htmlCell(row.label)}</td><td><span style="display:inline-block;padding:2px 8px;border:1px solid #94a3b8;border-radius:999px;font-size:12px">${_htmlCell(tagRepresentationFor(row.channel, props.tagRepresentations, tr, lo, hi))}</span></td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.jitter)}</td><td>${_htmlCell(row.sigma)}</td><td>${_htmlCell(row.p50)}</td><td>${_htmlCell(row.p95)}</td><td>${_htmlCell(row.p99)}</td></tr>`,
       ).join('')
-    : '<tr><td colspan="11" class="empty">No tag data</td></tr>'
+    : '<tr><td colspan="12" class="empty">No tag data</td></tr>'
   return `<section class="report-card"><h2>Tag Analysis${_htmlCell(suffix)}</h2>
-    <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>
+    <table><thead><tr><th>Channel</th><th>Label</th><th>Representation</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>
     <tbody>${summaryBody}</tbody></table>
     <h3 class="sub">Tag channels over time</h3>
     ${htmlTagOverview(samples, { timeOf: s => s.time })}</section>`

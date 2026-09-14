@@ -9,6 +9,65 @@ const TAG_COLORS = [
   '#E8C84A', '#3498DB', '#2ECC71', '#E74C3C', '#9B59B6',
   '#1ABC9C', '#F39C12', '#E91E63',
 ]
+const FLOAT32_VIEW = new DataView(new ArrayBuffer(4))
+
+export const TAG_REPRESENTATION_OPTIONS = Object.freeze([
+  { value: 'uint32', label: 'uint32' },
+  { value: 'int32', label: 'int32' },
+  { value: 'float32', label: 'float32' },
+  { value: 'log2-uint32', label: 'log₂ uint32' },
+])
+
+export function normalizeTagRepresentation(value) {
+  return TAG_REPRESENTATION_OPTIONS.some(option => option.value === value) ? value : 'uint32'
+}
+
+/** Convert the BTF numeric payload to its original 32-bit word. */
+export function tagRawUint32(note) {
+  const raw = (note != null && note !== '') ? String(note).trim() : ''
+  if (!raw) return null
+  const numeric = /^[-+]?0[xX][0-9a-f]+$/i.test(raw) ? Number.parseInt(raw, 0) : Number(raw)
+  if (!Number.isFinite(numeric)) return null
+  return Math.trunc(numeric) >>> 0
+}
+
+/** Interpret one tag payload without changing its underlying 32-bit bits. */
+export function interpretTagValue(note, representation = 'uint32') {
+  const bits = tagRawUint32(note)
+  if (bits == null) return null
+  switch (normalizeTagRepresentation(representation)) {
+    case 'int32': return bits | 0
+    case 'float32': {
+      FLOAT32_VIEW.setUint32(0, bits, false)
+      const value = FLOAT32_VIEW.getFloat32(0, false)
+      return Number.isFinite(value) ? value : null
+    }
+    case 'log2-uint32': return Math.log2(1 + bits)
+    default: return bits
+  }
+}
+
+export function tagRepresentationFor(channel, representations, trace = null, lo = null, hi = null) {
+  if (representations?.[channel]) return normalizeTagRepresentation(representations[channel])
+  return trace ? recommendTagRepresentation(trace, channel, lo, hi) : 'uint32'
+}
+
+/** Recommend log normalization only when non-zero uint32 samples span >= 256x. */
+export function recommendTagRepresentation(trace, channel, lo = null, hi = null) {
+  const samples = trace?.tagSamplesByChannel?.get(channel) || []
+  const values = samples
+    .filter(sample => tagOverlapsRange(sample, lo, hi))
+    .map(sample => sample.rawUint32 ?? tagRawUint32(sample.rawValue ?? sample.value))
+    .filter(value => Number.isFinite(value) && value > 0)
+  if (values.length < 3) return 'uint32'
+  let min = Infinity
+  let max = -Infinity
+  for (const value of values) {
+    if (value < min) min = value
+    if (value > max) max = value
+  }
+  return max / min >= 256 ? 'log2-uint32' : 'uint32'
+}
 
 export function isTagChannel(name) {
   return TAG_CHANNEL_RE.test(name || '')
@@ -36,14 +95,7 @@ export function tagColor(channel) {
 }
 
 export function parseTagValue(note) {
-  const raw = (note != null && note !== '') ? String(note).trim() : ''
-  if (!raw) return null
-  if (/^0[xX]/.test(raw)) {
-    const v = parseInt(raw, 16)
-    return Number.isFinite(v) ? v : null
-  }
-  const v = parseFloat(raw)
-  return Number.isFinite(v) ? v : null
+  return interpretTagValue(note, 'uint32')
 }
 
 export function formatTagValue(value) {
@@ -110,7 +162,8 @@ export function buildTagData(stiEvents) {
 
   for (const ev of stiEvents || []) {
     if (!isTagChannel(ev.target)) continue
-    const value = parseTagValue(ev.note)
+    const rawUint32 = tagRawUint32(ev.note)
+    const value = rawUint32
     if (value == null) continue
     const ch = ev.target
     if (!tagSamplesByChannel.has(ch)) tagSamplesByChannel.set(ch, [])
@@ -118,6 +171,8 @@ export function buildTagData(stiEvents) {
       channel: ch,
       timeNs: ev.time,
       value,
+      rawValue: ev.note,
+      rawUint32,
       core: ev.core || '',
     })
   }
@@ -147,7 +202,7 @@ export function tagOverlapsRange(sample, lo, hi) {
  * @returns {Array<{channel, label, count, minVal, avgVal, maxVal, jitterVal,
  *   sigmaVal, p50Val, p95Val, p99Val, min, avg, max, jitter, sigma, p50, p95, p99}>}
  */
-export function tagStatsRows(trace, lo, hi) {
+export function tagStatsRows(trace, lo, hi, representations = null) {
   const byCh = trace?.tagSamplesByChannel
   if (!byCh?.size) return []
 
@@ -155,7 +210,8 @@ export function tagStatsRows(trace, lo, hi) {
   for (const channel of trace.tagChannels || []) {
     const samples = (byCh.get(channel) || [])
       .filter(s => tagOverlapsRange(s, lo, hi))
-      .map(s => s.value)
+      .map(s => interpretTagValue(s.rawValue ?? s.rawUint32 ?? s.value, tagRepresentationFor(channel, representations, trace, lo, hi)))
+      .filter(Number.isFinite)
     if (!samples.length) continue
     const sorted = [...samples].sort((a, b) => a - b)
     const total = samples.reduce((a, b) => a + b, 0)
@@ -191,7 +247,7 @@ export function tagStatsRows(trace, lo, hi) {
 }
 
 /** Per-sample detail rows for HTML/CSV export. */
-export function tagSampleDetailRows(trace, lo, hi, limit = 200) {
+export function tagSampleDetailRows(trace, lo, hi, limit = 200, representations = null) {
   const byCh = trace?.tagSamplesByChannel
   if (!byCh?.size) return []
   const scale = trace?.timeScale || 'ns'
@@ -199,13 +255,15 @@ export function tagSampleDetailRows(trace, lo, hi, limit = 200) {
   for (const channel of trace.tagChannels || []) {
     for (const sample of byCh.get(channel) || []) {
       if (!tagOverlapsRange(sample, lo, hi)) continue
+      const value = interpretTagValue(sample.rawValue ?? sample.rawUint32 ?? sample.value, tagRepresentationFor(channel, representations, trace, lo, hi))
+      if (!Number.isFinite(value)) continue
       rows.push({
         channel,
         label: tagChannelLabel(channel),
         timeNs: sample.timeNs,
         time: formatTime(sample.timeNs, scale),
-        value: formatTagValue(sample.value),
-        valueNum: sample.value,
+        value: formatTagValue(value),
+        valueNum: value,
         core: sample.core || '',
       })
     }
@@ -215,15 +273,17 @@ export function tagSampleDetailRows(trace, lo, hi, limit = 200) {
 }
 
 /** Plot points: x = sample time, y = tag value. */
-export function tagPlotPoints(trace, channel, lo, hi) {
+export function tagPlotPoints(trace, channel, lo, hi, representations = null) {
+  const representation = tagRepresentationFor(channel, representations, trace, lo, hi)
   const samples = trace?.tagSamplesByChannel?.get(channel) || []
   return samples
     .filter(s => tagOverlapsRange(s, lo, hi))
     .map(s => ({
       xNs: s.timeNs,
-      yValue: s.value,
+      yValue: interpretTagValue(s.rawValue ?? s.rawUint32 ?? s.value, representation),
       payload: s,
     }))
+    .filter(point => Number.isFinite(point.yValue))
 }
 
 /**

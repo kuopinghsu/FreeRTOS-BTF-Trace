@@ -474,28 +474,6 @@
       </div>
     </Teleport>
 
-    <!-- g5: Log₂ -->
-    <Teleport
-      :to="overflowPanelEl ?? 'body'"
-      :disabled="!overflow.g5"
-    >
-      <div
-        :ref="el => setGroupRef('g5', el)"
-        class="tb-group"
-      >
-        <button
-          type="button"
-          class="tb-btn tb-btn-text"
-          :class="{ active: modelValue.stiLogScale }"
-          title="STI waveform y-axis: toggle between linear and log₂ scale (only active when an STI row is expanded)"
-          @click="emit('update:modelValue', { ...modelValue, stiLogScale: !modelValue.stiLogScale })"
-        >
-          Log₂
-        </button>
-        <div class="tb-sep" />
-      </div>
-    </Teleport>
-
     <!-- g6: Theme -->
     <Teleport
       :to="overflowPanelEl ?? 'body'"
@@ -792,7 +770,7 @@ const overflowBtnEl = ref(null)
 const overflowPanelEl = ref(null)
 const overflowMenuOpen = ref(false)
 
-const GROUP_ORDER = ['g1', 'g2', 'g3', 'g4', 'g4b', 'g5', 'g6']
+const GROUP_ORDER = ['g1', 'g2', 'g3', 'g4', 'g4b', 'g6']
 const overflow = reactive(Object.fromEntries(GROUP_ORDER.map(k => [k, false])))
 const anyOverflow = computed(() => GROUP_ORDER.some(k => overflow[k]))
 

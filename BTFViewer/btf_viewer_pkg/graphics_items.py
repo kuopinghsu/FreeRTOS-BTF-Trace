@@ -4,6 +4,11 @@ from __future__ import annotations
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .parser import *  # noqa: F403,F401
+from .parser import (  # private symbols are not pulled in by import *
+    _TAG_REPRESENTATIONS,
+    _TAG_REPRESENTATION_LABELS,
+    _interpret_tag_value,
+)
 from .timeline_util import *  # noqa: F403,F401
 
 # ---------------------------------------------------------------------------
@@ -1075,12 +1080,52 @@ class _StiLabelItem(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         if expandable:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip("Click the label to expand/collapse; click the format pill to interpret the 32-bit payload")
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setBrush(QBrush(Qt.GlobalColor.transparent))
 
+    def _format_rect(self):
+        rect = self.rect()
+        width = min(88.0, max(0.0, rect.width() - 4))
+        return QRectF(rect.right() - width - 2, rect.bottom() - 22,
+                      width, 20)
+
+    def paint(self, painter, option, widget=None):
+        super().paint(painter, option, widget)
+        if not self._expandable:
+            return
+        rect = self._format_rect()
+        painter.setPen(QPen(self._tl_scene._c_sti_lbl))
+        painter.setBrush(QBrush(self._tl_scene._c_sti_bg))
+        painter.drawRoundedRect(rect, 10, 10)
+        font = painter.font()
+        font.setPointSize(8)
+        painter.setFont(font)
+        label = _TAG_REPRESENTATION_LABELS[self._tl_scene.tag_representation(self._channel)]
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label + " ▾")
+
     def mousePressEvent(self, event):
         if self._expandable:
+            if self._format_rect().contains(event.pos()):
+                self.contextMenuEvent(event)
+                return
             self._tl_scene.toggle_sti_channel(self._channel)
+        event.accept()
+
+    def contextMenuEvent(self, event):  # noqa: N802
+        if not self._expandable:
+            event.ignore()
+            return
+        menu = QMenu()
+        current = self._tl_scene.tag_representation(self._channel)
+        for representation in _TAG_REPRESENTATIONS:
+            action = menu.addAction(_TAG_REPRESENTATION_LABELS[representation])
+            action.setCheckable(True)
+            action.setChecked(representation == current)
+            action.triggered.connect(
+                lambda _checked=False, r=representation:
+                self._tl_scene.set_tag_representation(self._channel, r))
+        menu.exec(event.screenPos())
         event.accept()
 
     def hoverEnterEvent(self, event):
@@ -1099,13 +1144,12 @@ class _BatchStiWaveformItem(QGraphicsItem):
     Numeric values are taken from ``StiEvent.note`` (falling back to
     ``StiEvent.event``).  Non-numeric notes are assigned a stable integer
     category index so that categorical channels still produce a readable chart.
-    When *log_scale* is True the y-axis uses log2(1 + |value|) with the
-    original sign preserved.
+    The selected representation reinterprets each tag's original 32-bit word.
     """
 
     def __init__(self, bounding_rect: QRectF, events: list, time_scale: str,
                  time_min: int, px_per_ns: float, x_offset: float,
-                 log_scale: bool = False, line_style: str = "step"):
+                 representation: str = "uint32", line_style: str = "step"):
         super().__init__()
         self._bounding_rect = bounding_rect
         self._events        = events      # all StiEvent objects for this channel
@@ -1113,7 +1157,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
         self._time_min      = time_min
         self._px_per_ns     = px_per_ns
         self._x_offset      = x_offset
-        self._log_scale     = log_scale
+        self._representation = representation
         self._line_style    = line_style  # "step" (hold) or "linear" (point-to-point)
         self._category_map: dict = {}     # note -> stable int (for categorical channels)
         self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
@@ -1122,19 +1166,8 @@ class _BatchStiWaveformItem(QGraphicsItem):
     # ------------------------------------------------------------------ helpers
     def _ev_value(self, ev) -> float:
         """Return a numeric float for *ev*; categorical notes map to stable ints."""
-        raw = ev.note or ev.event or ""
-        try:
-            return float(raw)
-        except (ValueError, TypeError):
-            pass
-        if raw not in self._category_map:
-            self._category_map[raw] = float(len(self._category_map))
-        return self._category_map[raw]
-
-    @staticmethod
-    def _signed_log2(v: float) -> float:
-        import math
-        return math.copysign(math.log2(1.0 + abs(v)), v)
+        value = _interpret_tag_value(ev.note or ev.event or "", self._representation)
+        return value if value is not None else float("nan")
 
     # ------------------------------------------------------------------ Qt API
     def boundingRect(self) -> QRectF:
@@ -1152,11 +1185,16 @@ class _BatchStiWaveformItem(QGraphicsItem):
         if chart_h <= 0:
             return
 
-        vals = [self._ev_value(ev) for ev in self._events]
-        if self._log_scale:
-            mapped = [self._signed_log2(v) for v in vals]
-        else:
-            mapped = list(vals)
+        event_values = [
+            (ev, value)
+            for ev in self._events
+            for value in (self._ev_value(ev),)
+            if math.isfinite(value)
+        ]
+        if not event_values:
+            return
+
+        mapped = [value for _, value in event_values]
 
         v_min = min(mapped)
         v_max = max(mapped)
@@ -1179,6 +1217,18 @@ class _BatchStiWaveformItem(QGraphicsItem):
         painter.drawLine(QLineF(rect.left(), chart_top, rect.right(), chart_top))
         painter.drawLine(QLineF(rect.left(), chart_bot,  rect.right(), chart_bot))
 
+        painter.setPen(QColor(160, 170, 180))
+        painter.setFont(QFont("monospace", 8))
+        painter.drawText(QRectF(rect.left() + 4, chart_top, 150, 14),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                         _TAG_REPRESENTATION_LABELS[self._representation])
+        painter.drawText(QRectF(rect.right() - 130, chart_top, 126, 14),
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+                         _format_tag_value(v_max))
+        painter.drawText(QRectF(rect.right() - 130, chart_bot - 14, 126, 14),
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
+                         _format_tag_value(v_min))
+
         # Polyline: step-hold or direct point-to-point
         line_color = QColor("#5BC8FF")
         painter.setPen(QPen(line_color, 1.5))
@@ -1186,10 +1236,10 @@ class _BatchStiWaveformItem(QGraphicsItem):
 
         pts: list = []
         if self._line_style == "linear":
-            for ev, m in zip(self._events, mapped):
+            for ev, m in event_values:
                 pts.append((ev_to_x(ev), val_to_y(m)))
         else:  # "step" (default): hold value until next event
-            for ev, m in zip(self._events, mapped):
+            for ev, m in event_values:
                 x = ev_to_x(ev)
                 y = val_to_y(m)
                 if pts:
@@ -1205,7 +1255,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
         dot_color = QColor("#80DFFF")
         painter.setPen(QPen(dot_color.darker(130), 0.5))
         painter.setBrush(QBrush(dot_color))
-        for ev, m in zip(self._events, mapped):
+        for ev, m in event_values:
             x = ev_to_x(ev)
             y = val_to_y(m)
             painter.drawEllipse(QPointF(x, y), 2.5, 2.5)
@@ -1230,7 +1280,11 @@ class _BatchStiWaveformItem(QGraphicsItem):
             if x > pos_x + HIT and best_dist <= HIT:
                 break
         if best_ev is not None and best_dist <= HIT:
+            value = self._ev_value(best_ev)
+            value_text = (_format_tag_value(value) if math.isfinite(value) else "—")
+            representation = _TAG_REPRESENTATION_LABELS[self._representation]
             tip = (f"<b>STI: {best_ev.note}</b><br>"
+                   f"Value: {value_text} ({representation})<br>"
                    f"Time: {_format_time(best_ev.time, self._time_scale)}<br>"
                    f"Core: {best_ev.core}<br>"
                    f"Target: {best_ev.target}<br>"
@@ -1259,13 +1313,13 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
     time_min      : int      Trace time_min (scene Y = y_offset + (t - time_min) * px_per_ns)
     px_per_ns     : float    Scene pixels per nanosecond (vertical axis)
     y_offset      : float    Scene Y coordinate of time=time_min
-    log_scale     : bool     Use log2(1+|v|) mapping
+    representation: str     uint32, int32, float32, or log2-uint32
     line_style    : str      "step" (hold) or "linear"
     """
 
     def __init__(self, bounding_rect: QRectF, events: list, all_events: list,
                  time_scale: str, time_min: int, px_per_ns: float, y_offset: float,
-                 log_scale: bool = False, line_style: str = "linear"):
+                 representation: str = "uint32", line_style: str = "linear"):
         super().__init__()
         self._bounding_rect = bounding_rect
         self._events        = events
@@ -1274,25 +1328,14 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
         self._time_min      = time_min
         self._px_per_ns     = px_per_ns
         self._y_offset      = y_offset
-        self._log_scale     = log_scale
+        self._representation = representation
         self._line_style    = line_style
         self._category_map: dict = {}
         self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
 
     def _ev_value(self, ev) -> float:
-        raw = ev.note or ev.event or ""
-        try:
-            return float(raw)
-        except (ValueError, TypeError):
-            pass
-        if raw not in self._category_map:
-            self._category_map[raw] = float(len(self._category_map))
-        return self._category_map[raw]
-
-    @staticmethod
-    def _signed_log2(v: float) -> float:
-        import math
-        return math.copysign(math.log2(1.0 + abs(v)), v)
+        value = _interpret_tag_value(ev.note or ev.event or "", self._representation)
+        return value if value is not None else float("nan")
 
     def boundingRect(self) -> QRectF:
         return self._bounding_rect
@@ -1313,8 +1356,8 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
         all_mapped = []
         for ev in self._all_events:
             v = self._ev_value(ev)
-            m = self._signed_log2(v) if self._log_scale else v
-            all_mapped.append(m)
+            if math.isfinite(v):
+                all_mapped.append(v)
         if not all_mapped:
             return
         v_min = min(all_mapped)
@@ -1338,6 +1381,18 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
         painter.drawLine(QLineF(chart_left, rect.top(),    chart_left, rect.bottom()))
         painter.drawLine(QLineF(chart_right, rect.top(), chart_right, rect.bottom()))
 
+        painter.setPen(QColor(160, 170, 180))
+        painter.setFont(QFont("monospace", 8))
+        painter.drawText(QRectF(chart_left, rect.top() + 2, chart_w, 14),
+                         Qt.AlignmentFlag.AlignCenter,
+                         _TAG_REPRESENTATION_LABELS[self._representation])
+        painter.drawText(QRectF(chart_left, rect.bottom() - 16, chart_w, 14),
+                         Qt.AlignmentFlag.AlignLeft,
+                         _format_tag_value(v_min))
+        painter.drawText(QRectF(chart_left, rect.bottom() - 16, chart_w, 14),
+                         Qt.AlignmentFlag.AlignRight,
+                         _format_tag_value(v_max))
+
         # Polyline
         line_color = QColor("#5BC8FF")
         painter.setPen(QPen(line_color, 1.5))
@@ -1346,8 +1401,9 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
         pts: list = []
         for ev in self._events:
             v = self._ev_value(ev)
-            m = self._signed_log2(v) if self._log_scale else v
-            x = val_to_x(m)
+            if not math.isfinite(v):
+                continue
+            x = val_to_x(v)
             y = ev_to_y(ev)
             if self._line_style == "step" and pts:
                 prev_x, prev_y = pts[-1]
@@ -1369,8 +1425,9 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
         painter.setBrush(QBrush(dot_color))
         for ev in self._events:
             v = self._ev_value(ev)
-            m = self._signed_log2(v) if self._log_scale else v
-            x = val_to_x(m)
+            if not math.isfinite(v):
+                continue
+            x = val_to_x(v)
             y = ev_to_y(ev)
             painter.drawEllipse(QPointF(x, y), 2.5, 2.5)
 
