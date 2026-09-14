@@ -1367,32 +1367,39 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     window.addEventListener('scroll', syncScrollUi, { passive: true });
     window.addEventListener('resize', syncScrollUi);
     var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    function formatCountedNumber(numText, val) {
+      var decimals = (numText.split('.')[1] || '').length;
+      var grouped = numText.indexOf(',') >= 0;
+      return val.toLocaleString(undefined, {
+        minimumFractionDigits: decimals, maximumFractionDigits: decimals, useGrouping: grouped
+      });
+    }
     function countUpKpi(el, delayMs) {
       if (reduceMotion) return;
       if (el.dataset.kpiRaw === undefined) el.dataset.kpiRaw = el.textContent;
       var raw = el.dataset.kpiRaw;
-      var m = /^([^0-9]*?)(-?[0-9][0-9,]*(?:\\.[0-9]+)?)([^0-9]*)$/.exec(raw);
+      var single = /^([^0-9]*?)(-?[0-9][0-9,]*(?:\\.[0-9]+)?)([^0-9]*)$/.exec(raw);
+      var range = !single && /^([^0-9]*?)(-?[0-9][0-9,]*(?:\\.[0-9]+)?)(\\s*[–—-]\\s*)(-?[0-9][0-9,]*(?:\\.[0-9]+)?)([^0-9]*)$/.exec(raw);
+      var m = single || range;
       if (!m) return;
-      var prefix = m[1], numText = m[2], suffix = m[3];
-      var target = parseFloat(numText.replace(/,/g, ''));
-      if (!isFinite(target)) return;
-      var decimals = (numText.split('.')[1] || '').length;
-      var grouped = numText.indexOf(',') >= 0;
+      var nums = range ? [m[2], m[4]] : [m[2]];
+      var targets = nums.map(function (n) { return parseFloat(n.replace(/,/g, '')); });
+      if (targets.some(function (t) { return !isFinite(t); })) return;
       var duration = 700, start = null;
       function frame(ts) {
         if (start === null) start = ts;
         var p = Math.min(1, (ts - start) / duration);
         var eased = 1 - Math.pow(1 - p, 3);
-        var val = target * eased;
-        el.textContent = prefix + val.toLocaleString(undefined, {
-          minimumFractionDigits: decimals, maximumFractionDigits: decimals, useGrouping: grouped
-        }) + suffix;
+        el.textContent = range
+          ? m[1] + formatCountedNumber(nums[0], targets[0] * eased) + m[3]
+            + formatCountedNumber(nums[1], targets[1] * eased) + m[5]
+          : m[1] + formatCountedNumber(nums[0], targets[0] * eased) + m[3];
         if (p < 1) requestAnimationFrame(frame); else el.textContent = raw;
       }
       window.setTimeout(function () { requestAnimationFrame(frame); }, delayMs);
     }
-    function animateKpis(root) {
-      root.querySelectorAll('.kpi').forEach(function (tile, i) {
+    function animateKpiTiles(tiles) {
+      Array.prototype.forEach.call(tiles, function (tile, i) {
         var delay = Math.min(i * 45, 360);
         tile.classList.remove('kpi-in'); tile.classList.add('kpi-animate');
         tile.style.animationDelay = delay + 'ms';
@@ -1400,6 +1407,9 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
         var valueEl = tile.querySelector('.v');
         if (valueEl) countUpKpi(valueEl, delay);
       });
+    }
+    function animateKpis(root) {
+      animateKpiTiles(root.querySelectorAll('.kpi'));
     }
     function animateMetrics(root) {
       root.classList.remove('compare-chart-active');
@@ -1423,6 +1433,13 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
       });
       animateKpis(root);
     }
+    // A "top card" KPI grid (e.g. Statistics Report's overview strip) may sit
+    // above the TOC, outside every collapsible section, so it never enters
+    // the per-card reveal/toggle machinery below; animate it once directly.
+    animateKpiTiles(Array.prototype.filter.call(
+      document.querySelectorAll('.kpi'),
+      function (tile) { return !tile.closest('.report-card'); }
+    ));
     cards.forEach(function (card) {
       card.addEventListener('toggle', function () { if (card.open) animateMetrics(card); });
     });
