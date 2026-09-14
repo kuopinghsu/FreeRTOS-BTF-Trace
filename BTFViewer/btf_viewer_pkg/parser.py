@@ -7575,7 +7575,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     )
     return html_apply_collapsible_toc(
         report,
-        default_expanded=("Overview", "Summary"),
+        default_expanded=True,
         toc_groups=COMPARE_TOC_GROUPS,
     )
 

@@ -1861,7 +1861,7 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
     docTitle: 'BTFViewer — Trace Compare',
     reportClass: 'report-compare',
   })
-  return htmlApplyCollapsibleToc(report, ['Overview', 'Summary'], COMPARE_TOC_GROUPS)
+  return htmlApplyCollapsibleToc(report, true, COMPARE_TOC_GROUPS)
 }
 
 export function downloadCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {

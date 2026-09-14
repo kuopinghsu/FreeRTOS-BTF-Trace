@@ -6457,7 +6457,6 @@ import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
 import { btfHtmlReportDocument, htmlApplyCollapsibleToc, HTML_REPORT_TOC_CSS, HTML_REPORT_TOC_SCRIPT, HTML_REPORT_INTERACTIVE_SCRIPT, REPORT_THEME_CSS } from '../utils/htmlReport.js'
 import {
-  STATS_DEFAULT_EXPANDED,
   STATS_HTML_EXTRA_CSS,
   STATS_TOC_GROUPS,
   htmlDiagnosticKpiGrid,
@@ -10981,7 +10980,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
     reportClass: 'report-wide',
   })
 
-  const finalHtml = htmlApplyCollapsibleToc(html, STATS_DEFAULT_EXPANDED, STATS_TOC_GROUPS)
+  const finalHtml = htmlApplyCollapsibleToc(html, true, STATS_TOC_GROUPS)
   _exportAnonFn = v => v
   if (returnHtml) return finalHtml
   _downloadText(`statistics-${_stamp()}.html`, finalHtml, 'text/html;charset=utf-8')

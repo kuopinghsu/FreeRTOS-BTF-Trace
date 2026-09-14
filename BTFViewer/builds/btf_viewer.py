@@ -3115,6 +3115,8 @@ details.report-card[open] > :not(summary) { animation: report-content-in 0.24s e
 .chart-point.metric-animate.metric-in, .pctile-bar.metric-animate.metric-in {
   animation: report-point-in 0.35s ease-out both;
 }
+.kpi.kpi-animate { opacity: 0; transform: translateY(6px); }
+.kpi.kpi-animate.kpi-in { animation: report-kpi-in 0.5s cubic-bezier(.2,.8,.2,1) both; }
 .auto-chart-grid { display: grid; gap: 12px; margin: 10px 0 16px; }
 .auto-chart-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .auto-chart {
@@ -3167,11 +3169,13 @@ details.report-card[open] > :not(summary) { animation: report-content-in 0.24s e
 .compare-chart-active .paired-row:nth-child(2n) .paired-fill,
 .compare-chart-active .delta-row:nth-child(2n) .delta-fill { animation-delay: 70ms; }
 .compare-chart-active .compare-chart svg { animation: compare-chart-rise .5s ease-out both; }
+.report-card.compare-chart-active .compare-verdict-banner { animation: compare-verdict-in .45s cubic-bezier(.2,.9,.2,1) both; }
 @keyframes auto-line-draw { from { stroke-dashoffset: 1200; } to { stroke-dashoffset: 0; } }
 @keyframes auto-dot-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes auto-donut-in { to { opacity: 1; transform: rotate(-90deg) scale(1); } }
 @keyframes compare-bar-in { from { transform: scaleX(0); opacity: .35; } to { transform: scaleX(1); opacity: 1; } }
 @keyframes compare-chart-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes compare-verdict-in { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
 @keyframes report-content-in {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }
@@ -3179,6 +3183,7 @@ details.report-card[open] > :not(summary) { animation: report-content-in 0.24s e
 @keyframes report-bar-in { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @keyframes report-line-in { to { stroke-dashoffset: 0; } }
 @keyframes report-point-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes report-kpi-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (max-width: 700px) {
   .report-command-bar { position: static; flex-wrap: wrap; }
   .report-search-wrap { flex-basis: 100%; }
@@ -3191,6 +3196,7 @@ details.report-card[open] > :not(summary) { animation: report-content-in 0.24s e
   *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
   .report-card.motion-ready { opacity: 1; transform: none; }
   .metric-animate { transform: none; opacity: 1; stroke-dashoffset: 0; }
+  .kpi-animate { opacity: 1; transform: none; }
   .auto-chart .auto-series { stroke-dashoffset: 0; }
   .auto-chart .auto-dot { opacity: 1; }
   .auto-chart .auto-donut { opacity: 1; transform: rotate(-90deg) scale(1); }
@@ -3983,6 +3989,41 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     }
     window.addEventListener('scroll', syncScrollUi, { passive: true });
     window.addEventListener('resize', syncScrollUi);
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    function countUpKpi(el, delayMs) {
+      if (reduceMotion) return;
+      if (el.dataset.kpiRaw === undefined) el.dataset.kpiRaw = el.textContent;
+      var raw = el.dataset.kpiRaw;
+      var m = /^([^0-9]*?)(-?[0-9][0-9,]*(?:\\.[0-9]+)?)([^0-9]*)$/.exec(raw);
+      if (!m) return;
+      var prefix = m[1], numText = m[2], suffix = m[3];
+      var target = parseFloat(numText.replace(/,/g, ''));
+      if (!isFinite(target)) return;
+      var decimals = (numText.split('.')[1] || '').length;
+      var grouped = numText.indexOf(',') >= 0;
+      var duration = 700, start = null;
+      function frame(ts) {
+        if (start === null) start = ts;
+        var p = Math.min(1, (ts - start) / duration);
+        var eased = 1 - Math.pow(1 - p, 3);
+        var val = target * eased;
+        el.textContent = prefix + val.toLocaleString(undefined, {
+          minimumFractionDigits: decimals, maximumFractionDigits: decimals, useGrouping: grouped
+        }) + suffix;
+        if (p < 1) requestAnimationFrame(frame); else el.textContent = raw;
+      }
+      window.setTimeout(function () { requestAnimationFrame(frame); }, delayMs);
+    }
+    function animateKpis(root) {
+      root.querySelectorAll('.kpi').forEach(function (tile, i) {
+        var delay = Math.min(i * 45, 360);
+        tile.classList.remove('kpi-in'); tile.classList.add('kpi-animate');
+        tile.style.animationDelay = delay + 'ms';
+        requestAnimationFrame(function () { tile.classList.add('kpi-in'); });
+        var valueEl = tile.querySelector('.v');
+        if (valueEl) countUpKpi(valueEl, delay);
+      });
+    }
     function animateMetrics(root) {
       root.classList.remove('compare-chart-active');
       root.getBoundingClientRect();
@@ -4003,6 +4044,7 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
         chart.classList.remove('chart-active'); chart.getBoundingClientRect();
         requestAnimationFrame(function () { chart.classList.add('chart-active'); });
       });
+      animateKpis(root);
     }
     cards.forEach(function (card) {
       card.addEventListener('toggle', function () { if (card.open) animateMetrics(card); });
@@ -4260,8 +4302,10 @@ def html_make_collapsible_sections(
 ) -> tuple:
     """Wrap every ``<section class="report-card ...">`` in ``<details>``
     and build a table-of-contents nav. Returns ``(nav_html, new_doc_html)``.
+    Pass ``default_expanded=True`` to open every section by default.
     """
-    prefixes = tuple(default_expanded or ())
+    expand_all = default_expanded is True
+    prefixes = () if expand_all else tuple(default_expanded or ())
     toc_entries: list = []
     used_ids: set = set()
     counter = 0
@@ -4289,7 +4333,7 @@ def html_make_collapsible_sections(
                 n += 1
         used_ids.add(sec_id)
         toc_entries.append((sec_id, title_text))
-        open_attr = " open" if prefixes and title_text.startswith(prefixes) else ""
+        open_attr = " open" if (expand_all or title_text.startswith(prefixes)) else ""
         extra = re.sub(r'\s*\bid="[^"]*"', "", attrs).strip()
         extra_attr = f" {extra}" if extra else ""
         return (
@@ -13534,7 +13578,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     )
     return html_apply_collapsible_toc(
         report,
-        default_expanded=("Overview", "Summary"),
+        default_expanded=True,
         toc_groups=COMPARE_TOC_GROUPS,
     )
 
@@ -77847,7 +77891,7 @@ class _StatsPanel(QWidget):
 
         out = html_apply_collapsible_toc(
             report,
-            default_expanded=STATS_DEFAULT_EXPANDED,
+            default_expanded=True,
             toc_groups=STATS_TOC_GROUPS,
         )
         # Blanket task-name redaction over the assembled document — mirrors the

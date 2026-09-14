@@ -15444,7 +15444,7 @@ class _StatsPanel(QWidget):
 
         out = html_apply_collapsible_toc(
             report,
-            default_expanded=STATS_DEFAULT_EXPANDED,
+            default_expanded=True,
             toc_groups=STATS_TOC_GROUPS,
         )
         # Blanket task-name redaction over the assembled document — mirrors the
