@@ -290,6 +290,24 @@ class AiToolsTests(unittest.TestCase):
         self.assertIn("TICK", summarise_tool_call(
             AI_TOOL_SEARCH_TIMELINE, {"query": "TICK", "mode": "sti"}))
 
+    def test_search_timeline_tag_aliases(self):
+        from types import SimpleNamespace
+        trace = SimpleNamespace(tag_channels=["tag0_event", "tag1_event"],
+            tag_representations={ch: {"format": "uint32", "alias": "memory usage"} for ch in ("tag0_event", "tag1_event")},
+            seg_map_by_merge_key={}, task_repr={}, sti_events=[
+                SimpleNamespace(target=ch, time=t, note="1", event="trigger", core="Core_0")
+                for ch, t in (("tag0_event", 11), ("tag1_event", 22))])
+        for mode in ("contains", "exact", "regex", "tags"):
+            out = search_timeline_hits(trace, "^memory usage$" if mode == "regex" else "MEMORY USAGE", mode)
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["data"]["times"], [11, 22])
+            self.assertEqual(out["data"]["tag_channels"], [
+                {"channel": "tag0_event", "label": "memory usage"},
+                {"channel": "tag1_event", "label": "memory usage"}])
+        trace.tag_representations["tag0_event"].pop("alias")
+        self.assertEqual(search_timeline_hits(trace, "memory usage")["data"]["times"], [22])
+        self.assertEqual(search_timeline_hits(trace, "tag0_event", "tags")["data"]["times"], [11])
+
     def test_search_timeline_hits_annotations(self) -> None:
         from types import SimpleNamespace
 

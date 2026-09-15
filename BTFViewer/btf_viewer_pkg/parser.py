@@ -892,14 +892,112 @@ def _parse_tag_value(note: str) -> Optional[float]:
     value = _tag_raw_uint32(note)
     return float(value) if value is not None else None
 
-_TAG_REPRESENTATIONS = ("uint32", "int32", "float32", "log2-uint32")
+_TAG_REPRESENTATIONS = ("uint32", "int32", "float32")
 _TAG_REPRESENTATION_LABELS = {
-    "uint32": "uint32", "int32": "int32", "float32": "float32",
+    "uint32": "UInt32", "int32": "Int32", "float32": "Float32",
     "log2-uint32": "log₂ uint32",
 }
 
+def _normalize_tag_alias(value):
+    return value.replace("\r", " ").replace("\n", " ").replace("\t", " ").strip()[:80] if isinstance(value, str) else ""
+
+def _tag_alias(trace, channel):
+    return _tag_chart_preferences(trace, channel).get("alias", "") if trace is not None else ""
+
+def _tag_preferences(value=None):
+    if isinstance(value, str):
+        return {"format": value if value in _TAG_REPRESENTATIONS else "uint32",
+                "scale": "log2" if value == "log2-uint32" else "linear", "includeZero": False}
+    value = value if isinstance(value, dict) else {}
+    alias = _normalize_tag_alias(value.get("alias"))
+    return {"format": value.get("format") if value.get("format") in _TAG_REPRESENTATIONS else "uint32",
+            "scale": "log2" if value.get("scale") == "log2" else "linear",
+            "includeZero": value.get("includeZero") is True, **({"alias": alias} if alias else {})}
+
+def _tag_chart_preferences(trace, channel):
+    return _tag_preferences(getattr(trace, "tag_representations", {}).get(channel))
+
+
+# Smallest positive subnormal float32 magnitude (2**-149) -- float32's own
+# resolution floor. Used as the linear-threshold constant for the float32
+# log2 scale below: since |value| >> _FLOAT32_LOG_FLOOR for essentially any
+# representable float32 (subnormal or normal), log2(1 + |value| / floor)
+# reduces to log2(|value|) shifted by a constant, without the degeneracy a
+# threshold of 1 would cause (see _tag_transform).
+_FLOAT32_LOG_FLOOR = 2.0 ** -149
+
+def _tag_transform(value, preferences=None):
+    """``log2(1 + |value|)`` reads as a genuine log SCALE for large-magnitude
+    integers (uint32/int32 bit patterns): it behaves ~linearly near zero and
+    compresses the long tail, and stays invertible because its argument
+    never drops below 1. A float32 payload is usually far below 1 in
+    magnitude (raw bits reinterpreted as float32 land in the subnormal
+    range, ~1e-40), where ``log1p(x) ~= x`` -- the "+1" swamps the value
+    entirely and the transform degenerates into a constant multiple of the
+    input (1/ln2), i.e. visually identical to linear. Float32 instead
+    divides by its own resolution floor before adding 1, which keeps the
+    same always-invertible shape while actually compressing that range."""
+    prefs = _tag_preferences(preferences)
+    if prefs["scale"] != "log2":
+        return value
+    if prefs["format"] == "float32":
+        return 0.0 if value == 0 else math.copysign(
+            math.log2(1.0 + abs(value) / _FLOAT32_LOG_FLOOR), value)
+    return math.copysign(math.log1p(abs(value)) / math.log(2), value)
+
+def _tag_inverse(value, preferences=None):
+    prefs = _tag_preferences(preferences)
+    if prefs["scale"] != "log2":
+        return value
+    if prefs["format"] == "float32":
+        return 0.0 if value == 0 else math.copysign(
+            _FLOAT32_LOG_FLOOR * (2.0 ** abs(value) - 1.0), value)
+    return math.copysign(math.expm1(abs(value) * math.log(2)), value)
+
+def _tag_axis_bounds(values, preferences=None):
+    values = [v for v in values if math.isfinite(v)]
+    if not values:
+        return 0, 1
+    lo, hi = min(values), max(values)
+    if _tag_preferences(preferences)["includeZero"]:
+        lo, hi = min(0, lo), max(0, hi)
+    if lo == hi:
+        pad = abs(lo) * 0.05 or 0.5
+        lo, hi = lo - pad, hi + pad
+    return lo, hi
+
+def _update_tag_preferences(trace, channel, command):
+    prefs = _tag_chart_preferences(trace, channel)
+    if command == "reset":
+        if prefs.get("alias"):
+            trace.tag_representations[channel] = {**_tag_preferences(), "alias": prefs["alias"]}
+        else:
+            trace.tag_representations.pop(channel, None)
+        return
+    if command == "all":
+        for ch in trace.tag_channels:
+            alias = _tag_alias(trace, ch)
+            copied = {k: v for k, v in prefs.items() if k != "alias"}
+            trace.tag_representations[ch] = {**copied, **({"alias": alias} if alias else {})}
+        return
+    if command.startswith("alias:"):
+        alias = _normalize_tag_alias(command[6:])
+        if alias:
+            prefs["alias"] = alias
+        else:
+            prefs.pop("alias", None)
+    elif command in _TAG_REPRESENTATIONS:
+        prefs["format"] = command
+    elif command in ("linear", "log2"):
+        prefs["scale"] = command
+    elif command == "zero":
+        prefs["includeZero"] = not prefs["includeZero"]
+    else:
+        return
+    trace.tag_representations[channel] = prefs
+
 def _tag_raw_uint32(note) -> Optional[int]:
-    raw = str(note or "").strip()
+    raw = str(note if note is not None else "").strip()
     if not raw:
         return None
     try:
@@ -912,13 +1010,12 @@ def _interpret_tag_value(note, representation: str = "uint32") -> Optional[float
     bits = _tag_raw_uint32(note)
     if bits is None:
         return None
+    representation = _tag_preferences(representation)["format"]
     if representation == "int32":
         return float(bits if bits < 0x80000000 else bits - 0x100000000)
     if representation == "float32":
         value = struct.unpack(">f", bits.to_bytes(4, "big"))[0]
         return float(value) if math.isfinite(value) else None
-    if representation == "log2-uint32":
-        return math.log2(1.0 + bits)
     return float(bits)
 
 def _recommend_tag_representation(trace: "BtfTrace", channel: str,
@@ -934,17 +1031,41 @@ def _tag_representation(trace: "BtfTrace", channel: str,
                         lo: Optional[int] = None,
                         hi: Optional[int] = None) -> str:
     selected = getattr(trace, "tag_representations", {}).get(channel)
-    return selected if selected in _TAG_REPRESENTATIONS else _recommend_tag_representation(trace, channel, lo, hi)
+    return _tag_preferences(selected)["format"]
 
 def _tag_sample_value(sample: TagSample, representation: str) -> Optional[float]:
     return _interpret_tag_value(sample.raw_value or sample.raw_uint32, representation)
 
-def _tag_channel_label(channel: str) -> str:
+def _tag_channel_label(channel: str, trace=None) -> str:
+    alias = _tag_alias(trace, channel)
+    if alias:
+        return alias
     m = _STI_EXPANDABLE_RE.match(channel or "")
     if not m:
         return channel
     digit = m.group(1)
     return f"Tag {digit}" if digit is not None else "Tag"
+
+def _matching_tag_channels(trace, query, mode="contains"):
+    q = str(query or "").strip()
+    if not q:
+        return []
+    regex = None
+    if mode == "regex":
+        if len(q) > 1024:
+            return []
+        try:
+            regex = re.compile(q, re.IGNORECASE)
+        except re.error:
+            return []
+    def matches(name):
+        if not name:
+            return False
+        if regex is not None:
+            return bool(regex.search(name))
+        return name.lower() == q.lower() if mode == "exact" else q.lower() in name.lower()
+    return [ch for ch in getattr(trace, "tag_channels", ())
+            if any(matches(name) for name in (ch, _tag_channel_label(ch), _tag_alias(trace, ch)))]
 
 def _tag_color(channel: str) -> str:
     m = _STI_EXPANDABLE_RE.match(channel or "")
@@ -1140,7 +1261,7 @@ def _tag_stats_rows(
         jitter, sigma, p50, p99 = _sample_variability(samples)
         rows.append((
             ch,
-            _tag_channel_label(ch),
+            _tag_channel_label(ch, trace),
             count,
             _format_tag_value(mn),
             _format_tag_value(avg),
@@ -1660,11 +1781,12 @@ def _tag_sample_detail_rows(
                 continue
             rows.append({
                 "channel": ch,
-                "label": _tag_channel_label(ch),
+                "label": _tag_channel_label(ch, trace),
                 "time_ns": sample.time_ns,
                 "time": _format_time(sample.time_ns, scale),
                 "value": _format_tag_value(value),
                 "value_num": value,
+                "preferences": _tag_chart_preferences(trace, ch),
                 "core": sample.core,
             })
     rows.sort(key=lambda r: (-r["value_num"], r["time_ns"]))
@@ -2462,9 +2584,9 @@ def _format_plot_point_note(
                 f"[{fmt(payload.start_ns)} – {fmt(payload.stop_ns)}]")
     if isinstance(payload, TagSample):
         if kind == "tag_interval":
-            return (f"{_tag_channel_label(payload.channel)}: {fmt(y_ns)} "
+            return (f"{_tag_channel_label(payload.channel, trace)}: {fmt(y_ns)} "
                     f"since previous sample at {fmt(x_ns)}")
-        return (f"{_tag_channel_label(payload.channel)}: "
+        return (f"{_tag_channel_label(payload.channel, trace)}: "
                 f"{_format_tag_value(y_ns)} at {fmt(x_ns)}")
     if isinstance(payload, PriorityEpisode):
         tag = " · L/M/H" if payload.inversion_suspect else ""
@@ -2686,7 +2808,7 @@ class BtfTrace:
     interval_unmatched_starts: int                                          = 0
     tag_channels: List[str]                                                 = field(default_factory=list)
     tag_samples_by_channel: Dict[str, List["TagSample"]]                    = field(default_factory=dict)
-    tag_representations: Dict[str, str]                                     = field(default_factory=dict)
+    tag_representations: Dict[str, Union[str, dict]]                                     = field(default_factory=dict)
     task_base_priority: Dict[str, int]                                     = field(default_factory=dict)
     priority_episodes: List[PriorityEpisode]                                = field(default_factory=list)
     priority_episodes_by_mk: Dict[str, List[PriorityEpisode]]                 = field(default_factory=dict)

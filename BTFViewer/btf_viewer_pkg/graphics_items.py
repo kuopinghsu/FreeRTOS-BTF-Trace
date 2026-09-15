@@ -1062,6 +1062,66 @@ class _CoreHeaderItem(QGraphicsRectItem):
         self.update()
         super().hoverLeaveEvent(event)
 
+def _edit_tag_alias(trace, channel, callback, parent=None):
+    dialog = QInputDialog(parent)
+    dialog.setWindowTitle("Rename tag")
+    dialog.setLabelText(f"Display name for {channel}:\nLeave blank to restore the original name. Saved for this trace.")
+    dialog.setInputMode(QInputDialog.InputMode.TextInput)
+    dialog.setTextValue(_tag_alias(trace, channel))
+    dialog.setOkButtonText("Save")
+    editor = dialog.findChild(QLineEdit)
+    if editor is not None:
+        editor.setMaxLength(80)
+        editor.setPlaceholderText(_tag_channel_label(channel))
+    if dialog.exec():
+        callback("alias:" + dialog.textValue())
+
+def _tag_settings_menu(trace, channel, callback, parent=None):
+    menu = QMenu(parent)
+    prefs = _tag_chart_preferences(trace, channel)
+    menu.addAction("Rename tag…").triggered.connect(
+        lambda checked=False: QTimer.singleShot(0, lambda: _edit_tag_alias(trace, channel, callback, parent)))
+    if prefs.get("alias"):
+        menu.addAction("Reset tag name").triggered.connect(lambda checked=False: callback("alias:"))
+    menu.addSection("Data format")
+    samples = trace.tag_samples_by_channel.get(channel, [])
+    bits = samples[0].raw_uint32 if samples else None
+    descriptions = {"uint32": "Unsigned integer", "int32": "Signed integer", "float32": "IEEE 754 bit interpretation"}
+    for value in _TAG_REPRESENTATIONS:
+        label = value.replace("uint", "UInt").replace("int", "Int").replace("float", "Float")
+        action = menu.addAction(label)
+        action.setCheckable(True)
+        action.setChecked(prefs["format"] == value)
+        action.setToolTip(descriptions[value])
+        action.triggered.connect(lambda checked=False, command=value: callback(command))
+    preview = "No sample available" if bits is None else f"{descriptions[prefs['format']]} · 0x{bits:08X} → {_format_tag_value(_interpret_tag_value(bits, prefs)) if _interpret_tag_value(bits, prefs) is not None else '—'}"
+    menu.addAction(preview).setEnabled(False)
+    menu.addSection("Chart scale")
+    log2_label = "Log₂ (signed log₂(|value|))" if prefs["format"] == "float32" else "Log₂ (signed log₂(1 + |value|))"
+    for command, label in (("linear", "Linear"), ("log2", log2_label), ("zero", "Include zero")):
+        action = menu.addAction(label)
+        action.setCheckable(True)
+        action.setChecked(prefs["includeZero"] if command == "zero" else prefs["scale"] == command)
+        action.triggered.connect(lambda checked=False, c=command: callback(c))
+    menu.addSeparator()
+    for command, label in (("all", "Apply these settings to all tag channels"), ("reset", "Reset to default")):
+        menu.addAction(label).triggered.connect(lambda checked=False, c=command: callback(c))
+    menu.addAction("Saved for this trace" if channel in trace.tag_representations else "Default · UInt32 / Linear / Fit range").setEnabled(False)
+    menu.setToolTipsVisible(True)
+    return menu
+
+def _tag_settings_button(trace, channel, callback):
+    button = QToolButton()
+    button.setText(_TAG_REPRESENTATION_LABELS[_tag_representation(trace, channel)] + " ▾")
+    button.setAccessibleName(f"Tag settings for {channel}")
+    button.setStyleSheet("QToolButton { border: 1px solid #94a3b8; border-radius: 10px; padding: 2px 8px; }")
+    def show_menu():
+        menu = _tag_settings_menu(trace, channel, lambda command: QTimer.singleShot(0, lambda: callback(command)), button)
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+        button.setText(_TAG_REPRESENTATION_LABELS[_tag_representation(trace, channel)] + " ▾")
+    button.clicked.connect(show_menu)
+    return button
+
 class _StiLabelItem(QGraphicsRectItem):
     """Clickable label area for an STI channel row - toggles waveform expand/collapse.
 
@@ -1116,15 +1176,8 @@ class _StiLabelItem(QGraphicsRectItem):
         if not self._expandable:
             event.ignore()
             return
-        menu = QMenu()
-        current = self._tl_scene.tag_representation(self._channel)
-        for representation in _TAG_REPRESENTATIONS:
-            action = menu.addAction(_TAG_REPRESENTATION_LABELS[representation])
-            action.setCheckable(True)
-            action.setChecked(representation == current)
-            action.triggered.connect(
-                lambda _checked=False, r=representation:
-                self._tl_scene.set_tag_representation(self._channel, r))
+        menu = _tag_settings_menu(self._tl_scene._trace, self._channel,
+                                  lambda command: self._tl_scene.set_tag_representation(self._channel, command))
         menu.exec(event.screenPos())
         event.accept()
 
@@ -1196,15 +1249,11 @@ class _BatchStiWaveformItem(QGraphicsItem):
 
         mapped = [value for _, value in event_values]
 
-        v_min = min(mapped)
-        v_max = max(mapped)
-        if v_min == v_max:
-            v_min -= 1.0
-            v_max += 1.0
-        v_rng = v_max - v_min
+        v_min, v_max = _tag_axis_bounds(mapped, self._representation)
+        v_rng = _tag_transform(v_max, self._representation) - _tag_transform(v_min, self._representation)
 
         def val_to_y(m: float) -> float:
-            return chart_bot - ((m - v_min) / v_rng) * chart_h
+            return chart_bot - ((_tag_transform(m, self._representation) - _tag_transform(v_min, self._representation)) / v_rng) * chart_h
 
         def ev_to_x(ev) -> float:
             return self._x_offset + (ev.time - self._time_min) * self._px_per_ns
@@ -1221,7 +1270,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
         painter.setFont(QFont("monospace", 8))
         painter.drawText(QRectF(rect.left() + 4, chart_top, 150, 14),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                         _TAG_REPRESENTATION_LABELS[self._representation])
+                         _TAG_REPRESENTATION_LABELS[_tag_preferences(self._representation)["format"]])
         painter.drawText(QRectF(rect.right() - 130, chart_top, 126, 14),
                          Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
                          _format_tag_value(v_max))
@@ -1282,12 +1331,15 @@ class _BatchStiWaveformItem(QGraphicsItem):
         if best_ev is not None and best_dist <= HIT:
             value = self._ev_value(best_ev)
             value_text = (_format_tag_value(value) if math.isfinite(value) else "—")
-            representation = _TAG_REPRESENTATION_LABELS[self._representation]
+            representation = _TAG_REPRESENTATION_LABELS[_tag_preferences(self._representation)["format"]]
+            alias = _tag_preferences(self._representation).get("alias", "")
+            alias_html = f"Name: {html.escape(alias)}<br>" if alias else ""
             tip = (f"<b>STI: {best_ev.note}</b><br>"
                    f"Value: {value_text} ({representation})<br>"
                    f"Time: {_format_time(best_ev.time, self._time_scale)}<br>"
                    f"Core: {best_ev.core}<br>"
                    f"Target: {best_ev.target}<br>"
+                   f"{alias_html}"
                    f"Event: {best_ev.event}")
             _get_popup().show_at(event.screenPos(), tip, host=event.widget())
         else:
@@ -1313,7 +1365,7 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
     time_min      : int      Trace time_min (scene Y = y_offset + (t - time_min) * px_per_ns)
     px_per_ns     : float    Scene pixels per nanosecond (vertical axis)
     y_offset      : float    Scene Y coordinate of time=time_min
-    representation: str     uint32, int32, float32, or log2-uint32
+    representation: dict    format, scale, and includeZero preferences
     line_style    : str      "step" (hold) or "linear"
     """
 
@@ -1360,15 +1412,11 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
                 all_mapped.append(v)
         if not all_mapped:
             return
-        v_min = min(all_mapped)
-        v_max = max(all_mapped)
-        if v_min == v_max:
-            v_min -= 1.0
-            v_max += 1.0
-        v_rng = v_max - v_min
+        v_min, v_max = _tag_axis_bounds(all_mapped, self._representation)
+        v_rng = _tag_transform(v_max, self._representation) - _tag_transform(v_min, self._representation)
 
         def val_to_x(m: float) -> float:
-            return chart_left + ((m - v_min) / v_rng) * chart_w
+            return chart_left + ((_tag_transform(m, self._representation) - _tag_transform(v_min, self._representation)) / v_rng) * chart_w
 
         def ev_to_y(ev) -> float:
             return self._y_offset + (ev.time - self._time_min) * self._px_per_ns
@@ -1385,7 +1433,7 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
         painter.setFont(QFont("monospace", 8))
         painter.drawText(QRectF(chart_left, rect.top() + 2, chart_w, 14),
                          Qt.AlignmentFlag.AlignCenter,
-                         _TAG_REPRESENTATION_LABELS[self._representation])
+                         _TAG_REPRESENTATION_LABELS[_tag_preferences(self._representation)["format"]])
         painter.drawText(QRectF(chart_left, rect.bottom() - 16, chart_w, 14),
                          Qt.AlignmentFlag.AlignLeft,
                          _format_tag_value(v_min))

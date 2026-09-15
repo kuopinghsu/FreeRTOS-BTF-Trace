@@ -353,7 +353,7 @@ import { isRestorableViewport } from '../utils/sessionStore.js'
 import { lodReduce } from '../utils/lod.js'
 import { collectSegmentStarts } from '../utils/snapBoundary.js'
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
-import { interpretTagValue, tagRepresentationFor } from '../utils/tagAnalysis.js'
+import { interpretTagValue, tagAxisBounds, tagTransform } from '../utils/tagAnalysis.js'
 import { pixiTimelineHost } from '../renderer/pixi/PixiTimelineHost.js'
 import {
   initWasmAccel,
@@ -2822,7 +2822,7 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
       const y  = mainAreaH + i * stiRowH
       const rh = Math.max(2, stiRowH - 0.5)
       if (isExpanded) {
-        const representation = tagRepresentationFor(ch, props.options.tagRepresentations, tr)
+        const representation = props.options.tagRepresentations?.[ch]
         let vMin = Infinity
         let vMax = -Infinity
         for (const ev of evs) {
@@ -2834,9 +2834,10 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
         // Use the same waveform colours as drawStiWaveformRow in TimelineRenderer.js.
         const wfLineColor = dark ? '#5BC8FF' : '#0070CC'
         const wfDotColor  = dark ? '#80DFFF' : '#0050AA'
-        if (isFinite(vMin) && vMin !== vMax) {
+        if (isFinite(vMin)) {
+          ;[vMin, vMax] = tagAxisBounds([vMin, vMax], representation)
           // Draw as a line chart to match the main timeline view
-          const vRng = vMax - vMin
+          const vRng = tagTransform(vMax, representation) - tagTransform(vMin, representation)
           ctx.save()
           ctx.strokeStyle = wfLineColor
           ctx.lineWidth   = 1.0
@@ -2848,7 +2849,7 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
             const v = interpretTagValue(ev.note !== '' ? ev.note : ev.event, representation)
             if (!Number.isFinite(v)) continue
             const cx = (ev.time - lo) * pxPerNs
-            const cy = y + rh - (v - vMin) / vRng * rh
+            const cy = y + rh - (tagTransform(v, representation) - tagTransform(vMin, representation)) / vRng * rh
             if (firstPt) { ctx.moveTo(cx, cy); firstPt = false }
             else ctx.lineTo(cx, cy)
           }

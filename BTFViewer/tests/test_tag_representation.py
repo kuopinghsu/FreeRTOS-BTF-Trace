@@ -5,6 +5,8 @@ import os
 import sys
 import unittest
 import runpy
+import tempfile
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,11 +32,12 @@ def _pump(ms: int) -> None:
 
 
 class TestTagRepresentation(unittest.TestCase):
-    def test_same_word_has_four_representations(self) -> None:
+    def test_formats_preserve_values_and_legacy_log_migrates(self) -> None:
         self.assertEqual(P._interpret_tag_value("-1", "uint32"), 0xFFFFFFFF)
         self.assertEqual(P._interpret_tag_value("4294967295", "int32"), -1)
         self.assertEqual(P._interpret_tag_value("1065353216", "float32"), 1.0)
-        self.assertEqual(P._interpret_tag_value("255", "log2-uint32"), 8.0)
+        self.assertEqual(P._interpret_tag_value("255", "log2-uint32"), 255.0)
+        self.assertEqual(P._tag_transform(255, P._tag_preferences("log2-uint32")), 8.0)
 
     def test_wide_sparse_range_recommends_log2(self) -> None:
         samples = [
@@ -48,7 +51,85 @@ class TestTagRepresentation(unittest.TestCase):
         )
         self.assertEqual(P._recommend_tag_representation(trace, "tag3_event"), "log2-uint32")
         values = [point[1] for point in P._tag_plot_points(trace, "tag3_event")]
-        self.assertEqual(values, [1.0, math.log2(1025), math.log2(1048577)])
+        self.assertEqual(values, [1.0, 1024.0, 1048576.0])
+
+    def test_chart_preferences_do_not_change_statistics(self):
+        tr = SimpleNamespace(tag_channels=["tag0_event", "tag1_event"], tag_representations={})
+        P._update_tag_preferences(tr, "tag0_event", "float32")
+        P._update_tag_preferences(tr, "tag0_event", "log2")
+        P._update_tag_preferences(tr, "tag0_event", "zero")
+        self.assertEqual(P._tag_representation(tr, "tag0_event"), "float32")
+        P._update_tag_preferences(tr, "tag0_event", "all")
+        self.assertEqual(tr.tag_representations["tag0_event"], tr.tag_representations["tag1_event"])
+        P._update_tag_preferences(tr, "tag0_event", "reset")
+        self.assertNotIn("tag0_event", tr.tag_representations)
+        self.assertTrue(tr.tag_representations["tag1_event"]["includeZero"])
+
+    def test_range_fitting_signed_tiny_and_constant(self):
+        for values in ([2, 8], [-20, -2], [1.14e-41, 1.13e-40]):
+            self.assertEqual(P._tag_axis_bounds(values), (min(values), max(values)))
+            prefs = {"scale": "log2"}
+            lo, hi = [P._tag_transform(v, prefs) for v in values]
+            self.assertGreater(hi, lo)
+            self.assertAlmostEqual(P._tag_inverse(lo, prefs) / values[0], 1)
+        self.assertEqual(P._tag_axis_bounds([10, 10]), (9.5, 10.5))
+        self.assertEqual(P._tag_axis_bounds([2, 8], {"includeZero": True}), (0, 8))
+
+    def test_rc_round_trip_and_legacy_migration(self):
+        from btf_viewer_pkg.stats import _RcSettings
+        from btf_viewer_pkg.mainwindow import MainWindow
+        with tempfile.TemporaryDirectory() as directory, patch.object(_RcSettings, "RC_PATH", str(Path(directory) / "btf_viewer.rc")):
+            trace = SimpleNamespace(tag_channels=["tag0_event"], tag_representations={
+                "tag0_event": {"format": "float32", "scale": "log2", "includeZero": True, "alias": "memory usage"}})
+            tab = SimpleNamespace(path="/trace/a.btf", trace=trace, view=MagicMock())
+            window = SimpleNamespace(_active_tab=tab, _settings=_RcSettings(),
+                _trace_state_key=lambda path: MainWindow._trace_state_key(None, path))
+            MainWindow._persist_tag_settings(window)
+            window._settings = _RcSettings()
+            trace.tag_representations = {}
+            MainWindow._load_tab_view_state(window, tab)
+            self.assertEqual(trace.tag_representations["tag0_event"],
+                {"format": "float32", "scale": "log2", "includeZero": True, "alias": "memory usage"})
+            window._settings.set("tag_representations", window._trace_state_key(tab.path), '{"tag0_event":"log2-uint32"}')
+            MainWindow._load_tab_view_state(window, tab)
+            self.assertEqual(trace.tag_representations["tag0_event"],
+                {"format": "uint32", "scale": "log2", "includeZero": False})
+            tab.path = "/trace/b.btf"
+            MainWindow._load_tab_view_state(window, tab)
+            self.assertEqual(trace.tag_representations, {})
+
+    def test_histogram_keeps_fractional_axis_labels(self):
+        from btf_viewer_pkg.stats import _hist_build_model
+        model = _hist_build_model([1.14e-41, 1.13e-40], "ns", "linear", value_as_time=False)
+        self.assertTrue(all(label != "0" for _, label in model["x_ticks"]))
+
+    def test_aliases_preserve_channel_identity_and_individual_names(self):
+        trace = SimpleNamespace(time_scale="ns", tag_channels=["tag0_event", "tag1_event"],
+            tag_representations={}, tag_samples_by_channel={"tag0_event": [
+                P.TagSample("tag0_event", 0, 42.0, "Core_0", "42", 42)]})
+        P._update_tag_preferences(trace, "tag0_event", "alias:  memory usage  ")
+        P._update_tag_preferences(trace, "tag1_event", "alias:CPU usage")
+        P._update_tag_preferences(trace, "tag0_event", "float32")
+        P._update_tag_preferences(trace, "tag0_event", "all")
+        self.assertEqual(P._tag_channel_label("tag1_event", trace), "CPU usage")
+        self.assertEqual(P._tag_representation(trace, "tag1_event"), "float32")
+        P._update_tag_preferences(trace, "tag0_event", "reset")
+        row = P._tag_stats_rows(trace)[0]
+        self.assertEqual(row[:2], ("tag0_event", "memory usage"))
+        self.assertEqual(row[3], "42")
+        self.assertEqual(P._tag_sample_detail_rows(trace)[0]["label"], "memory usage")
+        P._update_tag_preferences(trace, "tag0_event", "alias:")
+        self.assertEqual(P._tag_channel_label("tag0_event", trace), "Tag 0")
+
+    def test_same_alias_does_not_merge_export_channels(self):
+        from btf_viewer_pkg.stats_html import html_tag_overview
+        samples = [{"channel": ch, "label": "memory <usage>", "value": str(i),
+                    "value_num": i, "time_ns": i, "time": str(i)}
+                   for i, ch in enumerate(("tag0_event", "tag1_event"))]
+        html = html_tag_overview(samples, time_fmt=lambda s: s["time"])
+        self.assertEqual(html.count('aria-label="Tag time series, value versus time"'), 2)
+        self.assertIn("memory &lt;usage&gt;", html)
+        self.assertNotIn("memory <usage>", html)
 
     def test_manual_float32_override_drives_stats(self) -> None:
         words = (1065353216, 1073741824)

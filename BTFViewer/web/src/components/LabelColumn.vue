@@ -91,15 +91,20 @@
           >
             <span class="expand-arrow">{{ row.isExpanded ? '▼' : '▶' }}</span>
             <span class="sti-wave-icon">〰</span>
-            <span class="label-text sti">{{ row.label }}</span>
-            <DomSelect
+            <span
+              class="label-text sti"
+              :title="row.key"
+            >{{ tagAlias(row.key, tagRepresentations) || row.label }}</span>
+            <TagFormatControl
               class="tag-representation-select"
-              :model-value="tagRepresentation(row.key)"
-              :options="TAG_REPRESENTATION_OPTIONS"
+              :value="tagRepresentations[row.key]"
+              :channel="row.key"
+              :trace="trace"
+
               :aria-label="`Data representation for ${row.label}`"
               @click.stop
               @keydown.stop
-              @update:model-value="emit('tagRepresentationChange', row.key, $event)"
+              @change="emit('tagRepresentationChange', row.key, $event)"
             />
           </div>
 
@@ -123,13 +128,13 @@
 </template>
 
 <script setup>
-import DomSelect from './DomSelect.vue'
+import { tagAlias } from '../utils/tagAnalysis.js'
+import TagFormatControl from './TagFormatControl.vue'
 import { computed, ref } from 'vue'
 import { rowBandHeight, visibleRowIndexRange, orthRowBuffer, RULER_H } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { taskMergeKey } from '../utils/colors.js'
 import { stripeClassForBand } from '../utils/timelineStripes.js'
-import { TAG_REPRESENTATION_OPTIONS, tagRepresentationFor } from '../utils/tagAnalysis.js'
 
 function layout() {
   return getTimelineLayout()
@@ -152,9 +157,6 @@ const props = defineProps({
 
 const emit = defineEmits(['expandToggle', 'highlightChange', 'highlightClick', 'stiExpandToggle', 'tagRepresentationChange'])
 
-function tagRepresentation(channel) {
-  return tagRepresentationFor(channel, props.tagRepresentations, props.trace)
-}
 
 const colEl = ref(null)
 defineExpose({ colEl })
@@ -224,9 +226,13 @@ function taskRowKey(row) {
   will-change: transform;
 }
 
-.tag-representation-select {
+/* :deep() because TagFormatControl's template has two root nodes (DomSelect +
+   a Teleport for the rename dialog), so Vue can't auto-attach this scoped
+   component's data-v- id to "the" root — a bare `.tag-representation-select`
+   selector would silently never match the rendered button. */
+:deep(.tag-representation-select) {
   margin-left: auto;
-  min-width: 70px;
+  min-width: 0;
   max-width: 88px;
   height: 20px;
   border: 1px solid var(--border);
@@ -341,7 +347,7 @@ function taskRowKey(row) {
 </style>
 
 <style scoped>
-.tag-representation-select :deep(.dom-select-trigger) {
+:deep(.tag-representation-select .dom-select-trigger) {
   min-height: 20px;
   height: 20px;
   padding: 0 6px;

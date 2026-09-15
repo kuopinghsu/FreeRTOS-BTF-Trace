@@ -11,6 +11,12 @@
       <span class="sti-key">Channel</span><span class="sti-val">{{ stiEvent.target }}</span>
     </div>
     <div
+      v-if="tagAlias(stiEvent.target, tagRepresentations)"
+      class="sti-row"
+    >
+      <span class="sti-key">Name</span><span class="sti-val">{{ tagAlias(stiEvent.target, tagRepresentations) }}</span>
+    </div>
+    <div
       v-if="stiEvent.event"
       class="sti-row"
     >
@@ -37,7 +43,7 @@
 <script setup>
 import { computed } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
-import { formatTagValue, interpretTagValue, isTagChannel, tagRepresentationFor, TAG_REPRESENTATION_OPTIONS } from '../utils/tagAnalysis.js'
+import { tagAlias, formatTagValue, interpretTagValue, isTagChannel, tagRepresentationFor, TAG_REPRESENTATION_OPTIONS } from '../utils/tagAnalysis.js'
 
 const props = defineProps({
   stiEvent:  { type: Object, default: null },

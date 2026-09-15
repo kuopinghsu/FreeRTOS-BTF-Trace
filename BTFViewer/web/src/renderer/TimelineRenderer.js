@@ -25,7 +25,7 @@ import { formatTime, formatMigrationGapTime } from '../utils/timeFormat.js'
 import { cursorSortedPlaced } from '../utils/cursorAnalysis.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { CURSOR_COLORS } from '../utils/cursorColors.js'
-import { formatTagValue, interpretTagValue, tagRepresentationFor } from '../utils/tagAnalysis.js'
+import { tagAlias, formatTagValue, interpretTagValue, tagAxisBounds, tagTransform, tagPreferences } from '../utils/tagAnalysis.js'
 import {
   intervalColor,
   isIntervalMarkerChannel,
@@ -660,7 +660,7 @@ export function render(ctx, trace, viewport, options = {}) {
     } else if (row.type === 'core-task') {
       drawCoreTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, lockedTaskKey, rowBudget, showHoverHighlight, gpuBatch)
     } else if (row.type === 'sti') {
-      drawStiRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, tagRepresentationFor(row.key, tagRepresentations, trace))
+      drawStiRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, tagRepresentations?.[row.key])
     } else if (row.type === 'interval') {
       drawIntervalRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, options.highlightInterval ?? null)
     }
@@ -1506,7 +1506,7 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
     valMin = Infinity; valMax = -Infinity
     for (let i = 0; i < evs.length; i++) {
       const v = evVal(evs[i])
-      if (isNaN(v)) continue
+      if (!Number.isFinite(v)) continue
       if (v < valMin) valMin = v
       if (v > valMax) valMax = v
     }
@@ -1515,13 +1515,13 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
   if (!isFinite(valMin)) return   // no numeric values at all — nothing to draw
 
   // If all values are identical give a tiny ±1 padding so the line is visible
-  if (valMin === valMax) { valMin -= 1; valMax += 1 }
+  ;[valMin, valMax] = tagAxisBounds([valMin, valMax], representation)
 
-  const mappedRange = valMax - valMin
+  const mappedRange = tagTransform(valMax, representation) - tagTransform(valMin, representation)
 
   // Helper: map a numeric value to canvas Y (valMin = bottom, valMax = top)
   function valToY(v) {
-    return chartBottom - ((v - valMin) / mappedRange) * chartH
+    return chartBottom - ((tagTransform(v, representation) - tagTransform(valMin, representation)) / mappedRange) * chartH
   }
 
   // Find events in the visible range (extend one step before/after for step-hold)
@@ -1546,11 +1546,11 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
   ctx.fillText(fmtVal(valMax), canvasW - 2, chartTop + 10)
   ctx.textBaseline = 'top'
   ctx.fillText(fmtVal(valMin), canvasW - 2, chartBottom - 10)
-  if (representation === 'log2-uint32') {
+  if (tagPreferences(representation).scale === 'log2') {
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
     ctx.fillStyle = darkMode ? 'rgba(91,200,255,0.55)' : 'rgba(0,100,200,0.55)'
-    ctx.fillText('log₂ uint32', 4, chartTop + 2)
+    ctx.fillText('Log₂ scale', 4, chartTop + 2)
   }
 
   ctx.save()
@@ -1566,7 +1566,7 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
   for (let i = 0; i < slice.length; i++) {
     const ev = slice[i]
     const val = evVal(ev)
-    if (isNaN(val)) continue
+    if (!Number.isFinite(val)) continue
 
     const cx = (ev.time - timeStart) * pxPerNs
     const cy = valToY(val)
@@ -1612,7 +1612,7 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
   for (let i = 0; i < slice.length; i++) {
     const ev = slice[i]
     const val = evVal(ev)
-    if (isNaN(val)) continue
+    if (!Number.isFinite(val)) continue
     const cx = (ev.time - timeStart) * pxPerNs
     const cy = valToY(val)
     ctx.beginPath()
@@ -2418,7 +2418,7 @@ function drawTickMarkersOnRulerVertical(ctx, trace, timeStart, timeEnd, pxPerNs,
 
 // ---- Column header labels (rotated text) -----------------------------------
 
-function drawColumnHeaders(ctx, cols, headerH, colW, highlightKey, darkMode) {
+function drawColumnHeaders(ctx, cols, headerH, colW, highlightKey, darkMode, tagRepresentations) {
   for (const col of cols) {
     const cw = col.colWidth ?? colW
     const x = col.x
@@ -2446,7 +2446,7 @@ function drawColumnHeaders(ctx, cols, headerH, colW, highlightKey, darkMode) {
     ctx.fillStyle = color
     // Elide to available header height
     const maxChars = Math.max(1, Math.floor((headerH - 20) / 7))
-    let rawLabel = col.label
+    let rawLabel = col.type === 'sti' ? (tagAlias(col.key, tagRepresentations) || col.label) : col.label
     if (col.isExpandable) rawLabel = (col.isExpanded ? '▼ ' : '▶ ') + rawLabel
     const label = rawLabel.length > maxChars ? rawLabel.substring(0, maxChars - 1) + '…' : rawLabel
     ctx.fillText(label, 0, 0)
@@ -2713,12 +2713,12 @@ function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerP
   }
 }
 
-function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode) {
+function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode, representation) {
   const headerH = vertHeaderBand()
   const cw = col.colWidth ?? COL_W
 
   if (col.isExpanded) {
-    drawStiColumnWaveform(ctx, trace, col, cw, timeStart, timeEnd, pxPerNs, canvasH, darkMode)
+    drawStiColumnWaveform(ctx, trace, col, cw, timeStart, timeEnd, pxPerNs, canvasH, darkMode, representation)
     return
   }
 
@@ -2757,7 +2757,7 @@ function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, da
 /**
  * Draw an expanded STI waveform inside a vertical column (time on Y, values on X).
  */
-function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerNs, canvasH, darkMode) {
+function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerNs, canvasH, darkMode, representation) {
   const headerH = vertHeaderBand()
   const evs    = trace.stiEventsByTarget.get(col.key) || []
   const starts = trace.stiStartsByTarget.get(col.key) || []
@@ -2786,9 +2786,9 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
   ctx.setLineDash([])
   ctx.restore()
 
-  function evVal(ev) { return parseFloat(ev.note !== '' ? ev.note : ev.event) }
+  function evVal(ev) { return interpretTagValue(ev.note !== '' ? ev.note : ev.event, representation) }
 
-  const preRange = trace.stiValRange?.get(col.key)
+  const preRange = null
   let valMin, valMax
   if (preRange) {
     valMin = preRange.min
@@ -2797,15 +2797,15 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
     valMin = Infinity; valMax = -Infinity
     for (const ev of evs) {
       const v = evVal(ev)
-      if (isNaN(v)) continue
+      if (!Number.isFinite(v)) continue
       if (v < valMin) valMin = v
       if (v > valMax) valMax = v
     }
   }
   if (!isFinite(valMin)) return
-  if (valMin === valMax) { valMin -= 1; valMax += 1 }
-  const valRange = valMax - valMin
-  function valToX(v) { return chartLeft + ((v - valMin) / valRange) * chartW }
+  ;[valMin, valMax] = tagAxisBounds([valMin, valMax], representation)
+  const valRange = tagTransform(valMax, representation) - tagTransform(valMin, representation)
+  function valToX(v) { return chartLeft + ((tagTransform(v, representation) - tagTransform(valMin, representation)) / valRange) * chartW }
 
   const lo = Math.max(0, bisectLeft(starts, timeStart) - 1)
   const hi = Math.min(evs.length, bisectRight(starts, timeEnd) + 1)
@@ -2813,11 +2813,7 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
   if (slice.length === 0) return
 
   // Scale labels at top of chart area
-  function fmtVal(v) {
-    if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(2) + 'M'
-    if (Math.abs(v) >= 1e3) return (v / 1e3).toFixed(1) + 'k'
-    return String(Math.round(v))
-  }
+  const fmtVal = formatTagValue
   ctx.save()
   ctx.font = '9px monospace'
   ctx.textAlign = 'center'
@@ -2845,7 +2841,7 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
   for (let i = 0; i < slice.length; i++) {
     const ev  = slice[i]
     const val = evVal(ev)
-    if (isNaN(val)) continue
+    if (!Number.isFinite(val)) continue
 
     const cy = headerH + (ev.time - timeStart) * pxPerNs
     const cx = valToX(val)
@@ -2885,7 +2881,7 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
   for (let i = 0; i < slice.length; i++) {
     const ev  = slice[i]
     const val = evVal(ev)
-    if (isNaN(val)) continue
+    if (!Number.isFinite(val)) continue
     const cx = valToX(val)
     const cy = headerH + (ev.time - timeStart) * pxPerNs
     if (cy < headerH - 4 || cy > canvasH + 4) continue
@@ -3189,7 +3185,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     } else if (col.type === 'core-task') {
       drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, lockedTaskKey, colBudget, gpuBatch)
     } else if (col.type === 'sti') {
-      drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode)
+      drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode, options.tagRepresentations?.[col.key])
     } else if (col.type === 'interval') {
       drawIntervalColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode, options.highlightInterval ?? null)
     }
@@ -3208,7 +3204,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     ctx.beginPath()
     ctx.rect(RULER_W, 0, canvasW - RULER_W, headerH)
     ctx.clip()
-    drawColumnHeaders(ctx, cols, headerH, COL_W, highlightKey, darkMode)
+    drawColumnHeaders(ctx, cols, headerH, COL_W, highlightKey, darkMode, options.tagRepresentations)
     ctx.restore()
   }
 

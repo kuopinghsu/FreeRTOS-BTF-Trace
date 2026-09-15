@@ -1,3 +1,4 @@
+import { matchingTagChannels, tagChannelLabel } from './tagAnalysis.js'
 /**
  * Viewer tool-calling schema for the AI Assistant.
  * Keep in sync with btf_viewer_pkg/ai_tools.py.
@@ -772,7 +773,7 @@ export function aiViewerTools() {
           properties: {
             query: {
               type: 'string',
-              description: 'Text, tag value, pointer, or task name.',
+              description: 'Text, tag alias (e.g. memory usage), channel ID, tag value, pointer, or task name.',
             },
             mode: {
               type: 'string',
@@ -4004,19 +4005,20 @@ function lookupAliases(task) {
   return out
 }
 
-export function searchTimelineHits(trace, query, mode = 'contains', annotations = []) {
+export function searchTimelineHits(trace, query, mode = 'contains', annotations = [], representations = trace?.tagRepresentations) {
   const q = String(query || '').trim()
   if (!q) return { ok: false, message: 'query must be a non-empty string' }
   if (!trace) return { ok: false, message: 'No trace loaded' }
   let findMode = String(mode || 'contains').toLowerCase()
   if (findMode === 'tags' || findMode === 'tag' || findMode === 'sti') findMode = 'sti'
-  const { hits, error } = computeFindHits(trace, q, findMode, annotations || [])
+  const { hits, error } = computeFindHits(trace, q, findMode, annotations || [], representations)
   if (error) return { ok: false, message: error }
   const times = [...(hits || [])]
   return {
     ok: true,
     message: `${times.length} match(es) for ${JSON.stringify(q)} (${findMode})`,
     data: {
+      tag_channels: ['contains', 'exact', 'regex', 'sti'].includes(findMode) ? matchingTagChannels(trace, q, findMode, representations).map(channel => ({ channel, label: tagChannelLabel(channel, representations) })) : [],
       times: times.slice(0, MAX_SEARCH_HITS),
       count: times.length,
       mode: findMode,

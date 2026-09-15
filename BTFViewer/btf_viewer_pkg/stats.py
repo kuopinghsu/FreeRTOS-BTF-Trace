@@ -1430,11 +1430,13 @@ class _ScatterWidget(QWidget):
         so a narrow band far from zero isn't squashed against the baseline."""
         if self._y_as_time:
             return 0, (max(ys) if max(ys) > 0 else 1)
-        y0, y1 = min(ys), max(ys)
-        if y1 <= y0:
-            pad = abs(y0) * 0.5 or 0.5
-            return y0 - pad, y0 + pad
-        return y0, y1
+        return _tag_axis_bounds(ys, getattr(self, "_tag_preferences", None))
+
+    def _chart_y(self, value):
+        return value if self._y_as_time else _tag_transform(value, getattr(self, "_tag_preferences", None))
+
+    def _chart_y_inverse(self, value):
+        return value if self._y_as_time else _tag_inverse(value, getattr(self, "_tag_preferences", None))
 
     def _screen_coords(self, w: int, h: int, ml: int, mr: int, mt: int, mb: int):
         """Return (sx_list, sy_list) mapping each point to widget pixels."""
@@ -1445,11 +1447,11 @@ class _ScatterWidget(QWidget):
         x0, x1 = min(xs), max(xs)
         y0, y1 = self._y_axis_bounds(ys)
         xspan = max(x1 - x0, 1)
-        yspan = max(y1 - y0, 1) if self._y_as_time else (y1 - y0)
+        yspan = max(y1 - y0, 1) if self._y_as_time else (self._chart_y(y1) - self._chart_y(y0))
         pw = w - ml - mr
         ph = h - mt - mb
         sx = [ml + int((x - x0) / xspan * pw) for x in xs]
-        sy = [mt + ph - int((y - y0) / yspan * ph) for y in ys]
+        sy = [mt + ph - int((self._chart_y(y) - self._chart_y(y0)) / yspan * ph) for y in ys]
         return sx, sy
 
     @staticmethod
@@ -1459,7 +1461,7 @@ class _ScatterWidget(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         w, h = self.width(), self.height()
-        ML, MT, MB = 56, 14, 36   # margins
+        ML, MT, MB = (96 if not self._y_as_time else 56), 14, 36   # margins
 
         dark  = self._is_dark
         bg    = QColor("#1E1E1E") if dark else QColor("#F8F8F8")
@@ -1482,10 +1484,10 @@ class _ScatterWidget(QWidget):
         x0, x1 = min(xs), max(xs)
         y0, y1 = self._y_axis_bounds(ys)
         xspan = max(x1 - x0, 1)
-        yspan = max(y1 - y0, 1) if self._y_as_time else (y1 - y0)
+        yspan = max(y1 - y0, 1) if self._y_as_time else (self._chart_y(y1) - self._chart_y(y0))
 
         def sx(x): return ML + int((x - x0) / xspan * pw)
-        def sy(y): return MT + ph - int((y - y0) / yspan * ph)
+        def sy(y): return MT + ph - int((self._chart_y(y) - self._chart_y(y0)) / yspan * ph)
 
         # Grid + axes
         sf = QFont(); sf.setPointSize(7)
@@ -1513,7 +1515,7 @@ class _ScatterWidget(QWidget):
         )
         p95_val = vals_sorted[min(n - 1, math.ceil(n * 0.95) - 1)]
         for fi in range(5):
-            val = y0 + (y1 - y0) * fi / 4
+            val = self._chart_y_inverse(self._chart_y(y0) + (self._chart_y(y1) - self._chart_y(y0)) * fi / 4)
             gy  = MT + ph - int(fi / 4 * ph)
             if self._y_as_time:
                 lbl = _format_time(int(val), self._time_scale, decimals=1)
@@ -1648,7 +1650,7 @@ class _ScatterWidget(QWidget):
 
     def _plot_margins(self) -> tuple:
         w, h = self.width(), self.height()
-        ml, mt, mb = 56, 14, 36
+        ml, mt, mb = (96 if not self._y_as_time else 56), 14, 36
         sf = QFont(); sf.setPointSize(7)
         mr = self._marker_right_margin(QFontMetrics(sf))
         pw = w - ml - mr
@@ -1663,10 +1665,10 @@ class _ScatterWidget(QWidget):
         x0, x1 = min(xs), max(xs)
         y0, y1 = self._y_axis_bounds(ys)
         xspan = max(x1 - x0, 1)
-        yspan = max(y1 - y0, 1) if self._y_as_time else (y1 - y0)
+        yspan = max(y1 - y0, 1) if self._y_as_time else (self._chart_y(y1) - self._chart_y(y0))
 
         def sx(x): return ml + int((x - x0) / xspan * pw)
-        def sy(y): return mt + ph - int((y - y0) / yspan * ph)
+        def sy(y): return mt + ph - int((self._chart_y(y) - self._chart_y(y0)) / yspan * ph)
         return sx, sy, x0, x1
 
     def _nearest_point_index(self, ex: float, ey: float) -> int:
@@ -2041,14 +2043,13 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
         if not x_ticks:
             for fi in range(3):
                 log_val = log_lo + (log_hi - log_lo) * fi / 2
-                val = int(round(10 ** log_val))
+                val = 10 ** log_val
                 x_ticks.append((region_left + int(fi / 2 * regular_w),
                                 _hist_format_axis_value(val, time_scale,
                                                         value_as_time=value_as_time)))
     else:
         for fi in range(3):
-            val = int(round(bin_spec["display_min"] +
-                            (bin_spec["display_max"] - bin_spec["display_min"]) * fi / 2))
+            val = bin_spec["display_min"] + (bin_spec["display_max"] - bin_spec["display_min"]) * fi / 2
             x_ticks.append((region_left + int(fi / 2 * regular_w),
                             _hist_format_axis_value(val, time_scale,
                                                     value_as_time=value_as_time)))
@@ -2385,6 +2386,7 @@ class _MetricsPlotDialog(QDialog):
                  on_open_chord=None,
                  ai_enabled: bool = True,
                  on_query_ai=None,
+                 tag_trace=None, tag_channel=None,
                  tag_representation: Optional[str] = None,
                  tag_representation_options: Optional[Sequence[Tuple[str, str]]] = None,
                  on_tag_representation_change=None,
@@ -2412,13 +2414,7 @@ class _MetricsPlotDialog(QDialog):
         if tag_representation is not None and tag_representation_options:
             representation_row = QHBoxLayout()
             representation_row.addWidget(QLabel("Representation"))
-            self._tag_representation = QComboBox()
-            for value, label in tag_representation_options:
-                self._tag_representation.addItem(label, value)
-            index = self._tag_representation.findData(tag_representation)
-            self._tag_representation.setCurrentIndex(max(0, index))
-            self._tag_representation.currentIndexChanged.connect(
-                self._on_tag_representation_selected)
+            self._tag_representation = _tag_settings_button(tag_trace, tag_channel, on_tag_representation_change)
             representation_row.addWidget(self._tag_representation)
             representation_row.addStretch(1)
             root.addLayout(representation_row)
@@ -2484,6 +2480,8 @@ class _MetricsPlotDialog(QDialog):
         hist_toolbar.addWidget(self._hist_scale)
         hist_toolbar.addStretch()
 
+        if tag_trace is not None and tag_channel is not None:
+            self._scatter._tag_preferences = _tag_chart_preferences(tag_trace, tag_channel)
         self._scatter.point_clicked.connect(self._on_scatter_click)
 
         splitter = _ResizeSplitter(Qt.Orientation.Vertical)
@@ -2624,12 +2622,6 @@ class _MetricsPlotDialog(QDialog):
         modes = ("auto", "linear", "percentile", "log")
         if 0 <= index < len(modes):
             self._histogram.set_scale_mode(modes[index])
-
-    def _on_tag_representation_selected(self, index: int) -> None:
-        combo = getattr(self, "_tag_representation", None)
-        if combo is None or self._on_tag_representation_change is None:
-            return
-        self._on_tag_representation_change(str(combo.itemData(index)))
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -11803,12 +11795,12 @@ class _StatsPanel(QWidget):
                 pts = _tag_interval_plot_points(trace, ch, lo, hi)
                 if not pts:
                     return None
-                title = f"{_tag_channel_label(ch)} — Interval{scope}"
+                title = f"{_tag_channel_label(ch, trace)} — Interval{scope}"
             else:
                 pts = _tag_plot_points(trace, ch, lo, hi)
                 if not pts:
                     return None
-                title = f"{_tag_channel_label(ch)} — Value{scope}"
+                title = f"{_tag_channel_label(ch, trace)} — Value{scope}"
             color = QColor(_tag_color(ch))
             return title, pts, color
         if kind == "priority":
@@ -12179,11 +12171,8 @@ class _StatsPanel(QWidget):
         title, pts, _color = built
         scoped, badge, detail = self._plot_scope_banner()
         if self._plot_kind == "tag" and hasattr(dlg, "_tag_representation"):
-            combo = dlg._tag_representation
-            index = combo.findData(_tag_representation(self._trace, self._plot_mk))
-            combo.blockSignals(True)
-            combo.setCurrentIndex(max(0, index))
-            combo.blockSignals(False)
+            dlg._tag_representation.setText(_TAG_REPRESENTATION_LABELS[_tag_representation(self._trace, self._plot_mk)] + " ▾")
+            dlg._scatter._tag_preferences = _tag_chart_preferences(self._trace, self._plot_mk)
         dlg.update_data(title, pts, scope_scoped=scoped,
                         scope_badge=badge, scope_detail=detail)
 
@@ -12246,6 +12235,7 @@ class _StatsPanel(QWidget):
             on_open_chord=on_ch,
             ai_enabled=self._ai_enabled,
             on_query_ai=self._query_plot_distribution_ai,
+            tag_trace=trace, tag_channel=mk,
             tag_representation=(_tag_representation(trace, mk) if kind == "tag" else None),
             tag_representation_options=(
                 [(value, _TAG_REPRESENTATION_LABELS[value]
@@ -12262,9 +12252,7 @@ class _StatsPanel(QWidget):
 
     def _set_tag_representation(self, trace: "BtfTrace", channel: str,
                                 representation: str) -> None:
-        if representation not in _TAG_REPRESENTATIONS:
-            return
-        trace.tag_representations[channel] = representation
+        _update_tag_preferences(trace, channel, representation)
         self.tag_representation_changed.emit(channel, representation)
         self.rebuild(trace)
         self._refresh_open_plot()
@@ -19133,7 +19121,7 @@ class _StatsPanel(QWidget):
 
         def _populate_tags(blay: QVBoxLayout) -> None:
             _tag_rows = _tag_stats_rows(trace, lo, hi)
-            blay.addWidget(self._build_stats_table(
+            host = self._build_stats_table(
                 _tag_rows,
                 _fs,
                 empty_tag,
@@ -19141,7 +19129,27 @@ class _StatsPanel(QWidget):
                 section_id="tags",
                 include_variability=True,
                 on_row_click=lambda ch: self._open_tag_plot(trace, ch),
-            ))
+            )
+
+            table = host.findChild(QTableWidget)
+            if table is not None:
+                table.setSortingEnabled(False)
+                table.insertColumn(0)
+                table.insertColumn(2)
+                table.setHorizontalHeaderItem(0, QTableWidgetItem("Channel"))
+                table.setHorizontalHeaderItem(1, QTableWidgetItem("Label"))
+                table.setHorizontalHeaderItem(2, QTableWidgetItem("Representation"))
+                for row in range(table.rowCount()):
+                    channel = table.item(row, 1).data(Qt.ItemDataRole.UserRole)
+                    item = QTableWidgetItem(channel)
+                    item.setData(Qt.ItemDataRole.UserRole, channel)
+                    table.setItem(row, 0, item)
+                    combo = _tag_settings_button(trace, channel,
+                        lambda command, ch=channel: self._set_tag_representation(trace, ch, command))
+                    table.setCellWidget(row, 2, combo)
+                table.setSortingEnabled(True)
+                table.resizeColumnsToContents()
+            blay.addWidget(host)
 
         self._add_collapsible_section(
             "tags",
@@ -19291,6 +19299,7 @@ class _RcSettings:
     [cursors]  positions  (space-separated ns timestamps; "" = no saved cursors)
     [files]    last_file, last_dir, open_tabs_json, active_tab_index
     [tab_view] per-trace zoom/cursor layout (key = trace_<sha256[:16]>)
+    [tag_representations] per-trace format, scale, and includeZero settings
     """
 
     RC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "btf_viewer.rc")

@@ -5612,8 +5612,9 @@
                           :class="thSortClass('tags', 'tag')"
                           @click="toggleTableSort('tags', 'tag')"
                         >
-                          Tag
+                          Channel
                         </th>
+                        <th>Label</th>
                         <th>Representation</th>
                         <th
                           :class="thSortClass('tags', 'count')"
@@ -5682,6 +5683,7 @@
                         @keydown.enter.prevent="openTagPlot(row.channel)"
                         @keydown.space.prevent="openTagPlot(row.channel)"
                       >
+                        <td>{{ row.channel }}</td>
                         <td class="task-col">
                           {{ row.label }}
                         </td>
@@ -5689,11 +5691,13 @@
                           @click.stop
                           @keydown.stop
                         >
-                          <DomSelect
-                            :model-value="tagRepresentation(row.channel)"
+                          <TagFormatControl
+                            :channel="row.channel"
+                            :trace="trace"
+                            :value="tagRepresentations[row.channel]"
                             class="tag-representation-select"
-                            :options="tagRepresentationOptions(row.channel)"
-                            @update:model-value="setTagRepresentation(row.channel, $event)"
+
+                            @change="setTagRepresentation(row.channel, $event)"
                           />
                         </td>
                         <td>{{ row.count }}</td>
@@ -5804,11 +5808,13 @@
           class="plot-scale-label"
         >
           Representation
-          <DomSelect
-            :model-value="tagRepresentation(openPlotRef.tagChannel)"
+          <TagFormatControl
+            :channel="openPlotRef.tagChannel"
+            :trace="trace"
+            :value="tagRepresentations[openPlotRef.tagChannel]"
             class="plot-scale-select"
-            :options="tagRepresentationOptions(openPlotRef.tagChannel)"
-            @update:model-value="setTagRepresentation(openPlotRef.tagChannel, $event)"
+
+            @change="setTagRepresentation(openPlotRef.tagChannel, $event)"
           />
         </label>
         <button
@@ -6335,6 +6341,8 @@
 </template>
 
 <script setup>
+import { tagAxisBounds, tagTransform, tagInverse } from '../utils/tagAnalysis.js'
+import TagFormatControl from './TagFormatControl.vue'
 import { ref, computed, watch, onBeforeUnmount, nextTick, provide } from 'vue'
 import DomSelect from './DomSelect.vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
@@ -6389,9 +6397,7 @@ import {
   tagChannelLabel,
   formatTagValue,
   tagSampleDetailRows,
-  TAG_REPRESENTATION_OPTIONS,
   tagRepresentationFor,
-  recommendTagRepresentation,
 } from '../utils/tagAnalysis.js'
 import { priorityStatsRows, priorityEpisodePlotPoints, priorityEpisodeDetailRows, priorityEpisodeNote, BOOST_BAND_COLOR, INVERSION_BAND_COLOR } from '../utils/priorityAnalysis.js'
 import {
@@ -6577,19 +6583,7 @@ const emit = defineEmits([
   'tagRepresentationChange',
 ])
 
-function tagRepresentation(channel) {
-  const range = statsRange.value
-  return tagRepresentationFor(channel, props.tagRepresentations, props.trace, range?.lo ?? null, range?.hi ?? null)
-}
 
-function tagRepresentationOptions(channel) {
-  const range = statsRange.value
-  const recommended = recommendTagRepresentation(props.trace, channel, range?.lo ?? null, range?.hi ?? null)
-  return TAG_REPRESENTATION_OPTIONS.map(option => ({
-    ...option,
-    label: `${option.label}${option.value === recommended ? ' (recommended)' : ''}`,
-  }))
-}
 
 function setTagRepresentation(channel, representation) {
   emit('tagRepresentationChange', channel, representation)
@@ -9051,7 +9045,7 @@ function _buildTagPlot(trace, channel, range) {
   const suffix = scopeSuffix(range)
   const lo = range?.lo ?? null
   const hi = range?.hi ?? null
-  const label = tagChannelLabel(channel)
+  const label = tagChannelLabel(channel, props.tagRepresentations)
   const rawPoints = tagPlotPoints(trace, channel, lo, hi, props.tagRepresentations)
   const points = rawPoints.map((pt, index) => ({
     index,
@@ -9073,7 +9067,7 @@ function _buildTagIntervalPlot(trace, channel, range) {
   const suffix = scopeSuffix(range)
   const lo = range?.lo ?? null
   const hi = range?.hi ?? null
-  const label = tagChannelLabel(channel)
+  const label = tagChannelLabel(channel, props.tagRepresentations)
   const rawPoints = tagIntervalPlotPoints(trace, channel, lo, hi)
   const points = rawPoints.map((pt, index) => ({
     index,
@@ -9494,7 +9488,7 @@ const scatterModel = computed(() => {
   if (!plot || plot.points.length === 0) return null
   const width = 820
   const height = 320
-  const margin = { left: 72, right: 42, top: 16, bottom: 34 }
+  const margin = { left: 96, right: 42, top: 16, bottom: 34 }
   const xs = plot.points.map(point => point.xNs)
   const ys = plot.points.map(point => point.yValue)
   const x0 = Math.min(...xs)
@@ -9505,21 +9499,12 @@ const scatterModel = computed(() => {
   const isTagValue = plot.kind === 'tag'
   let yMin = 0
   let yMax
-  if (isTagValue) {
-    const rawMin = Math.min(...ys)
-    const rawMax = Math.max(...ys)
-    if (rawMax > rawMin) {
-      yMin = rawMin
-      yMax = rawMax
-    } else {
-      const pad = Math.abs(rawMin) * 0.5 || 0.5
-      yMin = rawMin - pad
-      yMax = rawMin + pad
-    }
-  } else {
-    yMax = Math.max(1, ...ys)
-  }
-  const ySpan = yMax - yMin
+  const preferences = props.tagRepresentations[plot.tagChannel]
+  const transform = value => isTagValue ? tagTransform(value, preferences) : value
+  const inverse = value => isTagValue ? tagInverse(value, preferences) : value
+  if (isTagValue) [yMin, yMax] = tagAxisBounds(ys, preferences)
+  else yMax = Math.max(1, ...ys)
+  const ySpan = transform(yMax) - transform(yMin)
   const xSpan = Math.max(1, x1 - x0)
   const plotW = width - margin.left - margin.right
   const plotH = height - margin.top - margin.bottom
@@ -9530,7 +9515,7 @@ const scatterModel = computed(() => {
     : (v) => formatTime(Math.round(v), props.trace.timeScale)
 
   const scaleX = value => margin.left + ((value - x0) / xSpan) * plotW
-  const scaleY = value => margin.top + plotH - ((value - yMin) / ySpan) * plotH
+  const scaleY = value => margin.top + plotH - ((transform(value) - transform(yMin)) / ySpan) * plotH
 
   const sigmaLo = summary
     ? Math.max(yMin, summary.avg - summary.stddev)
@@ -9555,7 +9540,7 @@ const scatterModel = computed(() => {
       return { index, x: scaleX(value), label: formatTime(value, props.trace.timeScale) }
     }),
     yTicks: Array.from({ length: 5 }, (_, index) => {
-      const value = yMin + ySpan * (1 - index / 4)
+      const value = inverse(transform(yMin) + ySpan * (1 - index / 4))
       return { index, y: scaleY(value), label: yFormat(value) }
     }),
     sigmaBand: (summary && showVariability) ? {
@@ -11992,6 +11977,7 @@ defineExpose({
 
 .plot-dialog {
   width: min(900px, calc(100vw - 32px));
+  height: min(86vh, 760px);
   max-height: min(86vh, 760px);
   display: flex;
   flex-direction: column;
@@ -12397,4 +12383,10 @@ defineExpose({
     padding: 10px;
   }
 }
+</style>
+
+<style scoped>
+.plot-card-scatter, .plot-card-histogram { display: flex; flex-direction: column; }
+.plot-card-scatter .plot-svg, .plot-card-histogram .plot-svg { flex: 1 1 0; min-height: 0; height: 100%; }
+.plot-scale-select.dom-select { padding: 0; border: 0; background: transparent; }
 </style>

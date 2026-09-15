@@ -75,6 +75,7 @@ const props = defineProps({
   ariaLabel: { type: String, default: '' },
   placeholder: { type: String, default: '' },
   maxHeight: { type: Number, default: 280 },
+  menuWidth: { type: Number, default: 0 },
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
@@ -110,6 +111,10 @@ function placeMenu() {
     maxHeight: props.maxHeight,
     zIndex: 12050,
   })
+  if (props.menuWidth) {
+    const width = Math.min(props.menuWidth, window.innerWidth - 16)
+    Object.assign(listStyle.value, { width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px`, left: `${Math.max(8, Math.min(el.getBoundingClientRect().left, window.innerWidth - width - 8))}px` })
+  }
 }
 
 function unbindCloser() {

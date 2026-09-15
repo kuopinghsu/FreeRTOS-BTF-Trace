@@ -2,6 +2,7 @@
  * Find panel logic (parity with desktop find_logic.py).
  */
 
+import { tagChannelLabel, matchingTagChannels } from './tagAnalysis.js'
 import { bisectLeft, bisectRight } from './bisect.js'
 import { taskLabelForMergeKey, taskReprGet } from './colors.js'
 import { parseTaskLifecycleNote } from './lifecycleAnalysis.js'
@@ -17,17 +18,17 @@ export const FIND_MODE_CHOICES = [
   {
     label: 'Contains',
     key: 'contains',
-    help: 'Substring match on task names (merge key / display name) and annotation notes.',
+    help: 'Substring match on task names (merge key / display name), tag channel names/aliases, and annotation notes.',
   },
   {
     label: 'Exact',
     key: 'exact',
-    help: 'Whole-string match on a task merge key, raw name, or display name.',
+    help: 'Whole-string match on task names or tag channel names/aliases.',
   },
   {
     label: 'Regex',
     key: 'regex',
-    help: 'Case-insensitive regular expression on task names and annotation notes.',
+    help: 'Case-insensitive regular expression on task names, tag channel names/aliases, and annotation notes.',
   },
   {
     label: 'Migrations',
@@ -37,7 +38,7 @@ export const FIND_MODE_CHOICES = [
   {
     label: 'STI',
     key: 'sti',
-    help: 'Software-trace items: channel, event verb, note, and core (tags, TICK, mutex notes, …).',
+    help: 'Software-trace items: channel name/alias, event verb, note, and core (tags, TICK, mutex notes, …).',
   },
   {
     label: 'Intervals',
@@ -112,11 +113,11 @@ function haystackMatches(query, mode, haystack, regexObj) {
   return false
 }
 
-function findStiHits(trace, query, mode, regexObj) {
+function findStiHits(trace, query, mode, regexObj, representations) {
   const hits = []
   const qLower = query.toLowerCase()
   for (const ev of trace.stiEvents || []) {
-    const hay = `${ev.target} ${ev.event || ''} ${ev.note || ''} ${ev.core || ''}`
+    const hay = `${ev.target} ${tagChannelLabel(ev.target, representations)} ${ev.event || ''} ${ev.note || ''} ${ev.core || ''}`
     let matched = false
     if (mode === 'exact') matched = hay.toLowerCase() === qLower
     else if (mode === 'contains') matched = hay.toLowerCase().includes(qLower)
@@ -181,7 +182,7 @@ function findPointerHits(trace, query, mode, regexObj) {
  * @param {object[]} [annotations]
  * @returns {{ hits: number[], error: string|null }}
  */
-export function computeFindHits(trace, query, mode, annotations = []) {
+export function computeFindHits(trace, query, mode, annotations = [], representations = trace?.tagRepresentations) {
   if (!trace || !query?.trim()) return { hits: [], error: null }
   const q = query.trim()
   const modeKey = normalizeFindMode(mode)
@@ -214,7 +215,7 @@ export function computeFindHits(trace, query, mode, annotations = []) {
   }
 
   if (modeKey === 'sti') {
-    return { hits: [...new Set(findStiHits(trace, q, 'contains', regexObj))].sort((a, b) => a - b), error: null }
+    return { hits: [...new Set(findStiHits(trace, q, 'contains', regexObj, representations))].sort((a, b) => a - b), error: null }
   }
   if (modeKey === 'intervals') {
     return { hits: [...new Set(findIntervalHits(trace, q, 'contains', regexObj))].sort((a, b) => a - b), error: null }
@@ -227,6 +228,8 @@ export function computeFindHits(trace, query, mode, annotations = []) {
   }
 
   const hits = []
+  const channels = new Set(matchingTagChannels(trace, q, modeKey, representations))
+  for (const ev of trace.stiEvents || []) if (channels.has(ev.target)) hits.push(ev.time)
   const qLower = q.toLowerCase()
   for (const [mk, segs] of trace.segByMergeKey || []) {
     const raw = taskReprGet(trace, mk) || mk

@@ -3769,7 +3769,7 @@ class TimelineView(QGraphicsView):
                 ch_color = QColor(_STI_PALETTE[ch_idx % len(_STI_PALETTE)])
                 ch_color.setAlpha(200)
                 is_exp = ch in sc._sti_expanded
-                sti_row_data.append({'evs': ch_evs, 'color': ch_color, 'is_expanded': is_exp})
+                sti_row_data.append({'evs': ch_evs, 'color': ch_color, 'is_expanded': is_exp, 'channel': ch})
 
         if not row_data and not sti_row_data:
             # Border only
@@ -3834,32 +3834,22 @@ class TimelineView(QGraphicsView):
                 col = rd['color']
                 evs = rd['evs']
                 if rd['is_expanded']:
-                    # Single-pass min/max extraction
-                    v_min = math.inf
-                    v_max = -math.inf
-                    fvals: list = []
-                    for ev in evs:
-                        note_str = (ev.note or '').strip()
-                        try:
-                            v = float(note_str) if note_str else float(ev.event or 0)
-                        except (ValueError, TypeError):
-                            fvals.append(None)
-                            continue
-                        if v < v_min: v_min = v
-                        if v > v_max: v_max = v
-                        fvals.append(v)
+                    preferences = _tag_chart_preferences(tr, rd['channel'])
+                    fvals = [_interpret_tag_value(ev.note or ev.event, preferences) for ev in evs]
+                    finite_values = [v for v in fvals if v is not None]
+                    v_min, v_max = _tag_axis_bounds(finite_values, preferences)
                     # Use the same waveform colours as _BatchStiWaveformItem.
                     _wf_line_col = QColor("#5BC8FF")
                     _wf_dot_col  = QColor("#80DFFF")
                     if math.isfinite(v_min) and v_min != v_max:
-                        v_rng = v_max - v_min
+                        v_rng = _tag_transform(v_max, preferences) - _tag_transform(v_min, preferences)
                         pts: list = []
                         if sc._sti_line_style == 'step':
                             for ev, v in zip(evs, fvals):
                                 if v is None:
                                     continue
                                 px = (ev.time - tr.time_min) / time_span * W
-                                py = y + rh - (v - v_min) / v_rng * rh
+                                py = y + rh - (_tag_transform(v, preferences) - _tag_transform(v_min, preferences)) / v_rng * rh
                                 if pts:
                                     pts.append(QPointF(px, pts[-1].y()))
                                 pts.append(QPointF(px, py))
@@ -3868,7 +3858,7 @@ class TimelineView(QGraphicsView):
                                 if v is None:
                                     continue
                                 px = (ev.time - tr.time_min) / time_span * W
-                                py = y + rh - (v - v_min) / v_rng * rh
+                                py = y + rh - (_tag_transform(v, preferences) - _tag_transform(v_min, preferences)) / v_rng * rh
                                 pts.append(QPointF(px, py))
                         if len(pts) >= 2:
                             p.setPen(QPen(_wf_line_col, 1.0))

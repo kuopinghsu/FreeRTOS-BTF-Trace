@@ -5,6 +5,8 @@ with ``web/src/utils/aiTools.js``.
 """
 from __future__ import annotations
 
+from .parser import _matching_tag_channels, _tag_channel_label
+
 import csv
 import io
 import json
@@ -841,7 +843,7 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Text, tag value, pointer, or task name.",
+                            "description": "Text, tag alias (e.g. memory usage), channel ID, tag value, pointer, or task name.",
                         },
                         "mode": {
                             "type": "string",
@@ -4332,6 +4334,9 @@ def search_timeline_hits(
         True,
         f"{len(hits)} match(es) for {q!r} ({find_mode})",
         data={
+            "tag_channels": [{"channel": ch, "label": _tag_channel_label(ch, trace)}
+                             for ch in _matching_tag_channels(trace, q, find_mode)]
+                            if find_mode in ("contains", "exact", "regex", "sti") else [],
             "times": shown,
             "count": len(hits),
             "mode": find_mode,

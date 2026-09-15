@@ -5,7 +5,7 @@ import re
 from typing import List, Optional, Tuple
 
 from ..config import _MAX_FIND_REGEX_LEN
-from ..parser import BtfTrace, TraceAnnotation, _task_display_name
+from ..parser import BtfTrace, TraceAnnotation, _task_display_name, _tag_channel_label, _matching_tag_channels
 
 _FIND_MODES = frozenset({
     "contains", "exact", "regex", "migrations",
@@ -18,18 +18,18 @@ FIND_MODE_CHOICES: Tuple[Tuple[str, str, str], ...] = (
     (
         "Contains",
         "contains",
-        "Substring match on task names (merge key / display name) and "
-        "annotation notes.",
+        "Substring match on task names (merge key / display name), "
+        "tag channel names/aliases, and annotation notes.",
     ),
     (
         "Exact",
         "exact",
-        "Whole-string match on a task merge key, raw name, or display name.",
+        "Whole-string match on task names or tag channel names/aliases.",
     ),
     (
         "Regex",
         "regex",
-        "Case-insensitive regular expression on task names and annotation notes.",
+        "Case-insensitive regular expression on task names, tag channel names/aliases, and annotation notes.",
     ),
     (
         "Migrations",
@@ -40,7 +40,7 @@ FIND_MODE_CHOICES: Tuple[Tuple[str, str, str], ...] = (
     (
         "STI",
         "sti",
-        "Software-trace items: channel, event verb, note, and core "
+        "Software-trace items: channel name/alias, event verb, note, and core "
         "(tags, TICK, mutex notes, …).",
     ),
     (
@@ -133,7 +133,8 @@ def recompute_find_hits(
         unique = sorted(set(hits))
         return unique, f"{len(unique)} matches"
 
-    hits: List[int] = []
+    channels = set(_matching_tag_channels(trace, q, mode_key))
+    hits: List[int] = [ev.time for ev in getattr(trace, "sti_events", ()) if ev.target in channels]
     for mk, segs in trace.seg_map_by_merge_key.items():
         raw = trace.task_repr.get(mk, mk)
         disp = _task_display_name(raw)
@@ -185,7 +186,7 @@ def _find_sti_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern])
     hits: List[int] = []
     q_lower = query.lower()
     for ev in getattr(trace, "sti_events", ()):
-        hay = f"{ev.target} {ev.event or ''} {ev.note or ''} {ev.core or ''}"
+        hay = f"{ev.target} {_tag_channel_label(ev.target, trace)} {ev.event or ''} {ev.note or ''} {ev.core or ''}"
         if _haystack_matches(query, "contains", hay, regex_obj):
             hits.append(ev.time)
         elif not regex_obj and q_lower == hay.lower():

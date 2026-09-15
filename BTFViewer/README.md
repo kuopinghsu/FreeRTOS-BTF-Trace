@@ -628,3 +628,25 @@ Thanks to everyone who has contributed to this project.
 |---|---|
 | [DiogoRoseira](https://github.com/DiogoRoseira) | CPU Load Graph and metric-distribution charts |
 
+
+
+### Tag format and chart scale
+
+Each tag channel has a format chip in its timeline label, statistics row, and value-chart header. All three controls share the same settings:
+
+- **Data format:** UInt32 (unsigned integer), Int32 (signed integer), or Float32 (IEEE 754 reinterpretation of the original 32-bit word). The menu previews the first sample as hexadecimal bits and its interpreted value. Non-finite Float32 samples are omitted from numeric charts and statistics.
+- **Chart scale:** Linear or Log₂. Log₂ uses the signed transform `sign(value) × log₂(1 + |value|)`, so zero and negative values remain valid. Scaling changes positions only; statistics, tooltips, and axis labels retain interpreted values.
+- **Fit range:** all formats fit their minimum and maximum values by default. A constant value gets 5% padding (±0.5 for zero). **Include zero** expands the range to include zero.
+- **Apply these settings to all tag channels** copies the current channel's format, scale, and zero-baseline choice. **Reset to default** restores UInt32, Linear, and Fit range for the current channel.
+
+Settings are saved per trace in desktop `btf_viewer.rc` (trace path) and web local storage (trace name), and restored when reopening the trace. Older `log₂ uint32` settings migrate to UInt32 with Log₂ scale. Exported HTML reports preserve the selected interpretation and chart settings and include labeled value/time axes.
+
+
+#### Tag name aliases
+
+Choose **Rename tag…** from any tag format chip to set a display name such as `memory usage`. Names are saved per trace alongside format settings in desktop `.rc` and web local storage. The original channel identifier (for example, `tag0_event`) remains unchanged and is still shown in the statistics Channel column and tooltips. Timeline labels, chart titles, and exported reports use the alias.
+
+Choose **Reset tag name**, or save a blank name, to restore the original display name. Renaming does not change data interpretation. Applying format settings to all channels preserves their individual names, and resetting format/scale also preserves the alias. Names are limited to 80 characters.
+
+
+Tag aliases are also searchable in Find and the AI Assistant's `search_timeline` tool (Contains, Exact, Regex, and STI/Tags modes). For example, after renaming Tag 0 to `memory usage`, ask `check "memory usage" tag`. Search results retain canonical channel IDs for follow-up queries; if multiple channels share an alias, all matching channels are returned.

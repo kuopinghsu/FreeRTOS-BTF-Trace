@@ -26,7 +26,7 @@ import {
 } from '../utils/intervalAnalysis.js'
 import { cursorSortedPlaced } from '../utils/cursorAnalysis.js'
 import { stripeColorForBand } from '../utils/timelineStripes.js'
-import { formatTagValue, interpretTagValue, tagRepresentationFor } from '../utils/tagAnalysis.js'
+import { tagAlias, formatTagValue, interpretTagValue, tagAxisBounds, tagTransform, tagPreferences } from '../utils/tagAnalysis.js'
 
 function L() {
   return getTimelineLayout()
@@ -351,19 +351,19 @@ export function renderToSvg(trace, viewport, options = {}) {
       const chartBottom = row.y + rowH - PAD
       const chartHt     = chartBottom - chartTop
 
-      const representation = tagRepresentationFor(row.key, tagRepresentations, trace)
+      const representation = tagRepresentations?.[row.key]
       const evVal = ev => interpretTagValue(ev.note !== '' ? ev.note : ev.event, representation)
 
       let valMin = Infinity, valMax = -Infinity
       for (const ev of evs) {
         const v = evVal(ev)
-        if (!isNaN(v)) { if (v < valMin) valMin = v; if (v > valMax) valMax = v }
+        if (Number.isFinite(v)) { if (v < valMin) valMin = v; if (v > valMax) valMax = v }
       }
       if (!isFinite(valMin)) continue
-      if (valMin === valMax) { valMin -= 1; valMax += 1 }
+      ;[valMin, valMax] = tagAxisBounds([valMin, valMax], representation)
 
-      const mappedRange = valMax - valMin
-      const valToY      = v => chartBottom - ((v - valMin) / mappedRange) * chartHt
+      const mappedRange = tagTransform(valMax, representation) - tagTransform(valMin, representation)
+      const valToY      = v => chartBottom - ((tagTransform(v, representation) - tagTransform(valMin, representation)) / mappedRange) * chartHt
 
       // Axis dashed lines (span timeline area only)
       const axisColor = darkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'
@@ -375,9 +375,9 @@ export function renderToSvg(trace, viewport, options = {}) {
       const dimColor = darkMode ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'
       els.push(`<text x="${svgW - 2}" y="${(chartTop + 10).toFixed(1)}" text-anchor="end" fill="${dimColor}" font-family="monospace" font-size="9">${esc(fmtVal(valMax))}</text>`)
       els.push(`<text x="${svgW - 2}" y="${(chartBottom - 2).toFixed(1)}" text-anchor="end" fill="${dimColor}" font-family="monospace" font-size="9">${esc(fmtVal(valMin))}</text>`)
-      if (representation === 'log2-uint32') {
+      if (tagPreferences(representation).scale === 'log2') {
         const scaleColor = darkMode ? 'rgba(91,200,255,0.55)' : 'rgba(0,100,200,0.55)'
-        els.push(`<text x="${OX + 4}" y="${(chartTop + 2).toFixed(1)}" dominant-baseline="hanging" fill="${scaleColor}" font-family="monospace" font-size="9">log&#x2082; uint32</text>`)
+        els.push(`<text x="${OX + 4}" y="${(chartTop + 2).toFixed(1)}" dominant-baseline="hanging" fill="${scaleColor}" font-family="monospace" font-size="9">Log&#x2082; scale</text>`)
       }
 
       // Clip region (timeline area only)
@@ -394,16 +394,16 @@ export function renderToSvg(trace, viewport, options = {}) {
         else if (ev.time <= timeEnd) { rangeEvs.push(ev) }
       }
       const pts = []
-      if (prevEv) { const pv = evVal(prevEv); if (!isNaN(pv)) pts.push(`${OX},${valToY(pv).toFixed(1)}`) }
+      if (prevEv) { const pv = evVal(prevEv); if (Number.isFinite(pv)) pts.push(`${OX},${valToY(pv).toFixed(1)}`) }
       for (const ev of rangeEvs) {
         const v = evVal(ev)
-        if (!isNaN(v)) pts.push(`${(OX + (ev.time - timeStart) * pxPerNs).toFixed(1)},${valToY(v).toFixed(1)}`)
+        if (Number.isFinite(v)) pts.push(`${(OX + (ev.time - timeStart) * pxPerNs).toFixed(1)},${valToY(v).toFixed(1)}`)
       }
       if (pts.length >= 2) {
         els.push(`<polyline points="${pts.join(' ')}" fill="none" stroke="${lineColor}" stroke-width="1.5" stroke-linejoin="round" clip-path="url(#${wfClipId})"/>`)
       }
       for (const ev of rangeEvs) {
-        const v = evVal(ev); if (isNaN(v)) continue
+        const v = evVal(ev); if (!Number.isFinite(v)) continue
         els.push(`<circle cx="${(OX + (ev.time - timeStart) * pxPerNs).toFixed(1)}" cy="${valToY(v).toFixed(1)}" r="2.5" fill="${dotColor}" clip-path="url(#${wfClipId})"/>`)
       }
     } else {
@@ -457,7 +457,7 @@ export function renderToSvg(trace, viewport, options = {}) {
 
     const midY       = row.y + rowH / 2
     const maxChars   = Math.floor(L().labelW / 7)
-    const rawLabel   = row.label
+    const rawLabel   = row.type === 'sti' ? (tagAlias(row.key, tagRepresentations) || row.label) : row.label
     const label      = rawLabel.length > maxChars ? rawLabel.slice(0, maxChars - 1) + '…' : rawLabel
     let labelColor = row.type === 'sti' ? '#88AABB' : (row.type === 'core' ? '#E0E0E0' : textColor)
     if (row.type === 'interval') labelColor = row.color || intervalColor(row.key)

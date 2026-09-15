@@ -5595,15 +5595,17 @@ def html_tag_overview(
         if not isinstance(s, dict):
             continue
         lab = str(s.get("label") or s.get("tag") or "")
-        by_label.setdefault(lab, []).append(s)
+        by_label.setdefault(s.get("channel") or lab, []).append(s)
     if not by_label:
         return '<p class="empty">No tag samples in scope</p>'
     blocks = []
-    for lab, group in list(by_label.items())[:8]:
+    for _channel, group in list(by_label.items())[:8]:
+        lab = str(group[0].get("label") or group[0].get("tag") or _channel)
+        group.sort(key=lambda s: s.get("time_ns", 0))
         vals = []
         for s in group:
             try:
-                vals.append(float(str(s.get("value") or "0").replace(",", "")))
+                vals.append(s.get("value_num", float(str(s.get("value") or "0").replace(",", ""))))
             except (TypeError, ValueError):
                 continue
         if not vals:
@@ -5621,7 +5623,7 @@ def html_tag_overview(
         plateau = max(plateau, run)
         unique = len(set(vals))
         mn, mx = min(vals), max(vals)
-        spark = _sparkline(vals)
+        spark = _sparkline(vals, preferences=group[0].get("preferences"), times=[s.get("time_ns", 0) for s in group])
         extrema = sorted(group, key=lambda s: float(str(s.get("value") or 0).replace(",", "") or 0))
         shown = []
         if extrema:
@@ -5648,23 +5650,24 @@ def html_tag_overview(
     return "".join(blocks) or '<p class="empty">No tag samples in scope</p>'
 
 
-def _sparkline(vals: Sequence[float], *, width: int = 420, height: int = 48) -> str:
-    if len(vals) < 2:
+def _sparkline(vals, *, preferences=None, times=None, width=640, height=180):
+    if not vals:
         return ""
-    mn, mx = min(vals), max(vals)
-    span = (mx - mn) or 1.0
-    n = len(vals)
-    pts = []
-    for i, v in enumerate(vals[:200]):
-        x = 4 + (width - 8) * i / max(n - 1, 1)
-        y = height - 6 - (height - 12) * ((v - mn) / span)
-        pts.append(f"{x:.1f},{y:.1f}")
-    return (
-        f'<svg class="pctile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
-        f'width="{width}" height="{height}" role="img" aria-label="Tag time series">'
-        f'<polyline class="sparkline-line" fill="none" stroke-width="1.5" '
-        f'points="{" ".join(pts)}"/></svg>'
-    )
+    lo, hi = _tag_axis_bounds(vals, preferences)
+    low = _tag_transform(lo, preferences)
+    span = _tag_transform(hi, preferences) - low
+    left, right, top, bottom = 100, width - 16, 16, height - 30
+    times = times or list(range(len(vals)))
+    t0, t1 = times[0], times[-1]
+    pts = " ".join(f"{left + (right-left)*(t-t0)/(t1-t0 or 1):.2f},{bottom-(bottom-top)*(_tag_transform(v, preferences)-low)/span:.2f}" for t, v in zip(times, vals))
+    ticks = []
+    for i in range(5):
+        y = bottom - (bottom-top)*i/4
+        label = _esc(_format_tag_value(_tag_inverse(low+span*i/4, preferences)))
+        ticks.append(f'<path d="M{left} {y}H{right}" stroke="#94a3b8" opacity=".3"/><text x="{left-6}" y="{y+4}" text-anchor="end" fill="currentColor" font-size="11">{label}</text>')
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-label="Tag time series, value versus time" style="width:100%;max-width:{width}px">'
+            + "".join(ticks) + f'<path d="M{left} {top}V{bottom}H{right}" fill="none" stroke="currentColor"/><polyline class="sparkline-line" fill="none" stroke-width="1.5" points="{pts}"/>'
+            + f'<text x="{left}" y="{height-8}" fill="currentColor" font-size="11">{t0} ns</text><text x="{right}" y="{height-8}" text-anchor="end" fill="currentColor" font-size="11">{t1} ns</text></svg>')
 
 
 _BM_TYPE_LABELS = {
@@ -6914,14 +6917,112 @@ def _parse_tag_value(note: str) -> Optional[float]:
     value = _tag_raw_uint32(note)
     return float(value) if value is not None else None
 
-_TAG_REPRESENTATIONS = ("uint32", "int32", "float32", "log2-uint32")
+_TAG_REPRESENTATIONS = ("uint32", "int32", "float32")
 _TAG_REPRESENTATION_LABELS = {
-    "uint32": "uint32", "int32": "int32", "float32": "float32",
+    "uint32": "UInt32", "int32": "Int32", "float32": "Float32",
     "log2-uint32": "log₂ uint32",
 }
 
+def _normalize_tag_alias(value):
+    return value.replace("\r", " ").replace("\n", " ").replace("\t", " ").strip()[:80] if isinstance(value, str) else ""
+
+def _tag_alias(trace, channel):
+    return _tag_chart_preferences(trace, channel).get("alias", "") if trace is not None else ""
+
+def _tag_preferences(value=None):
+    if isinstance(value, str):
+        return {"format": value if value in _TAG_REPRESENTATIONS else "uint32",
+                "scale": "log2" if value == "log2-uint32" else "linear", "includeZero": False}
+    value = value if isinstance(value, dict) else {}
+    alias = _normalize_tag_alias(value.get("alias"))
+    return {"format": value.get("format") if value.get("format") in _TAG_REPRESENTATIONS else "uint32",
+            "scale": "log2" if value.get("scale") == "log2" else "linear",
+            "includeZero": value.get("includeZero") is True, **({"alias": alias} if alias else {})}
+
+def _tag_chart_preferences(trace, channel):
+    return _tag_preferences(getattr(trace, "tag_representations", {}).get(channel))
+
+
+# Smallest positive subnormal float32 magnitude (2**-149) -- float32's own
+# resolution floor. Used as the linear-threshold constant for the float32
+# log2 scale below: since |value| >> _FLOAT32_LOG_FLOOR for essentially any
+# representable float32 (subnormal or normal), log2(1 + |value| / floor)
+# reduces to log2(|value|) shifted by a constant, without the degeneracy a
+# threshold of 1 would cause (see _tag_transform).
+_FLOAT32_LOG_FLOOR = 2.0 ** -149
+
+def _tag_transform(value, preferences=None):
+    """``log2(1 + |value|)`` reads as a genuine log SCALE for large-magnitude
+    integers (uint32/int32 bit patterns): it behaves ~linearly near zero and
+    compresses the long tail, and stays invertible because its argument
+    never drops below 1. A float32 payload is usually far below 1 in
+    magnitude (raw bits reinterpreted as float32 land in the subnormal
+    range, ~1e-40), where ``log1p(x) ~= x`` -- the "+1" swamps the value
+    entirely and the transform degenerates into a constant multiple of the
+    input (1/ln2), i.e. visually identical to linear. Float32 instead
+    divides by its own resolution floor before adding 1, which keeps the
+    same always-invertible shape while actually compressing that range."""
+    prefs = _tag_preferences(preferences)
+    if prefs["scale"] != "log2":
+        return value
+    if prefs["format"] == "float32":
+        return 0.0 if value == 0 else math.copysign(
+            math.log2(1.0 + abs(value) / _FLOAT32_LOG_FLOOR), value)
+    return math.copysign(math.log1p(abs(value)) / math.log(2), value)
+
+def _tag_inverse(value, preferences=None):
+    prefs = _tag_preferences(preferences)
+    if prefs["scale"] != "log2":
+        return value
+    if prefs["format"] == "float32":
+        return 0.0 if value == 0 else math.copysign(
+            _FLOAT32_LOG_FLOOR * (2.0 ** abs(value) - 1.0), value)
+    return math.copysign(math.expm1(abs(value) * math.log(2)), value)
+
+def _tag_axis_bounds(values, preferences=None):
+    values = [v for v in values if math.isfinite(v)]
+    if not values:
+        return 0, 1
+    lo, hi = min(values), max(values)
+    if _tag_preferences(preferences)["includeZero"]:
+        lo, hi = min(0, lo), max(0, hi)
+    if lo == hi:
+        pad = abs(lo) * 0.05 or 0.5
+        lo, hi = lo - pad, hi + pad
+    return lo, hi
+
+def _update_tag_preferences(trace, channel, command):
+    prefs = _tag_chart_preferences(trace, channel)
+    if command == "reset":
+        if prefs.get("alias"):
+            trace.tag_representations[channel] = {**_tag_preferences(), "alias": prefs["alias"]}
+        else:
+            trace.tag_representations.pop(channel, None)
+        return
+    if command == "all":
+        for ch in trace.tag_channels:
+            alias = _tag_alias(trace, ch)
+            copied = {k: v for k, v in prefs.items() if k != "alias"}
+            trace.tag_representations[ch] = {**copied, **({"alias": alias} if alias else {})}
+        return
+    if command.startswith("alias:"):
+        alias = _normalize_tag_alias(command[6:])
+        if alias:
+            prefs["alias"] = alias
+        else:
+            prefs.pop("alias", None)
+    elif command in _TAG_REPRESENTATIONS:
+        prefs["format"] = command
+    elif command in ("linear", "log2"):
+        prefs["scale"] = command
+    elif command == "zero":
+        prefs["includeZero"] = not prefs["includeZero"]
+    else:
+        return
+    trace.tag_representations[channel] = prefs
+
 def _tag_raw_uint32(note) -> Optional[int]:
-    raw = str(note or "").strip()
+    raw = str(note if note is not None else "").strip()
     if not raw:
         return None
     try:
@@ -6934,13 +7035,12 @@ def _interpret_tag_value(note, representation: str = "uint32") -> Optional[float
     bits = _tag_raw_uint32(note)
     if bits is None:
         return None
+    representation = _tag_preferences(representation)["format"]
     if representation == "int32":
         return float(bits if bits < 0x80000000 else bits - 0x100000000)
     if representation == "float32":
         value = struct.unpack(">f", bits.to_bytes(4, "big"))[0]
         return float(value) if math.isfinite(value) else None
-    if representation == "log2-uint32":
-        return math.log2(1.0 + bits)
     return float(bits)
 
 def _recommend_tag_representation(trace: "BtfTrace", channel: str,
@@ -6956,17 +7056,41 @@ def _tag_representation(trace: "BtfTrace", channel: str,
                         lo: Optional[int] = None,
                         hi: Optional[int] = None) -> str:
     selected = getattr(trace, "tag_representations", {}).get(channel)
-    return selected if selected in _TAG_REPRESENTATIONS else _recommend_tag_representation(trace, channel, lo, hi)
+    return _tag_preferences(selected)["format"]
 
 def _tag_sample_value(sample: TagSample, representation: str) -> Optional[float]:
     return _interpret_tag_value(sample.raw_value or sample.raw_uint32, representation)
 
-def _tag_channel_label(channel: str) -> str:
+def _tag_channel_label(channel: str, trace=None) -> str:
+    alias = _tag_alias(trace, channel)
+    if alias:
+        return alias
     m = _STI_EXPANDABLE_RE.match(channel or "")
     if not m:
         return channel
     digit = m.group(1)
     return f"Tag {digit}" if digit is not None else "Tag"
+
+def _matching_tag_channels(trace, query, mode="contains"):
+    q = str(query or "").strip()
+    if not q:
+        return []
+    regex = None
+    if mode == "regex":
+        if len(q) > 1024:
+            return []
+        try:
+            regex = re.compile(q, re.IGNORECASE)
+        except re.error:
+            return []
+    def matches(name):
+        if not name:
+            return False
+        if regex is not None:
+            return bool(regex.search(name))
+        return name.lower() == q.lower() if mode == "exact" else q.lower() in name.lower()
+    return [ch for ch in getattr(trace, "tag_channels", ())
+            if any(matches(name) for name in (ch, _tag_channel_label(ch), _tag_alias(trace, ch)))]
 
 def _tag_color(channel: str) -> str:
     m = _STI_EXPANDABLE_RE.match(channel or "")
@@ -7162,7 +7286,7 @@ def _tag_stats_rows(
         jitter, sigma, p50, p99 = _sample_variability(samples)
         rows.append((
             ch,
-            _tag_channel_label(ch),
+            _tag_channel_label(ch, trace),
             count,
             _format_tag_value(mn),
             _format_tag_value(avg),
@@ -7683,11 +7807,12 @@ def _tag_sample_detail_rows(
                 continue
             rows.append({
                 "channel": ch,
-                "label": _tag_channel_label(ch),
+                "label": _tag_channel_label(ch, trace),
                 "time_ns": sample.time_ns,
                 "time": _format_time(sample.time_ns, scale),
                 "value": _format_tag_value(value),
                 "value_num": value,
+                "preferences": _tag_chart_preferences(trace, ch),
                 "core": sample.core,
             })
     rows.sort(key=lambda r: (-r["value_num"], r["time_ns"]))
@@ -8485,9 +8610,9 @@ def _format_plot_point_note(
                 f"[{fmt(payload.start_ns)} – {fmt(payload.stop_ns)}]")
     if isinstance(payload, TagSample):
         if kind == "tag_interval":
-            return (f"{_tag_channel_label(payload.channel)}: {fmt(y_ns)} "
+            return (f"{_tag_channel_label(payload.channel, trace)}: {fmt(y_ns)} "
                     f"since previous sample at {fmt(x_ns)}")
-        return (f"{_tag_channel_label(payload.channel)}: "
+        return (f"{_tag_channel_label(payload.channel, trace)}: "
                 f"{_format_tag_value(y_ns)} at {fmt(x_ns)}")
     if isinstance(payload, PriorityEpisode):
         tag = " · L/M/H" if payload.inversion_suspect else ""
@@ -8709,7 +8834,7 @@ class BtfTrace:
     interval_unmatched_starts: int                                          = 0
     tag_channels: List[str]                                                 = field(default_factory=list)
     tag_samples_by_channel: Dict[str, List["TagSample"]]                    = field(default_factory=dict)
-    tag_representations: Dict[str, str]                                     = field(default_factory=dict)
+    tag_representations: Dict[str, Union[str, dict]]                                     = field(default_factory=dict)
     task_base_priority: Dict[str, int]                                     = field(default_factory=dict)
     priority_episodes: List[PriorityEpisode]                                = field(default_factory=list)
     priority_episodes_by_mk: Dict[str, List[PriorityEpisode]]                 = field(default_factory=dict)
@@ -15800,9 +15925,9 @@ class TimelineScene(QGraphicsScene):
         return _tag_representation(self._trace, channel)
 
     def set_tag_representation(self, channel: str, representation: str) -> None:
-        if self._trace is None or representation not in _TAG_REPRESENTATIONS:
+        if self._trace is None:
             return
-        self._trace.tag_representations[channel] = representation
+        _update_tag_preferences(self._trace, channel, representation)
         self.rebuild()
         self.tag_representation_changed.emit(channel, representation)
 
@@ -17941,7 +18066,7 @@ class TimelineScene(QGraphicsScene):
             # Label with expand/collapse indicator (only for expandable channels)
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.TextElideMode.ElideRight, max(0, lw - 98))
+                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, lw - 98))
             else:
                 _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
@@ -17962,7 +18087,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(lw, y_top, timeline_w, row_h),
                     _sti_evs_h, trace.time_scale,
                     time_min=_time_min, px_per_ns=_px_per_ns, x_offset=lw,
-                    representation=self.tag_representation(channel),
+                    representation=_tag_chart_preferences(trace, channel),
                     line_style=self._sti_line_style)
                 _wf.setZValue(2)
                 self.addItem(_wf)
@@ -18213,7 +18338,7 @@ class TimelineScene(QGraphicsScene):
             # Rotated label with optional expand indicator
             _ind_txt = ("▼ " if is_exp else "▶ ") if expandable else ""
             _lbl_avail_v = max(0, label_row_h - (38 if expandable else 14))
-            _lbl_txt  = fm.elidedText(_ind_txt + channel, Qt.TextElideMode.ElideRight, _lbl_avail_v)
+            _lbl_txt  = fm.elidedText(_ind_txt + (_tag_alias(trace, channel) or channel), Qt.TextElideMode.ElideRight, _lbl_avail_v)
             lbl = _make_rotated_label(self, _lbl_txt, font, self._c_sti_lbl,
                                       x_ctr,
                                       label_row_h - LABEL_BOTTOM_MARGIN - (24 if expandable else 0), 37)
@@ -18229,7 +18354,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(x_left, label_row_h, cw_sti, timeline_h),
                     _sti_evs_clipped_v, _sti_evs_v,
                     trace.time_scale, trace.time_min, _px_per_ns, label_row_h,
-                    representation=self.tag_representation(channel),
+                    representation=_tag_chart_preferences(trace, channel),
                     line_style=self._sti_line_style)
                 _wf_col.setZValue(2)
                 self.addItem(_wf_col)
@@ -18573,7 +18698,7 @@ class TimelineScene(QGraphicsScene):
             self._track_timeline_bg(_sti_bg_rect)
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
+                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             else:
                 _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
@@ -18593,7 +18718,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(lw, y_top, timeline_w, row_h),
                     _sti_evs_ch, trace.time_scale,
                     time_min=_time_min, px_per_ns=_px_per_ns, x_offset=lw,
-                    representation=self.tag_representation(channel),
+                    representation=_tag_chart_preferences(trace, channel),
                     line_style=self._sti_line_style)
                 _wf.setZValue(2)
                 self.addItem(_wf)
@@ -18888,7 +19013,7 @@ class TimelineScene(QGraphicsScene):
             _ind_txt_vc  = ("v " if is_exp else "> ") if expandable else ""
             _lbl_avail_vc = max(0, label_row_h - 14)
             _lbl_txt_vc  = QFontMetrics(font).elidedText(
-                _ind_txt_vc + channel, Qt.TextElideMode.ElideRight, _lbl_avail_vc)
+                _ind_txt_vc + (_tag_alias(trace, channel) or channel), Qt.TextElideMode.ElideRight, _lbl_avail_vc)
             lbl = _make_rotated_label(self, _lbl_txt_vc, font, self._c_sti_lbl,
                                       x_ctr_vc,
                                       label_row_h - LABEL_BOTTOM_MARGIN, 37)
@@ -18904,7 +19029,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(x_left, label_row_h, cw_sti_vc, timeline_h),
                     _sti_evs_clipped_vc, _sti_evs_vc,
                     trace.time_scale, trace.time_min, _px_per_ns, label_row_h,
-                    representation=self.tag_representation(channel),
+                    representation=_tag_chart_preferences(trace, channel),
                     line_style=self._sti_line_style)
                 _wf_col_vc.setZValue(2)
                 self.addItem(_wf_col_vc)
@@ -19989,6 +20114,66 @@ class _CoreHeaderItem(QGraphicsRectItem):
         self.update()
         super().hoverLeaveEvent(event)
 
+def _edit_tag_alias(trace, channel, callback, parent=None):
+    dialog = QInputDialog(parent)
+    dialog.setWindowTitle("Rename tag")
+    dialog.setLabelText(f"Display name for {channel}:\nLeave blank to restore the original name. Saved for this trace.")
+    dialog.setInputMode(QInputDialog.InputMode.TextInput)
+    dialog.setTextValue(_tag_alias(trace, channel))
+    dialog.setOkButtonText("Save")
+    editor = dialog.findChild(QLineEdit)
+    if editor is not None:
+        editor.setMaxLength(80)
+        editor.setPlaceholderText(_tag_channel_label(channel))
+    if dialog.exec():
+        callback("alias:" + dialog.textValue())
+
+def _tag_settings_menu(trace, channel, callback, parent=None):
+    menu = QMenu(parent)
+    prefs = _tag_chart_preferences(trace, channel)
+    menu.addAction("Rename tag…").triggered.connect(
+        lambda checked=False: QTimer.singleShot(0, lambda: _edit_tag_alias(trace, channel, callback, parent)))
+    if prefs.get("alias"):
+        menu.addAction("Reset tag name").triggered.connect(lambda checked=False: callback("alias:"))
+    menu.addSection("Data format")
+    samples = trace.tag_samples_by_channel.get(channel, [])
+    bits = samples[0].raw_uint32 if samples else None
+    descriptions = {"uint32": "Unsigned integer", "int32": "Signed integer", "float32": "IEEE 754 bit interpretation"}
+    for value in _TAG_REPRESENTATIONS:
+        label = value.replace("uint", "UInt").replace("int", "Int").replace("float", "Float")
+        action = menu.addAction(label)
+        action.setCheckable(True)
+        action.setChecked(prefs["format"] == value)
+        action.setToolTip(descriptions[value])
+        action.triggered.connect(lambda checked=False, command=value: callback(command))
+    preview = "No sample available" if bits is None else f"{descriptions[prefs['format']]} · 0x{bits:08X} → {_format_tag_value(_interpret_tag_value(bits, prefs)) if _interpret_tag_value(bits, prefs) is not None else '—'}"
+    menu.addAction(preview).setEnabled(False)
+    menu.addSection("Chart scale")
+    log2_label = "Log₂ (signed log₂(|value|))" if prefs["format"] == "float32" else "Log₂ (signed log₂(1 + |value|))"
+    for command, label in (("linear", "Linear"), ("log2", log2_label), ("zero", "Include zero")):
+        action = menu.addAction(label)
+        action.setCheckable(True)
+        action.setChecked(prefs["includeZero"] if command == "zero" else prefs["scale"] == command)
+        action.triggered.connect(lambda checked=False, c=command: callback(c))
+    menu.addSeparator()
+    for command, label in (("all", "Apply these settings to all tag channels"), ("reset", "Reset to default")):
+        menu.addAction(label).triggered.connect(lambda checked=False, c=command: callback(c))
+    menu.addAction("Saved for this trace" if channel in trace.tag_representations else "Default · UInt32 / Linear / Fit range").setEnabled(False)
+    menu.setToolTipsVisible(True)
+    return menu
+
+def _tag_settings_button(trace, channel, callback):
+    button = QToolButton()
+    button.setText(_TAG_REPRESENTATION_LABELS[_tag_representation(trace, channel)] + " ▾")
+    button.setAccessibleName(f"Tag settings for {channel}")
+    button.setStyleSheet("QToolButton { border: 1px solid #94a3b8; border-radius: 10px; padding: 2px 8px; }")
+    def show_menu():
+        menu = _tag_settings_menu(trace, channel, lambda command: QTimer.singleShot(0, lambda: callback(command)), button)
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+        button.setText(_TAG_REPRESENTATION_LABELS[_tag_representation(trace, channel)] + " ▾")
+    button.clicked.connect(show_menu)
+    return button
+
 class _StiLabelItem(QGraphicsRectItem):
     """Clickable label area for an STI channel row - toggles waveform expand/collapse.
 
@@ -20043,15 +20228,8 @@ class _StiLabelItem(QGraphicsRectItem):
         if not self._expandable:
             event.ignore()
             return
-        menu = QMenu()
-        current = self._tl_scene.tag_representation(self._channel)
-        for representation in _TAG_REPRESENTATIONS:
-            action = menu.addAction(_TAG_REPRESENTATION_LABELS[representation])
-            action.setCheckable(True)
-            action.setChecked(representation == current)
-            action.triggered.connect(
-                lambda _checked=False, r=representation:
-                self._tl_scene.set_tag_representation(self._channel, r))
+        menu = _tag_settings_menu(self._tl_scene._trace, self._channel,
+                                  lambda command: self._tl_scene.set_tag_representation(self._channel, command))
         menu.exec(event.screenPos())
         event.accept()
 
@@ -20123,15 +20301,11 @@ class _BatchStiWaveformItem(QGraphicsItem):
 
         mapped = [value for _, value in event_values]
 
-        v_min = min(mapped)
-        v_max = max(mapped)
-        if v_min == v_max:
-            v_min -= 1.0
-            v_max += 1.0
-        v_rng = v_max - v_min
+        v_min, v_max = _tag_axis_bounds(mapped, self._representation)
+        v_rng = _tag_transform(v_max, self._representation) - _tag_transform(v_min, self._representation)
 
         def val_to_y(m: float) -> float:
-            return chart_bot - ((m - v_min) / v_rng) * chart_h
+            return chart_bot - ((_tag_transform(m, self._representation) - _tag_transform(v_min, self._representation)) / v_rng) * chart_h
 
         def ev_to_x(ev) -> float:
             return self._x_offset + (ev.time - self._time_min) * self._px_per_ns
@@ -20148,7 +20322,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
         painter.setFont(QFont("monospace", 8))
         painter.drawText(QRectF(rect.left() + 4, chart_top, 150, 14),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                         _TAG_REPRESENTATION_LABELS[self._representation])
+                         _TAG_REPRESENTATION_LABELS[_tag_preferences(self._representation)["format"]])
         painter.drawText(QRectF(rect.right() - 130, chart_top, 126, 14),
                          Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
                          _format_tag_value(v_max))
@@ -20209,12 +20383,15 @@ class _BatchStiWaveformItem(QGraphicsItem):
         if best_ev is not None and best_dist <= HIT:
             value = self._ev_value(best_ev)
             value_text = (_format_tag_value(value) if math.isfinite(value) else "—")
-            representation = _TAG_REPRESENTATION_LABELS[self._representation]
+            representation = _TAG_REPRESENTATION_LABELS[_tag_preferences(self._representation)["format"]]
+            alias = _tag_preferences(self._representation).get("alias", "")
+            alias_html = f"Name: {html.escape(alias)}<br>" if alias else ""
             tip = (f"<b>STI: {best_ev.note}</b><br>"
                    f"Value: {value_text} ({representation})<br>"
                    f"Time: {_format_time(best_ev.time, self._time_scale)}<br>"
                    f"Core: {best_ev.core}<br>"
                    f"Target: {best_ev.target}<br>"
+                   f"{alias_html}"
                    f"Event: {best_ev.event}")
             _get_popup().show_at(event.screenPos(), tip, host=event.widget())
         else:
@@ -20240,7 +20417,7 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
     time_min      : int      Trace time_min (scene Y = y_offset + (t - time_min) * px_per_ns)
     px_per_ns     : float    Scene pixels per nanosecond (vertical axis)
     y_offset      : float    Scene Y coordinate of time=time_min
-    representation: str     uint32, int32, float32, or log2-uint32
+    representation: dict    format, scale, and includeZero preferences
     line_style    : str      "step" (hold) or "linear"
     """
 
@@ -20287,15 +20464,11 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
                 all_mapped.append(v)
         if not all_mapped:
             return
-        v_min = min(all_mapped)
-        v_max = max(all_mapped)
-        if v_min == v_max:
-            v_min -= 1.0
-            v_max += 1.0
-        v_rng = v_max - v_min
+        v_min, v_max = _tag_axis_bounds(all_mapped, self._representation)
+        v_rng = _tag_transform(v_max, self._representation) - _tag_transform(v_min, self._representation)
 
         def val_to_x(m: float) -> float:
-            return chart_left + ((m - v_min) / v_rng) * chart_w
+            return chart_left + ((_tag_transform(m, self._representation) - _tag_transform(v_min, self._representation)) / v_rng) * chart_w
 
         def ev_to_y(ev) -> float:
             return self._y_offset + (ev.time - self._time_min) * self._px_per_ns
@@ -20312,7 +20485,7 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
         painter.setFont(QFont("monospace", 8))
         painter.drawText(QRectF(chart_left, rect.top() + 2, chart_w, 14),
                          Qt.AlignmentFlag.AlignCenter,
-                         _TAG_REPRESENTATION_LABELS[self._representation])
+                         _TAG_REPRESENTATION_LABELS[_tag_preferences(self._representation)["format"]])
         painter.drawText(QRectF(chart_left, rect.bottom() - 16, chart_w, 14),
                          Qt.AlignmentFlag.AlignLeft,
                          _format_tag_value(v_min))
@@ -24119,7 +24292,7 @@ class TimelineView(QGraphicsView):
                 ch_color = QColor(_STI_PALETTE[ch_idx % len(_STI_PALETTE)])
                 ch_color.setAlpha(200)
                 is_exp = ch in sc._sti_expanded
-                sti_row_data.append({'evs': ch_evs, 'color': ch_color, 'is_expanded': is_exp})
+                sti_row_data.append({'evs': ch_evs, 'color': ch_color, 'is_expanded': is_exp, 'channel': ch})
 
         if not row_data and not sti_row_data:
             # Border only
@@ -24184,32 +24357,22 @@ class TimelineView(QGraphicsView):
                 col = rd['color']
                 evs = rd['evs']
                 if rd['is_expanded']:
-                    # Single-pass min/max extraction
-                    v_min = math.inf
-                    v_max = -math.inf
-                    fvals: list = []
-                    for ev in evs:
-                        note_str = (ev.note or '').strip()
-                        try:
-                            v = float(note_str) if note_str else float(ev.event or 0)
-                        except (ValueError, TypeError):
-                            fvals.append(None)
-                            continue
-                        if v < v_min: v_min = v
-                        if v > v_max: v_max = v
-                        fvals.append(v)
+                    preferences = _tag_chart_preferences(tr, rd['channel'])
+                    fvals = [_interpret_tag_value(ev.note or ev.event, preferences) for ev in evs]
+                    finite_values = [v for v in fvals if v is not None]
+                    v_min, v_max = _tag_axis_bounds(finite_values, preferences)
                     # Use the same waveform colours as _BatchStiWaveformItem.
                     _wf_line_col = QColor("#5BC8FF")
                     _wf_dot_col  = QColor("#80DFFF")
                     if math.isfinite(v_min) and v_min != v_max:
-                        v_rng = v_max - v_min
+                        v_rng = _tag_transform(v_max, preferences) - _tag_transform(v_min, preferences)
                         pts: list = []
                         if sc._sti_line_style == 'step':
                             for ev, v in zip(evs, fvals):
                                 if v is None:
                                     continue
                                 px = (ev.time - tr.time_min) / time_span * W
-                                py = y + rh - (v - v_min) / v_rng * rh
+                                py = y + rh - (_tag_transform(v, preferences) - _tag_transform(v_min, preferences)) / v_rng * rh
                                 if pts:
                                     pts.append(QPointF(px, pts[-1].y()))
                                 pts.append(QPointF(px, py))
@@ -24218,7 +24381,7 @@ class TimelineView(QGraphicsView):
                                 if v is None:
                                     continue
                                 px = (ev.time - tr.time_min) / time_span * W
-                                py = y + rh - (v - v_min) / v_rng * rh
+                                py = y + rh - (_tag_transform(v, preferences) - _tag_transform(v_min, preferences)) / v_rng * rh
                                 pts.append(QPointF(px, py))
                         if len(pts) >= 2:
                             p.setPen(QPen(_wf_line_col, 1.0))
@@ -39020,7 +39183,7 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Text, tag value, pointer, or task name.",
+                            "description": "Text, tag alias (e.g. memory usage), channel ID, tag value, pointer, or task name.",
                         },
                         "mode": {
                             "type": "string",
@@ -42512,6 +42675,9 @@ def search_timeline_hits(
         True,
         f"{len(hits)} match(es) for {q!r} ({find_mode})",
         data={
+            "tag_channels": [{"channel": ch, "label": _tag_channel_label(ch, trace)}
+                             for ch in _matching_tag_channels(trace, q, find_mode)]
+                            if find_mode in ("contains", "exact", "regex", "sti") else [],
             "times": shown,
             "count": len(hits),
             "mode": find_mode,
@@ -63996,11 +64162,13 @@ class _ScatterWidget(QWidget):
         so a narrow band far from zero isn't squashed against the baseline."""
         if self._y_as_time:
             return 0, (max(ys) if max(ys) > 0 else 1)
-        y0, y1 = min(ys), max(ys)
-        if y1 <= y0:
-            pad = abs(y0) * 0.5 or 0.5
-            return y0 - pad, y0 + pad
-        return y0, y1
+        return _tag_axis_bounds(ys, getattr(self, "_tag_preferences", None))
+
+    def _chart_y(self, value):
+        return value if self._y_as_time else _tag_transform(value, getattr(self, "_tag_preferences", None))
+
+    def _chart_y_inverse(self, value):
+        return value if self._y_as_time else _tag_inverse(value, getattr(self, "_tag_preferences", None))
 
     def _screen_coords(self, w: int, h: int, ml: int, mr: int, mt: int, mb: int):
         """Return (sx_list, sy_list) mapping each point to widget pixels."""
@@ -64011,11 +64179,11 @@ class _ScatterWidget(QWidget):
         x0, x1 = min(xs), max(xs)
         y0, y1 = self._y_axis_bounds(ys)
         xspan = max(x1 - x0, 1)
-        yspan = max(y1 - y0, 1) if self._y_as_time else (y1 - y0)
+        yspan = max(y1 - y0, 1) if self._y_as_time else (self._chart_y(y1) - self._chart_y(y0))
         pw = w - ml - mr
         ph = h - mt - mb
         sx = [ml + int((x - x0) / xspan * pw) for x in xs]
-        sy = [mt + ph - int((y - y0) / yspan * ph) for y in ys]
+        sy = [mt + ph - int((self._chart_y(y) - self._chart_y(y0)) / yspan * ph) for y in ys]
         return sx, sy
 
     @staticmethod
@@ -64025,7 +64193,7 @@ class _ScatterWidget(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         w, h = self.width(), self.height()
-        ML, MT, MB = 56, 14, 36   # margins
+        ML, MT, MB = (96 if not self._y_as_time else 56), 14, 36   # margins
 
         dark  = self._is_dark
         bg    = QColor("#1E1E1E") if dark else QColor("#F8F8F8")
@@ -64048,10 +64216,10 @@ class _ScatterWidget(QWidget):
         x0, x1 = min(xs), max(xs)
         y0, y1 = self._y_axis_bounds(ys)
         xspan = max(x1 - x0, 1)
-        yspan = max(y1 - y0, 1) if self._y_as_time else (y1 - y0)
+        yspan = max(y1 - y0, 1) if self._y_as_time else (self._chart_y(y1) - self._chart_y(y0))
 
         def sx(x): return ML + int((x - x0) / xspan * pw)
-        def sy(y): return MT + ph - int((y - y0) / yspan * ph)
+        def sy(y): return MT + ph - int((self._chart_y(y) - self._chart_y(y0)) / yspan * ph)
 
         # Grid + axes
         sf = QFont(); sf.setPointSize(7)
@@ -64079,7 +64247,7 @@ class _ScatterWidget(QWidget):
         )
         p95_val = vals_sorted[min(n - 1, math.ceil(n * 0.95) - 1)]
         for fi in range(5):
-            val = y0 + (y1 - y0) * fi / 4
+            val = self._chart_y_inverse(self._chart_y(y0) + (self._chart_y(y1) - self._chart_y(y0)) * fi / 4)
             gy  = MT + ph - int(fi / 4 * ph)
             if self._y_as_time:
                 lbl = _format_time(int(val), self._time_scale, decimals=1)
@@ -64214,7 +64382,7 @@ class _ScatterWidget(QWidget):
 
     def _plot_margins(self) -> tuple:
         w, h = self.width(), self.height()
-        ml, mt, mb = 56, 14, 36
+        ml, mt, mb = (96 if not self._y_as_time else 56), 14, 36
         sf = QFont(); sf.setPointSize(7)
         mr = self._marker_right_margin(QFontMetrics(sf))
         pw = w - ml - mr
@@ -64229,10 +64397,10 @@ class _ScatterWidget(QWidget):
         x0, x1 = min(xs), max(xs)
         y0, y1 = self._y_axis_bounds(ys)
         xspan = max(x1 - x0, 1)
-        yspan = max(y1 - y0, 1) if self._y_as_time else (y1 - y0)
+        yspan = max(y1 - y0, 1) if self._y_as_time else (self._chart_y(y1) - self._chart_y(y0))
 
         def sx(x): return ml + int((x - x0) / xspan * pw)
-        def sy(y): return mt + ph - int((y - y0) / yspan * ph)
+        def sy(y): return mt + ph - int((self._chart_y(y) - self._chart_y(y0)) / yspan * ph)
         return sx, sy, x0, x1
 
     def _nearest_point_index(self, ex: float, ey: float) -> int:
@@ -64607,14 +64775,13 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
         if not x_ticks:
             for fi in range(3):
                 log_val = log_lo + (log_hi - log_lo) * fi / 2
-                val = int(round(10 ** log_val))
+                val = 10 ** log_val
                 x_ticks.append((region_left + int(fi / 2 * regular_w),
                                 _hist_format_axis_value(val, time_scale,
                                                         value_as_time=value_as_time)))
     else:
         for fi in range(3):
-            val = int(round(bin_spec["display_min"] +
-                            (bin_spec["display_max"] - bin_spec["display_min"]) * fi / 2))
+            val = bin_spec["display_min"] + (bin_spec["display_max"] - bin_spec["display_min"]) * fi / 2
             x_ticks.append((region_left + int(fi / 2 * regular_w),
                             _hist_format_axis_value(val, time_scale,
                                                     value_as_time=value_as_time)))
@@ -64951,6 +65118,7 @@ class _MetricsPlotDialog(QDialog):
                  on_open_chord=None,
                  ai_enabled: bool = True,
                  on_query_ai=None,
+                 tag_trace=None, tag_channel=None,
                  tag_representation: Optional[str] = None,
                  tag_representation_options: Optional[Sequence[Tuple[str, str]]] = None,
                  on_tag_representation_change=None,
@@ -64978,13 +65146,7 @@ class _MetricsPlotDialog(QDialog):
         if tag_representation is not None and tag_representation_options:
             representation_row = QHBoxLayout()
             representation_row.addWidget(QLabel("Representation"))
-            self._tag_representation = QComboBox()
-            for value, label in tag_representation_options:
-                self._tag_representation.addItem(label, value)
-            index = self._tag_representation.findData(tag_representation)
-            self._tag_representation.setCurrentIndex(max(0, index))
-            self._tag_representation.currentIndexChanged.connect(
-                self._on_tag_representation_selected)
+            self._tag_representation = _tag_settings_button(tag_trace, tag_channel, on_tag_representation_change)
             representation_row.addWidget(self._tag_representation)
             representation_row.addStretch(1)
             root.addLayout(representation_row)
@@ -65050,6 +65212,8 @@ class _MetricsPlotDialog(QDialog):
         hist_toolbar.addWidget(self._hist_scale)
         hist_toolbar.addStretch()
 
+        if tag_trace is not None and tag_channel is not None:
+            self._scatter._tag_preferences = _tag_chart_preferences(tag_trace, tag_channel)
         self._scatter.point_clicked.connect(self._on_scatter_click)
 
         splitter = _ResizeSplitter(Qt.Orientation.Vertical)
@@ -65190,12 +65354,6 @@ class _MetricsPlotDialog(QDialog):
         modes = ("auto", "linear", "percentile", "log")
         if 0 <= index < len(modes):
             self._histogram.set_scale_mode(modes[index])
-
-    def _on_tag_representation_selected(self, index: int) -> None:
-        combo = getattr(self, "_tag_representation", None)
-        if combo is None or self._on_tag_representation_change is None:
-            return
-        self._on_tag_representation_change(str(combo.itemData(index)))
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -74373,12 +74531,12 @@ class _StatsPanel(QWidget):
                 pts = _tag_interval_plot_points(trace, ch, lo, hi)
                 if not pts:
                     return None
-                title = f"{_tag_channel_label(ch)} — Interval{scope}"
+                title = f"{_tag_channel_label(ch, trace)} — Interval{scope}"
             else:
                 pts = _tag_plot_points(trace, ch, lo, hi)
                 if not pts:
                     return None
-                title = f"{_tag_channel_label(ch)} — Value{scope}"
+                title = f"{_tag_channel_label(ch, trace)} — Value{scope}"
             color = QColor(_tag_color(ch))
             return title, pts, color
         if kind == "priority":
@@ -74749,11 +74907,8 @@ class _StatsPanel(QWidget):
         title, pts, _color = built
         scoped, badge, detail = self._plot_scope_banner()
         if self._plot_kind == "tag" and hasattr(dlg, "_tag_representation"):
-            combo = dlg._tag_representation
-            index = combo.findData(_tag_representation(self._trace, self._plot_mk))
-            combo.blockSignals(True)
-            combo.setCurrentIndex(max(0, index))
-            combo.blockSignals(False)
+            dlg._tag_representation.setText(_TAG_REPRESENTATION_LABELS[_tag_representation(self._trace, self._plot_mk)] + " ▾")
+            dlg._scatter._tag_preferences = _tag_chart_preferences(self._trace, self._plot_mk)
         dlg.update_data(title, pts, scope_scoped=scoped,
                         scope_badge=badge, scope_detail=detail)
 
@@ -74816,6 +74971,7 @@ class _StatsPanel(QWidget):
             on_open_chord=on_ch,
             ai_enabled=self._ai_enabled,
             on_query_ai=self._query_plot_distribution_ai,
+            tag_trace=trace, tag_channel=mk,
             tag_representation=(_tag_representation(trace, mk) if kind == "tag" else None),
             tag_representation_options=(
                 [(value, _TAG_REPRESENTATION_LABELS[value]
@@ -74832,9 +74988,7 @@ class _StatsPanel(QWidget):
 
     def _set_tag_representation(self, trace: "BtfTrace", channel: str,
                                 representation: str) -> None:
-        if representation not in _TAG_REPRESENTATIONS:
-            return
-        trace.tag_representations[channel] = representation
+        _update_tag_preferences(trace, channel, representation)
         self.tag_representation_changed.emit(channel, representation)
         self.rebuild(trace)
         self._refresh_open_plot()
@@ -81703,7 +81857,7 @@ class _StatsPanel(QWidget):
 
         def _populate_tags(blay: QVBoxLayout) -> None:
             _tag_rows = _tag_stats_rows(trace, lo, hi)
-            blay.addWidget(self._build_stats_table(
+            host = self._build_stats_table(
                 _tag_rows,
                 _fs,
                 empty_tag,
@@ -81711,7 +81865,27 @@ class _StatsPanel(QWidget):
                 section_id="tags",
                 include_variability=True,
                 on_row_click=lambda ch: self._open_tag_plot(trace, ch),
-            ))
+            )
+
+            table = host.findChild(QTableWidget)
+            if table is not None:
+                table.setSortingEnabled(False)
+                table.insertColumn(0)
+                table.insertColumn(2)
+                table.setHorizontalHeaderItem(0, QTableWidgetItem("Channel"))
+                table.setHorizontalHeaderItem(1, QTableWidgetItem("Label"))
+                table.setHorizontalHeaderItem(2, QTableWidgetItem("Representation"))
+                for row in range(table.rowCount()):
+                    channel = table.item(row, 1).data(Qt.ItemDataRole.UserRole)
+                    item = QTableWidgetItem(channel)
+                    item.setData(Qt.ItemDataRole.UserRole, channel)
+                    table.setItem(row, 0, item)
+                    combo = _tag_settings_button(trace, channel,
+                        lambda command, ch=channel: self._set_tag_representation(trace, ch, command))
+                    table.setCellWidget(row, 2, combo)
+                table.setSortingEnabled(True)
+                table.resizeColumnsToContents()
+            blay.addWidget(host)
 
         self._add_collapsible_section(
             "tags",
@@ -81861,6 +82035,7 @@ class _RcSettings:
     [cursors]  positions  (space-separated ns timestamps; "" = no saved cursors)
     [files]    last_file, last_dir, open_tabs_json, active_tab_index
     [tab_view] per-trace zoom/cursor layout (key = trace_<sha256[:16]>)
+    [tag_representations] per-trace format, scale, and includeZero settings
     """
 
     RC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "btf_viewer.rc")
@@ -87229,18 +87404,18 @@ FIND_MODE_CHOICES: Tuple[Tuple[str, str, str], ...] = (
     (
         "Contains",
         "contains",
-        "Substring match on task names (merge key / display name) and "
-        "annotation notes.",
+        "Substring match on task names (merge key / display name), "
+        "tag channel names/aliases, and annotation notes.",
     ),
     (
         "Exact",
         "exact",
-        "Whole-string match on a task merge key, raw name, or display name.",
+        "Whole-string match on task names or tag channel names/aliases.",
     ),
     (
         "Regex",
         "regex",
-        "Case-insensitive regular expression on task names and annotation notes.",
+        "Case-insensitive regular expression on task names, tag channel names/aliases, and annotation notes.",
     ),
     (
         "Migrations",
@@ -87251,7 +87426,7 @@ FIND_MODE_CHOICES: Tuple[Tuple[str, str, str], ...] = (
     (
         "STI",
         "sti",
-        "Software-trace items: channel, event verb, note, and core "
+        "Software-trace items: channel name/alias, event verb, note, and core "
         "(tags, TICK, mutex notes, …).",
     ),
     (
@@ -87344,7 +87519,8 @@ def recompute_find_hits(
         unique = sorted(set(hits))
         return unique, f"{len(unique)} matches"
 
-    hits: List[int] = []
+    channels = set(_matching_tag_channels(trace, q, mode_key))
+    hits: List[int] = [ev.time for ev in getattr(trace, "sti_events", ()) if ev.target in channels]
     for mk, segs in trace.seg_map_by_merge_key.items():
         raw = trace.task_repr.get(mk, mk)
         disp = _task_display_name(raw)
@@ -87396,7 +87572,7 @@ def _find_sti_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern])
     hits: List[int] = []
     q_lower = query.lower()
     for ev in getattr(trace, "sti_events", ()):
-        hay = f"{ev.target} {ev.event or ''} {ev.note or ''} {ev.core or ''}"
+        hay = f"{ev.target} {_tag_channel_label(ev.target, trace)} {ev.event or ''} {ev.note or ''} {ev.core or ''}"
         if _haystack_matches(query, "contains", hay, regex_obj):
             hits.append(ev.time)
         elif not regex_obj and q_lower == hay.lower():
@@ -96594,6 +96770,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if view is self._view and hasattr(self, "_stats_panel"):
                 self._stats_panel.rebuild(view._scene._trace)
                 self._stats_panel._refresh_open_plot()
+                self._persist_tag_settings()
 
         view._scene.tag_representation_changed.connect(_on_tag_representation_changed)
 
@@ -96922,12 +97099,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_undo.setEnabled(bool(vm and vm.undo_stack))
         self._act_redo.setEnabled(bool(vm and vm.redo_stack))
 
+    def _persist_tag_settings(self, *_args) -> None:
+        if hasattr(self, "_find_input") and self._find_input.text().strip():
+            self._recompute_find_hits()
+        tab = self._active_tab
+        if tab is not None and tab.path and tab.trace is not None:
+            self._settings.set("tag_representations", self._trace_state_key(tab.path),
+                               json.dumps(tab.trace.tag_representations))
+
     def _persist_tab_view_state(self, tab: _TraceTab) -> None:
         """Save zoom/cursor layout for one tab (keyed by trace path hash)."""
         if not tab.path or tab.trace is None:
             return
         tab.vm.capture_viewport_from_view(tab.view)
         key = self._trace_state_key(tab.path)
+        self._settings.set("tag_representations", key,
+                           json.dumps(tab.trace.tag_representations), flush=False)
         self._settings.set(
             "tab_view", key, viewport_to_json(tab.vm.viewport), flush=False)
 
@@ -96935,6 +97122,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Restore zoom/cursors saved for *tab* in btf_viewer.rc."""
         view = tab.view
         sc = view._scene
+        try:
+            saved = json.loads(self._settings.get(
+                "tag_representations", self._trace_state_key(tab.path), "{}"))
+        except (ValueError, TypeError):
+            saved = {}
+        if tab.trace is not None and isinstance(saved, dict):
+            tab.trace.tag_representations = {
+                ch: _tag_preferences(value) for ch, value in saved.items()
+                if ch in tab.trace.tag_channels
+                and (isinstance(value, dict) or value in ("uint32", "int32", "float32", "log2-uint32"))}
+            sc.rebuild()
         raw = self._settings.get("tab_view", self._trace_state_key(tab.path), "")
         vp = viewport_from_json(raw)
         if vp is None:
@@ -100057,6 +100255,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.section_collapsed_changed.connect(
             self._on_section_collapsed_changed)
         self._stats_panel.query_ai_requested.connect(self._on_stats_query_ai)
+        self._stats_panel.tag_representation_changed.connect(self._persist_tag_settings)
         self._stats_panel.tag_representation_changed.connect(
             lambda _channel, _representation: self._view._scene.rebuild())
         self._stats_panel.set_ai_enabled(self._ai_feature_enabled())

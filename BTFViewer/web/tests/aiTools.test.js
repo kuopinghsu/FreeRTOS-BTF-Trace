@@ -634,3 +634,23 @@ describe('aiTools', () => {
     assert.match(AI_MALFORMED_FUNCTION_CALL_NUDGE, /Do not call tools/)
   })
 })
+
+
+describe('AI tag alias search', () => {
+  it('resolves aliases to canonical channels in default, exact, regex, and tags modes', () => {
+    const trace = {tagChannels:['tag0_event','tag1_event'],segByMergeKey:new Map(),taskRepr:new Map(),stiEvents:[
+      {target:'tag0_event',time:11,note:'1',event:'trigger',core:'Core_0'},
+      {target:'tag1_event',time:22,note:'2',event:'trigger',core:'Core_0'},
+    ]}
+    const preferences={tag0_event:{format:'uint32',alias:'memory usage'},tag1_event:{format:'uint32',alias:'memory usage'}}
+    for(const mode of ['contains','exact','regex','tags']) {
+      const out=searchTimelineHits(trace,mode==='regex'?'^memory usage$':'MEMORY USAGE',mode,[],preferences)
+      assert.equal(out.ok,true)
+      assert.deepEqual(out.data.times,[11,22])
+      assert.deepEqual(out.data.tag_channels,[{channel:'tag0_event',label:'memory usage'},{channel:'tag1_event',label:'memory usage'}])
+    }
+    assert.deepEqual(searchTimelineHits(trace,'tag0_event','tags',[],preferences).data.times,[11])
+    delete preferences.tag0_event.alias
+    assert.deepEqual(searchTimelineHits(trace,'memory usage','contains',[],preferences).data.times,[22])
+  })
+})

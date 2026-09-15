@@ -1876,6 +1876,7 @@
 </template>
 
 <script setup>
+import { updateTagPreferences, tagPreferences } from './utils/tagAnalysis.js'
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick, markRaw } from 'vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
 import Toolbar          from './components/Toolbar.vue'
@@ -3330,10 +3331,30 @@ function onToolbarOptionsUpdate(v) {
 }
 
 function onTagRepresentationChange(channel, representation) {
-  timelineOptions.tagRepresentations = {
-    ...(timelineOptions.tagRepresentations || {}),
-    [channel]: representation,
+  const settings = { ...timelineOptions.tagRepresentations }
+  if (representation === 'all') {
+    for (const ch of trace.value?.tagChannels || []) {
+      const next = tagPreferences(settings[channel])
+      delete next.alias
+      const alias = tagPreferences(settings[ch]).alias
+      settings[ch] = alias ? { ...next, alias } : next
+    }
+  } else {
+    const next = updateTagPreferences(settings[channel], representation)
+    if (next) settings[channel] = next
+    else delete settings[channel]
   }
+  timelineOptions.tagRepresentations = settings
+  if (activeTab.value?.findQuery) recomputeFind()
+  if (activeTab.value?.name) {
+    const name = activeTab.value.name
+    _savedTabStateByTraceName[name] = {
+      ..._savedTabStateByTraceName[name],
+      tagRepresentations: { ...timelineOptions.tagRepresentations },
+    }
+  }
+  saveFiltersToActiveTab()
+  scheduleSessionSave()
 }
 
 /** Show Statistics when opening a new trace (desktop focuses Stats on load only). */
@@ -3411,6 +3432,7 @@ const cpuLoadSelectedTask = computed(() => selectedTaskFromHighlight({
 
 function saveFiltersToActiveTab(tab = activeTab.value) {
   if (!tab) return
+  tab.tagRepresentations = { ...timelineOptions.tagRepresentations }
   tab.taskFilterText = timelineOptions.taskFilterText || ''
   tab.migratedOnlyFilter = !!timelineOptions.migratedOnlyFilter
   tab.taskFilterKeys = timelineOptions.taskFilterKeys ?? null
@@ -3419,6 +3441,7 @@ function saveFiltersToActiveTab(tab = activeTab.value) {
 }
 
 function syncFiltersFromTab(tab) {
+  timelineOptions.tagRepresentations = { ...(tab?.tagRepresentations || {}) }
   timelineOptions.taskFilterText = tab?.taskFilterText ?? ''
   timelineOptions.migratedOnlyFilter = !!tab?.migratedOnlyFilter
   timelineOptions.taskFilterKeys = tab?.taskFilterKeys ?? null
@@ -4766,6 +4789,7 @@ function recomputeFind() {
     activeTab.value.findMode,
     // Desktop Find searches annotations only (not bookmarks).
     (marks.value || []).filter(m => m.type === 'annotation'),
+    timelineOptions.tagRepresentations,
   )
   activeTab.value.findHits = hits
   activeTab.value.findHitIdx = -1
@@ -5454,6 +5478,7 @@ function dispatchAiTool(name, args) {
       args.query || '',
       args.mode || 'contains',
       (marks.value || []).filter(m => m.type === 'annotation'),
+      timelineOptions.tagRepresentations,
     )
   }
   if (name === AI_TOOL_TRIGGER_COMPARE) {
@@ -7685,7 +7710,8 @@ function scheduleSessionSave() {
       aiCase: aiPanelRef.value?.investigationSnapshot?.() || null,
       findingsTriage: findingsTriageState.value,
     })
-    _savedTabStateByTraceName = snapshot.tabStateByTraceName ?? {}
+    snapshot.tabStateByTraceName = { ..._savedTabStateByTraceName, ...snapshot.tabStateByTraceName }
+    _savedTabStateByTraceName = snapshot.tabStateByTraceName
     saveSession(snapshot)
     saveSessionOpfs(snapshot).catch(() => {})
   }, 400)

@@ -312,9 +312,9 @@ class TimelineScene(QGraphicsScene):
         return _tag_representation(self._trace, channel)
 
     def set_tag_representation(self, channel: str, representation: str) -> None:
-        if self._trace is None or representation not in _TAG_REPRESENTATIONS:
+        if self._trace is None:
             return
-        self._trace.tag_representations[channel] = representation
+        _update_tag_preferences(self._trace, channel, representation)
         self.rebuild()
         self.tag_representation_changed.emit(channel, representation)
 
@@ -2453,7 +2453,7 @@ class TimelineScene(QGraphicsScene):
             # Label with expand/collapse indicator (only for expandable channels)
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.TextElideMode.ElideRight, max(0, lw - 98))
+                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, lw - 98))
             else:
                 _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
@@ -2474,7 +2474,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(lw, y_top, timeline_w, row_h),
                     _sti_evs_h, trace.time_scale,
                     time_min=_time_min, px_per_ns=_px_per_ns, x_offset=lw,
-                    representation=self.tag_representation(channel),
+                    representation=_tag_chart_preferences(trace, channel),
                     line_style=self._sti_line_style)
                 _wf.setZValue(2)
                 self.addItem(_wf)
@@ -2725,7 +2725,7 @@ class TimelineScene(QGraphicsScene):
             # Rotated label with optional expand indicator
             _ind_txt = ("▼ " if is_exp else "▶ ") if expandable else ""
             _lbl_avail_v = max(0, label_row_h - (38 if expandable else 14))
-            _lbl_txt  = fm.elidedText(_ind_txt + channel, Qt.TextElideMode.ElideRight, _lbl_avail_v)
+            _lbl_txt  = fm.elidedText(_ind_txt + (_tag_alias(trace, channel) or channel), Qt.TextElideMode.ElideRight, _lbl_avail_v)
             lbl = _make_rotated_label(self, _lbl_txt, font, self._c_sti_lbl,
                                       x_ctr,
                                       label_row_h - LABEL_BOTTOM_MARGIN - (24 if expandable else 0), 37)
@@ -2741,7 +2741,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(x_left, label_row_h, cw_sti, timeline_h),
                     _sti_evs_clipped_v, _sti_evs_v,
                     trace.time_scale, trace.time_min, _px_per_ns, label_row_h,
-                    representation=self.tag_representation(channel),
+                    representation=_tag_chart_preferences(trace, channel),
                     line_style=self._sti_line_style)
                 _wf_col.setZValue(2)
                 self.addItem(_wf_col)
@@ -3085,7 +3085,7 @@ class TimelineScene(QGraphicsScene):
             self._track_timeline_bg(_sti_bg_rect)
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
+                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             else:
                 _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
@@ -3105,7 +3105,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(lw, y_top, timeline_w, row_h),
                     _sti_evs_ch, trace.time_scale,
                     time_min=_time_min, px_per_ns=_px_per_ns, x_offset=lw,
-                    representation=self.tag_representation(channel),
+                    representation=_tag_chart_preferences(trace, channel),
                     line_style=self._sti_line_style)
                 _wf.setZValue(2)
                 self.addItem(_wf)
@@ -3400,7 +3400,7 @@ class TimelineScene(QGraphicsScene):
             _ind_txt_vc  = ("v " if is_exp else "> ") if expandable else ""
             _lbl_avail_vc = max(0, label_row_h - 14)
             _lbl_txt_vc  = QFontMetrics(font).elidedText(
-                _ind_txt_vc + channel, Qt.TextElideMode.ElideRight, _lbl_avail_vc)
+                _ind_txt_vc + (_tag_alias(trace, channel) or channel), Qt.TextElideMode.ElideRight, _lbl_avail_vc)
             lbl = _make_rotated_label(self, _lbl_txt_vc, font, self._c_sti_lbl,
                                       x_ctr_vc,
                                       label_row_h - LABEL_BOTTOM_MARGIN, 37)
@@ -3416,7 +3416,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(x_left, label_row_h, cw_sti_vc, timeline_h),
                     _sti_evs_clipped_vc, _sti_evs_vc,
                     trace.time_scale, trace.time_min, _px_per_ns, label_row_h,
-                    representation=self.tag_representation(channel),
+                    representation=_tag_chart_preferences(trace, channel),
                     line_style=self._sti_line_style)
                 _wf_col_vc.setZValue(2)
                 self.addItem(_wf_col_vc)

@@ -1,6 +1,13 @@
 /** Persist web viewer layout, tabs, and per-trace state in localStorage. */
 
+import { tagPreferences } from './tagAnalysis.js'
 import { dumpInvestigation, loadInvestigation } from './investigationNotebook.js'
+
+export function sanitizeTagRepresentations(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).filter(([channel, format]) =>
+    /^tag(?:[0-7])?_event$/i.test(channel) && (['uint32', 'int32', 'float32', 'log2-uint32'].includes(format) || (format && typeof format === 'object' && ['uint32', 'int32', 'float32'].includes(format.format)))).map(([ch, value]) => [ch, tagPreferences(value)]))
+}
 
 const SESSION_KEY = 'btf-viewer-session-v2'
 
@@ -128,6 +135,7 @@ export function snapshotTabState(tab) {
   if (!tab?.trace) return null
   const filters = snapshotTabFilters(tab)
   return {
+    tagRepresentations: sanitizeTagRepresentations(tab.tagRepresentations),
     timelineViewport: sanitizeViewport(tab.timelineViewport),
     cursors: sanitizeCursors(tab.cursors),
     marks: sanitizeMarks(tab.marks),
@@ -171,6 +179,7 @@ export function buildTabStateByTraceName(tabs) {
 
 export function applyTabState(tab, state) {
   if (!tab || !state) return
+  tab.tagRepresentations = sanitizeTagRepresentations(state.tagRepresentations)
   const vp = sanitizeViewport(state.timelineViewport)
   if (vp) Object.assign(tab.timelineViewport, vp)
   const curs = sanitizeCursors(state.cursors)

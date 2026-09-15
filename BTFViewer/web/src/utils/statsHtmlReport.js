@@ -1,3 +1,4 @@
+import { tagAxisBounds, tagTransform, tagInverse, formatTagValue } from './tagAnalysis.js'
 /**
  * Statistics HTML report helpers (Web).
  * Keep in sync with btf_viewer_pkg/stats_html.py.
@@ -1115,19 +1116,18 @@ export function htmlHealthBars(rows) {
   }).join('')}</div>`
 }
 
-function sparkline(vals, width = 420, height = 48) {
-  if (!vals || vals.length < 2) return ''
-  const mn = Math.min(...vals)
-  const mx = Math.max(...vals)
-  const span = (mx - mn) || 1
-  const n = vals.length
-  const pts = vals.slice(0, 200).map((v, i) => {
-    const x = 4 + (width - 8) * i / Math.max(n - 1, 1)
-    const y = height - 6 - (height - 12) * ((v - mn) / span)
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  })
-  return `<svg class="pctile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Tag time series">`
-    + `<polyline class="sparkline-line" fill="none" stroke-width="1.5" points="${pts.join(' ')}"/></svg>`
+function sparkline(vals, preferences, times, width = 640, height = 180) {
+  if (!vals?.length) return ''
+  const [lo, hi] = tagAxisBounds(vals, preferences)
+  const low = tagTransform(lo, preferences), span = tagTransform(hi, preferences) - low
+  const left = 100, right = width - 16, top = 16, bottom = height - 30
+  const t0 = times[0], t1 = times[times.length - 1]
+  const points = vals.map((value, i) => `${(left + (right-left)*(times[i]-t0)/(t1-t0 || 1)).toFixed(2)},${(bottom-(bottom-top)*(tagTransform(value,preferences)-low)/span).toFixed(2)}`)
+  const ticks = Array.from({length:5}, (_, i) => {
+    const y = bottom - (bottom-top)*i/4
+    return `<path d="M${left} ${y}H${right}" stroke="#94a3b8" opacity=".3"/><text x="${left-6}" y="${y+4}" text-anchor="end" fill="currentColor" font-size="11">${esc(formatTagValue(tagInverse(low+span*i/4,preferences)))}</text>`
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Tag time series, value versus time" style="width:100%;max-width:${width}px">${ticks}<path d="M${left} ${top}V${bottom}H${right}" fill="none" stroke="currentColor"/><polyline class="sparkline-line" fill="none" stroke-width="1.5" points="${points.join(' ')}"/><text x="${left}" y="${height-8}" fill="currentColor" font-size="11">${t0} ns</text><text x="${right}" y="${height-8}" text-anchor="end" fill="currentColor" font-size="11">${t1} ns</text></svg>`
 }
 
 export function htmlTagOverview(samples, { timeOf = (s) => s.time, maxRows = 12 } = {}) {
@@ -1135,17 +1135,20 @@ export function htmlTagOverview(samples, { timeOf = (s) => s.time, maxRows = 12 
   for (const s of samples || []) {
     if (!s || typeof s !== 'object') continue
     const lab = String(s.label || s.tag || '')
-    if (!byLabel.has(lab)) byLabel.set(lab, [])
-    byLabel.get(lab).push(s)
+    const key = s.channel || lab
+    if (!byLabel.has(key)) byLabel.set(key, [])
+    byLabel.get(key).push(s)
   }
   if (!byLabel.size) return '<p class="empty">No tag samples in scope</p>'
   const blocks = []
   let n = 0
-  for (const [lab, group] of byLabel) {
+  for (const [channel, group] of byLabel) {
+    const lab = String(group[0].label || group[0].tag || channel)
     if (n++ >= 8) break
+    group.sort((a,b) => a.timeNs-b.timeNs)
     const vals = []
     for (const s of group) {
-      const v = Number(String(s.value ?? '0').replace(/,/g, ''))
+      const v = s.valueNum ?? Number(String(s.value ?? '0').replace(/,/g, ''))
       if (Number.isFinite(v)) vals.push(v)
     }
     if (!vals.length) continue
@@ -1174,7 +1177,7 @@ export function htmlTagOverview(samples, { timeOf = (s) => s.time, maxRows = 12 
     blocks.push(
       `<h3 class="sub">${esc(lab)}</h3>`
       + `<p class="detail-note">${group.length} samples · ${unique} distinct values · ${transitions} transitions · longest plateau ${plateau} · min ${mn} / max ${mx}</p>`
-      + sparkline(vals)
+      + sparkline(vals, group[0]?.preferences, group.map(s => s.timeNs))
       + `<table><thead><tr><th>Time</th><th>Value</th><th>Core</th></tr></thead><tbody>${rows}</tbody></table>`,
     )
   }

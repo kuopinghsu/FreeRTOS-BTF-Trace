@@ -69,3 +69,14 @@ describe('histogram bar hover tips', () => {
     )
   })
 })
+
+
+describe('tag histogram precision', () => {
+  it('preserves fractional values on linear and logarithmic axes', () => {
+    for (const scaleMode of ['linear', 'log']) {
+      const model = buildHistogramModel([1.14e-41, 1.13e-40], {scaleMode, valueAsTime:false, formatValue:String})
+      assert.ok(model.xTicks.length)
+      assert.ok(model.xTicks.every(t => Number(t.label) > 0))
+    }
+  })
+})

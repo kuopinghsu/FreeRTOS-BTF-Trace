@@ -6,6 +6,7 @@ import math
 from typing import Optional, Sequence
 
 from .html_report import html_section_slug
+from .parser import _tag_axis_bounds, _tag_transform, _tag_inverse, _format_tag_value
 
 STATS_TOC_GROUPS = (
     ("Overview and Findings", (
@@ -1216,15 +1217,17 @@ def html_tag_overview(
         if not isinstance(s, dict):
             continue
         lab = str(s.get("label") or s.get("tag") or "")
-        by_label.setdefault(lab, []).append(s)
+        by_label.setdefault(s.get("channel") or lab, []).append(s)
     if not by_label:
         return '<p class="empty">No tag samples in scope</p>'
     blocks = []
-    for lab, group in list(by_label.items())[:8]:
+    for _channel, group in list(by_label.items())[:8]:
+        lab = str(group[0].get("label") or group[0].get("tag") or _channel)
+        group.sort(key=lambda s: s.get("time_ns", 0))
         vals = []
         for s in group:
             try:
-                vals.append(float(str(s.get("value") or "0").replace(",", "")))
+                vals.append(s.get("value_num", float(str(s.get("value") or "0").replace(",", ""))))
             except (TypeError, ValueError):
                 continue
         if not vals:
@@ -1242,7 +1245,7 @@ def html_tag_overview(
         plateau = max(plateau, run)
         unique = len(set(vals))
         mn, mx = min(vals), max(vals)
-        spark = _sparkline(vals)
+        spark = _sparkline(vals, preferences=group[0].get("preferences"), times=[s.get("time_ns", 0) for s in group])
         extrema = sorted(group, key=lambda s: float(str(s.get("value") or 0).replace(",", "") or 0))
         shown = []
         if extrema:
@@ -1269,23 +1272,24 @@ def html_tag_overview(
     return "".join(blocks) or '<p class="empty">No tag samples in scope</p>'
 
 
-def _sparkline(vals: Sequence[float], *, width: int = 420, height: int = 48) -> str:
-    if len(vals) < 2:
+def _sparkline(vals, *, preferences=None, times=None, width=640, height=180):
+    if not vals:
         return ""
-    mn, mx = min(vals), max(vals)
-    span = (mx - mn) or 1.0
-    n = len(vals)
-    pts = []
-    for i, v in enumerate(vals[:200]):
-        x = 4 + (width - 8) * i / max(n - 1, 1)
-        y = height - 6 - (height - 12) * ((v - mn) / span)
-        pts.append(f"{x:.1f},{y:.1f}")
-    return (
-        f'<svg class="pctile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
-        f'width="{width}" height="{height}" role="img" aria-label="Tag time series">'
-        f'<polyline class="sparkline-line" fill="none" stroke-width="1.5" '
-        f'points="{" ".join(pts)}"/></svg>'
-    )
+    lo, hi = _tag_axis_bounds(vals, preferences)
+    low = _tag_transform(lo, preferences)
+    span = _tag_transform(hi, preferences) - low
+    left, right, top, bottom = 100, width - 16, 16, height - 30
+    times = times or list(range(len(vals)))
+    t0, t1 = times[0], times[-1]
+    pts = " ".join(f"{left + (right-left)*(t-t0)/(t1-t0 or 1):.2f},{bottom-(bottom-top)*(_tag_transform(v, preferences)-low)/span:.2f}" for t, v in zip(times, vals))
+    ticks = []
+    for i in range(5):
+        y = bottom - (bottom-top)*i/4
+        label = _esc(_format_tag_value(_tag_inverse(low+span*i/4, preferences)))
+        ticks.append(f'<path d="M{left} {y}H{right}" stroke="#94a3b8" opacity=".3"/><text x="{left-6}" y="{y+4}" text-anchor="end" fill="currentColor" font-size="11">{label}</text>')
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-label="Tag time series, value versus time" style="width:100%;max-width:{width}px">'
+            + "".join(ticks) + f'<path d="M{left} {top}V{bottom}H{right}" fill="none" stroke="currentColor"/><polyline class="sparkline-line" fill="none" stroke-width="1.5" points="{pts}"/>'
+            + f'<text x="{left}" y="{height-8}" fill="currentColor" font-size="11">{t0} ns</text><text x="{right}" y="{height-8}" text-anchor="end" fill="currentColor" font-size="11">{t1} ns</text></svg>')
 
 
 _BM_TYPE_LABELS = {

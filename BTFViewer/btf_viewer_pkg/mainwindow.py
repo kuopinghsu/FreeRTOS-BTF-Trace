@@ -5589,6 +5589,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if view is self._view and hasattr(self, "_stats_panel"):
                 self._stats_panel.rebuild(view._scene._trace)
                 self._stats_panel._refresh_open_plot()
+                self._persist_tag_settings()
 
         view._scene.tag_representation_changed.connect(_on_tag_representation_changed)
 
@@ -5917,12 +5918,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_undo.setEnabled(bool(vm and vm.undo_stack))
         self._act_redo.setEnabled(bool(vm and vm.redo_stack))
 
+    def _persist_tag_settings(self, *_args) -> None:
+        if hasattr(self, "_find_input") and self._find_input.text().strip():
+            self._recompute_find_hits()
+        tab = self._active_tab
+        if tab is not None and tab.path and tab.trace is not None:
+            self._settings.set("tag_representations", self._trace_state_key(tab.path),
+                               json.dumps(tab.trace.tag_representations))
+
     def _persist_tab_view_state(self, tab: _TraceTab) -> None:
         """Save zoom/cursor layout for one tab (keyed by trace path hash)."""
         if not tab.path or tab.trace is None:
             return
         tab.vm.capture_viewport_from_view(tab.view)
         key = self._trace_state_key(tab.path)
+        self._settings.set("tag_representations", key,
+                           json.dumps(tab.trace.tag_representations), flush=False)
         self._settings.set(
             "tab_view", key, viewport_to_json(tab.vm.viewport), flush=False)
 
@@ -5930,6 +5941,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Restore zoom/cursors saved for *tab* in btf_viewer.rc."""
         view = tab.view
         sc = view._scene
+        try:
+            saved = json.loads(self._settings.get(
+                "tag_representations", self._trace_state_key(tab.path), "{}"))
+        except (ValueError, TypeError):
+            saved = {}
+        if tab.trace is not None and isinstance(saved, dict):
+            tab.trace.tag_representations = {
+                ch: _tag_preferences(value) for ch, value in saved.items()
+                if ch in tab.trace.tag_channels
+                and (isinstance(value, dict) or value in ("uint32", "int32", "float32", "log2-uint32"))}
+            sc.rebuild()
         raw = self._settings.get("tab_view", self._trace_state_key(tab.path), "")
         vp = viewport_from_json(raw)
         if vp is None:
@@ -9052,6 +9074,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.section_collapsed_changed.connect(
             self._on_section_collapsed_changed)
         self._stats_panel.query_ai_requested.connect(self._on_stats_query_ai)
+        self._stats_panel.tag_representation_changed.connect(self._persist_tag_settings)
         self._stats_panel.tag_representation_changed.connect(
             lambda _channel, _representation: self._view._scene.rebuild())
         self._stats_panel.set_ai_enabled(self._ai_feature_enabled())

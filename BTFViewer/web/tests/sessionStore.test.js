@@ -112,3 +112,43 @@ describe('sessionStore investigation notebook persistence', () => {
     assert.equal(snapshotTabState(baseTab()).investigation, null)
   })
 })
+
+
+describe('per-trace tag formats', () => {
+  it('round-trips formats without sharing state between traces', () => {
+    const first = { trace: {}, tagRepresentations: { tag0_event: 'float32', tag1_event: 'int32' } }
+    const saved = JSON.parse(JSON.stringify(snapshotTabState(first)))
+    const restored = { timelineViewport: {} }
+    applyTabState(restored, saved)
+    assert.deepEqual(restored.tagRepresentations, {tag0_event:{format:'float32',scale:'linear',includeZero:false},tag1_event:{format:'int32',scale:'linear',includeZero:false}})
+    const other = { timelineViewport: {} }
+    applyTabState(other, {})
+    assert.deepEqual(other.tagRepresentations, {})
+    restored.tagRepresentations.tag0_event = 'uint32'
+    assert.equal(saved.tagRepresentations.tag0_event.format, 'float32')
+  })
+  it('ignores invalid saved channels and formats', () => {
+    const tab = { timelineViewport: {} }
+    applyTabState(tab, { tagRepresentations: { tag0_event: 'float32', tag1_event: 'invalid', unknown: 'int32' } })
+    assert.deepEqual(tab.tagRepresentations, { tag0_event: {format:'float32',scale:'linear',includeZero:false} })
+  })
+})
+
+
+it('migrates legacy logarithmic preferences and preserves independent display settings', () => {
+  const tab = {timelineViewport:{}}
+  applyTabState(tab, {tagRepresentations:{tag0_event:'log2-uint32', tag1_event:{format:'int32',scale:'log2',includeZero:true}}})
+  assert.deepEqual(tab.tagRepresentations.tag0_event, {format:'uint32',scale:'log2',includeZero:false})
+  assert.deepEqual(snapshotTabState({...tab,trace:{}}).tagRepresentations.tag1_event, {format:'int32',scale:'log2',includeZero:true})
+})
+
+it('restores per-trace aliases together with format and chart preferences', () => {
+  const first={trace:{},tagRepresentations:{tag0_event:{format:'uint32',scale:'linear',includeZero:false,alias:'memory usage'}}}
+  const saved=JSON.parse(JSON.stringify(snapshotTabState(first)))
+  const restored={timelineViewport:{}}
+  applyTabState(restored,saved)
+  assert.equal(restored.tagRepresentations.tag0_event.alias,'memory usage')
+  const other={timelineViewport:{}}
+  applyTabState(other,{})
+  assert.deepEqual(other.tagRepresentations,{})
+})

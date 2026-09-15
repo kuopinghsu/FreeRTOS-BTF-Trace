@@ -321,14 +321,14 @@ function buildXTicks(binSpec, plotW, margin, formatValue) {
         ticks.push({
           index: idx++,
           x: regionLeft + t * regularW,
-          label: formatValue(Math.round(value)),
+          label: formatValue(value),
         })
       }
     }
     if (ticks.length === 0) {
       return [0, 0.5, 1].map((ratio, index) => {
         const logVal = logLo + (logHi - logLo) * ratio
-        const value = Math.round(10 ** logVal)
+        const value = 10 ** logVal
         return { index, x: regionLeft + ratio * regularW, label: formatValue(value) }
       })
     }
@@ -336,7 +336,7 @@ function buildXTicks(binSpec, plotW, margin, formatValue) {
   }
 
   const ticks = [0, 0.5, 1].map((ratio, index) => {
-    const value = Math.round(displayMin + (displayMax - displayMin) * ratio)
+    const value = displayMin + (displayMax - displayMin) * ratio
     return {
       index,
       x: regionLeft + ratio * regularW,
