@@ -1,4 +1,4 @@
-import { matchingTagChannels, tagChannelLabel } from './tagAnalysis.js'
+import { matchingTagChannels, tagChannelLabel, tagStatsRows } from './tagAnalysis.js'
 /**
  * Viewer tool-calling schema for the AI Assistant.
  * Keep in sync with btf_viewer_pkg/ai_tools.py.
@@ -767,7 +767,11 @@ export function aiViewerTools() {
         description:
           'Search the trace like Find (Ctrl+F). Returns matching '
           + 'timestamps for task names, STI/tag notes, intervals, '
-          + 'lifecycle events, sync pointers, or migrations.',
+          + 'lifecycle events, sync pointers, or migrations. A tag query '
+          + '(by channel id or alias, e.g. "memory usage") also returns '
+          + 'that channel\'s value stats (count/min/avg/max/p50/p95/p99) '
+          + 'in tag_channels, trace-wide — use it to answer a peak/min/avg '
+          + 'question about a tag, not just to locate occurrences.',
         parameters: {
           type: 'object',
           properties: {
@@ -4014,11 +4018,29 @@ export function searchTimelineHits(trace, query, mode = 'contains', annotations 
   const { hits, error } = computeFindHits(trace, q, findMode, annotations || [], representations)
   if (error) return { ok: false, message: error }
   const times = [...(hits || [])]
+  // Value stats (not just timestamps) so a query like "memory usage peak" can
+  // be answered from a matched tag channel's own alias — trace-wide, same as
+  // the rest of this Find-style search (no cursor-range scoping).
+  let tagChannels = []
+  if (['contains', 'exact', 'regex', 'sti'].includes(findMode)) {
+    const statsByChannel = new Map(tagStatsRows(trace, null, null, representations).map(row => [row.channel, row]))
+    tagChannels = matchingTagChannels(trace, q, findMode, representations).map(channel => {
+      const row = statsByChannel.get(channel)
+      const entry = { channel, label: tagChannelLabel(channel, representations) }
+      if (row) {
+        Object.assign(entry, {
+          count: row.count, min: row.min, avg: row.avg, max: row.max,
+          jitter: row.jitter, sigma: row.sigma, p50: row.p50, p95: row.p95, p99: row.p99,
+        })
+      }
+      return entry
+    })
+  }
   return {
     ok: true,
     message: `${times.length} match(es) for ${JSON.stringify(q)} (${findMode})`,
     data: {
-      tag_channels: ['contains', 'exact', 'regex', 'sti'].includes(findMode) ? matchingTagChannels(trace, q, findMode, representations).map(channel => ({ channel, label: tagChannelLabel(channel, representations) })) : [],
+      tag_channels: tagChannels,
       times: times.slice(0, MAX_SEARCH_HITS),
       count: times.length,
       mode: findMode,

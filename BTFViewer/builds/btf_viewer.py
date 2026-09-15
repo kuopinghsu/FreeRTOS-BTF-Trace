@@ -39176,7 +39176,12 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 "description": (
                     "Search the trace like Find (Ctrl+F). Returns matching "
                     "timestamps for task names, STI/tag notes, intervals, "
-                    "lifecycle events, sync pointers, or migrations."
+                    "lifecycle events, sync pointers, or migrations. A tag "
+                    "query (by channel id or alias, e.g. \"memory usage\") "
+                    "also returns that channel's value stats "
+                    "(count/min/avg/max/p50/p95/p99) in tag_channels, "
+                    "trace-wide — use it to answer a peak/min/avg "
+                    "question about a tag, not just to locate occurrences."
                 ),
                 "parameters": {
                     "type": "object",
@@ -42671,13 +42676,33 @@ def search_timeline_hits(
     if status_s in ("Regex error", "Regex too long"):
         return tool_result_payload(False, status_s)
     shown = list(hits[:_MAX_SEARCH_HITS])
+    tag_channels: List[Dict[str, Any]] = []
+    if find_mode in ("contains", "exact", "regex", "sti"):
+        # Value stats (not just timestamps) so a query like "memory usage
+        # peak" can be answered from a matched tag channel's own alias --
+        # trace-wide, same as the rest of this Find-style search (no
+        # cursor-range scoping). Best-effort: a minimal trace-like object
+        # (e.g. some test fixtures) may lack the per-channel sample index
+        # _tag_stats_rows needs -- degrade to channel/label only rather
+        # than failing the whole search.
+        try:
+            stats_by_channel = {row[0]: row for row in _tag_stats_rows(trace)}
+        except AttributeError:
+            stats_by_channel = {}
+        for ch in _matching_tag_channels(trace, q, find_mode):
+            entry: Dict[str, Any] = {"channel": ch, "label": _tag_channel_label(ch, trace)}
+            row = stats_by_channel.get(ch)
+            if row:
+                entry.update({
+                    "count": row[2], "min": row[3], "avg": row[4], "max": row[5],
+                    "jitter": row[6], "sigma": row[7], "p50": row[8], "p95": row[9], "p99": row[10],
+                })
+            tag_channels.append(entry)
     return tool_result_payload(
         True,
         f"{len(hits)} match(es) for {q!r} ({find_mode})",
         data={
-            "tag_channels": [{"channel": ch, "label": _tag_channel_label(ch, trace)}
-                             for ch in _matching_tag_channels(trace, q, find_mode)]
-                            if find_mode in ("contains", "exact", "regex", "sti") else [],
+            "tag_channels": tag_channels,
             "times": shown,
             "count": len(hits),
             "mode": find_mode,
