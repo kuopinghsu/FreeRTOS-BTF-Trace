@@ -7291,7 +7291,7 @@ function onGlobalKeydown(e) {
   }
   if (mod && e.shiftKey && e.key.toLowerCase() === 'e') {
     e.preventDefault()
-    openExportDialog('perfetto')
+    openExportDialog()
     return
   }
   if (mod && !e.shiftKey && e.key.toLowerCase() === 's') {

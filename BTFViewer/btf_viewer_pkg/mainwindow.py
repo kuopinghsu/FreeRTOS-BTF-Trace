@@ -9168,13 +9168,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_undo = em.addAction("&Undo", self._cmd_undo, QKeySequence.Undo)
         self._act_undo.setEnabled(False)
         self._act_redo = em.addAction("&Redo", self._cmd_redo, QKeySequence.Redo)
-        self._act_redo.setShortcut(QKeySequence("Ctrl+Y"))   # override platform default
+        self._act_redo.setShortcuts([QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")])   # override platform default
         self._act_redo.setEnabled(False)
 
         # --- View menu (layout, visibility, zoom, mode, theme) ---
         vm = mb.addMenu("&View")
         self._act_horiz = vm.addAction("&Horizontal layout", lambda: self._set_orientation(True))
         self._act_vert  = vm.addAction("&Vertical layout",   lambda: self._set_orientation(False))
+        self._act_horiz.setShortcut(QKeySequence("H"))
+        self._act_vert.setShortcut(QKeySequence("V"))
         self._act_horiz.setCheckable(True)
         self._act_vert.setCheckable(True)
         self._act_horiz.setChecked(True)
@@ -9188,6 +9190,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         vm.addSeparator()
         self._act_task_view = vm.addAction("Task &View", lambda: self._set_view_mode("task"))
         self._act_core_view = vm.addAction("&Core View", lambda: self._set_view_mode("core"))
+        self._act_task_view.setShortcut(QKeySequence("1"))
+        self._act_core_view.setShortcut(QKeySequence("2"))
         self._act_task_view.setCheckable(True)
         self._act_core_view.setCheckable(True)
         self._act_task_view.setChecked(True)
@@ -9245,7 +9249,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # --- Navigate menu ---
         nm = mb.addMenu("&Navigate")
         act_bookmark = nm.addAction("Add &Bookmark", self._add_bookmark_at_center, "Ctrl+B")
-        act_bookmark.setShortcuts([QKeySequence("Ctrl+B"), QKeySequence("M"), QKeySequence("B")])
+        act_bookmark.setShortcuts([QKeySequence("Ctrl+B"), QKeySequence("B")])
         act_annotation = nm.addAction("Add &Annotation…", self._prompt_annotation_at_center, "Ctrl+Shift+B")
         act_annotation.setShortcuts([QKeySequence("Ctrl+Shift+B"), QKeySequence("A")])
         nm.addAction("Clear all &Bookmarks", self._clear_all_bookmarks, "Shift+B")
@@ -17163,11 +17167,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),
                 ("Ctrl+K",               "Command palette"),
+                ("? / F1",               "Keyboard & Mouse Shortcuts (this dialog)"),
                 ("Shift+F",              "Toggle Focus Mode"),
                 ("Esc",                  "Exit Focus Mode (or stop guided demo)"),
                 ("G",                    "Toggle grid lines on/off"),
                 ("I",                    "Toggle STI event rows on/off"),
                 ("D",                    "Toggle dark / light theme"),
+                ("1",                    "Task View"),
+                ("2",                    "Core View"),
+                ("H",                    "Horizontal layout"),
+                ("V",                    "Vertical layout"),
                 ("Double-click",         "Zoom to segment under cursor"),
                 ("Dbl-click label edge", "Auto-fit label column width"),
             ]),
@@ -17198,7 +17207,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Shift+F3",  "Find previous"),
             ]),
             ("Marks", [
-                ("B / M / Ctrl+B",      "Add bookmark at current cursor"),
+                ("B / Ctrl+B",          "Add bookmark at current cursor"),
                 ("Shift+B",             "Clear all bookmarks"),
                 ("A / Ctrl+Shift+B",    "Add annotation at current cursor"),
                 ("Shift+A",             "Clear all annotations"),

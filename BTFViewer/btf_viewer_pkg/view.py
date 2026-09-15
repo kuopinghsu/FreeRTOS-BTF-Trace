@@ -2762,6 +2762,16 @@ class TimelineView(QGraphicsView):
                 self._auto_fit_label_column()
                 event.accept()
                 return
+            # Double-click on the ruler (frozen at the viewport's leading
+            # edge, past the label column) -> Fit Trace. Parity with Web.
+            if self._scene._horizontal:
+                in_ruler = event.position().y() <= RULER_HEIGHT and event.position().x() > lw
+            else:
+                in_ruler = event.position().x() <= RULER_WIDTH and event.position().y() > lw
+            if in_ruler:
+                self.zoom_fit()
+                event.accept()
+                return
 
         if event.button() != Qt.MouseButton.LeftButton or self._scene._trace is None:
             super().mouseDoubleClickEvent(event)
