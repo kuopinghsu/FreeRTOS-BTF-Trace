@@ -6,7 +6,7 @@ import { isRestorableViewport, sanitizeTabFilters, snapshotTabFilters, sanitizeO
 import { MAX_CURSORS } from './settingsStore.js'
 import { selectedTaskFromHighlight } from './highlightLock.js'
 
-export const SESSION_PORTABLE_VERSION = 2
+export const SESSION_PORTABLE_VERSION = 3
 export const SESSION_MAX_BYTES = 2 * 1024 * 1024
 
 const PORTABLE_FIND_MODES = [
@@ -31,7 +31,6 @@ export function buildPortableSession({
   scopeToCursors,
   openPlot,
   statsSectionCollapsed,
-  compareScopeToCursors,
 }) {
   return {
     version: SESSION_PORTABLE_VERSION,
@@ -56,7 +55,6 @@ export function buildPortableSession({
     scopeToCursors: scopeToCursors !== false,
     openPlot: openPlot ? { ...openPlot } : null,
     statsSectionCollapsed: statsSectionCollapsed ? { ...statsSectionCollapsed } : null,
-    compareScopeToCursors: compareScopeToCursors !== false,
   }
 }
 
@@ -68,7 +66,7 @@ export function parsePortableSession(text) {
   const data = JSON.parse(text)
   if (!data || typeof data !== 'object') throw new Error('Invalid session file')
   const ver = data.version
-  if (ver !== 1 && ver !== 2) {
+  if (ver !== 1 && ver !== 2 && ver !== SESSION_PORTABLE_VERSION) {
     throw new Error(`Unsupported session version: ${ver}`)
   }
   return data

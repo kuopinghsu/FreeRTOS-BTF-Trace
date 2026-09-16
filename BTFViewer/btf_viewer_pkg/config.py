@@ -1461,20 +1461,21 @@ _MAX_CURSORS         = 8  # Hard upper bound - must equal len(_CURSOR_COLORS).
 _DEFAULT_MAX_CURSORS = 4  # Default number of simultaneously visible cursors.
 
 # Portable session JSON (shared with BTFViewer/web sessionPortable.js)
-SESSION_PORTABLE_VERSION = 2
+SESSION_PORTABLE_VERSION = 3
 _PORTABLE_FIND_MODES = (
     "contains", "exact", "regex", "migrations",
     "sti", "intervals", "lifecycle", "pointers",
 )
 
-# Canonical portable view-state fields — the single schema shared by the
-# standalone Session export/import and the .btfw state/view.json member.
-# Defined once so Session and Workspace never grow independent field lists.
+# Canonical portable view-state fields (schema v3) — the single schema
+# shared by the standalone Session export/import and the .btfw
+# state/view.json member. Defined once so Session and Workspace never grow
+# independent field lists.
 PORTABLE_VIEW_STATE_KEYS = (
     "version", "traceName", "cursors", "marks", "markNextId",
     "timelineViewport", "timelineOptions", "tabFilters",
     "findQuery", "findMode", "pinnedHighlightKey", "scopeToCursors",
-    "openPlot", "statsSectionCollapsed", "compareScopeToCursors",
+    "openPlot", "statsSectionCollapsed",
 )
 
 # A subset that only the modern portable schema has — legacy Desktop

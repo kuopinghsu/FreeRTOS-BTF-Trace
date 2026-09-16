@@ -54,6 +54,19 @@ describe('portable session', () => {
     )
   })
 
+  it('parsePortableSession accepts legacy v1/v2 and current v3', () => {
+    for (const version of [1, 2, SESSION_PORTABLE_VERSION]) {
+      const data = parsePortableSession(JSON.stringify({ version }))
+      assert.equal(data.version, version)
+    }
+  })
+
+  it('buildPortableSession no longer emits compareScopeToCursors', () => {
+    const payload = buildPortableSession({ traceName: 'demo.btf' })
+    assert.equal(payload.version, 3)
+    assert.ok(!('compareScopeToCursors' in payload))
+  })
+
   it('sessionCursorsSlotCount respects MAX_CURSORS', () => {
     const data = { cursors: [1, 2, 3, 4, 5, 6, 7, 8, 9] }
     assert.equal(sessionCursorsSlotCount(data, 4), 8)
@@ -186,7 +199,6 @@ describe('portable session', () => {
       scopeToCursors: false,
       openPlot: null,
       statsSectionCollapsed: { exec: true },
-      compareScopeToCursors: true,
     }
     const tab = {
       cursors: [], marks: [], markNextId: 1, timelineViewport: {},

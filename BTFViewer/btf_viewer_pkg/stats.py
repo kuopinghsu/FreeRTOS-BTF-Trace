@@ -9060,8 +9060,7 @@ class _AnalysisFindingsDialog(QDialog):
             lambda: self._query_with_ai(ai_enabled, "auto_investigate"))
         ask_btn.setMenu(ask_menu)
 
-        more_btn = _menu_btn(
-            "More ▾", "Save recipe, story, text export, or evidence pack")
+        more_btn = _menu_btn("More ▾", "Save or export findings")
         more_menu = _ci_make_popup_menu(more_btn)
         more_menu.addAction("Save recipe…").triggered.connect(self._save_recipe)
         more_menu.addAction("Story…").triggered.connect(self._save_story)

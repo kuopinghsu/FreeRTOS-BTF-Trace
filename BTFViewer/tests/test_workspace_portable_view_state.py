@@ -269,7 +269,6 @@ class WorkspaceViewStateGuiTests(unittest.TestCase):
             "scopeToCursors": False,
             "openPlot": None,
             "statsSectionCollapsed": {"exec": True},
-            "compareScopeToCursors": True,
         }
         self.assertTrue(_workspace_has_portable_view_state(web_view_state))
 

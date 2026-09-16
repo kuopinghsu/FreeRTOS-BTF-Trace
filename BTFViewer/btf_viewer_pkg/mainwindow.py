@@ -16793,14 +16793,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "scopeToCursors": bool(getattr(self._stats_panel, "_scope_to_cursors", True)),
             "openPlot": plot_payload,
             "statsSectionCollapsed": dict(self._stats_panel._section_collapsed),
-            "compareScopeToCursors": True,
         }
 
     def _apply_portable_session_payload(self, data: dict) -> None:
         """Restore cursors, marks, viewport, and UI state from portable session JSON."""
         if not isinstance(data, dict):
             raise ValueError("Invalid session file")
-        if data.get("version") not in (1, SESSION_PORTABLE_VERSION):
+        if data.get("version") not in (1, 2, SESSION_PORTABLE_VERSION):
             raise ValueError(f"Unsupported session version: {data.get('version')}")
 
         exp_name = data.get("traceName") or ""

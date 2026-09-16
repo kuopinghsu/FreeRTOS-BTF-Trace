@@ -282,7 +282,7 @@
               ref="moreBtn"
               type="button"
               class="analysis-btn"
-              title="Save recipe, story, or text export"
+              title="Save or export findings"
               @click.stop="toggleMore"
             >
               More ▾

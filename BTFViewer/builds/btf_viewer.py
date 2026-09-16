@@ -1711,20 +1711,21 @@ _MAX_CURSORS         = 8  # Hard upper bound - must equal len(_CURSOR_COLORS).
 _DEFAULT_MAX_CURSORS = 4  # Default number of simultaneously visible cursors.
 
 # Portable session JSON (shared with BTFViewer/web sessionPortable.js)
-SESSION_PORTABLE_VERSION = 2
+SESSION_PORTABLE_VERSION = 3
 _PORTABLE_FIND_MODES = (
     "contains", "exact", "regex", "migrations",
     "sti", "intervals", "lifecycle", "pointers",
 )
 
-# Canonical portable view-state fields — the single schema shared by the
-# standalone Session export/import and the .btfw state/view.json member.
-# Defined once so Session and Workspace never grow independent field lists.
+# Canonical portable view-state fields (schema v3) — the single schema
+# shared by the standalone Session export/import and the .btfw
+# state/view.json member. Defined once so Session and Workspace never grow
+# independent field lists.
 PORTABLE_VIEW_STATE_KEYS = (
     "version", "traceName", "cursors", "marks", "markNextId",
     "timelineViewport", "timelineOptions", "tabFilters",
     "findQuery", "findMode", "pinnedHighlightKey", "scopeToCursors",
-    "openPlot", "statsSectionCollapsed", "compareScopeToCursors",
+    "openPlot", "statsSectionCollapsed",
 )
 
 # A subset that only the modern portable schema has — legacy Desktop
@@ -71944,8 +71945,7 @@ class _AnalysisFindingsDialog(QDialog):
             lambda: self._query_with_ai(ai_enabled, "auto_investigate"))
         ask_btn.setMenu(ask_menu)
 
-        more_btn = _menu_btn(
-            "More ▾", "Save recipe, story, text export, or evidence pack")
+        more_btn = _menu_btn("More ▾", "Save or export findings")
         more_menu = _ci_make_popup_menu(more_btn)
         more_menu.addAction("Save recipe…").triggered.connect(self._save_recipe)
         more_menu.addAction("Story…").triggered.connect(self._save_story)
@@ -108174,14 +108174,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "scopeToCursors": bool(getattr(self._stats_panel, "_scope_to_cursors", True)),
             "openPlot": plot_payload,
             "statsSectionCollapsed": dict(self._stats_panel._section_collapsed),
-            "compareScopeToCursors": True,
         }
 
     def _apply_portable_session_payload(self, data: dict) -> None:
         """Restore cursors, marks, viewport, and UI state from portable session JSON."""
         if not isinstance(data, dict):
             raise ValueError("Invalid session file")
-        if data.get("version") not in (1, SESSION_PORTABLE_VERSION):
+        if data.get("version") not in (1, 2, SESSION_PORTABLE_VERSION):
             raise ValueError(f"Unsupported session version: {data.get('version')}")
 
         exp_name = data.get("traceName") or ""
