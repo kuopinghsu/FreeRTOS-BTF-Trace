@@ -69,8 +69,6 @@ _FIND_MODE_ALIASES = {
 }
 
 _TASK_LIFE_RE = re.compile(r"^(create|delete|suspend|resume)\b", re.IGNORECASE)
-_SYNC_NOTE_RE = re.compile(
-    r"^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$", re.IGNORECASE)
 
 
 def normalize_find_mode(mode: str) -> str:
@@ -233,11 +231,11 @@ def _find_lifecycle_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pat
     return hits
 
 def _parse_sync_note(note: str) -> Optional[Tuple[str, str]]:
-    m = _SYNC_NOTE_RE.match((note or "").strip())
+    from ..parser import _normalize_sync_ptr, _SYNC_OBJECT_NOTE_RE
+    m = _SYNC_OBJECT_NOTE_RE.match((note or "").strip())
     if not m:
         return None
-    ptr = (m.group(2) or "0").lower()
-    return m.group(1).lower(), ptr
+    return m.group(1).lower(), _normalize_sync_ptr(m.group(2))
 
 def _find_pointer_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
     hits: List[int] = []

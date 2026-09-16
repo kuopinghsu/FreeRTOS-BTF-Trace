@@ -2,7 +2,7 @@
  * Pair interval_start / interval_stop STI events into measurable spans.
  */
 import { formatTime } from './timeFormat.js'
-import { lighterColor, parseTaskName } from './colors.js'
+import { lighterColor, parseTaskName, tryParseBtfInt, parseIntToken } from './colors.js'
 import { bisectLeft } from './bisect.js'
 
 export const INTERVAL_START_CHANNELS = new Set(['interval_start'])
@@ -18,8 +18,8 @@ export function isIntervalMarkerChannel(name) {
 }
 
 export function intervalColor(id) {
-  const n = parseInt(id, 10)
-  const idx = Number.isFinite(n) ? Math.abs(n) % INTERVAL_COLORS.length : 0
+  const n = tryParseBtfInt(id)
+  const idx = n != null ? Math.abs(n) % INTERVAL_COLORS.length : 0
   return INTERVAL_COLORS[idx]
 }
 
@@ -63,9 +63,7 @@ function isStop(ev) {
 const INTERVAL_TID_RE = /^(\S+)\s+tid:((?:0[xX][0-9a-fA-F]+|\d+))\s*$/i
 
 function parseIntervalIntToken(s) {
-  const t = s.trim()
-  if (/^0[xX]/.test(t)) return parseInt(t, 16)
-  return parseInt(t, 10)
+  return parseIntToken(s, NaN)
 }
 
 function formatIntervalTidDisplay(token, value) {

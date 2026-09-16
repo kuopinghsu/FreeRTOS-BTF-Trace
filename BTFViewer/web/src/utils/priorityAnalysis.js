@@ -2,25 +2,27 @@
  * Priority inheritance / inversion analysis from create pri:N and set_priority STI events.
  */
 import { formatTime } from './timeFormat.js'
-import { taskMergeKey, taskLabelForMergeKey } from './colors.js'
+import { taskMergeKey, taskLabelForMergeKey, tryParseBtfInt } from './colors.js'
 
 export const BOOST_BAND_COLOR = '#F39C12'
 export const INVERSION_BAND_COLOR = '#E74C3C'
 
-const CREATE_PRI_RE = /^create\s+pri:(\d+)\s*$/i
-const PRIORITY_STI_RE = /^(set_priority|priority_inherit|priority_disinherit)\s+(.+?)\s+pri:(\d+)\s*$/i
+const CREATE_PRI_RE = /^create\s+pri:((?:0[xX][0-9a-fA-F]+|\d+))\s*$/i
+const PRIORITY_STI_RE = /^(set_priority|priority_inherit|priority_disinherit)\s+(.+?)\s+pri:((?:0[xX][0-9a-fA-F]+|\d+))\s*$/i
 
 /** @returns {number|null} */
 export function parseCreatePriority(note) {
   const m = CREATE_PRI_RE.exec((note ?? '').trim())
-  return m ? parseInt(m[1], 10) : null
+  return m ? tryParseBtfInt(m[1]) : null
 }
 
 /** @returns {{ taskRef: string, priority: number, kind: string }|null} */
 export function parsePriorityStiNote(note) {
   const m = PRIORITY_STI_RE.exec((note ?? '').trim())
   if (!m) return null
-  return { kind: m[1].toLowerCase(), taskRef: m[2].trim(), priority: parseInt(m[3], 10) }
+  const priority = tryParseBtfInt(m[3])
+  if (priority == null) return null
+  return { kind: m[1].toLowerCase(), taskRef: m[2].trim(), priority }
 }
 
 /** @deprecated alias */

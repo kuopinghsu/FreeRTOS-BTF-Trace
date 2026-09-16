@@ -6,7 +6,7 @@
  * (tskNO_AFFINITY) and does not contribute violations.
  */
 
-import { taskDisplayName, taskMergeKey, taskReprGet } from './colors.js'
+import { taskDisplayName, taskMergeKey, taskReprGet, tryParseBtfInt } from './colors.js'
 
 const AFFINITY_NOTE_RE = /^affinity_set\s+(.+?)\s+(0x[0-9a-fA-F]+|\d+)\s*$/i
 
@@ -70,8 +70,8 @@ export function buildCoreAffinityRows(trace, lo = null, hi = null) {
     if (!m) continue
     const taskLabel = m[1].trim()
     const raw = m[2]
-    const mask = parseInt(raw, raw.startsWith('0x') || raw.startsWith('0X') ? 16 : 10)
-    if (Number.isNaN(mask)) continue
+    const mask = tryParseBtfInt(raw)
+    if (mask == null) continue
     const mk = taskMergeKey(taskLabel)
     if (!histories.has(mk)) histories.set(mk, [])
     histories.get(mk).push([ev.time, mask])

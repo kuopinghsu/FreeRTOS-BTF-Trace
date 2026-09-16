@@ -118,11 +118,34 @@ const TASK_SUFFIX_PAREN_RE = /^(.+?)\(((?:0[xX][0-9a-fA-F]+|\d+))\)$/
 // Matches: idle, idle0, idle 0, idle(0x...), idle 0(0x...), idle0(0x...)
 const IDLE_RE = /^idle(?:\s*(\d+))?\s*(?:\((?:0[xX][0-9a-fA-F]+|\d+)\))?$/i
 
-function parseIntToken(s) {
-  const t = s.trim()
-  if (/^0[xX]/.test(t)) return parseInt(t, 16)
-  return parseInt(t, 10)
+function parseIntToken(s, defaultValue = 0) {
+  const n = tryParseBtfInt(s)
+  return n == null ? defaultValue : n
 }
+
+/** Parse a BTF integer token that may be decimal or ``0x`` / ``+0x`` / ``-0x`` hex. */
+export function tryParseBtfInt(s) {
+  const t = String(s ?? '').trim()
+  if (!t) return null
+  if (/^[-+]?0[xX][0-9a-fA-F]+$/.test(t)) {
+    const n = Number.parseInt(t, 16)
+    return Number.isFinite(n) ? n : null
+  }
+  if (/^[-+]?\d+$/.test(t)) {
+    const n = Number.parseInt(t, 10)
+    return Number.isSafeInteger(n) ? n : null
+  }
+  return null
+}
+
+/** Canonical sync-object pointer key (lowercase ``0x…``) from decimal or hex. */
+export function normalizeSyncPtr(raw) {
+  const n = tryParseBtfInt(raw == null || raw === '' ? '0' : raw)
+  if (n == null) return '0x0'
+  return `0x${(n >>> 0).toString(16)}`
+}
+
+export { parseIntToken }
 
 function formatIntTokenDisplay(token, value) {
   if (/^0[xX]/.test(token)) return `0x${value.toString(16).toUpperCase()}`

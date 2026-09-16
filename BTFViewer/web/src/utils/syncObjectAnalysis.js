@@ -2,7 +2,7 @@
  * Pair mutex/sem STI take/give events by object pointer; detect mispairs and deadlock risk.
  */
 import { formatTime } from './timeFormat.js'
-import { taskMergeKey, taskLabelForMergeKey } from './colors.js'
+import { taskMergeKey, taskLabelForMergeKey, normalizeSyncPtr } from './colors.js'
 import { bisectLeft } from './bisect.js'
 import { segmentStartsF64 } from './lod.js'
 
@@ -11,14 +11,14 @@ export const SYNC_OBJECT_TARGETS = new Set(['mutex', 'sem', 'queue'])
 /** Max time after `create` for the kernel post-create `give` (mutex / binary sem available). */
 export const POST_CREATE_GIVE_MAX_NS = 1000
 
-const SYNC_NOTE_RE = /^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$/i
+const SYNC_NOTE_RE = /^(create|take|give|delete|send|recv)(?:\s+(0[xX][0-9a-fA-F]+|\d+))?$/i
 
 /** @returns {{ action: string, ptr: string }|null} */
 export function parseSyncObjectNote(note) {
   const m = SYNC_NOTE_RE.exec((note ?? '').trim())
   if (!m) return null
   const action = m[1].toLowerCase()
-  const ptr = (m[2] || '0').toLowerCase()
+  const ptr = normalizeSyncPtr(m[2] || '0')
   return { action, ptr }
 }
 

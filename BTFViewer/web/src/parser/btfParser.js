@@ -15,7 +15,7 @@
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
 import { applyBtfVersionWarning } from '../utils/btfMeta.js'
 import { makeLodSummary, segmentStartsF64, LOD_SUMMARY_BINS, LOD_SUMMARY_BINS_ULTRA } from '../utils/lod.js'
-import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors } from '../utils/colors.js'
+import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors, tryParseBtfInt } from '../utils/colors.js'
 import { buildMigrationIndex, prepareFullTraceStats } from '../utils/migrationAnalysis.js'
 import { analyzeTickHealth } from '../utils/tickHealth.js'
 import {
@@ -23,7 +23,7 @@ import {
   buildIntervalMarkerIndex,
   isIntervalMarkerChannel,
 } from '../utils/intervalAnalysis.js'
-import { buildTagData } from '../utils/tagAnalysis.js'
+import { buildTagData, tagRawUint32, isTagChannel } from '../utils/tagAnalysis.js'
 import { buildPriorityData, parseCreatePriority } from '../utils/priorityAnalysis.js'
 import { buildSyncObjectData } from '../utils/syncObjectAnalysis.js'
 
@@ -192,8 +192,8 @@ export async function parseBtf(text, progressCallback) {
         if (parts.length < 7) {
           skippedLines++
         } else {
-          const t = parseInt(parts[0], 10)
-          if (isNaN(t) || !Number.isSafeInteger(t)) {
+          const t = tryParseBtfInt(parts[0])
+          if (t == null) {
             skippedLines++
           } else {
             const evType = parts[3].trim()
@@ -235,8 +235,8 @@ export async function parseBtf(text, progressCallback) {
                 // STI TICK events are rendered as ruler marks, not as STI channel rows.
                 tickStiTimes.push(t)
                 const tickNote = parts.length > 7 ? parts[7].trim() : ''
-                const tickCount = parseInt(tickNote, 10)
-                tickStiCounts.push([t, Number.isSafeInteger(tickCount) ? tickCount : null])
+                const tickCount = tryParseBtfInt(tickNote)
+                tickStiCounts.push([t, tickCount])
               } else {
                 stiEvents.push({
                   time:   t,
@@ -609,8 +609,9 @@ export async function parseBtf(text, progressCallback) {
   for (const [ch, evs] of stiByTarget) {
     let vMin = Infinity, vMax = -Infinity
     for (const ev of evs) {
-      const v = parseFloat(ev.note !== '' ? ev.note : ev.event)
-      if (isNaN(v)) continue
+      const raw = ev.note !== '' ? ev.note : ev.event
+      const v = isTagChannel(ch) ? tagRawUint32(raw) : tryParseBtfInt(raw) ?? Number.parseFloat(raw)
+      if (v == null || Number.isNaN(v)) continue
       if (v < vMin) vMin = v
       if (v > vMax) vMax = v
     }

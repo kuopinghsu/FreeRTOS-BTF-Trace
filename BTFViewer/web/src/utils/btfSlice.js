@@ -2,7 +2,7 @@
  * Cursor-range BTF slice (parity with btf_viewer_pkg/btf_slice.py).
  */
 
-import { taskLabelForMergeKey, taskReprGet } from './colors.js'
+import { taskLabelForMergeKey, taskReprGet, tryParseBtfInt } from './colors.js'
 
 export function filterBtfTextToRange(text, lo, hi) {
   let a = Number(lo)
@@ -87,8 +87,8 @@ function filterBtfLines(src, lo, hi) {
       out.push(stripped)
       continue
     }
-    const t = Number.parseInt(String(parts[0] || '').trim(), 10)
-    if (!Number.isFinite(t)) continue
+    const t = tryParseBtfInt(String(parts[0] || '').trim())
+    if (t == null) continue
     if (t >= lo && t <= hi) {
       out.push(stripped)
       kept += 1

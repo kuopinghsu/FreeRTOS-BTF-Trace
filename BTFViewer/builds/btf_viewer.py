@@ -6369,13 +6369,18 @@ def _open_btf_text(filepath: str):
 
 
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
-_CREATE_PRI_RE = re.compile(r"^create\s+pri:(\d+)\s*$", re.IGNORECASE)
+_CREATE_PRI_RE = re.compile(
+    r"^create\s+pri:((?:0[xX][0-9a-fA-F]+|\d+))\s*$", re.IGNORECASE)
 _PRIORITY_STI_RE = re.compile(
-    r"^(set_priority|priority_inherit|priority_disinherit)\s+(.+?)\s+pri:(\d+)\s*$",
+    r"^(set_priority|priority_inherit|priority_disinherit)\s+(.+?)\s+"
+    r"pri:((?:0[xX][0-9a-fA-F]+|\d+))\s*$",
     re.IGNORECASE,
 )
 _SYNC_OBJECT_NOTE_RE = re.compile(
-    r"^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$", re.IGNORECASE)
+    r"^(create|take|give|delete|send|recv)"
+    r"(?:\s+(0[xX][0-9a-fA-F]+|\d+))?$",
+    re.IGNORECASE,
+)
 _SYNC_OBJECT_TARGETS = frozenset({"mutex", "sem", "queue"})
 _POST_CREATE_GIVE_MAX_NS = 1000
 _INTERVAL_START_CHANNELS = frozenset({"interval_start"})
@@ -6415,8 +6420,8 @@ def _interval_display_id(ev: "StiEvent") -> str:
 
 def _interval_color(interval_id: str) -> str:
     try:
-        idx = abs(int(interval_id)) % len(_INTERVAL_COLORS)
-    except ValueError:
+        idx = abs(_parse_int_token(str(interval_id), default=0)) % len(_INTERVAL_COLORS)
+    except (TypeError, ValueError):
         idx = 0
     return _INTERVAL_COLORS[idx]
 
@@ -7639,7 +7644,7 @@ def _task_core_affinity_rows(
             continue
         task_label = m.group(1).strip()
         raw_mask = m.group(2)
-        mask_val = _safe_int(raw_mask, 16 if raw_mask.startswith(("0x", "0X")) else 10)
+        mask_val = _parse_int_token(raw_mask)
         mk = _task_merge_key(task_label)
         histories.setdefault(mk, []).append((ev.time, mask_val))
 
@@ -7846,13 +7851,16 @@ def _tag_sample_detail_rows(
 
 def _parse_create_priority(note: str) -> Optional[int]:
     m = _CREATE_PRI_RE.match((note or "").strip())
-    return _safe_int(m.group(1)) if m else None
+    return _try_parse_btf_int(m.group(1)) if m else None
 
 def _parse_priority_sti_note(note: str) -> Optional[Tuple[str, str, int]]:
     m = _PRIORITY_STI_RE.match((note or "").strip())
     if not m:
         return None
-    return m.group(1).lower(), m.group(2).strip(), _safe_int(m.group(3))
+    pri = _try_parse_btf_int(m.group(3))
+    if pri is None:
+        return None
+    return m.group(1).lower(), m.group(2).strip(), pri
 
 def _merge_key_from_priority_ref(task_ref: str) -> str:
     return _task_merge_key((task_ref or "").strip())
@@ -8166,8 +8174,7 @@ def _parse_sync_object_note(note: str) -> Optional[Tuple[str, str]]:
     m = _SYNC_OBJECT_NOTE_RE.match((note or "").strip())
     if not m:
         return None
-    ptr = (m.group(2) or "0").lower()
-    return m.group(1).lower(), ptr
+    return m.group(1).lower(), _normalize_sync_ptr(m.group(2))
 
 def _sync_object_key(kind: str, ptr: str) -> str:
     return f"{kind}:{ptr}"
@@ -8891,7 +8898,10 @@ _IDLE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_MAX_SAFE_INT_DIGITS = 18  # generous headroom over any realistic task/core id, priority, or tag index
+_MAX_SAFE_INT_DIGITS = 24  # headroom for 0x-prefixed hex tokens (timestamps, ptrs, ids)
+_BTF_HEX_INT_RE = re.compile(r"^[-+]?0[xX][0-9a-fA-F]+$")
+_BTF_DEC_INT_RE = re.compile(r"^[-+]?\d+$")
+
 
 def _safe_int(s: str, base: int = 10, default: int = 0) -> int:
     """Parse an int token defensively.
@@ -8908,11 +8918,37 @@ def _safe_int(s: str, base: int = 10, default: int = 0) -> int:
     except ValueError:
         return default
 
-def _parse_int_token(s: str) -> int:
-    """Parse an integer token that may be hex (0x...) or decimal (with optional leading zeros)."""
-    if s.startswith(("0x", "0X")):
-        return _safe_int(s, 16)
-    return _safe_int(s, 10)
+
+def _try_parse_btf_int(s: str) -> Optional[int]:
+    """Parse a BTF numeric token that may be decimal or ``0x`` / ``+0x`` / ``-0x`` hex.
+
+    Returns ``None`` when the token is empty or not a plain integer form.
+    """
+    raw = str(s if s is not None else "").strip()
+    if not raw or len(raw) > _MAX_SAFE_INT_DIGITS:
+        return None
+    try:
+        if _BTF_HEX_INT_RE.match(raw):
+            return int(raw, 16)
+        if _BTF_DEC_INT_RE.match(raw):
+            return int(raw, 10)
+    except (ValueError, OverflowError):
+        return None
+    return None
+
+
+def _parse_int_token(s: str, default: int = 0) -> int:
+    """Parse an integer token that may be hex (0x...) or decimal (optional leading zeros)."""
+    value = _try_parse_btf_int(s)
+    return default if value is None else value
+
+
+def _normalize_sync_ptr(raw: Optional[str]) -> str:
+    """Canonical sync-object pointer key (lowercase ``0x…``) from decimal or hex."""
+    value = _try_parse_btf_int(raw if raw not in (None, "") else "0")
+    if value is None:
+        return "0x0"
+    return f"0x{value & 0xFFFFFFFF:x}"
 
 def _format_int_token_display(token: str, value: int) -> str:
     """Format a parsed task-id token for Name[id] labels."""
@@ -14050,7 +14086,6 @@ def _parse_btf(filepath: str,
     # ------------------------------------------------------------------
     if progress_callback:
         progress_callback(2, "Reading file…")
-    _int = int
     _meta_re_match = _META_KEY_RE.match
     with _open_btf_text(filepath) as fh:
         for line_index, line in enumerate(fh, start=1):
@@ -14078,9 +14113,8 @@ def _parse_btf(filepath: str,
             if len(parts) < 7:
                 continue
 
-            try:
-                t = _int(parts[0])
-            except ValueError:
+            t = _try_parse_btf_int(parts[0].strip())
+            if t is None:
                 _skipped_lines += 1
                 continue
 
@@ -14124,10 +14158,7 @@ def _parse_btf(filepath: str,
                     # STI TICK events are rendered as ruler marks, not STI channel rows.
                     tick_sti_times.append(t)
                     _tick_note = parts[7].strip() if len(parts) > 7 else ""
-                    try:
-                        tick_sti_notes.append((t, _int(_tick_note)))
-                    except ValueError:
-                        tick_sti_notes.append((t, None))
+                    tick_sti_notes.append((t, _try_parse_btf_int(_tick_note)))
                 else:
                     sti_events.append(StiEvent(
                         time=t,
@@ -14669,9 +14700,8 @@ def _filter_btf_lines(src: Iterable[str], lo: int, hi: int) -> Tuple[List[str], 
         if ev_type == "C":
             out.append(stripped)
             continue
-        try:
-            t = int(parts[0].strip())
-        except ValueError:
+        t = _try_parse_btf_int(parts[0].strip())
+        if t is None:
             continue
         if lo <= t <= hi:
             out.append(stripped)
@@ -87625,8 +87655,6 @@ _FIND_MODE_ALIASES = {
 }
 
 _TASK_LIFE_RE = re.compile(r"^(create|delete|suspend|resume)\b", re.IGNORECASE)
-_SYNC_NOTE_RE = re.compile(
-    r"^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$", re.IGNORECASE)
 
 
 def normalize_find_mode(mode: str) -> str:
@@ -87789,11 +87817,12 @@ def _find_lifecycle_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pat
     return hits
 
 def _parse_sync_note(note: str) -> Optional[Tuple[str, str]]:
-    m = _SYNC_NOTE_RE.match((note or "").strip())
+    _normalize_sync_ptr = globals().get("_normalize_sync_ptr")
+    _SYNC_OBJECT_NOTE_RE = globals().get("_SYNC_OBJECT_NOTE_RE")
+    m = _SYNC_OBJECT_NOTE_RE.match((note or "").strip())
     if not m:
         return None
-    ptr = (m.group(2) or "0").lower()
-    return m.group(1).lower(), ptr
+    return m.group(1).lower(), _normalize_sync_ptr(m.group(2))
 
 def _find_pointer_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
     hits: List[int] = []

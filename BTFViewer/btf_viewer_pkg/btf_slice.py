@@ -5,7 +5,7 @@ import gzip
 import os
 from typing import Iterable, List, Tuple
 
-from .parser import BtfTrace, _open_btf_text, _task_display_name
+from .parser import BtfTrace, _open_btf_text, _task_display_name, _try_parse_btf_int
 
 
 def filter_btf_text_to_range(text: str, lo: int, hi: int) -> Tuple[str, int]:
@@ -106,9 +106,8 @@ def _filter_btf_lines(src: Iterable[str], lo: int, hi: int) -> Tuple[List[str], 
         if ev_type == "C":
             out.append(stripped)
             continue
-        try:
-            t = int(parts[0].strip())
-        except ValueError:
+        t = _try_parse_btf_int(parts[0].strip())
+        if t is None:
             continue
         if lo <= t <= hi:
             out.append(stripped)
