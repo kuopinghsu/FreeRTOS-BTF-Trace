@@ -64,7 +64,7 @@ describe('formatToolUsageFold', () => {
   })
 })
 
-// TODO §10 — structured verification is authoritative over prose.
+// Structured verification is authoritative over prose.
 describe('inconclusive verify_claim can never read as Confirmed', () => {
   const strongPrior = {
     conclusion: 'Mutex CS[12] holds Worker[3] off-CPU',

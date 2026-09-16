@@ -1,4 +1,4 @@
-"""Superseded Desktop dialogs are gone (BTFVIEWER_DESIGN_CONSISTENCY_TODO §11).
+"""Superseded Desktop dialogs are gone.
 
 The unified ``_CorridorInspectorDialog`` is the only migration-heatmap / chord
 entry point. ``_MigrationHeatmapDialog``, ``_MigrationHeatmapWidget`` and

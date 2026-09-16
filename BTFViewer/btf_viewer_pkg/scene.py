@@ -2450,10 +2450,15 @@ class TimelineScene(QGraphicsScene):
             y_top  = _sti_y
             y_ctr  = y_top + row_h / 2
             _stripe_rows.append((y_top, row_h, self._row_gap, _sti_bg, None))
-            # Label with expand/collapse indicator (only for expandable channels)
+            # Label with expand/collapse indicator (only for expandable channels).
+            # The format pill sits in the row's bottom-right 20px, so it only
+            # overlaps the vertically-centered label while collapsed (short
+            # row); once expanded the tall waveform row pushes the pill well
+            # below the label, so the full width is free to use again.
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, lw - 98))
+                _avail = lw - 4 - 4 if is_exp else lw - 98
+                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, _avail))
             else:
                 _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
@@ -2648,7 +2653,7 @@ class TimelineScene(QGraphicsScene):
 
             lbl_color    = _complementary_color(col_color) if is_hl else _lbl_color
             lbl_font     = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
-            _lbl_avail_v = max(0, label_row_h - (38 if expandable else 14))
+            _lbl_avail_v = max(0, label_row_h - 14)
             _lbl_fm_v    = QFontMetrics(lbl_font) if is_hl else fm
             _lbl_disp_v  = _lbl_fm_v.elidedText(disp, Qt.TextElideMode.ElideRight, _lbl_avail_v)
             lbl = _make_rotated_label(self, _lbl_disp_v, lbl_font, lbl_color,
@@ -3083,9 +3088,14 @@ class TimelineScene(QGraphicsScene):
                                         QPen(Qt.PenStyle.NoPen), QBrush(self._c_sti_bg))
             _sti_bg_rect.setZValue(0)
             self._track_timeline_bg(_sti_bg_rect)
+            # The format pill sits in the row's bottom-right 20px, so it only
+            # overlaps the vertically-centered label while collapsed (short
+            # row); once expanded the tall waveform row pushes the pill well
+            # below the label, so the full width is free to use again.
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
+                _avail = lw - 4 - 4 if is_exp else lw - 98
+                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, _avail))
             else:
                 _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
@@ -3396,9 +3406,12 @@ class TimelineScene(QGraphicsScene):
             self.addItem(lbl_bg_vc)
             self._frozen_top_items.append((lbl_bg_vc, 0))
 
-            # Rotated label with optional expand indicator
+            # Rotated label with optional expand indicator. Reserve room for
+            # the format pill _StiLabelItem paints at the label's bottom edge
+            # (see _format_rect) so a long tag alias can't be elided wide
+            # enough to run under it.
             _ind_txt_vc  = ("v " if is_exp else "> ") if expandable else ""
-            _lbl_avail_vc = max(0, label_row_h - 14)
+            _lbl_avail_vc = max(0, label_row_h - (38 if expandable else 14))
             _lbl_txt_vc  = QFontMetrics(font).elidedText(
                 _ind_txt_vc + (_tag_alias(trace, channel) or channel), Qt.TextElideMode.ElideRight, _lbl_avail_vc)
             lbl = _make_rotated_label(self, _lbl_txt_vc, font, self._c_sti_lbl,

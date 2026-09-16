@@ -3035,8 +3035,8 @@ def _tool_usage_summary_fold_html(
     is_dark: bool = True,
     open_folds: Optional[Set[str]] = None,
 ) -> str:
-    """Collapsed "Tool usage · X calls / Y tools" fold — one per query
-    (AI_RESPONSE_FLOW_TODO §4). Expands to ``name ×N`` + a short brief.
+    """Collapsed "Tool usage · X calls / Y tools" fold — one per query.
+    Expands to ``name ×N`` + a short brief.
     Lockstep with the ``queryMeta`` tool-usage block in AiAssistantPanel.vue."""
     summary = format_tool_usage_summary_line(tools, labels)
     groups = tool_usage_from_chat_tools(tools)["groups"]
@@ -3383,8 +3383,8 @@ def _format_ai_log_html(
         f'<tr><td class="ai-role {role_cls}"{_align} style="padding:10px 0 3px 0;">'
         f"{label}</td></tr>"
     )
-    # AI_RESPONSE_FLOW_TODO: "Analysis completed · N.N s" then a collapsed
-    # "Tool usage · X calls / Y tools" fold, immediately before the answer.
+    # "Analysis completed · N.N s" then a collapsed "Tool usage · X calls /
+    # Y tools" fold, immediately before the answer.
     if analysis_line:
         acc = "#8b98a8" if is_dark else "#5a6a7c"
         rows += (
@@ -3443,9 +3443,9 @@ def _ai_log_document_html(
     """Full conversation document for QTextBrowser.setHtml (avoids append merge)."""
     if not entries:
         return ""
-    # AI_RESPONSE_FLOW_TODO: once a query completes, collapse its turns to
-    # user -> "Analysis completed" -> "Tool usage" -> final answer. While a
-    # query is still running nothing is hidden (live tool cards stay).
+    # Once a query completes, collapse its turns to user -> "Analysis
+    # completed" -> "Tool usage" -> final answer. While a query is still
+    # running nothing is hidden (live tool cards stay).
     hidden, meta = plan_query_blocks(entries)
     labels = evidence_panel_labels(response_language)
     parts: List[str] = []
@@ -3505,7 +3505,7 @@ def format_ai_conversation_markdown(
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
 ) -> str:
     """Markdown transcript. A completed query exports the same clean block as
-    the UI (AI_RESPONSE_FLOW_TODO §15): ## Question / <q> / Analysis completed ·
+    the UI: ## Question / <q> / Analysis completed ·
     N.N s / Tool usage · X calls / Y tools + groups / ## Answer / <final>."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     labels = evidence_panel_labels(response_language)
@@ -5594,11 +5594,11 @@ def create_ai_assistant_panel(
                 self._guide_step_row.addWidget(btn, 1)
                 self._guide_step_btns[sid] = btn
             g_lay.addWidget(self._guide_stepper)
-            # BTFVIEWER_DESIGN_AND_AI_PROMPT_TODO §5/§15 — the guided stages are
-            # an internal prompt-orchestration detail, not a user-facing
-            # workflow. The stage stepper rail is not shown (the Investigation
-            # Notebook is the only visible persistent-investigation model);
-            # `_guide_stage` still drives prompt composition.
+            # The guided stages are an internal prompt-orchestration detail,
+            # not a user-facing workflow. The stage stepper rail is not shown
+            # (the Investigation Notebook is the only visible
+            # persistent-investigation model); `_guide_stage` still drives
+            # prompt composition.
             self._guide_stepper.setVisible(False)
             self._start_inv_host = QWidget()
             self._start_inv_host.setObjectName("aiStartInv")
@@ -8824,7 +8824,7 @@ def create_ai_assistant_panel(
         def _stamp_query_complete(self) -> None:
             """Mark the active query done + stamp its analysis time from the one
             authoritative timer (cost meter's accumulated model time), so the
-            log flips to the compact block (AI_RESPONSE_FLOW_TODO §3)."""
+            log flips to the compact block."""
             elapsed = 0.0
             try:
                 elapsed = float((self._cost_meter or {}).get("model_time_s") or 0.0)

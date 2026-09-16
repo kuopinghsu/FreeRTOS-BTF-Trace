@@ -1876,8 +1876,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn('low.startswith("btfstats:")', assist)
         self.assertIn('class="ai-tool-cards"', assist)
         self.assertIn('class="ai-msg-body"', panel)
-        # AI_RESPONSE_FLOW_TODO — no per-round tool cards; the only tool surface
-        # in the chat is the one "Tool Usage" block per completed query.
+        # No per-round tool cards; the only tool surface in the chat is the
+        # one "Tool Usage" block per completed query.
         self.assertIn('class="ai-tool-card ai-tool-usage"', panel)
         self.assertIn("planQueryBlocks", panel)
         self.assertIn("plan_query_blocks", assist)

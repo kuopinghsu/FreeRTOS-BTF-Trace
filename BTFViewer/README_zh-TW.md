@@ -343,7 +343,7 @@ BTFViewer 的所有結果都由已記錄的 BTF 事件計算而來。它不會�
 | 3 | **結果清單** | 依嚴重度排序並依受影響物件分組；每筆項目會顯示分類，以及證據為 `Estimated / heuristic`（推估／啟發式）或實測。 |
 | 4 | **詳細窗格** | 所選結果的完整內容——現象與解讀、證據強度、確切證據、**Check next** 指引，以及建議的分析範圍。 |
 | 5 | **結果動作** | **Apply cursors** / **Show on timeline** / **Open Statistics** 可跳至證據；**Done** / **Dismiss…** 可記錄分流結果；**Add to investigation** 會把該結果存入[調查筆記本](#investigation-notebook)。 |
-| 6 | **底部列** | 對所選結果 **Ask AI**，以及 **More** 中的匯出選項。 |
+| 6 | **底部列** | 對所選結果 **Ask AI**，以及 **More** 中的 **Save recipe…**、**Story…**、**Save as text…** 與 **Export Evidence Pack…**——將目前結果與可攜式工作階段／分析內容打包成 zip，作為可重現的證據分享。 |
 
 ### Max、p95 與 p99 的判讀方式
 

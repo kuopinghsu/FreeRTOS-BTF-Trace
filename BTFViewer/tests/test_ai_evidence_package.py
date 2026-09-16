@@ -1,4 +1,4 @@
-"""Compact AI evidence package (TODO Phase 6): assembly, size, preview, parity."""
+"""Compact AI evidence package: assembly, size, preview, parity."""
 from __future__ import annotations
 
 import io

@@ -90,6 +90,7 @@ from .investigation_notebook import (
 )
 from .ai_planner import analysis_dashboard, format_analysis_story
 from .empty_state import empty_state_message, stats_empty_label
+from .evidence_pack import build_evidence_pack_zip
 from .evidence_nav import (
     EVIDENCE_GLYPH,
     EVIDENCE_TOOLTIP,
@@ -6197,7 +6198,7 @@ def _ci_item_data(item):
 
 
 class _CorridorInspectorDialog(QDialog):
-    """Unified Migration & Corridor Inspector (TODO2) — tree + timeline + mini-chord."""
+    """Unified Migration & Corridor Inspector — tree + timeline + mini-chord."""
 
     def __init__(self, trace: "BtfTrace", parent=None,
                  on_spotlight: Optional[Callable] = None,
@@ -9059,11 +9060,14 @@ class _AnalysisFindingsDialog(QDialog):
             lambda: self._query_with_ai(ai_enabled, "auto_investigate"))
         ask_btn.setMenu(ask_menu)
 
-        more_btn = _menu_btn("More ▾", "Save recipe, story, or text export")
+        more_btn = _menu_btn(
+            "More ▾", "Save recipe, story, text export, or evidence pack")
         more_menu = _ci_make_popup_menu(more_btn)
         more_menu.addAction("Save recipe…").triggered.connect(self._save_recipe)
         more_menu.addAction("Story…").triggered.connect(self._save_story)
         more_menu.addAction("Save as text…").triggered.connect(self._save_as_text)
+        self._export_evidence_action = more_menu.addAction("Export Evidence Pack…")
+        self._export_evidence_action.triggered.connect(self._export_evidence_pack)
         more_btn.setMenu(more_menu)
 
         def _hsep() -> QFrame:
@@ -9370,6 +9374,14 @@ class _AnalysisFindingsDialog(QDialog):
             btn.clicked.connect(self._recalculate_context)
             lay.addWidget(btn, 0)
         lay.addStretch(1)
+        export_action = getattr(self, "_export_evidence_action", None)
+        if export_action is not None:
+            export_action.setEnabled(not self._ctx_stale)
+            export_action.setToolTip(
+                "Recalculate with current context before exporting"
+                if self._ctx_stale else
+                "Export current Analysis Findings with the portable "
+                "session and analysis context")
 
     def _mark_context_stale(self) -> None:
         """Scope/Filters changed since these findings were built."""
@@ -9856,6 +9868,48 @@ class _AnalysisFindingsDialog(QDialog):
         rebuild = getattr(panel, "_rebuild_investigation_menu", None)
         if callable(rebuild):
             rebuild()
+
+    def _export_evidence_pack(self) -> None:
+        """Zip of the current Analysis Findings + portable session/context —
+        the Desktop mirror of web's Marks-panel-turned-Findings "Evidence"
+        action. Distinct from the Investigation Notebook's question-driven
+        "Evidence package…" (ai_evidence_package.py)."""
+        wnd = self.parent()
+        session_fn = getattr(wnd, "_build_portable_session_payload", None)
+        if not callable(session_fn):
+            return
+        try:
+            session = session_fn()
+        except ValueError:
+            session = None
+        findings_text = _format_analysis_findings_text(
+            self._findings, self._scope_title, triage_state=self._triage_state)
+        trace_name = os.path.basename(getattr(wnd, "_current_file", "") or "trace.btf")
+        base = re.sub(r"\.btf(\.gz)?$", "", trace_name, flags=re.IGNORECASE)
+        zip_bytes, filename = build_evidence_pack_zip(
+            base_name=base,
+            findings_text=findings_text,
+            session_json=(
+                json.dumps(session, indent=2) if session is not None else ""),
+            notes=(
+                f"Trace: {trace_name}\n"
+                f"Scope: {self._scope_title.strip() or 'full trace'}\n"
+                "Re-open the .btf in BTFViewer and Import Session to "
+                "restore cursors/marks.\n"),
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save evidence pack", filename,
+            "Zip files (*.zip);;All files (*)")
+        if not path:
+            return
+        if not path.lower().endswith(".zip"):
+            path += ".zip"
+        try:
+            with open(path, "wb") as fh:
+                fh.write(zip_bytes)
+        except OSError as exc:
+            QMessageBox.warning(
+                self, "Save failed", f"Could not write file:\n{exc}")
 
 
 

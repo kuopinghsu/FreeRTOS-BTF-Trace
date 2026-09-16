@@ -1717,6 +1717,32 @@ _PORTABLE_FIND_MODES = (
     "sti", "intervals", "lifecycle", "pointers",
 )
 
+# Canonical portable view-state fields — the single schema shared by the
+# standalone Session export/import and the .btfw state/view.json member.
+# Defined once so Session and Workspace never grow independent field lists.
+PORTABLE_VIEW_STATE_KEYS = (
+    "version", "traceName", "cursors", "marks", "markNextId",
+    "timelineViewport", "timelineOptions", "tabFilters",
+    "findQuery", "findMode", "pinnedHighlightKey", "scopeToCursors",
+    "openPlot", "statsSectionCollapsed", "compareScopeToCursors",
+)
+
+# A subset that only the modern portable schema has — legacy Desktop
+# workspace state (trace_name / viewport_desktop, pre-unification) never
+# sets any of these, even though it may share the same ``version`` number.
+_PORTABLE_VIEW_STATE_MARKERS = (
+    "timelineViewport", "timelineOptions", "tabFilters",
+    "findQuery", "statsSectionCollapsed",
+)
+
+def _workspace_has_portable_view_state(view) -> bool:
+    """True if a ``.btfw`` ``state/view.json`` dict uses the modern
+    portable Session schema rather than the legacy reduced Desktop
+    workspace schema. Detection must be field-based: legacy Desktop
+    workspace state may report ``version == SESSION_PORTABLE_VERSION`` too."""
+    return isinstance(view, dict) and any(
+        key in view for key in _PORTABLE_VIEW_STATE_MARKERS)
+
 def _snapshot_tab_filters(scene) -> dict:
     """Per-tab legend filter state (portable session + tab_view rc).
 
@@ -10673,7 +10699,7 @@ _CHORD_MIN_ARC_RAD = 0.05
 _CHORD_TAPER_DEST_RATIO = 0.4
 _CHORD_GRAD_SOURCE_STOP = 0.7
 _CHORD_RIBBON_MAX_HALF = 7.0
-# Split core rings (TODO2): outer = egress/departures, inner = ingress/arrivals.
+# Split core rings: outer = egress/departures, inner = ingress/arrivals.
 _CHORD_ARC_OUTER = 12.0
 _CHORD_ARC_INNER = 8.0
 
@@ -18063,10 +18089,15 @@ class TimelineScene(QGraphicsScene):
             y_top  = _sti_y
             y_ctr  = y_top + row_h / 2
             _stripe_rows.append((y_top, row_h, self._row_gap, _sti_bg, None))
-            # Label with expand/collapse indicator (only for expandable channels)
+            # Label with expand/collapse indicator (only for expandable channels).
+            # The format pill sits in the row's bottom-right 20px, so it only
+            # overlaps the vertically-centered label while collapsed (short
+            # row); once expanded the tall waveform row pushes the pill well
+            # below the label, so the full width is free to use again.
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, lw - 98))
+                _avail = lw - 4 - 4 if is_exp else lw - 98
+                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, _avail))
             else:
                 _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
@@ -18261,7 +18292,7 @@ class TimelineScene(QGraphicsScene):
 
             lbl_color    = _complementary_color(col_color) if is_hl else _lbl_color
             lbl_font     = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
-            _lbl_avail_v = max(0, label_row_h - (38 if expandable else 14))
+            _lbl_avail_v = max(0, label_row_h - 14)
             _lbl_fm_v    = QFontMetrics(lbl_font) if is_hl else fm
             _lbl_disp_v  = _lbl_fm_v.elidedText(disp, Qt.TextElideMode.ElideRight, _lbl_avail_v)
             lbl = _make_rotated_label(self, _lbl_disp_v, lbl_font, lbl_color,
@@ -18696,9 +18727,14 @@ class TimelineScene(QGraphicsScene):
                                         QPen(Qt.PenStyle.NoPen), QBrush(self._c_sti_bg))
             _sti_bg_rect.setZValue(0)
             self._track_timeline_bg(_sti_bg_rect)
+            # The format pill sits in the row's bottom-right 20px, so it only
+            # overlaps the vertically-centered label while collapsed (short
+            # row); once expanded the tall waveform row pushes the pill well
+            # below the label, so the full width is free to use again.
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
+                _avail = lw - 4 - 4 if is_exp else lw - 98
+                _ltxt = fm.elidedText(f"{_ind} {_tag_alias(trace, channel) or channel}", Qt.TextElideMode.ElideRight, max(0, _avail))
             else:
                 _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
@@ -19009,9 +19045,12 @@ class TimelineScene(QGraphicsScene):
             self.addItem(lbl_bg_vc)
             self._frozen_top_items.append((lbl_bg_vc, 0))
 
-            # Rotated label with optional expand indicator
+            # Rotated label with optional expand indicator. Reserve room for
+            # the format pill _StiLabelItem paints at the label's bottom edge
+            # (see _format_rect) so a long tag alias can't be elided wide
+            # enough to run under it.
             _ind_txt_vc  = ("v " if is_exp else "> ") if expandable else ""
-            _lbl_avail_vc = max(0, label_row_h - 14)
+            _lbl_avail_vc = max(0, label_row_h - (38 if expandable else 14))
             _lbl_txt_vc  = QFontMetrics(font).elidedText(
                 _ind_txt_vc + (_tag_alias(trace, channel) or channel), Qt.TextElideMode.ElideRight, _lbl_avail_vc)
             lbl = _make_rotated_label(self, _lbl_txt_vc, font, self._c_sti_lbl,
@@ -25315,7 +25354,7 @@ def summarize_tool_usage(usage: Optional[dict]) -> Dict[str, Any]:
 # ===========================================================================
 
 def format_elapsed_seconds(s: Any) -> str:
-    """``28.3`` — one decimal, matches the TODO's own examples."""
+    """``28.3`` — one decimal place."""
     try:
         n = max(0.0, float(s))
     except (TypeError, ValueError):
@@ -32171,8 +32210,8 @@ def extract_evidence_panel_payload(
             else "Medium"
         )
     elif name in ("verify_claim", "challenge_conclusion"):
-        # Structured verification is authoritative (TODO §10): fold the verdict
-        # into payload["validation"] so an inconclusive / negative result cannot
+        # Structured verification is authoritative: fold the verdict into
+        # payload["validation"] so an inconclusive / negative result cannot
         # be displayed as Confirmed regardless of prose confidence.
         verdict = str(
             data.get("verdict") or data.get("status") or result.get("message") or ""
@@ -47905,8 +47944,8 @@ def _tool_usage_summary_fold_html(
     is_dark: bool = True,
     open_folds: Optional[Set[str]] = None,
 ) -> str:
-    """Collapsed "Tool usage · X calls / Y tools" fold — one per query
-    (AI_RESPONSE_FLOW_TODO §4). Expands to ``name ×N`` + a short brief.
+    """Collapsed "Tool usage · X calls / Y tools" fold — one per query.
+    Expands to ``name ×N`` + a short brief.
     Lockstep with the ``queryMeta`` tool-usage block in AiAssistantPanel.vue."""
     summary = format_tool_usage_summary_line(tools, labels)
     groups = tool_usage_from_chat_tools(tools)["groups"]
@@ -48253,8 +48292,8 @@ def _format_ai_log_html(
         f'<tr><td class="ai-role {role_cls}"{_align} style="padding:10px 0 3px 0;">'
         f"{label}</td></tr>"
     )
-    # AI_RESPONSE_FLOW_TODO: "Analysis completed · N.N s" then a collapsed
-    # "Tool usage · X calls / Y tools" fold, immediately before the answer.
+    # "Analysis completed · N.N s" then a collapsed "Tool usage · X calls /
+    # Y tools" fold, immediately before the answer.
     if analysis_line:
         acc = "#8b98a8" if is_dark else "#5a6a7c"
         rows += (
@@ -48313,9 +48352,9 @@ def _ai_log_document_html(
     """Full conversation document for QTextBrowser.setHtml (avoids append merge)."""
     if not entries:
         return ""
-    # AI_RESPONSE_FLOW_TODO: once a query completes, collapse its turns to
-    # user -> "Analysis completed" -> "Tool usage" -> final answer. While a
-    # query is still running nothing is hidden (live tool cards stay).
+    # Once a query completes, collapse its turns to user -> "Analysis
+    # completed" -> "Tool usage" -> final answer. While a query is still
+    # running nothing is hidden (live tool cards stay).
     hidden, meta = plan_query_blocks(entries)
     labels = evidence_panel_labels(response_language)
     parts: List[str] = []
@@ -48375,7 +48414,7 @@ def format_ai_conversation_markdown(
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
 ) -> str:
     """Markdown transcript. A completed query exports the same clean block as
-    the UI (AI_RESPONSE_FLOW_TODO §15): ## Question / <q> / Analysis completed ·
+    the UI: ## Question / <q> / Analysis completed ·
     N.N s / Tool usage · X calls / Y tools + groups / ## Answer / <final>."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     labels = evidence_panel_labels(response_language)
@@ -50464,11 +50503,11 @@ def create_ai_assistant_panel(
                 self._guide_step_row.addWidget(btn, 1)
                 self._guide_step_btns[sid] = btn
             g_lay.addWidget(self._guide_stepper)
-            # BTFVIEWER_DESIGN_AND_AI_PROMPT_TODO §5/§15 — the guided stages are
-            # an internal prompt-orchestration detail, not a user-facing
-            # workflow. The stage stepper rail is not shown (the Investigation
-            # Notebook is the only visible persistent-investigation model);
-            # `_guide_stage` still drives prompt composition.
+            # The guided stages are an internal prompt-orchestration detail,
+            # not a user-facing workflow. The stage stepper rail is not shown
+            # (the Investigation Notebook is the only visible
+            # persistent-investigation model); `_guide_stage` still drives
+            # prompt composition.
             self._guide_stepper.setVisible(False)
             self._start_inv_host = QWidget()
             self._start_inv_host.setObjectName("aiStartInv")
@@ -53694,7 +53733,7 @@ def create_ai_assistant_panel(
         def _stamp_query_complete(self) -> None:
             """Mark the active query done + stamp its analysis time from the one
             authoritative timer (cost meter's accumulated model time), so the
-            log flips to the compact block (AI_RESPONSE_FLOW_TODO §3)."""
+            log flips to the compact block."""
             elapsed = 0.0
             try:
                 elapsed = float((self._cost_meter or {}).get("model_time_s") or 0.0)
@@ -62319,6 +62358,49 @@ def format_evidence_package_preview(package: Dict[str, Any]) -> str:
     lines.append(package.get("instructions", ""))
     return "\n".join(lines) + "\n"
 # ===========================================================================
+# evidence_pack
+# ===========================================================================
+
+_README_TEXT = (
+    "BTFViewer evidence pack\n"
+    "----------------------\n"
+    "analysis-findings.txt — Analysis Findings snapshot\n"
+    "session.json — portable session (marks, cursors, layout)\n"
+    "statistics-report.html — optional HTML stats export\n"
+    "Open the matching .btf in BTFViewer to verify events.\n"
+)
+
+_BASENAME_SANITIZE_RE = re.compile(r"[^\w.-]+", re.ASCII)
+
+
+def build_evidence_pack_zip(
+    *,
+    base_name: str = "",
+    findings_text: str = "",
+    session_json: str = "",
+    stats_html: str = "",
+    notes: str = "",
+) -> tuple[bytes, str]:
+    """Return ``(zip_bytes, filename)`` for an evidence pack.
+
+    Same member set, naming, and timestamp format as ``buildEvidencePackZip()``
+    in ``web/src/utils/evidencePack.js``.
+    """
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    base = _BASENAME_SANITIZE_RE.sub("_", base_name or "btf-evidence") or "btf-evidence"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        if findings_text:
+            zf.writestr("analysis-findings.txt", findings_text)
+        if session_json:
+            zf.writestr("session.json", session_json)
+        if stats_html:
+            zf.writestr("statistics-report.html", stats_html)
+        if notes:
+            zf.writestr("notes.txt", notes)
+        zf.writestr("README.txt", _README_TEXT)
+    return buf.getvalue(), f"{base}-evidence-{stamp}.zip"
+# ===========================================================================
 # anonymize_export
 # ===========================================================================
 
@@ -68964,7 +69046,7 @@ def _ci_item_data(item):
 
 
 class _CorridorInspectorDialog(QDialog):
-    """Unified Migration & Corridor Inspector (TODO2) — tree + timeline + mini-chord."""
+    """Unified Migration & Corridor Inspector — tree + timeline + mini-chord."""
 
     def __init__(self, trace: "BtfTrace", parent=None,
                  on_spotlight: Optional[Callable] = None,
@@ -71832,11 +71914,14 @@ class _AnalysisFindingsDialog(QDialog):
             lambda: self._query_with_ai(ai_enabled, "auto_investigate"))
         ask_btn.setMenu(ask_menu)
 
-        more_btn = _menu_btn("More ▾", "Save recipe, story, or text export")
+        more_btn = _menu_btn(
+            "More ▾", "Save recipe, story, text export, or evidence pack")
         more_menu = _ci_make_popup_menu(more_btn)
         more_menu.addAction("Save recipe…").triggered.connect(self._save_recipe)
         more_menu.addAction("Story…").triggered.connect(self._save_story)
         more_menu.addAction("Save as text…").triggered.connect(self._save_as_text)
+        self._export_evidence_action = more_menu.addAction("Export Evidence Pack…")
+        self._export_evidence_action.triggered.connect(self._export_evidence_pack)
         more_btn.setMenu(more_menu)
 
         def _hsep() -> QFrame:
@@ -72143,6 +72228,14 @@ class _AnalysisFindingsDialog(QDialog):
             btn.clicked.connect(self._recalculate_context)
             lay.addWidget(btn, 0)
         lay.addStretch(1)
+        export_action = getattr(self, "_export_evidence_action", None)
+        if export_action is not None:
+            export_action.setEnabled(not self._ctx_stale)
+            export_action.setToolTip(
+                "Recalculate with current context before exporting"
+                if self._ctx_stale else
+                "Export current Analysis Findings with the portable "
+                "session and analysis context")
 
     def _mark_context_stale(self) -> None:
         """Scope/Filters changed since these findings were built."""
@@ -72629,6 +72722,48 @@ class _AnalysisFindingsDialog(QDialog):
         rebuild = getattr(panel, "_rebuild_investigation_menu", None)
         if callable(rebuild):
             rebuild()
+
+    def _export_evidence_pack(self) -> None:
+        """Zip of the current Analysis Findings + portable session/context —
+        the Desktop mirror of web's Marks-panel-turned-Findings "Evidence"
+        action. Distinct from the Investigation Notebook's question-driven
+        "Evidence package…" (ai_evidence_package.py)."""
+        wnd = self.parent()
+        session_fn = getattr(wnd, "_build_portable_session_payload", None)
+        if not callable(session_fn):
+            return
+        try:
+            session = session_fn()
+        except ValueError:
+            session = None
+        findings_text = _format_analysis_findings_text(
+            self._findings, self._scope_title, triage_state=self._triage_state)
+        trace_name = os.path.basename(getattr(wnd, "_current_file", "") or "trace.btf")
+        base = re.sub(r"\.btf(\.gz)?$", "", trace_name, flags=re.IGNORECASE)
+        zip_bytes, filename = build_evidence_pack_zip(
+            base_name=base,
+            findings_text=findings_text,
+            session_json=(
+                json.dumps(session, indent=2) if session is not None else ""),
+            notes=(
+                f"Trace: {trace_name}\n"
+                f"Scope: {self._scope_title.strip() or 'full trace'}\n"
+                "Re-open the .btf in BTFViewer and Import Session to "
+                "restore cursors/marks.\n"),
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save evidence pack", filename,
+            "Zip files (*.zip);;All files (*)")
+        if not path:
+            return
+        if not path.lower().endswith(".zip"):
+            path += ".zip"
+        try:
+            with open(path, "wb") as fh:
+                fh.write(zip_bytes)
+        except OSError as exc:
+            QMessageBox.warning(
+                self, "Save failed", f"Could not write file:\n{exc}")
 
 
 
@@ -100359,7 +100494,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._recent_menu = fm.addMenu("Open &Recent")
         self._rebuild_recent_menu()
         fm.addSeparator()
-        self._act_save_img = fm.addAction("Snapshot &Editor…", self._on_save_image, "Ctrl+S")
+        self._act_save_img = fm.addAction("Snapshot &Editor…", self._on_save_image)
+        self._act_save_img.setShortcuts([QKeySequence("Ctrl+S"), QKeySequence("S")])
         self._act_save_img.setEnabled(False)
         self._act_save_svg = fm.addAction("Save as &SVG…", self._on_save_svg, "Ctrl+Shift+S")
         self._act_save_svg.setEnabled(False)
@@ -100397,9 +100533,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_vert.setCheckable(True)
         self._act_horiz.setChecked(True)
         vm.addSeparator()
-        vm.addAction("&Zoom In",        lambda: self._view.zoom_in(),   QKeySequence.ZoomIn)
+        self._act_zoom_in = vm.addAction("&Zoom In", lambda: self._view.zoom_in())
+        self._act_zoom_in.setShortcuts([
+            QKeySequence.ZoomIn, QKeySequence("+"), QKeySequence("="),
+        ])
         self._act_zoom_out = vm.addAction(
-            "Zoom &Out", lambda: self._view.zoom_out(), QKeySequence.ZoomOut)
+            "Zoom &Out", lambda: self._view.zoom_out())
+        self._act_zoom_out.setShortcuts([
+            QKeySequence.ZoomOut, QKeySequence("-"), QKeySequence("_"),
+        ])
         self._act_zoom_out.setEnabled(False)
         _fit_act = vm.addAction("Fit &Trace",  lambda: self._view.zoom_fit())
         _fit_act.setShortcuts([QKeySequence("Ctrl+0"), QKeySequence("F")])
@@ -104445,7 +104587,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         scene.set_finding_overlays(merge_incident_overlay_times(
             ux, finding_times, include_anomalies=True, limit=120))
 
-    # -- Investigation notebook (TODO Phase 3) --------------------------
+    # -- Investigation notebook -----------------------------------------
     def _notebook_cursor_range(self):
         if self._trace is None or not self._has_cursor_range():
             return None
@@ -105525,7 +105667,30 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             n = len(tab._investigation.get("bookmarks") or [])
             notes.append(f"investigation notebook ({n} bookmark{'' if n == 1 else 's'})")
         view = ws.get("view_state")
-        if isinstance(view, dict):
+        if isinstance(view, dict) and _workspace_has_portable_view_state(view):
+            # Modern portable schema (Desktop or Web) — restore through the
+            # same path as standalone Session import, so cursors, marks,
+            # view mode, orientation, filters, Find, highlight, Statistics
+            # scope/collapsed state, and the open plot all come back.
+            try:
+                self._apply_portable_session_payload(view)
+            except ValueError:
+                pass
+            else:
+                cursors = view.get("cursors") or []
+                n_cursors = sum(1 for c in cursors if isinstance(c, (int, float)))
+                if n_cursors:
+                    notes.append(f"{n_cursors} cursor{'' if n_cursors == 1 else 's'}")
+                marks = view.get("marks") or []
+                n_bm = sum(1 for m in marks
+                          if isinstance(m, dict) and m.get("type") != "annotation")
+                n_an = sum(1 for m in marks
+                          if isinstance(m, dict) and m.get("type") == "annotation")
+                if n_bm or n_an:
+                    notes.append(f"{n_bm} bookmark(s), {n_an} annotation(s)")
+        elif isinstance(view, dict):
+            # Legacy Desktop workspace (pre-unification): reduced schema —
+            # cursors, marks, scope, and a Desktop-only serialized viewport.
             cursors = view.get("cursors") or view.get("cursor_times") or []
             times = [int(t) for t in cursors if isinstance(t, (int, float))]
             if len(times) >= 1 and hasattr(self._view, "_scene"):
@@ -105564,6 +105729,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     pass
                 notes.append(
                     f"{len(bms)} bookmark(s), {len(anns)} annotation(s)")
+
+            if "scopeToCursors" in view and hasattr(self._stats_panel, "_scope_cb"):
+                want_scope = bool(view.get("scopeToCursors", True))
+                self._stats_panel._scope_cb.blockSignals(True)
+                self._stats_panel._scope_cb.setChecked(want_scope)
+                self._stats_panel._scope_cb.blockSignals(False)
+                self._stats_panel._on_scope_toggled(want_scope)
+                self._update_cursor_scope_banner()
 
             vp_raw = view.get("viewport_desktop")
             if isinstance(vp_raw, str) and vp_raw:
@@ -106755,34 +106928,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return build_task_alias_map(names)
 
     def _workspace_view_state(self, tab) -> dict:
-        """Web-compatible ``state/view.json`` — cursors + marks + viewport."""
-        try:
-            cursors = [int(t) for t in self._view._scene.cursor_times()]
-        except (AttributeError, TypeError, ValueError):
-            cursors = []
-        marks = []
-        for b in list(getattr(self, "_bookmarks", []) or []):
-            marks.append({"id": int(b.id), "ns": int(b.ns),
-                          "label": str(b.label or ""), "type": "bookmark"})
-        for a in list(getattr(self, "_annotations", []) or []):
-            marks.append({"id": int(a.id), "ns": int(a.ns),
-                          "label": str(a.note or ""), "type": "annotation"})
-        vp_json = ""
-        try:
-            tab.vm.capture_viewport_from_view(tab.view)
-            vp_json = viewport_to_json(tab.vm.viewport)
-        except Exception:
-            vp_json = ""
-        return {
-            "version": 2,
-            "trace_name": os.path.basename(getattr(tab, "path", "") or ""),
-            "cursors": cursors,
-            "marks": marks,
-            "markNextId": int(getattr(self, "_mark_next_id", 1) or 1),
-            "scopeToCursors": bool(
-                getattr(self._stats_panel, "_scope_to_cursors", True)),
-            "viewport_desktop": vp_json,
-        }
+        """Portable ``state/view.json`` — shares the canonical Session
+        builder with the standalone Session export, so Desktop and Web
+        ``.btfw`` files carry one view-state schema instead of two."""
+        return self._build_portable_session_payload()
 
     def _run_workspace_export(self, embed: bool, *, anonymize: bool = False) -> None:
         """Write a portable .btfw for the active trace + investigation state.
@@ -106846,6 +106995,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             except Exception:
                 report_html = None
             tab = self._active_tab
+            if tab is not None:
+                self._capture_legend_filters_to_scene(tab.view._scene)
             investigation = getattr(tab, "_investigation", None)
             if amap and investigation is not None:
                 investigation = _anon(load_investigation(investigation))
@@ -108367,7 +108518,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+W",       "Close active tab"),
                 ("Ctrl+Tab",     "Next trace tab"),
                 ("Ctrl+Shift+Tab", "Previous trace tab"),
-                ("Ctrl+S",       "Open Snapshot Editor"),
+                ("S / Ctrl+S",   "Open Snapshot Editor"),
                 ("Ctrl+Shift+S", "Save viewport as SVG"),
                 ("Ctrl+Shift+C", "Copy viewport to clipboard"),
                 ("Ctrl+Shift+E", "Export… (workspace · Perfetto · BTF slice)"),
@@ -108375,11 +108526,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ]),
             ("Edit", [
                 ("Ctrl+Z",    "Undo last cursor / mark change"),
-                ("Ctrl+Y",    "Redo"),
+                ("Ctrl+Y / Ctrl+Shift+Z", "Redo"),
             ]),
             ("View / Zoom", [
-                ("Ctrl++",               "Zoom in"),
-                ("Ctrl+-",               "Zoom out (until Fit)"),
+                ("+ / = / Ctrl++",       "Zoom in"),
+                ("- / _ / Ctrl+-",       "Zoom out (until Fit)"),
                 ("Ctrl+0 / F",           "Fit entire trace to window"),
                 ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),
@@ -108394,8 +108545,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("2",                    "Core View"),
                 ("H",                    "Horizontal layout"),
                 ("V",                    "Vertical layout"),
-                ("Double-click",         "Zoom to segment under cursor"),
-                ("Dbl-click label edge", "Auto-fit label column width"),
+                ("Dbl-click ruler",       "Fit entire trace"),
+                ("Dbl-click segment",     "Zoom to segment; repeat to restore previous zoom"),
+                ("Dbl-click label edge",  "Auto-fit label column width"),
             ]),
             ("Navigation", [
                 ("Ctrl+Home",         "Jump to trace start"),
@@ -108443,7 +108595,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Shift+Left-click",              "Snap cursor to nearest segment boundary"),
                 ("Right-click  (timeline)",       "Remove nearest cursor / context menu"),
                 ("Shift+Right-click",             "Clear all cursors"),
-                ("Double-click  (segment)",       "Zoom to that segment"),
+                ("Double-click  (ruler)",         "Fit entire trace"),
+                ("Double-click  (segment)",       "Zoom to that segment; repeat to restore previous zoom"),
                 ("Left-drag  (label edge)",       "Resize label column"),
                 ("Double-click  (label edge)",    "Auto-fit label column width"),
                 ("Left-drag  (cursor line)",      "Drag cursor to new position"),

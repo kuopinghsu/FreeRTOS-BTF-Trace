@@ -232,11 +232,10 @@
         <div
           class="ai-guide"
         >
-          <!-- BTFVIEWER_DESIGN_AND_AI_PROMPT_TODO §5/§15 — the AI guided stages are
-           an internal prompt-orchestration detail (`guideStage`), not a
-           user-facing workflow. The stage stepper rail is not shown; the
-           Investigation Notebook is the only visible persistent-investigation
-           model. -->
+          <!-- The AI guided stages are an internal prompt-orchestration
+           detail (`guideStage`), not a user-facing workflow. The stage
+           stepper rail is not shown; the Investigation Notebook is the
+           only visible persistent-investigation model. -->
           <div
             v-if="guideStage === 'idle' && !messages.length"
             class="ai-start-inv"
@@ -354,8 +353,8 @@
                 <div class="ai-msg-role">
                   {{ aiRoleLabel(m.role, responseLanguage) }}
                 </div>
-                <!-- AI_RESPONSE_FLOW_TODO: one clean block per query — status line +
-               collapsed Tool usage summary, right before the final answer. -->
+                <!-- One clean block per query — status line + collapsed
+               Tool usage summary, right before the final answer. -->
                 <template v-if="queryMeta(i)">
                   <div class="ai-analysis-line">
                     ✨ {{ analysisStatusText(queryMeta(i).elapsedS) }}
@@ -1165,7 +1164,7 @@ function finishInvestigationPlan() {
 }
 
 /**
- * One clean response block per user query (AI_RESPONSE_FLOW_TODO):
+ * One clean response block per user query:
  *   user → "Analysis completed · N.N s" → collapsed "Tool Usage · X calls / Y
  *   tools" → final answer.
  * Per-round tool cards are never rendered in the chat (GUI actions auto-apply);
@@ -2430,8 +2429,8 @@ function hasProseAssistantReply() {
 }
 
 /** Mark the active query done and stamp its end-to-end analysis time
- *  (AI_RESPONSE_FLOW_TODO §3) from the one authoritative timer — the cost
- *  meter's accumulated model time. Rendering flips to the compact block. */
+ *  from the one authoritative timer — the cost meter's accumulated model
+ *  time. Rendering flips to the compact block. */
 function stampQueryComplete() {
   const elapsed = Number(costMeter.value?.model_time_s || 0)
   for (let k = messages.value.length - 1; k >= 0; k -= 1) {

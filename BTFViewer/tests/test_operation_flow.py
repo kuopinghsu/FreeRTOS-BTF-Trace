@@ -1,4 +1,4 @@
-"""Step 1–3 operation-flow regression checks (BTFVIEWER_OPERATION_FLOW_TODO.md).
+"""Step 1–3 operation-flow regression checks.
 
 Source-level lockstep assertions that pin the "one flow, no duplicated
 operations" invariants across the web (App.vue / AnalysisFindingsDialog.vue /

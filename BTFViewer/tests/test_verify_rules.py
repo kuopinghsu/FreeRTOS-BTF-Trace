@@ -1,4 +1,4 @@
-"""Headless ``verify`` rule engine + CLI exit-code contract (TODO Phase 5)."""
+"""Headless ``verify`` rule engine + CLI exit-code contract."""
 from __future__ import annotations
 
 import io

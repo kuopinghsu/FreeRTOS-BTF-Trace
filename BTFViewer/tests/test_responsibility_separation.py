@@ -1,5 +1,4 @@
-"""Notebook / Findings / Statistics / Compare / AI responsibility boundaries
-(BTFVIEWER_DESIGN_CONSISTENCY_TODO §11).
+"""Notebook / Findings / Statistics / Compare / AI responsibility boundaries.
 
 - The Notebook owns durable investigation state and does not depend on AI.
 - Analysis Findings stays deterministic triage.

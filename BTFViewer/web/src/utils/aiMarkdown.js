@@ -564,7 +564,7 @@ export function aiFileStamp(date = new Date()) {
 
 /**
  * Markdown transcript of the conversation. Once a query completes it exports
- * the same clean block as the UI (AI_RESPONSE_FLOW_TODO §15):
+ * the same clean block as the UI:
  *   ## Question / <q> / Analysis completed · N.N s / Tool usage · X calls /
  *   Y tools + groups / ## Answer / <final>.
  * Keep in sync with ai_assistant.py::format_ai_conversation_markdown.

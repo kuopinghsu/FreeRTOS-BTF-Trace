@@ -104,13 +104,6 @@
       </button>
       <button
         class="action-btn"
-        title="Download evidence pack zip (findings + session)"
-        @click="emit('exportEvidencePack')"
-      >
-        Evidence
-      </button>
-      <button
-        class="action-btn"
         title="Import portable session JSON"
         @click="triggerSessionImport"
       >
@@ -147,7 +140,7 @@ const props = defineProps({
 const emit = defineEmits([
   'deleteMark', 'jumpTo', 'updateLabel',
   'importMarks', 'clearBookmarks', 'clearAnnotations', 'selectMark',
-  'exportSession', 'importSession', 'exportEvidencePack',
+  'exportSession', 'importSession',
 ])
 
 const hasBookmarks = computed(() => props.marks.some(m => m.type !== 'annotation'))

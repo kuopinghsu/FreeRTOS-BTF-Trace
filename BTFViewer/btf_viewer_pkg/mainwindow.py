@@ -9143,7 +9143,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._recent_menu = fm.addMenu("Open &Recent")
         self._rebuild_recent_menu()
         fm.addSeparator()
-        self._act_save_img = fm.addAction("Snapshot &Editor…", self._on_save_image, "Ctrl+S")
+        self._act_save_img = fm.addAction("Snapshot &Editor…", self._on_save_image)
+        self._act_save_img.setShortcuts([QKeySequence("Ctrl+S"), QKeySequence("S")])
         self._act_save_img.setEnabled(False)
         self._act_save_svg = fm.addAction("Save as &SVG…", self._on_save_svg, "Ctrl+Shift+S")
         self._act_save_svg.setEnabled(False)
@@ -9181,9 +9182,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_vert.setCheckable(True)
         self._act_horiz.setChecked(True)
         vm.addSeparator()
-        vm.addAction("&Zoom In",        lambda: self._view.zoom_in(),   QKeySequence.ZoomIn)
+        self._act_zoom_in = vm.addAction("&Zoom In", lambda: self._view.zoom_in())
+        self._act_zoom_in.setShortcuts([
+            QKeySequence.ZoomIn, QKeySequence("+"), QKeySequence("="),
+        ])
         self._act_zoom_out = vm.addAction(
-            "Zoom &Out", lambda: self._view.zoom_out(), QKeySequence.ZoomOut)
+            "Zoom &Out", lambda: self._view.zoom_out())
+        self._act_zoom_out.setShortcuts([
+            QKeySequence.ZoomOut, QKeySequence("-"), QKeySequence("_"),
+        ])
         self._act_zoom_out.setEnabled(False)
         _fit_act = vm.addAction("Fit &Trace",  lambda: self._view.zoom_fit())
         _fit_act.setShortcuts([QKeySequence("Ctrl+0"), QKeySequence("F")])
@@ -13228,7 +13235,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         scene.set_finding_overlays(merge_incident_overlay_times(
             ux, finding_times, include_anomalies=True, limit=120))
 
-    # -- Investigation notebook (TODO Phase 3) --------------------------
+    # -- Investigation notebook -----------------------------------------
     def _notebook_cursor_range(self):
         if self._trace is None or not self._has_cursor_range():
             return None
@@ -14308,7 +14315,30 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             n = len(tab._investigation.get("bookmarks") or [])
             notes.append(f"investigation notebook ({n} bookmark{'' if n == 1 else 's'})")
         view = ws.get("view_state")
-        if isinstance(view, dict):
+        if isinstance(view, dict) and _workspace_has_portable_view_state(view):
+            # Modern portable schema (Desktop or Web) — restore through the
+            # same path as standalone Session import, so cursors, marks,
+            # view mode, orientation, filters, Find, highlight, Statistics
+            # scope/collapsed state, and the open plot all come back.
+            try:
+                self._apply_portable_session_payload(view)
+            except ValueError:
+                pass
+            else:
+                cursors = view.get("cursors") or []
+                n_cursors = sum(1 for c in cursors if isinstance(c, (int, float)))
+                if n_cursors:
+                    notes.append(f"{n_cursors} cursor{'' if n_cursors == 1 else 's'}")
+                marks = view.get("marks") or []
+                n_bm = sum(1 for m in marks
+                          if isinstance(m, dict) and m.get("type") != "annotation")
+                n_an = sum(1 for m in marks
+                          if isinstance(m, dict) and m.get("type") == "annotation")
+                if n_bm or n_an:
+                    notes.append(f"{n_bm} bookmark(s), {n_an} annotation(s)")
+        elif isinstance(view, dict):
+            # Legacy Desktop workspace (pre-unification): reduced schema —
+            # cursors, marks, scope, and a Desktop-only serialized viewport.
             cursors = view.get("cursors") or view.get("cursor_times") or []
             times = [int(t) for t in cursors if isinstance(t, (int, float))]
             if len(times) >= 1 and hasattr(self._view, "_scene"):
@@ -14347,6 +14377,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     pass
                 notes.append(
                     f"{len(bms)} bookmark(s), {len(anns)} annotation(s)")
+
+            if "scopeToCursors" in view and hasattr(self._stats_panel, "_scope_cb"):
+                want_scope = bool(view.get("scopeToCursors", True))
+                self._stats_panel._scope_cb.blockSignals(True)
+                self._stats_panel._scope_cb.setChecked(want_scope)
+                self._stats_panel._scope_cb.blockSignals(False)
+                self._stats_panel._on_scope_toggled(want_scope)
+                self._update_cursor_scope_banner()
 
             vp_raw = view.get("viewport_desktop")
             if isinstance(vp_raw, str) and vp_raw:
@@ -15538,34 +15576,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return build_task_alias_map(names)
 
     def _workspace_view_state(self, tab) -> dict:
-        """Web-compatible ``state/view.json`` — cursors + marks + viewport."""
-        try:
-            cursors = [int(t) for t in self._view._scene.cursor_times()]
-        except (AttributeError, TypeError, ValueError):
-            cursors = []
-        marks = []
-        for b in list(getattr(self, "_bookmarks", []) or []):
-            marks.append({"id": int(b.id), "ns": int(b.ns),
-                          "label": str(b.label or ""), "type": "bookmark"})
-        for a in list(getattr(self, "_annotations", []) or []):
-            marks.append({"id": int(a.id), "ns": int(a.ns),
-                          "label": str(a.note or ""), "type": "annotation"})
-        vp_json = ""
-        try:
-            tab.vm.capture_viewport_from_view(tab.view)
-            vp_json = viewport_to_json(tab.vm.viewport)
-        except Exception:
-            vp_json = ""
-        return {
-            "version": 2,
-            "trace_name": os.path.basename(getattr(tab, "path", "") or ""),
-            "cursors": cursors,
-            "marks": marks,
-            "markNextId": int(getattr(self, "_mark_next_id", 1) or 1),
-            "scopeToCursors": bool(
-                getattr(self._stats_panel, "_scope_to_cursors", True)),
-            "viewport_desktop": vp_json,
-        }
+        """Portable ``state/view.json`` — shares the canonical Session
+        builder with the standalone Session export, so Desktop and Web
+        ``.btfw`` files carry one view-state schema instead of two."""
+        return self._build_portable_session_payload()
 
     def _run_workspace_export(self, embed: bool, *, anonymize: bool = False) -> None:
         """Write a portable .btfw for the active trace + investigation state.
@@ -15629,6 +15643,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             except Exception:
                 report_html = None
             tab = self._active_tab
+            if tab is not None:
+                self._capture_legend_filters_to_scene(tab.view._scene)
             investigation = getattr(tab, "_investigation", None)
             if amap and investigation is not None:
                 investigation = _anon(load_investigation(investigation))
@@ -17150,7 +17166,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+W",       "Close active tab"),
                 ("Ctrl+Tab",     "Next trace tab"),
                 ("Ctrl+Shift+Tab", "Previous trace tab"),
-                ("Ctrl+S",       "Open Snapshot Editor"),
+                ("S / Ctrl+S",   "Open Snapshot Editor"),
                 ("Ctrl+Shift+S", "Save viewport as SVG"),
                 ("Ctrl+Shift+C", "Copy viewport to clipboard"),
                 ("Ctrl+Shift+E", "Export… (workspace · Perfetto · BTF slice)"),
@@ -17158,11 +17174,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ]),
             ("Edit", [
                 ("Ctrl+Z",    "Undo last cursor / mark change"),
-                ("Ctrl+Y",    "Redo"),
+                ("Ctrl+Y / Ctrl+Shift+Z", "Redo"),
             ]),
             ("View / Zoom", [
-                ("Ctrl++",               "Zoom in"),
-                ("Ctrl+-",               "Zoom out (until Fit)"),
+                ("+ / = / Ctrl++",       "Zoom in"),
+                ("- / _ / Ctrl+-",       "Zoom out (until Fit)"),
                 ("Ctrl+0 / F",           "Fit entire trace to window"),
                 ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),
@@ -17177,8 +17193,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("2",                    "Core View"),
                 ("H",                    "Horizontal layout"),
                 ("V",                    "Vertical layout"),
-                ("Double-click",         "Zoom to segment under cursor"),
-                ("Dbl-click label edge", "Auto-fit label column width"),
+                ("Dbl-click ruler",       "Fit entire trace"),
+                ("Dbl-click segment",     "Zoom to segment; repeat to restore previous zoom"),
+                ("Dbl-click label edge",  "Auto-fit label column width"),
             ]),
             ("Navigation", [
                 ("Ctrl+Home",         "Jump to trace start"),
@@ -17226,7 +17243,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Shift+Left-click",              "Snap cursor to nearest segment boundary"),
                 ("Right-click  (timeline)",       "Remove nearest cursor / context menu"),
                 ("Shift+Right-click",             "Clear all cursors"),
-                ("Double-click  (segment)",       "Zoom to that segment"),
+                ("Double-click  (ruler)",         "Fit entire trace"),
+                ("Double-click  (segment)",       "Zoom to that segment; repeat to restore previous zoom"),
                 ("Left-drag  (label edge)",       "Resize label column"),
                 ("Double-click  (label edge)",    "Auto-fit label column width"),
                 ("Left-drag  (cursor line)",      "Drag cursor to new position"),

@@ -389,6 +389,18 @@
         >
           Save as text…
         </button>
+        <button
+          type="button"
+          class="analysis-popup-item"
+          role="menuitem"
+          :disabled="contextStale"
+          :title="contextStale
+            ? 'Recalculate with current context before exporting'
+            : 'Export current Analysis Findings with the portable session and analysis context'"
+          @click="moreAction('export-evidence-pack')"
+        >
+          Export Evidence Pack…
+        </button>
       </div>
     </Teleport>
   </div>
@@ -438,7 +450,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   'close', 'query-ai', 'apply-scope', 'open-statistics', 'show-evidence',
-  'save-recipe', 'save-story', 'recalculate-context',
+  'save-recipe', 'save-story', 'export-evidence-pack', 'recalculate-context',
   'add-to-investigation', 'update:triageState', 'update:selectedId',
 ])
 
@@ -847,10 +859,12 @@ function saveAsText() {
 }
 
 function moreAction(kind) {
+  if (kind === 'export-evidence-pack' && props.contextStale) return
   moreOpen.value = false
   if (kind === 'save-recipe') emit('save-recipe')
   else if (kind === 'save-story') emit('save-story')
   else if (kind === 'save-text') saveAsText()
+  else if (kind === 'export-evidence-pack') emit('export-evidence-pack')
 }
 </script>
 
@@ -1308,6 +1322,15 @@ function moreAction(kind) {
 
 .analysis-popup-item:hover {
   background: var(--tb-btn-hover);
+}
+
+.analysis-popup-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.analysis-popup-item:disabled:hover {
+  background: transparent;
 }
 
 .analysis-btn {

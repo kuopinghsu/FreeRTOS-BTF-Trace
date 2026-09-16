@@ -818,8 +818,8 @@ export function extractEvidencePanelPayload(toolName, result) {
       ? 'High'
       : resultLabel === 'DISPROVED' ? 'Low' : 'Medium'
   } else if (name === 'verify_claim' || name === 'challenge_conclusion') {
-    // Structured verification is authoritative (TODO §10): fold the verdict
-    // into payload.validation so an inconclusive / negative result cannot be
+    // Structured verification is authoritative: fold the verdict into
+    // payload.validation so an inconclusive / negative result cannot be
     // displayed as Confirmed regardless of prose confidence.
     const verdict = String(data.verdict || data.status || result.message || '')
       .trim().toLowerCase()

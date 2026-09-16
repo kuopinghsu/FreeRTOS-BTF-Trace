@@ -1,4 +1,4 @@
-"""Structured evidence cards + provenance (BTFVIEWER_DESIGN_CONSISTENCY_TODO §8).
+"""Structured evidence cards + provenance.
 
 Parity with web/tests/evidenceCards.test.js.
 """

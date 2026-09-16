@@ -4647,7 +4647,7 @@ _CHORD_MIN_ARC_RAD = 0.05
 _CHORD_TAPER_DEST_RATIO = 0.4
 _CHORD_GRAD_SOURCE_STOP = 0.7
 _CHORD_RIBBON_MAX_HALF = 7.0
-# Split core rings (TODO2): outer = egress/departures, inner = ingress/arrivals.
+# Split core rings: outer = egress/departures, inner = ingress/arrivals.
 _CHORD_ARC_OUTER = 12.0
 _CHORD_ARC_INNER = 8.0
 

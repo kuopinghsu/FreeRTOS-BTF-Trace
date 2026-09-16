@@ -1,5 +1,5 @@
 /**
- * Compact AI evidence package (TODO Phase 6).
+ * Compact AI evidence package.
  * Keep in sync with btf_viewer_pkg/ai_evidence_package.py.
  *
  * Assemble only the evidence needed to answer one question — question + range,

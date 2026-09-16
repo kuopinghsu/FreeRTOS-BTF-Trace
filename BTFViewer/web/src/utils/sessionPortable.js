@@ -201,11 +201,13 @@ export function applyPortableSession(tab, data, timelineOptions, trace = null) {
     tab.migratedOnlyFilter = filters.migratedOnlyFilter
     tab.taskFilterKeys = filters.taskFilterKeys
     tab.heatmapFilterLabel = filters.heatmapFilterLabel
+    tab.coreFilterKeys = filters.coreFilterKeys
     if (timelineOptions) {
       timelineOptions.taskFilterText = filters.taskFilterText
       timelineOptions.migratedOnlyFilter = filters.migratedOnlyFilter
       timelineOptions.taskFilterKeys = filters.taskFilterKeys
       timelineOptions.heatmapFilterLabel = filters.heatmapFilterLabel
+      timelineOptions.coreFilterKeys = filters.coreFilterKeys
     }
   }
 }

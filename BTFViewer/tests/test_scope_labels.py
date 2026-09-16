@@ -1,5 +1,4 @@
-"""Scope-label consistency + multi-state action disclosure
-(BTFVIEWER_DESIGN_CONSISTENCY_TODO — "P1 — Scope clarity without another scope model").
+"""Scope-label consistency + multi-state action disclosure.
 
 - The three scope controls read `Statistics Scope` (`Limit to C1–Cn`),
   `Inspector Scope`, and `Compare Scope`.

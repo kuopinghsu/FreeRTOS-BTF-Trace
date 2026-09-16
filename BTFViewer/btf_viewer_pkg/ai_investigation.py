@@ -1484,8 +1484,8 @@ def extract_evidence_panel_payload(
             else "Medium"
         )
     elif name in ("verify_claim", "challenge_conclusion"):
-        # Structured verification is authoritative (TODO §10): fold the verdict
-        # into payload["validation"] so an inconclusive / negative result cannot
+        # Structured verification is authoritative: fold the verdict into
+        # payload["validation"] so an inconclusive / negative result cannot
         # be displayed as Confirmed regardless of prose confidence.
         verdict = str(
             data.get("verdict") or data.get("status") or result.get("message") or ""

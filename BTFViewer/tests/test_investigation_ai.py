@@ -1,4 +1,4 @@
-"""Collaborate-with-AI + AI proposal review (BTFVIEWER_DESIGN_CONSISTENCY_TODO §9, §10).
+"""Collaborate-with-AI + AI proposal review.
 
 Parity with web/tests/investigationAi.test.js.
 """

@@ -1007,7 +1007,7 @@ export function chordHitRing(dist, radius) {
 }
 
 /**
- * Default Top-N corridor threshold from core count (TODO2 §5).
+ * Default Top-N corridor threshold from core count.
  * @returns {number} percent 10|25|50|100
  */
 export function defaultCorridorTopPct(coreCount) {
@@ -1358,7 +1358,7 @@ export function buildTaperedRibbonPath(cx, cy, rInner, a0, a1, srcHalf, dstHalf,
 }
 
 /**
- * Unified corridor inspector model (TODO2 Phase 1).
+ * Unified corridor inspector model.
  * @param {object} trace
  * @param {number|null} lo
  * @param {number|null} hi
@@ -1808,7 +1808,7 @@ export function filterCorridorsByTaskQuery(corridors, query) {
 }
 
 /**
- * In-inspector custom task filter (TODO2 §3.1).
+ * In-inspector custom task filter.
  * Searches allCorridors so Top-N cannot hide a matching task.
  * @param {object} model
  * @param {string} query

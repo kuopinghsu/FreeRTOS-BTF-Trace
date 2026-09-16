@@ -343,7 +343,7 @@ Open the Findings window from the toolbar **Investigation** group or the activit
 | 3 | **Findings list** | Severity-ranked and grouped by the affected object; each entry shows its category and whether the evidence is `Estimated / heuristic` or measured. |
 | 4 | **Detail pane** | The selected finding in full — observation vs interpretation, evidence strength, the exact evidence, a **Check next** pointer, and the recommended Scope. |
 | 5 | **Finding actions** | **Apply cursors** / **Show on timeline** / **Open Statistics** move to the evidence; **Done** / **Dismiss…** record the triage outcome; **Add to investigation** saves the finding to the [Investigation Notebook](#investigation-notebook). |
-| 6 | **Footer** | **Ask AI** about the selected finding, plus **More** export options. |
+| 6 | **Footer** | **Ask AI** about the selected finding, plus **More** for **Save recipe…**, **Story…**, **Save as text…**, and **Export Evidence Pack…** — a zip of the current findings and portable session/context, for sharing as reproducible evidence. |
 
 ### Reading Max, p95, and p99
 

@@ -1,5 +1,5 @@
 """Investigation Notebook schema/2: versioned migration, durable status, and the
-six-section projection (BTFVIEWER_DESIGN_CONSISTENCY_TODO §7).
+six-section projection.
 
 Parity with web/tests/notebookSchema2.test.js.
 """

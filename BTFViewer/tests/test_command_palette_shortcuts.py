@@ -1,6 +1,5 @@
 """Command Palette shortcut hygiene + Desktop/Web parity.
 
-BTFVIEWER_DESIGN_CONSISTENCY_TODO step 2:
 - The `I` key only toggles STI visibility; no palette item may advertise it.
 - Desktop and Web palettes expose the same action IDs, labels, and metadata.
 """

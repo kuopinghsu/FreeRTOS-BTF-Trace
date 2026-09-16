@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
 if str(BTF_ROOT) not in sys.path:
@@ -44,6 +46,7 @@ from btf_viewer_pkg.mainwindow import MainWindow  # noqa: E402
 from btf_viewer_pkg.parser import (  # noqa: E402
     BtfTrace, TraceAnnotation, TraceBookmark, _parse_btf, _task_merge_key,
 )
+from btf_viewer_pkg.workspace import open_workspace  # noqa: E402
 
 EXAMPLE_2CORE = BTF_ROOT.parent / "tracedata" / "example-2cores.btf.gz"
 
@@ -87,11 +90,28 @@ class PortableViewStateDetectionTests(unittest.TestCase):
 
 
 class WorkspaceViewStateGuiTests(unittest.TestCase):
+    """Exercises _set_orientation()/_apply_portable_session_payload(), which
+    persist to the shared dev-mode btf_viewer.rc regardless of any
+    ``persist=`` flag on the individual show_grid/show_sti calls -- snapshot
+    and restore it so running this file does not leave the local dev
+    settings mutated for the next manual run."""
     _app = None
+    _rc_path = None
+    _rc_backup = None
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._app = QApplication.instance() or QApplication([])
+        from btf_viewer_pkg.stats import _RcSettings
+        cls._rc_path = Path(_RcSettings.RC_PATH)
+        cls._rc_backup = cls._rc_path.read_bytes() if cls._rc_path.is_file() else None
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if cls._rc_backup is not None:
+            cls._rc_path.write_bytes(cls._rc_backup)
+        elif cls._rc_path.is_file():
+            cls._rc_path.unlink()
 
     def setUp(self) -> None:
         if not EXAMPLE_2CORE.is_file():
@@ -308,6 +328,53 @@ class WorkspaceViewStateGuiTests(unittest.TestCase):
         self.assertEqual(len(win._bookmarks), 1)
         self.assertEqual(win._bookmarks[0].label, "old-bm")
         self.assertFalse(win._stats_panel._scope_cb.isChecked())
+
+    def test_run_workspace_export_writes_portable_view_state_to_disk(self) -> None:
+        """End-to-end: _run_workspace_export() -> real .btfw on disk ->
+        open_workspace() must contain the portable schema, and re-opening it
+        through _start_pending_workspace() must restore the rich state
+        (Parity.md #17-#18 architecture, exercised through the real file
+        format rather than an in-memory dict)."""
+        chosen = self._set_rich_state()
+        win, sc = self.win, self.tab.view._scene
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = str(Path(tmp) / "roundtrip.btfw")
+            with patch(
+                "btf_viewer_pkg.mainwindow.QFileDialog.getSaveFileName",
+                return_value=(out_path, ""),
+            ):
+                win._run_workspace_export(embed=True)
+            self.assertTrue(Path(out_path).is_file())
+
+            ws = open_workspace(out_path)
+            view = ws["view_state"]
+            self.assertTrue(_workspace_has_portable_view_state(view))
+            for key in PORTABLE_VIEW_STATE_KEYS:
+                self.assertIn(key, view)
+            self.assertNotIn("viewport_desktop", view)
+            self.assertNotIn("trace_name", view)
+
+            # Reset, then restore through the real workspace-open dispatch.
+            win._set_view_mode("task")
+            win._set_orientation(True)
+            sc.clear_cursors()
+            win._bookmarks, win._annotations = [], []
+            win._stats_panel._scope_cb.setChecked(True)
+            win._stats_panel._on_scope_toggled(True)
+
+            win._pending_workspace = ws
+            win._start_pending_workspace()
+            for _ in range(3):
+                self._app.processEvents()
+
+            self.assertEqual(sc._view_mode, "core")
+            self.assertFalse(sc._horizontal)
+            self.assertEqual(
+                sorted(sc.cursor_times()), sorted([chosen["c1"], chosen["c2"]]))
+            self.assertEqual(len(win._bookmarks), 1)
+            self.assertEqual(len(win._annotations), 1)
+            self.assertFalse(win._stats_panel._scope_cb.isChecked())
 
     def test_forward_compatible_unknown_field_is_ignored(self) -> None:
         """Parity.md #24: an unknown future field must not break loading."""

@@ -1,4 +1,4 @@
-"""Compact AI evidence package (TODO Phase 6).
+"""Compact AI evidence package.
 
 Assemble only the evidence needed to answer one question — the user's question
 and range, trace-health status + limitations, related entities, the required

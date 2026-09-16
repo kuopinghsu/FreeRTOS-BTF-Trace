@@ -1,5 +1,4 @@
-"""AI tool-schema consolidation (BTFVIEWER_DESIGN_CONSISTENCY_TODO — "P3 — AI
-tool-schema consolidation").
+"""AI tool-schema consolidation.
 
 - No two model-visible tools are functional aliases of one another.
 - Every context mode returns an explicit, bounded schema list (Full Evidence no

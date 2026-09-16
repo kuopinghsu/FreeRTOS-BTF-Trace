@@ -135,4 +135,94 @@ describe('portable session', () => {
     assert.equal(timelineOptions.lockedTaskKey, timelineOptions.highlightKey)
     assert.match(String(timelineOptions.lockedTaskKey), /CS/)
   })
+
+  it('applyPortableSession restores coreFilterKeys onto the tab and timelineOptions', () => {
+    // Parity.md #10: coreFilterKeys is a supported portable filter (Desktop
+    // _snapshot_tab_filters / _sanitize_tab_filters carry it too) and must
+    // survive a Desktop <-> Web .btfw / Session round trip.
+    const tab = {
+      cursors: [], marks: [], markNextId: 1, timelineViewport: {},
+      findQuery: '', findMode: 'contains', pinnedHighlightKey: null,
+      taskFilterText: '', migratedOnlyFilter: false,
+      taskFilterKeys: null, heatmapFilterLabel: null, coreFilterKeys: null,
+    }
+    const timelineOptions = { coreFilterKeys: null }
+    applyPortableSession(tab, {
+      version: SESSION_PORTABLE_VERSION,
+      tabFilters: { taskFilterText: '', migratedOnlyFilter: false, coreFilterKeys: ['Core_0', 'Core_2'] },
+    }, timelineOptions)
+    assert.deepEqual(tab.coreFilterKeys, ['Core_0', 'Core_2'])
+    assert.deepEqual(timelineOptions.coreFilterKeys, ['Core_0', 'Core_2'])
+  })
+
+  it('accepts a Desktop-shaped .btfw view_state (Parity.md #22)', () => {
+    // The exact field set BTFViewer/btf_viewer_pkg/mainwindow.py's
+    // _build_portable_session_payload() / _workspace_view_state() produce —
+    // a Desktop-authored .btfw or Session must restore completely on Web.
+    const desktopPayload = {
+      version: SESSION_PORTABLE_VERSION,
+      traceName: 'example-2cores.btf',
+      exportedAt: '2026-01-01T00:00:00Z',
+      cursors: [1000, 2000, null, null],
+      marks: [
+        { id: 1, ns: 1000, label: 'bm', type: 'bookmark' },
+        { id: 2, ns: 2000, label: 'an', type: 'annotation' },
+      ],
+      markNextId: 3,
+      timelineViewport: {
+        timeStart: 0, timeEnd: 5000, scrollY: 0, scrollX: 0, canvasW: 800, canvasH: 600,
+      },
+      timelineOptions: {
+        viewMode: 'core', orientation: 'v', showGrid: false,
+        showSti: false, showCpuLoad: true, darkMode: true,
+      },
+      tabFilters: {
+        taskFilterText: 'idle', migratedOnlyFilter: true,
+        taskFilterKeys: null, heatmapFilterLabel: null,
+        coreFilterKeys: ['Core_0'],
+      },
+      findQuery: 'worker', findMode: 'exact',
+      pinnedHighlightKey: 'T1',
+      scopeToCursors: false,
+      openPlot: null,
+      statsSectionCollapsed: { exec: true },
+      compareScopeToCursors: true,
+    }
+    const tab = {
+      cursors: [], marks: [], markNextId: 1, timelineViewport: {},
+      findQuery: '', findMode: 'contains', pinnedHighlightKey: null,
+      taskFilterText: '', migratedOnlyFilter: false,
+      taskFilterKeys: null, heatmapFilterLabel: null, coreFilterKeys: null,
+    }
+    const timelineOptions = {
+      viewMode: 'task', orientation: 'h', showGrid: true, showSti: true,
+      showCpuLoad: false, darkMode: false,
+      taskFilterText: '', migratedOnlyFilter: false,
+      taskFilterKeys: null, heatmapFilterLabel: null, coreFilterKeys: null,
+      highlightKey: null, lockedTaskKey: null,
+    }
+    applyPortableSession(tab, desktopPayload, timelineOptions)
+
+    assert.deepEqual(tab.cursors, [1000, 2000, null, null])
+    assert.equal(tab.marks.length, 2)
+    assert.equal(tab.findQuery, 'worker')
+    assert.equal(tab.findMode, 'exact')
+    assert.equal(tab.pinnedHighlightKey, 'T1')
+    assert.equal(tab.scopeToCursors, false)
+    assert.deepEqual(tab.statsSectionCollapsed, { exec: true })
+    assert.equal(tab.taskFilterText, 'idle')
+    assert.equal(tab.migratedOnlyFilter, true)
+    assert.deepEqual(tab.coreFilterKeys, ['Core_0'])
+    assert.deepEqual(tab.timelineViewport, {
+      timeStart: 0, timeEnd: 5000, scrollY: 0, scrollX: 0, canvasW: 800, canvasH: 600,
+    })
+    assert.equal(timelineOptions.viewMode, 'core')
+    assert.equal(timelineOptions.orientation, 'v')
+    assert.equal(timelineOptions.showGrid, false)
+    assert.equal(timelineOptions.showSti, false)
+    assert.equal(timelineOptions.showCpuLoad, true)
+    assert.equal(timelineOptions.darkMode, true)
+    assert.deepEqual(timelineOptions.coreFilterKeys, ['Core_0'])
+    assert.equal(timelineOptions.lockedTaskKey, 'T1')
+  })
 })

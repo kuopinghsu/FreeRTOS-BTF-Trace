@@ -848,7 +848,6 @@
                     @clear-bookmarks="onClearBookmarks"
                     @clear-annotations="onClearAnnotations"
                     @export-session="onExportSession"
-                    @export-evidence-pack="onExportEvidencePack"
                     @import-session="onImportSession"
                     @select-mark="timelineOptions.selectedMarkId = $event"
                   />
@@ -1236,7 +1235,7 @@
                 Ctrl+Z
               </div><div>Undo cursor / mark changes</div>
               <div class="k">
-                Ctrl+Y
+                Ctrl+Y / Ctrl+Shift+Z
               </div><div>Redo</div>
               <div class="k">
                 Ctrl+F
@@ -1380,7 +1379,13 @@
               </div><div>Copy screenshot</div>
               <div class="k">
                 Double-click ruler
-              </div><div>Fit Trace</div>
+              </div><div>Fit entire trace</div>
+              <div class="k">
+                Double-click segment
+              </div><div>Zoom to segment; repeat to restore previous zoom</div>
+              <div class="k">
+                Double-click label edge
+              </div><div>Auto-fit label column width</div>
             </div>
           </div>
 
@@ -1621,6 +1626,7 @@
       @recalculate-context="findingsContextSnapshot = { ...findingsAnalysisContext }"
       @save-recipe="onSaveAnalysisRecipe"
       @save-story="onSaveAnalysisStory"
+      @export-evidence-pack="onExportEvidencePack"
     />
 
     <InvestigationNotebookDialog
@@ -3800,7 +3806,7 @@ const traceHealthResult = computed(() => {
   )
 })
 
-// ---- Investigation notebook (Phase 3) ----------------------------------
+// ---- Investigation notebook --------------------------------------------
 const notebookDialogOpen = ref(false)
 // §9 — compact Notebook context shown in the AI panel while collaborating.
 const notebookCollab = ref(null)
@@ -7325,7 +7331,12 @@ function onGlobalKeydown(e) {
     return
   }
 
-  if (trace.value && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+  // BTFViewer owns no Alt shortcuts — leave Alt-modified keys to the
+  // browser/OS (Alt+Left/Right are Back/Forward candidates) rather than
+  // letting them fall through into the bare-key/arrow handling below.
+  if (e.altKey) return
+
+  if (trace.value && !mod && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
     const horiz = (timelineOptions.orientation || 'h') === 'h'
     const timeKeys = horiz ? ['ArrowLeft', 'ArrowRight'] : ['ArrowUp', 'ArrowDown']
     const rowKeys = horiz ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight']
@@ -7358,14 +7369,18 @@ function onGlobalKeydown(e) {
 
   switch (key) {
     case '1':
-      timelineOptions.viewMode = 'task'
-      persistTimelineViewPrefs()
-      e.preventDefault()
+      if (!mod) {
+        timelineOptions.viewMode = 'task'
+        persistTimelineViewPrefs()
+        e.preventDefault()
+      }
       break
     case '2':
-      timelineOptions.viewMode = 'core'
-      persistTimelineViewPrefs()
-      e.preventDefault()
+      if (!mod) {
+        timelineOptions.viewMode = 'core'
+        persistTimelineViewPrefs()
+        e.preventDefault()
+      }
       break
     case 'h':
       if (!mod) {
@@ -7375,9 +7390,11 @@ function onGlobalKeydown(e) {
       }
       break
     case 'v':
-      timelineOptions.orientation = 'v'
-      persistTimelineViewPrefs()
-      e.preventDefault()
+      if (!mod) {
+        timelineOptions.orientation = 'v'
+        persistTimelineViewPrefs()
+        e.preventDefault()
+      }
       break
     case 'g':
       if (!mod) {
@@ -7387,14 +7404,18 @@ function onGlobalKeydown(e) {
       }
       break
     case 'i':
-      timelineOptions.showSti = !timelineOptions.showSti
-      persistTimelineViewPrefs()
-      e.preventDefault()
+      if (!mod) {
+        timelineOptions.showSti = !timelineOptions.showSti
+        persistTimelineViewPrefs()
+        e.preventDefault()
+      }
       break
     case 'd':
-      timelineOptions.darkMode = !timelineOptions.darkMode
-      persistTimelineViewPrefs()
-      e.preventDefault()
+      if (!mod) {
+        timelineOptions.darkMode = !timelineOptions.darkMode
+        persistTimelineViewPrefs()
+        e.preventDefault()
+      }
       break
     case 'b':
       if (!mod && !e.shiftKey) {

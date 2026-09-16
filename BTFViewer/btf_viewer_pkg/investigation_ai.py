@@ -1,5 +1,5 @@
 """Collaborate-with-AI entry point + AI proposal review for the Investigation
-Notebook (BTFVIEWER_DESIGN_CONSISTENCY_TODO §9, §10).
+Notebook.
 
 Pure functions. ``investigation_notebook`` stays AI-independent; this module is
 the *only* place that turns AI output into **proposed** Notebook operations and

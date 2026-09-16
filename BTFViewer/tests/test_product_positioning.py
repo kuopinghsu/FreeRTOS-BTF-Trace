@@ -1,4 +1,4 @@
-"""Product positioning (BTFVIEWER_DESIGN_CONSISTENCY_TODO — "P2 — Product positioning").
+"""Product positioning.
 
 Desktop, Web, CLI and exports use `BTFViewer` and a viewer-first, AI-optional
 description.

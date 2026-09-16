@@ -1,5 +1,5 @@
 /**
- * One clean response block per user query (AI_RESPONSE_FLOW_TODO):
+ * One clean response block per user query:
  *   user → "Analysis completed · N.N s" → collapsed "Tool usage · X calls /
  *   Y tools" → final answer.
  * Pure helpers shared by the live panel, the desktop log, and the exports.
@@ -9,7 +9,7 @@
 
 import { recordToolUsage, summarizeToolUsage } from './aiToolUsage.js'
 
-/** `28.3` — one decimal, matches the TODO's own examples. */
+/** `28.3` — one decimal place. */
 export function formatElapsedSeconds(s) {
   const n = Math.max(0, Number(s) || 0)
   return (Math.round(n * 10) / 10).toFixed(1)

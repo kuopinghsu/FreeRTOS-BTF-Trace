@@ -1,4 +1,4 @@
-"""Trace Compare A/B contract (BTFVIEWER_DESIGN_CONSISTENCY_TODO step 1).
+"""Trace Compare A/B contract.
 
 Public contract:
 - Trace A is Baseline A, Trace B is Candidate B.

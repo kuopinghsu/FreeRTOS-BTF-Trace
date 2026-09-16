@@ -1467,6 +1467,32 @@ _PORTABLE_FIND_MODES = (
     "sti", "intervals", "lifecycle", "pointers",
 )
 
+# Canonical portable view-state fields — the single schema shared by the
+# standalone Session export/import and the .btfw state/view.json member.
+# Defined once so Session and Workspace never grow independent field lists.
+PORTABLE_VIEW_STATE_KEYS = (
+    "version", "traceName", "cursors", "marks", "markNextId",
+    "timelineViewport", "timelineOptions", "tabFilters",
+    "findQuery", "findMode", "pinnedHighlightKey", "scopeToCursors",
+    "openPlot", "statsSectionCollapsed", "compareScopeToCursors",
+)
+
+# A subset that only the modern portable schema has — legacy Desktop
+# workspace state (trace_name / viewport_desktop, pre-unification) never
+# sets any of these, even though it may share the same ``version`` number.
+_PORTABLE_VIEW_STATE_MARKERS = (
+    "timelineViewport", "timelineOptions", "tabFilters",
+    "findQuery", "statsSectionCollapsed",
+)
+
+def _workspace_has_portable_view_state(view) -> bool:
+    """True if a ``.btfw`` ``state/view.json`` dict uses the modern
+    portable Session schema rather than the legacy reduced Desktop
+    workspace schema. Detection must be field-based: legacy Desktop
+    workspace state may report ``version == SESSION_PORTABLE_VERSION`` too."""
+    return isinstance(view, dict) and any(
+        key in view for key in _PORTABLE_VIEW_STATE_MARKERS)
+
 def _snapshot_tab_filters(scene) -> dict:
     """Per-tab legend filter state (portable session + tab_view rc).
 

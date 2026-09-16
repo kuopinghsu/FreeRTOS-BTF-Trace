@@ -2,6 +2,14 @@
 
 Since v1.0.0 (2026-09-13)
 
+## 2026-09-16
+- Evidence Pack export moved from Marks panel to Analysis Findings (new on desktop)
+- Keyboard shortcuts: fixed Ctrl/Cmd and Alt modifiers leaking into bare-key shortcuts (web)
+- Desktop: added bare `S` and `+`/`-`/`=`/`_` shortcuts, matching web
+- Desktop/web: unified portable workspace (.btfw) state with Session export/import
+- Fixed: long tag alias could overlap the data-format control
+- Fixed: data-format control covered the tag label when a row was expanded (web)
+
 ## 2026-09-15
 - AI: tag queries now return value stats (min/avg/max/etc.), not just occurrences
 - Tag rename (alias), saved per trace

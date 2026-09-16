@@ -1,4 +1,4 @@
-"""Headless verification against a JSON rule file (TODO Phase 5).
+"""Headless verification against a JSON rule file.
 
 ``btfviewer verify trace.btf --rules rules.json`` resolves each rule's metric
 for the trace (optionally a cursor scope), compares it to the configured

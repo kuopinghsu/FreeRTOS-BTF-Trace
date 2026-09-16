@@ -869,7 +869,7 @@ class AiInvestigationTests(unittest.TestCase):
         self.assertNotIn("Raw calls", no_repeat)
 
     def test_inconclusive_verify_claim_never_reads_as_confirmed(self) -> None:
-        # Mirrors web/tests/aiInvestigationTree.test.js (TODO §10).
+        # Mirrors web/tests/aiInvestigationTree.test.js.
         from btf_viewer_pkg.ai_investigation import (
             conclusion_status_from_payload,
             extract_evidence_panel_payload,

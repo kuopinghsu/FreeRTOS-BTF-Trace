@@ -256,8 +256,8 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertNotIn("self._scope_chip", src)
 
     def test_finished_round_is_one_tool_calls_card(self) -> None:
-        # Image spec / TODO §4/§13 — a finished round of tool use is ONE
-        # "Tool calls · N" fold of tool names; no per-tool params or status.
+        # A finished round of tool use is ONE "Tool calls · N" fold of tool
+        # names; no per-tool params or status.
         from btf_viewer_pkg.ai_assistant import _ev_fold_id, _tool_cards_html
         from btf_viewer_pkg.ai_tools import AI_TOOL_SEARCH_TIMELINE
 

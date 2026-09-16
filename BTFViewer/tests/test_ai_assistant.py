@@ -776,9 +776,9 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertLess(doc.index("Reply one"), doc.index("Prompt two"))
 
     def test_completed_query_collapses_to_one_response_block(self) -> None:
-        # AI_RESPONSE_FLOW_TODO — user -> "Analysis completed · N.N s" ->
-        # collapsed "Tool Usage · X calls / Y tools" -> final answer, with the
-        # model's interstitial narration hidden.
+        # user -> "Analysis completed · N.N s" -> collapsed "Tool Usage · X
+        # calls / Y tools" -> final answer, with the model's interstitial
+        # narration hidden.
         from btf_viewer_pkg.ai_assistant import _ev_fold_id
         from btf_viewer_pkg.ai_response_flow import format_tool_usage_summary_line
         from btf_viewer_pkg.ai_investigation import evidence_panel_labels
@@ -926,7 +926,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         )
         self.assertIn("Verdict: mutex stall.", html_out)
         self.assertIn("ai-tool-card", html_out)
-        # A finished round is one "Tool calls · N" fold (TODO §4/§13).
+        # A finished round is one "Tool calls · N" fold.
         self.assertIn("Tool calls · 1", html_out)
         self.assertNotIn("(applied)", html_out)
         bubble_at = html_out.find('class="ai-bubble"')

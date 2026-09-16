@@ -1,4 +1,4 @@
-"""One clean response block per user query (AI_RESPONSE_FLOW_TODO):
+"""One clean response block per user query:
 
     user -> "Analysis completed · N.N s" -> collapsed "Tool usage · X calls /
     Y tools" -> final answer.
@@ -14,7 +14,7 @@ from .ai_tool_usage import record_tool_usage, summarize_tool_usage
 
 
 def format_elapsed_seconds(s: Any) -> str:
-    """``28.3`` — one decimal, matches the TODO's own examples."""
+    """``28.3`` — one decimal place."""
     try:
         n = max(0.0, float(s))
     except (TypeError, ValueError):

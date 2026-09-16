@@ -1,6 +1,6 @@
 """Trace-health overhead measurement.
 
-Acceptance criterion (BTFVIEWER_PORTABLE_INVESTIGATION_TODO Phase 1):
+Acceptance criterion:
 "Health checks do not noticeably delay opening normal traces; measure and
 document the overhead."
 

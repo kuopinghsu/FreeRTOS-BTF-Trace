@@ -64,6 +64,7 @@ BUNDLE_MODULES: list[str] = [
     "investigation_notebook",
     "investigation_ai",
     "ai_evidence_package",
+    "evidence_pack",
     "anonymize_export",
     "workspace",
     "stats_symptom_landing",

@@ -53,7 +53,6 @@ describe('AI conversation turn layout', () => {
   })
 
   it('AI response is one clean block per query — no per-round tool cards', () => {
-    // AI_RESPONSE_FLOW_TODO — one clean block per query
     assert.match(aiPanel, /const queryPlan = computed/)
     assert.match(aiPanel, /function queryHidden\(i\)/)
     assert.match(aiPanel, /function queryMeta\(i\)/)

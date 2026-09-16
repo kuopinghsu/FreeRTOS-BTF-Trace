@@ -1,5 +1,5 @@
 """Reports and AI context state the trace identity and the scope actually used
-for their measurements (BTFVIEWER_DESIGN_CONSISTENCY_TODO §4).
+for their measurements.
 
 Verified against the existing report / context builders and locked here so a
 regression can't drop the provenance.

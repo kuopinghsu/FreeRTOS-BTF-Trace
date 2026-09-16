@@ -1,4 +1,4 @@
-"""Focus Mode help + exit behaviour (BTFVIEWER_DESIGN_CONSISTENCY_TODO step 4).
+"""Focus Mode help + exit behaviour.
 
 - Desktop status text, tooltip, Help and key handling all agree: Shift+F toggles,
   Esc exits, F never toggles Focus Mode.

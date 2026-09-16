@@ -213,7 +213,7 @@ class StatsHtmlHelpersTest(unittest.TestCase):
 
     def test_all_report_bars_share_one_track_geometry(self):
         """One bar component: utilisation, ranked and health bars must agree on
-        height, corner radius and track palette (TODO section 10)."""
+        height, corner radius and track palette."""
         css = STATS_HTML_EXTRA_CSS
         for name in (".util-bar {", ".rank-bar-track {", ".pct-bar .track {"):
             rule = css.split(name)[1].split("}")[0]

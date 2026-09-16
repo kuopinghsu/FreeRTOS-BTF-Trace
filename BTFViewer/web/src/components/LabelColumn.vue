@@ -81,22 +81,30 @@
             <span class="label-text sti">{{ row.label }}</span>
           </div>
 
-          <!-- STI tag-event channel row (expandable waveform) -->
+          <!-- STI tag-event channel row (expandable waveform). Expanded, the
+               row band is much taller (rowBandHeight -> stiWaveformH), so the
+               format control drops to its own line below the label instead
+               of staying inline and permanently eating into the label's
+               available width (desktop equivalent: _StiLabelItem's format
+               pill only reserves width from the label while collapsed). -->
           <div
             v-else-if="row.type === 'sti' && row.isTag"
             class="label-row label-sti label-sti-tag"
-            :class="stripeClassForBand(row)"
+            :class="[stripeClassForBand(row), { 'label-sti-tag-expanded': row.isExpanded }]"
             :style="labelRowStyle(row)"
             @click="emit('stiExpandToggle', row.key)"
           >
-            <span class="expand-arrow">{{ row.isExpanded ? '▼' : '▶' }}</span>
-            <span class="sti-wave-icon">〰</span>
-            <span
-              class="label-text sti"
-              :title="row.key"
-            >{{ tagAlias(row.key, tagRepresentations) || row.label }}</span>
+            <div class="label-sti-tag-top">
+              <span class="expand-arrow">{{ row.isExpanded ? '▼' : '▶' }}</span>
+              <span class="sti-wave-icon">〰</span>
+              <span
+                class="label-text sti"
+                :title="row.key"
+              >{{ tagAlias(row.key, tagRepresentations) || row.label }}</span>
+            </div>
             <TagFormatControl
               class="tag-representation-select"
+              :class="{ 'tag-representation-select-expanded': row.isExpanded }"
               :value="tagRepresentations[row.key]"
               :channel="row.key"
               :trace="trace"
@@ -241,6 +249,12 @@ function taskRowKey(row) {
   color: var(--fg);
   font-size: 10px;
 }
+/* Expanded STI tag row: the control drops to its own line below the label
+   (see .label-sti-tag-expanded below), so it no longer needs to hug the
+   row's right edge or sit inline with the label text. */
+:deep(.tag-representation-select-expanded) {
+  align-self: flex-end;
+}
 
 .label-row {
   display: flex;
@@ -284,6 +298,36 @@ function taskRowKey(row) {
 .label-sti-tag {
   cursor: pointer;
   opacity: 1;
+}
+
+/* The icon+text group stays a single flex item so it keeps eliding against
+   the row's available width in both the collapsed (inline) and expanded
+   (stacked) layouts below. */
+.label-sti-tag-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Expanded: the row band grows tall (stiWaveformH) for the waveform chart,
+   so stack the label on its own top line and drop the format control below
+   it instead of leaving it inline, where it permanently ate into the
+   label's width even though the tall row has plenty of room to spare. */
+.label-sti-tag-expanded {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 4px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+/* Keep the top line's own height (icon + text) instead of growing to fill
+   the tall row -- only the column's flex-direction changed, not how much
+   vertical space the label line itself should claim. */
+.label-sti-tag-expanded .label-sti-tag-top {
+  flex: 0 0 auto;
 }
 
 .label-interval {

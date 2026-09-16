@@ -1,4 +1,4 @@
-"""User-facing terminology normalization (BTFVIEWER_DESIGN_CONSISTENCY_TODO step 5).
+"""User-facing terminology normalization.
 
 Canonical spellings: `Core Utilization`, `Core Utilization Over Time`,
 `Snapshot Editor`. Internal identifiers (`core_utilisation`, `coreUtil`, the
