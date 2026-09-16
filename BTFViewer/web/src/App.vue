@@ -3424,6 +3424,7 @@ function onSettingsSave(next, meta = {}) {
     appSettings.statsSectionCollapsed = collapsed
     statsSectionHeights.value = {}
     saveSettings(appSettings)
+    aiPanelRef.value?.clear?.()
     scheduleSessionSave()
   }
   settingsRevertSnapshot = null

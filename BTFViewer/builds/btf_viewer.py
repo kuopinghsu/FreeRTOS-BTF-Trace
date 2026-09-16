@@ -107469,6 +107469,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._persist_settings_after_dlg(_snap)
             if dlg.reset_requested:
                 self._reset_stats_layout_to_defaults()
+                _clear_chat = getattr(
+                    getattr(self, "_ai_panel", None), "clear_conversation", None)
+                if callable(_clear_chat):
+                    _clear_chat()
             _new_budget = dlg.cpu_budget_pct
             _new_dl_text = dlg.task_deadlines_text
             if (_snap["cpu_budget_pct"] != _new_budget
