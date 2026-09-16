@@ -16119,6 +16119,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 extra_ids = [row["id"] for row in dlg.ai_extra_presets]
                 self._settings.align_section_keys(
                     "ai", set(self._ai_setting_keys(extra_ids)))
+                # align_section_keys() only marks the store dirty; without an
+                # explicit flush, stale <pid>_* keys from a removed import or
+                # Reset to Defaults stay in memory but never reach the .rc
+                # file until something unrelated happens to flush later.
+                self._settings.flush()
                 panel = getattr(self, "_ai_panel", None)
                 refresh = getattr(panel, "_refresh_localized_chrome", None)
                 if callable(refresh):

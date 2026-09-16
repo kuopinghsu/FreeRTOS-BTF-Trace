@@ -711,6 +711,7 @@
         <button
           type="button"
           class="settings-btn secondary"
+          title="Restore built-in defaults, including Statistics pins, order, and expand/collapse. Also removes any AI presets added by Import… and clears saved API keys."
           @click="onReset"
         >
           Reset to Defaults

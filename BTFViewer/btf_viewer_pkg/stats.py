@@ -20864,8 +20864,9 @@ class _SettingsDialog(QDialog):
         self._tip(
             btn_reset,
             "Restore built-in defaults, including Statistics pins, order, "
-            "and expand/collapse. The Statistics panel updates immediately; "
-            "OK writes them to btf_viewer.rc.")
+            "and expand/collapse. Also removes any AI presets added by "
+            "Import… and clears saved API keys. The Statistics panel "
+            "updates immediately; OK writes them to btf_viewer.rc.")
         btn_reset.clicked.connect(self._reset_to_defaults)
         footer.addWidget(btn_reset)
 

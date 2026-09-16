@@ -83747,8 +83747,9 @@ class _SettingsDialog(QDialog):
         self._tip(
             btn_reset,
             "Restore built-in defaults, including Statistics pins, order, "
-            "and expand/collapse. The Statistics panel updates immediately; "
-            "OK writes them to btf_viewer.rc.")
+            "and expand/collapse. Also removes any AI presets added by "
+            "Import… and clears saved API keys. The Statistics panel "
+            "updates immediately; OK writes them to btf_viewer.rc.")
         btn_reset.clicked.connect(self._reset_to_defaults)
         footer.addWidget(btn_reset)
 
@@ -107500,6 +107501,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 extra_ids = [row["id"] for row in dlg.ai_extra_presets]
                 self._settings.align_section_keys(
                     "ai", set(self._ai_setting_keys(extra_ids)))
+                # align_section_keys() only marks the store dirty; without an
+                # explicit flush, stale <pid>_* keys from a removed import or
+                # Reset to Defaults stay in memory but never reach the .rc
+                # file until something unrelated happens to flush later.
+                self._settings.flush()
                 panel = getattr(self, "_ai_panel", None)
                 refresh = getattr(panel, "_refresh_localized_chrome", None)
                 if callable(refresh):
