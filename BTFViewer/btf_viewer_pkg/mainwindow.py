@@ -10581,7 +10581,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "user_investigation_templates", "user_historical_knowledge",
                 "redact_task_names", "trace_sensitive", "extra_presets",
                 "split_bottom", "investigation_session", "context_mode",
-                "recent_templates", "template_usage"]
+                "recent_templates", "template_usage", "baseline_profile"]
         pids = [pid for pid, _label, _base, _model in AI_PRESETS]
         for pid in extra_ids:
             if pid and pid not in pids:
@@ -16085,12 +16085,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             lambda: self._apply_stats_layout_defaults(persist=False))
         if _exec_centred(dlg, self) == QDialog.Accepted:
             self._persist_settings_after_dlg(_snap)
-            if dlg.reset_requested:
+            _ai_reset = bool(dlg.reset_requested)
+            if _ai_reset:
                 self._reset_stats_layout_to_defaults()
-                _clear_chat = getattr(
-                    getattr(self, "_ai_panel", None), "clear_conversation", None)
+                # Factory reset: wipe the whole [ai] section in one call
+                # (connection settings, imported presets, and personalization/
+                # history/baseline state alike) instead of growing an
+                # allow-list of exceptions. Canonical connection defaults are
+                # rewritten by the normal _ai_upd save below; per-cache
+                # runtime state (chat, template MRU/usage, split position) is
+                # rebuilt from the now-empty settings right after.
+                self._settings.clear_section("ai", flush=False)
+                _ai_panel = getattr(self, "_ai_panel", None)
+                _clear_chat = getattr(_ai_panel, "clear_conversation", None)
                 if callable(_clear_chat):
                     _clear_chat()
+                _clear_tpl_hist = getattr(_ai_panel, "_clear_template_history", None)
+                if callable(_clear_tpl_hist):
+                    _clear_tpl_hist()
+                _restore_split = getattr(_ai_panel, "_restore_ai_split", None)
+                if callable(_restore_split):
+                    _restore_split()
             _new_budget = dlg.cpu_budget_pct
             _new_dl_text = dlg.task_deadlines_text
             if (_snap["cpu_budget_pct"] != _new_budget
@@ -16118,7 +16133,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _ai_changed = any(
                 str(_ai_cfg.get(_key, "")) != _val for _key, _val in _ai_upd.items()
             )
-            if _ai_changed:
+            if _ai_changed or _ai_reset:
                 self._settings.set_many("ai", _ai_upd)
                 extra_ids = [row["id"] for row in dlg.ai_extra_presets]
                 self._settings.align_section_keys(

@@ -272,6 +272,7 @@ from .ai_assistant import (  # noqa: F401
     ai_preset_signin_label,
     ai_preset_signin_url,
     ai_test_connection,
+    build_ai_settings_json,
     default_ai_auth_mode,
     format_ai_tls_verify,
     merge_ai_preset_catalog,
@@ -20792,6 +20793,14 @@ class _SettingsDialog(QDialog):
             "deepseek.json, grok.json, presets.json).")
         self._ai_import_btn.clicked.connect(self._import_ai_settings)
         _test_h.addWidget(self._ai_import_btn)
+        self._ai_export_btn = QPushButton("Export…")
+        self._tip(
+            self._ai_export_btn,
+            "Save all presets (base URL, model, auth mode), the active "
+            "preset, and global settings (reply language, context mode, "
+            "checkbox flags) to a JSON file. API keys are not included.")
+        self._ai_export_btn.clicked.connect(self._export_ai_settings)
+        _test_h.addWidget(self._ai_export_btn)
         _test_h.addStretch()
         f4.addRow("", _test_row)
         self._ai_form = f4
@@ -21239,6 +21248,42 @@ class _SettingsDialog(QDialog):
                 f"Cannot import {os.path.basename(path)}: {exc}", "error")
             return
         self._set_ai_status(self.apply_ai_settings_patch(patch), "ok")
+
+    def _export_ai_settings(self) -> None:
+        self._stash_ai_preset_fields()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export AI settings", "ai_settings.json",
+            "JSON files (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        extras = [
+            {"id": pid, "label": self._ai_preset_combo.itemText(
+                self._ai_preset_combo.findData(pid))}
+            for pid in self._ai_combo_preset_ids()
+            if pid not in BUILTIN_AI_PRESET_IDS
+        ]
+        doc = build_ai_settings_json(
+            self._ai_active_preset,
+            self._ai_preset_values,
+            extras,
+            response_language=self._response_lang_combo.currentText(),
+            enabled=self._ai_enabled_cb.isChecked(),
+            redact_task_names=self._ai_redact_cb.isChecked(),
+            trace_sensitive=self._ai_sensitive_cb.isChecked(),
+            context_mode=str(self._ai_context_combo.currentData() or ""),
+            mcp_log=self._ai_mcp_log_cb.isChecked(),
+        )
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh, indent=2)
+        except OSError as exc:
+            self._set_ai_status(
+                f"Cannot export {os.path.basename(path)}: {exc}", "error")
+            return
+        self._set_ai_status(
+            f"Exported AI settings to {os.path.basename(path)}. "
+            "API keys are not included.", "ok")
 
     def _ai_test_target(self) -> Tuple[str, str, str, bool]:
         """Typed fields, falling back to the active preset's defaults."""

@@ -1593,6 +1593,58 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
     return patch
 
 
+def build_ai_settings_json(
+    active_preset: str,
+    preset_values: Dict[str, Dict[str, str]],
+    extra_presets: Optional[List[Dict[str, str]]] = None,
+    response_language: str = "",
+    enabled: bool = True,
+    redact_task_names: bool = False,
+    trace_sensitive: bool = False,
+    context_mode: str = "",
+    mcp_log: bool = False,
+) -> Dict[str, Any]:
+    """Serialize every preset plus the global AI settings into the schema
+    ``parse_ai_settings_json`` reads back (see ``examples/ai/presets.json``),
+    for a full "Export…" backup. Each preset's base URL / model fall back to
+    its built-in default when the user never overrode them, so the file
+    fully documents the current setup. API keys are always written as
+    ``""`` so the file is safe to share; an empty key on import leaves the
+    current one unchanged.
+
+    Keep in sync with ``buildAiSettingsJson`` in web/src/utils/aiClient.js.
+    """
+    extras = parse_extra_ai_presets(extra_presets or [])
+    catalog = list(AI_PRESETS) + [
+        (row["id"], row["label"], "", "") for row in extras
+    ]
+    presets: Dict[str, Dict[str, Any]] = {}
+    for pid, label, def_base, def_model in catalog:
+        fields = preset_values.get(pid) or {}
+        entry: Dict[str, Any] = {
+            "base_url": fields.get("base_url") or def_base,
+            "model": fields.get("model") or def_model,
+            "api_key": "",
+        }
+        if fields.get("auth_mode"):
+            entry["auth_mode"] = fields["auth_mode"]
+        if str(fields.get("tls_verify", "true")).strip().lower() == "false":
+            entry["tls_verify"] = False
+        if pid not in BUILTIN_AI_PRESET_IDS:
+            entry["label"] = label or ai_preset_display_label(pid)
+        presets[pid] = entry
+    return {
+        "preset": normalize_ai_preset(active_preset),
+        "response_language": response_language,
+        "enabled": bool(enabled),
+        "redact_task_names": bool(redact_task_names),
+        "trace_sensitive": bool(trace_sensitive),
+        "context_mode": context_mode,
+        "mcp_log": bool(mcp_log),
+        "presets": presets,
+    }
+
+
 def normalize_api_key(api_key: Optional[str] = None) -> str:
     """Strip paste noise from an API key (quotes, Bearer prefix, non-ASCII junk).
 

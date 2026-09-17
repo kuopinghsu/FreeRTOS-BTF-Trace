@@ -2070,6 +2070,7 @@ import {
 import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, normalizeSettings,
   loadAiBaselineProfile, saveAiBaselineProfile,
   loadAiUserInvestigationTemplates, saveAiUserInvestigationTemplates,
+  clearAiPersistentState,
 } from './utils/settingsStore.js'
 import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
@@ -3424,7 +3425,9 @@ function onSettingsSave(next, meta = {}) {
     appSettings.statsSectionCollapsed = collapsed
     statsSectionHeights.value = {}
     saveSettings(appSettings)
+    clearAiPersistentState()
     aiPanelRef.value?.clear?.()
+    aiPanelRef.value?.resetPersonalizationState?.()
     scheduleSessionSave()
   }
   settingsRevertSnapshot = null

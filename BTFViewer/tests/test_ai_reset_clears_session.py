@@ -26,7 +26,11 @@ install()
 from PySide6.QtWidgets import QApplication, QDialog  # noqa: E402
 
 from btf_viewer_pkg import stats as _stats  # noqa: E402
-from btf_viewer_pkg.ai_assistant import create_ai_assistant_panel  # noqa: E402
+from btf_viewer_pkg.ai_assistant import (  # noqa: E402
+    create_ai_assistant_panel,
+    parse_ai_template_usage,
+    parse_recent_ai_templates,
+)
 from btf_viewer_pkg.ai_case import (  # noqa: E402
     dump_investigation_session,
     investigation_session_has_chat,
@@ -115,6 +119,56 @@ class ResetToDefaultsClearsSessionTests(unittest.TestCase):
             written = fh.read()
         self.assertNotIn("CPU spike", written)
         self.assertNotIn("CS[28]", written)
+
+    # -- Reset must also clear AI personalization/history/baseline state ---
+    # Regression coverage for TODO.bak/TODO.md P1: Reset already wiped
+    # imported presets/credentials and the chat/session, but left
+    # baseline_profile, user templates/knowledge, template MRU/usage, and
+    # (Desktop) split_bottom behind.
+
+    def test_reset_to_defaults_clears_ai_personalization_state(self) -> None:
+        settings = _stats._RcSettings()
+        settings.set_many("ai", {
+            "baseline_profile": '{"samples": 3, "tasks": {}}',
+            "user_investigation_templates": (
+                '[{"id": "my_tpl", "label": "My Template", "steps": ["a"]}]'),
+            "user_historical_knowledge": (
+                '[{"id": "k1", "title": "Known issue", "text": "..."}]'),
+            "recent_templates": '["explain_task", "verify_claim"]',
+            "template_usage": '{"explain_task": 3}',
+            "split_bottom": "180",
+        }, flush=True)
+
+        win = MainWindow()
+        self.addCleanup(destroy_main_window, win)
+        QApplication.processEvents()
+
+        def fake_exec(dlg, parent):
+            dlg._reset_to_defaults()
+            return QDialog.Accepted
+
+        with patch("btf_viewer_pkg.mainwindow._exec_centred", side_effect=fake_exec):
+            win._open_settings("AI")
+
+        cfg = win._ai_read_settings()
+        self.assertFalse(cfg.get("baseline_profile"))
+        self.assertFalse(cfg.get("user_investigation_templates"))
+        self.assertFalse(cfg.get("user_historical_knowledge"))
+        self.assertEqual(parse_recent_ai_templates(cfg.get("recent_templates")), [])
+        self.assertEqual(parse_ai_template_usage(cfg.get("template_usage")), {})
+
+        # Re-read from a fresh _RcSettings() instance (simulated restart) to
+        # prove the wipe actually reached disk, not just the live dialog.
+        reread = _stats._RcSettings()
+        self.assertFalse(reread.get("ai", "baseline_profile", ""))
+        self.assertFalse(reread.get("ai", "user_investigation_templates", ""))
+        self.assertFalse(reread.get("ai", "user_historical_knowledge", ""))
+        with open(self._rc_path, encoding="utf-8") as fh:
+            written = fh.read()
+        self.assertNotIn("my_tpl", written)
+        self.assertNotIn("Known issue", written)
+        self.assertNotIn("explain_task", written)
+        self.assertNotIn("180", written)
 
 
 if __name__ == "__main__":

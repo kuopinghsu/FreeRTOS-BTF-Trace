@@ -647,6 +647,41 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(f"  {sid}:", js, sid)
             self.assertIn(text, js, sid)
 
+    def test_finding_section_map_matches_web(self) -> None:
+        from btf_viewer_pkg.config import FINDING_SECTION_MAP
+
+        js = (BTF_ROOT / "web/src/utils/workflowAnalysis.js").read_text(
+            encoding="utf-8")
+        block = re.search(
+            r"export const FINDING_SECTION_MAP = Object\.freeze\(\{([\s\S]*?)\}\)",
+            js)
+        self.assertIsNotNone(block)
+        js_map = dict(re.findall(r"(\w+):\s*'([^']+)'", block.group(1)))
+        self.assertEqual(js_map, FINDING_SECTION_MAP)
+
+    def test_ai_builtin_presets_match_web(self) -> None:
+        from btf_viewer_pkg.ai_assistant import AI_PRESETS
+
+        js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(encoding="utf-8")
+        block = re.search(
+            r"export const AI_PRESETS = \[([\s\S]*?)\n\]", js)
+        self.assertIsNotNone(block)
+        entries = re.findall(
+            r"\{\s*id:\s*(\w+),\s*label:\s*'([^']*)',\s*"
+            r"baseUrl:\s*'([^']*)',[\s\S]*?model:\s*'([^']*)',?\s*\}",
+            block.group(1))
+        js_id_alias = {
+            "AI_PRESET_CUSTOM": "custom",
+            "AI_PRESET_OLLAMA": "ollama",
+            "AI_PRESET_OPENAI": "openai",
+            "AI_PRESET_GEMINI": "gemini",
+        }
+        js_presets = [
+            (js_id_alias.get(pid, pid), label, base_url, model)
+            for pid, label, base_url, model in entries
+        ]
+        self.assertEqual(js_presets, list(AI_PRESETS))
+
     def _assert_investigation_ui_match(self) -> None:
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(

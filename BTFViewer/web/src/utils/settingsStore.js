@@ -415,7 +415,7 @@ export function saveAiTemplateUsage(counts) {
   }
 }
 
-/** Drop the dynamic template row history (ids/counts only). Not used by Clear. */
+/** Drop the dynamic template row history (ids/counts only). Also called by clearAiPersistentState(). */
 export function clearAiTemplateHistory() {
   try {
     localStorage.removeItem(AI_RECENT_TEMPLATES_KEY)
@@ -423,6 +423,26 @@ export function clearAiTemplateHistory() {
   } catch {
     /* quota / private mode */
   }
+}
+
+/**
+ * Wipe every BTFViewer-owned AI personalization/history key that lives
+ * outside the main settings object (btf-viewer-settings-v1): baseline
+ * profile, user templates/knowledge, split position, and template MRU/usage.
+ * Called by Reset to Defaults. Never touches unrelated localStorage entries.
+ * Keep in sync with Desktop's `clear_section("ai")` +
+ * `_clear_template_history()` / `_restore_ai_split()` in mainwindow.py.
+ */
+export function clearAiPersistentState() {
+  try {
+    localStorage.removeItem(AI_BASELINE_KEY)
+    localStorage.removeItem(AI_USER_TEMPLATES_KEY)
+    localStorage.removeItem(AI_USER_KNOWLEDGE_KEY)
+    localStorage.removeItem(AI_SPLIT_BOTTOM_KEY)
+  } catch {
+    /* quota / private mode */
+  }
+  clearAiTemplateHistory()
 }
 
 export function loadAiSplitBottom() {

@@ -659,6 +659,14 @@
                     class="settings-file-input"
                     @change="onImportAiSettings"
                   >
+                  <button
+                    type="button"
+                    class="settings-btn secondary"
+                    title="Save all presets (base URL, model, auth mode), the active preset, and global settings (reply language, context mode, checkbox flags) to a JSON file. API keys are not included."
+                    @click="onExportAiSettings"
+                  >
+                    Export…
+                  </button>
                 </div>
               </div>
 
@@ -764,6 +772,7 @@ import {
   aiPresetSignInLabel,
   aiPresetSignInUrl,
   aiTestConnection,
+  buildAiSettingsJson,
   normalizeAiAuthMode,
   normalizeAiPreset,
   parseAiSettingsJson,
@@ -1155,6 +1164,18 @@ async function onImportAiSettings(event) {
     // Allow re-importing the same file after an edit.
     input.value = ''
   }
+}
+
+function onExportAiSettings() {
+  const json = JSON.stringify(buildAiSettingsJson(draft), null, 2)
+  const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'ai_settings.json'
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  aiTestStatus.value = 'Exported AI settings to ai_settings.json. API keys are not included.'
+  aiTestOk.value = true
 }
 
 const aiTestClass = computed(() => {

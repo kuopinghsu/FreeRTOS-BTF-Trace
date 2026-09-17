@@ -2,13 +2,21 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import {
+  clearAiPersistentState,
   loadAiBaselineProfile,
+  loadAiRecentTemplates,
   loadAiSplitBottom,
+  loadAiTemplateUsage,
+  loadAiUserHistoricalKnowledge,
   loadAiUserInvestigationTemplates,
   normalizeSettings,
   saveAiBaselineProfile,
+  saveAiRecentTemplates,
   saveAiSplitBottom,
+  saveAiTemplateUsage,
+  saveAiUserHistoricalKnowledge,
   saveAiUserInvestigationTemplates,
+  saveSettings,
 } from '../src/utils/settingsStore.js'
 
 function withMemoryLocalStorage(fn) {
@@ -204,5 +212,52 @@ describe('AI settings storage', () => {
     assert.match(panel, /authForced/)
     assert.match(panel, /showSignInCta/)
     assert.match(panel, /Opened \$\{url\}\. Paste the key or token in Settings/)
+  })
+
+  // Regression coverage for TODO.bak/TODO.md P1: Reset to Defaults must
+  // clear every BTFViewer-owned AI personalization/history/baseline key
+  // that lives outside btf-viewer-settings-v1, without touching unrelated
+  // localStorage entries. Desktop mirrors this with clear_section("ai") +
+  // _clear_template_history() / _restore_ai_split() in mainwindow.py.
+
+  it('clearAiPersistentState removes all six aux keys and leaves unrelated storage alone', () => {
+    withMemoryLocalStorage(() => {
+      saveAiBaselineProfile({ samples: 3, tasks: {} })
+      saveAiUserInvestigationTemplates([{ id: 't1', label: 'T1', steps: ['a'] }])
+      saveAiUserHistoricalKnowledge([{ id: 'k1', title: 'Known issue', text: '...' }])
+      saveAiRecentTemplates(['explain_task', 'verify_claim'])
+      saveAiTemplateUsage({ explain_task: 3 })
+      saveAiSplitBottom(180)
+      globalThis.localStorage.setItem('unrelated-test-key', 'keep')
+
+      clearAiPersistentState()
+
+      assert.equal(globalThis.localStorage.getItem('btf-viewer-ai-baseline-v1'), null)
+      assert.equal(globalThis.localStorage.getItem('btf-viewer-ai-user-templates-v1'), null)
+      assert.equal(globalThis.localStorage.getItem('btf-viewer-ai-user-knowledge-v1'), null)
+      assert.equal(globalThis.localStorage.getItem('btf-viewer-ai-split-bottom-v1'), null)
+      assert.equal(globalThis.localStorage.getItem('btf.ai.recentTemplates'), null)
+      assert.equal(globalThis.localStorage.getItem('btf.ai.templateUsage'), null)
+      assert.equal(globalThis.localStorage.getItem('unrelated-test-key'), 'keep')
+
+      // Reload verification: every loader now reports its default.
+      assert.deepEqual(loadAiBaselineProfile(), {})
+      assert.deepEqual(loadAiUserInvestigationTemplates(), [])
+      assert.deepEqual(loadAiUserHistoricalKnowledge(), [])
+      assert.deepEqual(loadAiRecentTemplates(), [])
+      assert.deepEqual(loadAiTemplateUsage(), {})
+      assert.equal(loadAiSplitBottom(), 80)
+    })
+  })
+
+  it('baseline profile survives an ordinary saveSettings() call', () => {
+    withMemoryLocalStorage(() => {
+      const profile = { samples: 5, tasks: { 'MX[16]': { wcet_us: { n: 5 } } } }
+      saveAiBaselineProfile(profile)
+
+      saveSettings(normalizeSettings({ aiResponseLanguage: 'Spanish' }))
+
+      assert.deepEqual(loadAiBaselineProfile(), profile)
+    })
   })
 })

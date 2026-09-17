@@ -46533,6 +46533,58 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
     return patch
 
 
+def build_ai_settings_json(
+    active_preset: str,
+    preset_values: Dict[str, Dict[str, str]],
+    extra_presets: Optional[List[Dict[str, str]]] = None,
+    response_language: str = "",
+    enabled: bool = True,
+    redact_task_names: bool = False,
+    trace_sensitive: bool = False,
+    context_mode: str = "",
+    mcp_log: bool = False,
+) -> Dict[str, Any]:
+    """Serialize every preset plus the global AI settings into the schema
+    ``parse_ai_settings_json`` reads back (see ``examples/ai/presets.json``),
+    for a full "Export…" backup. Each preset's base URL / model fall back to
+    its built-in default when the user never overrode them, so the file
+    fully documents the current setup. API keys are always written as
+    ``""`` so the file is safe to share; an empty key on import leaves the
+    current one unchanged.
+
+    Keep in sync with ``buildAiSettingsJson`` in web/src/utils/aiClient.js.
+    """
+    extras = parse_extra_ai_presets(extra_presets or [])
+    catalog = list(AI_PRESETS) + [
+        (row["id"], row["label"], "", "") for row in extras
+    ]
+    presets: Dict[str, Dict[str, Any]] = {}
+    for pid, label, def_base, def_model in catalog:
+        fields = preset_values.get(pid) or {}
+        entry: Dict[str, Any] = {
+            "base_url": fields.get("base_url") or def_base,
+            "model": fields.get("model") or def_model,
+            "api_key": "",
+        }
+        if fields.get("auth_mode"):
+            entry["auth_mode"] = fields["auth_mode"]
+        if str(fields.get("tls_verify", "true")).strip().lower() == "false":
+            entry["tls_verify"] = False
+        if pid not in BUILTIN_AI_PRESET_IDS:
+            entry["label"] = label or ai_preset_display_label(pid)
+        presets[pid] = entry
+    return {
+        "preset": normalize_ai_preset(active_preset),
+        "response_language": response_language,
+        "enabled": bool(enabled),
+        "redact_task_names": bool(redact_task_names),
+        "trace_sensitive": bool(trace_sensitive),
+        "context_mode": context_mode,
+        "mcp_log": bool(mcp_log),
+        "presets": presets,
+    }
+
+
 def normalize_api_key(api_key: Optional[str] = None) -> str:
     """Strip paste noise from an API key (quotes, Bearer prefix, non-ASCII junk).
 
@@ -83675,6 +83727,14 @@ class _SettingsDialog(QDialog):
             "deepseek.json, grok.json, presets.json).")
         self._ai_import_btn.clicked.connect(self._import_ai_settings)
         _test_h.addWidget(self._ai_import_btn)
+        self._ai_export_btn = QPushButton("Export…")
+        self._tip(
+            self._ai_export_btn,
+            "Save all presets (base URL, model, auth mode), the active "
+            "preset, and global settings (reply language, context mode, "
+            "checkbox flags) to a JSON file. API keys are not included.")
+        self._ai_export_btn.clicked.connect(self._export_ai_settings)
+        _test_h.addWidget(self._ai_export_btn)
         _test_h.addStretch()
         f4.addRow("", _test_row)
         self._ai_form = f4
@@ -84122,6 +84182,42 @@ class _SettingsDialog(QDialog):
                 f"Cannot import {os.path.basename(path)}: {exc}", "error")
             return
         self._set_ai_status(self.apply_ai_settings_patch(patch), "ok")
+
+    def _export_ai_settings(self) -> None:
+        self._stash_ai_preset_fields()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export AI settings", "ai_settings.json",
+            "JSON files (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        extras = [
+            {"id": pid, "label": self._ai_preset_combo.itemText(
+                self._ai_preset_combo.findData(pid))}
+            for pid in self._ai_combo_preset_ids()
+            if pid not in BUILTIN_AI_PRESET_IDS
+        ]
+        doc = build_ai_settings_json(
+            self._ai_active_preset,
+            self._ai_preset_values,
+            extras,
+            response_language=self._response_lang_combo.currentText(),
+            enabled=self._ai_enabled_cb.isChecked(),
+            redact_task_names=self._ai_redact_cb.isChecked(),
+            trace_sensitive=self._ai_sensitive_cb.isChecked(),
+            context_mode=str(self._ai_context_combo.currentData() or ""),
+            mcp_log=self._ai_mcp_log_cb.isChecked(),
+        )
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh, indent=2)
+        except OSError as exc:
+            self._set_ai_status(
+                f"Cannot export {os.path.basename(path)}: {exc}", "error")
+            return
+        self._set_ai_status(
+            f"Exported AI settings to {os.path.basename(path)}. "
+            "API keys are not included.", "ok")
 
     def _ai_test_target(self) -> Tuple[str, str, str, bool]:
         """Typed fields, falling back to the active preset's defaults."""
@@ -101960,7 +102056,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "user_investigation_templates", "user_historical_knowledge",
                 "redact_task_names", "trace_sensitive", "extra_presets",
                 "split_bottom", "investigation_session", "context_mode",
-                "recent_templates", "template_usage"]
+                "recent_templates", "template_usage", "baseline_profile"]
         pids = [pid for pid, _label, _base, _model in AI_PRESETS]
         for pid in extra_ids:
             if pid and pid not in pids:
@@ -107467,12 +107563,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             lambda: self._apply_stats_layout_defaults(persist=False))
         if _exec_centred(dlg, self) == QDialog.Accepted:
             self._persist_settings_after_dlg(_snap)
-            if dlg.reset_requested:
+            _ai_reset = bool(dlg.reset_requested)
+            if _ai_reset:
                 self._reset_stats_layout_to_defaults()
-                _clear_chat = getattr(
-                    getattr(self, "_ai_panel", None), "clear_conversation", None)
+                # Factory reset: wipe the whole [ai] section in one call
+                # (connection settings, imported presets, and personalization/
+                # history/baseline state alike) instead of growing an
+                # allow-list of exceptions. Canonical connection defaults are
+                # rewritten by the normal _ai_upd save below; per-cache
+                # runtime state (chat, template MRU/usage, split position) is
+                # rebuilt from the now-empty settings right after.
+                self._settings.clear_section("ai", flush=False)
+                _ai_panel = getattr(self, "_ai_panel", None)
+                _clear_chat = getattr(_ai_panel, "clear_conversation", None)
                 if callable(_clear_chat):
                     _clear_chat()
+                _clear_tpl_hist = getattr(_ai_panel, "_clear_template_history", None)
+                if callable(_clear_tpl_hist):
+                    _clear_tpl_hist()
+                _restore_split = getattr(_ai_panel, "_restore_ai_split", None)
+                if callable(_restore_split):
+                    _restore_split()
             _new_budget = dlg.cpu_budget_pct
             _new_dl_text = dlg.task_deadlines_text
             if (_snap["cpu_budget_pct"] != _new_budget
@@ -107500,7 +107611,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _ai_changed = any(
                 str(_ai_cfg.get(_key, "")) != _val for _key, _val in _ai_upd.items()
             )
-            if _ai_changed:
+            if _ai_changed or _ai_reset:
                 self._settings.set_many("ai", _ai_upd)
                 extra_ids = [row["id"] for row in dlg.ai_extra_presets]
                 self._settings.align_section_keys(

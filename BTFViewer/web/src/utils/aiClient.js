@@ -1034,6 +1034,51 @@ export function parseAiSettingsJson(data) {
   return out
 }
 
+/**
+ * Serialize every preset plus the global AI settings into the schema
+ * `parseAiSettingsJson` reads back (see `examples/ai/presets.json`), for a
+ * full "Export…" backup. Each preset's base URL / model fall back to its
+ * built-in default when the user never overrode them, so the file fully
+ * documents the current setup. API keys are always written as `""` so the
+ * file is safe to share; an empty key on import leaves the current one
+ * unchanged.
+ *
+ * @param {{ aiPreset: string, aiPresets: object, aiExtraPresets?: string|object[],
+ *   aiResponseLanguage?: string, aiEnabled?: boolean, aiRedactTaskNames?: boolean,
+ *   aiTraceSensitive?: boolean, aiContextMode?: string }} settings
+ * @returns {object} JSON-serializable settings object
+ */
+export function buildAiSettingsJson(settings) {
+  const extraPresets = parseExtraAiPresets(settings.aiExtraPresets)
+  const presetsIn = settings.aiPresets || {}
+  const catalog = [
+    ...AI_PRESETS,
+    ...extraPresets.map((e) => ({ id: e.id, label: e.label, baseUrl: '', model: '' })),
+  ]
+  const presets = {}
+  for (const p of catalog) {
+    const fields = presetsIn[p.id] || {}
+    const entry = {
+      base_url: fields.baseUrl || p.baseUrl || '',
+      model: fields.model || p.model || '',
+      api_key: '',
+    }
+    if (fields.authMode) entry.auth_mode = fields.authMode
+    if (fields.tlsVerify === false) entry.tls_verify = false
+    if (!BUILTIN_AI_PRESET_IDS.has(p.id)) entry.label = p.label || aiPresetDisplayLabel(p.id)
+    presets[p.id] = entry
+  }
+  return {
+    preset: normalizeAiPreset(settings.aiPreset),
+    response_language: settings.aiResponseLanguage || '',
+    enabled: settings.aiEnabled !== false,
+    redact_task_names: !!settings.aiRedactTaskNames,
+    trace_sensitive: !!settings.aiTraceSensitive,
+    context_mode: settings.aiContextMode || '',
+    presets,
+  }
+}
+
 /** Normalize an OpenAI-compatible API root (…/v1 or vendor equivalent). */
 export function normalizeAiBaseUrl(url) {
   let u = String(url || DEFAULT_AI_BASE_URL).trim().replace(/\/+$/, '')

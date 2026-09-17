@@ -1887,6 +1887,18 @@ function clear() {
   emit('sessionChange')
 }
 
+/**
+ * Re-sync the in-memory template MRU/usage and split position after Reset
+ * to Defaults has cleared their localStorage keys (clearAiPersistentState()
+ * in settingsStore.js). Kept separate from clear() — that's also the
+ * in-panel "New chat" button's handler and must not lose personalization.
+ */
+function resetPersonalizationState() {
+  recentTemplateIds.value = loadAiRecentTemplates()
+  templateUsage.value = loadAiTemplateUsage()
+  splitBottom.value = loadAiSplitBottom()
+}
+
 function investigationSnapshot() {
   return parseInvestigationSession(dumpInvestigationSession({
     payload: evidencePayload,
@@ -2862,6 +2874,7 @@ defineExpose({
   askValidateExperiment,
   onInvestigationMode,
   clear,
+  resetPersonalizationState,
   saveConversationAs,
   scrollLog,
   investigationSnapshot,

@@ -24,6 +24,7 @@ import {
   applyAiPreset,
   aiAuthStatus,
   aiPresetSignInUrl,
+  buildAiSettingsJson,
   buildAiSystemPrompt,
   compareSectionPrompt,
   defaultAiAuthMode,
@@ -336,6 +337,88 @@ describe('AI endpoint helpers', () => {
     assert.equal(patch.aiMcpLog, true)
     const skipped = parseAiSettingsJson({ preset: 'ollama', model: 'qwen3.5:9b' })
     assert.equal(skipped.aiEnabled, undefined)
+  })
+
+  it('buildAiSettingsJson exports every preset with defaults filled in and keys redacted', () => {
+    const doc = buildAiSettingsJson({
+      aiPreset: 'gemini',
+      aiPresets: {
+        gemini: { baseUrl: '', model: 'gemini-flash-lite-latest', apiKey: 'secret', authMode: 'api_key' },
+        openai: { baseUrl: '', model: '', apiKey: 'sk-live', authMode: '' },
+      },
+      aiExtraPresets: [],
+      aiResponseLanguage: 'English',
+      aiEnabled: true,
+      aiRedactTaskNames: true,
+      aiTraceSensitive: false,
+      aiContextMode: 'compact',
+    })
+    assert.equal(doc.preset, AI_PRESET_GEMINI)
+    assert.equal(doc.response_language, 'English')
+    assert.equal(doc.enabled, true)
+    assert.equal(doc.redact_task_names, true)
+    assert.equal(doc.trace_sensitive, false)
+    assert.equal(doc.context_mode, 'compact')
+    // Every builtin preset is present, not just the active one.
+    assert.deepEqual(
+      Object.keys(doc.presets).sort(),
+      ['custom', 'gemini', 'ollama', 'openai'],
+    )
+    assert.equal(doc.presets.gemini.model, 'gemini-flash-lite-latest')
+    assert.equal(doc.presets.gemini.auth_mode, 'api_key')
+    assert.equal(doc.presets.gemini.api_key, '')
+    assert.ok(!JSON.stringify(doc).includes('sk-live'), 'API key must never appear in the export')
+    // Untouched presets fall back to their built-in default base URL / model.
+    assert.equal(doc.presets.ollama.base_url, 'http://localhost:11434/v1')
+    assert.equal(doc.presets.ollama.model, 'qwen3.5:9b')
+    assert.equal(doc.presets.ollama.api_key, '')
+    assert.equal(doc.presets.custom.base_url, '')
+    assert.equal(doc.presets.gemini.label, undefined) // no label for a builtin preset
+  })
+
+  it('buildAiSettingsJson labels extra presets and round-trips through parseAiSettingsJson', () => {
+    const doc = buildAiSettingsJson({
+      aiPreset: 'xai',
+      aiPresets: {
+        xai: { baseUrl: 'https://api.x.ai/v1', model: 'grok-2', apiKey: 'secret', authMode: 'api_key' },
+      },
+      aiExtraPresets: [{ id: 'xai', label: 'xAI' }],
+    })
+    assert.equal(doc.preset, 'xai')
+    assert.equal(doc.presets.xai.label, 'xAI')
+    assert.equal(doc.presets.xai.base_url, 'https://api.x.ai/v1')
+    assert.equal(doc.presets.xai.model, 'grok-2')
+    assert.equal(doc.presets.xai.api_key, '')
+
+    const patch = parseAiSettingsJson(doc)
+    assert.equal(patch.preset, 'xai')
+    assert.equal(patch.presets.xai.baseUrl, 'https://api.x.ai/v1')
+    assert.equal(patch.presets.xai.model, 'grok-2')
+    // Redacted key means re-importing leaves the current key unchanged.
+    assert.equal(patch.presets.xai.apiKey, undefined)
+  })
+
+  it('importing examples/ai/grok.json then exporting keeps grok in the presets object', () => {
+    const text = readFileSync(
+      new URL('../../examples/ai/grok.json', import.meta.url), 'utf8')
+    const patch = parseAiSettingsJson(text)
+    // Mirror SettingsDialog.vue's applyAiSettingsPatch merge onto the draft.
+    const settings = {
+      aiPreset: patch.preset,
+      aiPresets: { ...patch.presets },
+      aiExtraPresets: patch.extraPresets || [],
+      aiResponseLanguage: patch.responseLanguage,
+      aiEnabled: patch.aiEnabled,
+      aiRedactTaskNames: patch.aiRedactTaskNames,
+      aiTraceSensitive: patch.aiTraceSensitive,
+      aiContextMode: patch.aiContextMode,
+    }
+    const doc = buildAiSettingsJson(settings)
+    assert.equal(doc.preset, 'grok')
+    assert.ok(doc.presets.grok, 'exported presets must include grok')
+    assert.equal(doc.presets.grok.base_url, 'https://api.x.ai/v1')
+    assert.equal(doc.presets.grok.model, 'grok-4.3')
+    assert.equal(doc.presets.grok.label, 'Grok')
   })
 
   it('parseAiSettingsJson reports unusable files', () => {

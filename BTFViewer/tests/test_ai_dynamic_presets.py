@@ -35,6 +35,7 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     DEFAULT_AI_PRESET,
     dump_extra_ai_presets,
     extra_ai_preset_ids_from_settings,
+    parse_ai_settings_json,
     parse_extra_ai_presets,
     sanitize_ai_preset_id,
 )
@@ -132,6 +133,75 @@ class AiDynamicPresetTests(unittest.TestCase):
         dlg = _SettingsDialog(parent, **kwargs)
         self.addCleanup(dlg.deleteLater)
         return dlg
+
+    # -- baseline_profile must survive ordinary (non-Reset) Settings saves --
+    # Regression coverage for TODO.bak/TODO.md P1: `_ai_setting_keys()` was
+    # missing "baseline_profile", so align_section_keys() silently deleted it
+    # on any save that touched a connection setting.
+
+    def test_baseline_profile_survives_response_language_change(self) -> None:
+        import json
+
+        host = self._host()
+        profile = json.dumps({"samples": 3, "tasks": {"CS[28]": {"wcet_us": {"n": 3}}}})
+        host._settings.set("ai", "baseline_profile", profile, flush=True)
+
+        dlg = self._dlg(**host.dialog_kwargs())
+        dlg.apply_ai_settings_patch({"response_language": "Spanish"})
+        host.save_dialog_result(dlg)
+
+        host2 = self._host()
+        cfg = host2._ai_read_settings()
+        self.assertEqual(cfg["response_language"], "Spanish")
+        self.assertEqual(cfg.get("baseline_profile"), profile)
+
+    def test_baseline_profile_survives_preset_change(self) -> None:
+        import json
+
+        host = self._host()
+        profile = json.dumps({"samples": 5, "tasks": {"MX[16]": {"wcet_us": {"n": 5}}}})
+        host._settings.set("ai", "baseline_profile", profile, flush=True)
+
+        dlg = self._dlg(**host.dialog_kwargs())
+        dlg.apply_ai_settings_patch({
+            "preset": "openai",
+            "openai_base_url": "https://api.openai.com/v1",
+            "openai_model": "gpt-4o-mini",
+        })
+        host.save_dialog_result(dlg)
+
+        host2 = self._host()
+        cfg = host2._ai_read_settings()
+        self.assertEqual(cfg["preset"], "openai")
+        self.assertEqual(cfg.get("baseline_profile"), profile)
+
+    def test_imported_preset_survives_unrelated_settings_change(self) -> None:
+        host = self._host()
+        dlg = self._dlg(**host.dialog_kwargs())
+        dlg.apply_ai_settings_patch({
+            "preset": "openrouter",
+            "extra_presets": '[{"id": "openrouter", "label": "OpenRouter"}]',
+            "openrouter_base_url": "https://openrouter.ai/api/v1",
+            "openrouter_model": "openrouter/auto",
+            "openrouter_api_key": "or-key",
+        })
+        host.save_dialog_result(dlg)
+
+        # A second, unrelated save (only the reply language changes) must not
+        # drop the previously-imported preset or its credentials.
+        host2 = self._host()
+        dlg2 = self._dlg(**host2.dialog_kwargs())
+        dlg2.apply_ai_settings_patch({"response_language": "French"})
+        host2.save_dialog_result(dlg2)
+
+        host3 = self._host()
+        cfg = host3._ai_read_settings()
+        self.assertEqual(cfg["response_language"], "French")
+        self.assertEqual(cfg["preset"], "openrouter")
+        self.assertEqual(cfg["openrouter_base_url"], "https://openrouter.ai/api/v1")
+        self.assertEqual(cfg["openrouter_model"], "openrouter/auto")
+        self.assertEqual(cfg["openrouter_api_key"], "or-key")
+        self.assertEqual(extra_ai_preset_ids_from_settings(cfg), ["openrouter"])
 
     # -- 25/26: unknown preset import survives a simulated restart --------
 
@@ -346,6 +416,86 @@ class AiDynamicPresetTests(unittest.TestCase):
         self.assertEqual(cfg["openrouter_base_url"], "https://openrouter.ai/api/v1")
         self.assertEqual(cfg["openrouter_api_key"], "or-key")
         self.assertEqual(extra_ai_preset_ids_from_settings(cfg), ["openrouter"])
+
+    # -- Export AI settings writes a JSON file with API keys redacted ------
+
+    def test_export_ai_settings_writes_file_without_api_keys(self) -> None:
+        import json
+        import tempfile as _tempfile
+        from unittest.mock import patch as _patch
+
+        host = self._host()
+        dlg = self._dlg(**host.dialog_kwargs())
+        dlg.apply_ai_settings_patch({
+            "preset": "openrouter",
+            "extra_presets": '[{"id": "openrouter", "label": "OpenRouter"}]',
+            "openrouter_base_url": "https://openrouter.ai/api/v1",
+            "openrouter_model": "openrouter/auto",
+            "openrouter_api_key": "or-secret-key",
+            "openrouter_auth_mode": "api_key",
+        })
+
+        out_path = os.path.join(_tempfile.mkdtemp(), "ai_settings.json")
+        with _patch(
+            "btf_viewer_pkg.stats.QFileDialog.getSaveFileName",
+            return_value=(out_path, ""),
+        ):
+            dlg._export_ai_settings()
+
+        with open(out_path, encoding="utf-8") as fh:
+            written = fh.read()
+        doc = json.loads(written)
+        # Same shape as examples/ai/presets.json, so it re-imports directly:
+        # every preset is included, not just the active one.
+        self.assertEqual(doc["preset"], "openrouter")
+        self.assertNotIn("or-secret-key", written)
+        self.assertEqual(
+            sorted(doc["presets"].keys()),
+            sorted(["custom", "ollama", "openai", "gemini", "openrouter"]),
+        )
+        openrouter = doc["presets"]["openrouter"]
+        self.assertEqual(openrouter["label"], "OpenRouter")
+        self.assertEqual(openrouter["base_url"], "https://openrouter.ai/api/v1")
+        self.assertEqual(openrouter["model"], "openrouter/auto")
+        self.assertEqual(openrouter["api_key"], "")
+        self.assertEqual(openrouter["auth_mode"], "api_key")
+        # Untouched presets still fall back to their built-in default.
+        self.assertEqual(doc["presets"]["ollama"]["base_url"], "http://localhost:11434/v1")
+        self.assertEqual(doc["presets"]["ollama"]["model"], "qwen3.5:9b")
+
+        patch = parse_ai_settings_json(json.dumps(doc))
+        self.assertEqual(patch["preset"], "openrouter")
+        self.assertEqual(patch["openrouter_base_url"], "https://openrouter.ai/api/v1")
+        dlg.deleteLater()
+
+    def test_import_grok_json_then_export_keeps_grok_in_presets(self) -> None:
+        import json
+        import tempfile as _tempfile
+        from unittest.mock import patch as _patch
+
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(here, "examples", "ai", "grok.json"), encoding="utf-8") as fh:
+            grok_patch = parse_ai_settings_json(fh.read())
+
+        host = self._host()
+        dlg = self._dlg(**host.dialog_kwargs())
+        dlg.apply_ai_settings_patch(grok_patch)
+
+        out_path = os.path.join(_tempfile.mkdtemp(), "ai_settings.json")
+        with _patch(
+            "btf_viewer_pkg.stats.QFileDialog.getSaveFileName",
+            return_value=(out_path, ""),
+        ):
+            dlg._export_ai_settings()
+
+        with open(out_path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        self.assertEqual(doc["preset"], "grok")
+        self.assertIn("grok", doc["presets"], "exported presets must include grok")
+        self.assertEqual(doc["presets"]["grok"]["base_url"], "https://api.x.ai/v1")
+        self.assertEqual(doc["presets"]["grok"]["model"], "grok-4.3")
+        self.assertEqual(doc["presets"]["grok"]["label"], "Grok")
+        dlg.deleteLater()
 
     # -- 17: malformed imported preset ids never become unsafe .rc keys ----
 

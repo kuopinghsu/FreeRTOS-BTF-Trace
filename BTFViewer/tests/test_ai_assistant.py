@@ -45,6 +45,7 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     append_ai_mcp_log,
     append_explain_region_bounds,
     apply_ai_preset,
+    build_ai_settings_json,
     build_ai_system_prompt,
     build_ai_user_message,
     ai_jump_annotation_note,
@@ -394,6 +395,67 @@ class AiAssistantHelpersTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 parse_ai_settings_json(bad)
+
+    def test_build_ai_settings_json_exports_every_preset_with_defaults(self) -> None:
+        preset_values = {
+            AI_PRESET_GEMINI: {
+                "base_url": "", "model": "gemini-flash-lite-latest",
+                "api_key": "secret", "auth_mode": "api_key",
+            },
+            AI_PRESET_OPENAI: {
+                "base_url": "", "model": "", "api_key": "sk-live", "auth_mode": "",
+            },
+        }
+        doc = build_ai_settings_json(
+            AI_PRESET_GEMINI, preset_values, [],
+            response_language="English", enabled=True,
+            redact_task_names=True, trace_sensitive=False,
+            context_mode="compact", mcp_log=False,
+        )
+        self.assertEqual(doc["preset"], AI_PRESET_GEMINI)
+        self.assertEqual(doc["response_language"], "English")
+        self.assertTrue(doc["enabled"])
+        self.assertTrue(doc["redact_task_names"])
+        self.assertFalse(doc["trace_sensitive"])
+        self.assertEqual(doc["context_mode"], "compact")
+        self.assertFalse(doc["mcp_log"])
+        # Every builtin preset is present, not just the active one.
+        self.assertEqual(
+            sorted(doc["presets"].keys()),
+            sorted([AI_PRESET_CUSTOM, AI_PRESET_OLLAMA, AI_PRESET_OPENAI, AI_PRESET_GEMINI]),
+        )
+        self.assertEqual(doc["presets"][AI_PRESET_GEMINI]["model"], "gemini-flash-lite-latest")
+        self.assertEqual(doc["presets"][AI_PRESET_GEMINI]["auth_mode"], "api_key")
+        self.assertEqual(doc["presets"][AI_PRESET_GEMINI]["api_key"], "")
+        self.assertNotIn("sk-live", json.dumps(doc))
+        # Untouched presets fall back to their built-in default base URL / model.
+        self.assertEqual(doc["presets"][AI_PRESET_OLLAMA]["base_url"], "http://localhost:11434/v1")
+        self.assertEqual(doc["presets"][AI_PRESET_OLLAMA]["model"], "qwen3.5:9b")
+        self.assertEqual(doc["presets"][AI_PRESET_OLLAMA]["api_key"], "")
+        self.assertEqual(doc["presets"][AI_PRESET_CUSTOM]["base_url"], "")
+        self.assertNotIn("label", doc["presets"][AI_PRESET_GEMINI])
+
+    def test_build_ai_settings_json_labels_extras_and_round_trips(self) -> None:
+        preset_values = {
+            "xai": {
+                "base_url": "https://api.x.ai/v1", "model": "grok-2",
+                "api_key": "secret", "auth_mode": "api_key",
+            },
+        }
+        doc = build_ai_settings_json(
+            "xai", preset_values, [{"id": "xai", "label": "xAI"}])
+        self.assertEqual(doc["preset"], "xai")
+        self.assertEqual(doc["presets"]["xai"]["label"], "xAI")
+        self.assertEqual(doc["presets"]["xai"]["base_url"], "https://api.x.ai/v1")
+        self.assertEqual(doc["presets"]["xai"]["model"], "grok-2")
+        self.assertEqual(doc["presets"]["xai"]["api_key"], "")
+
+        patch = parse_ai_settings_json(json.dumps(doc))
+        self.assertEqual(patch["preset"], "xai")
+        self.assertEqual(patch["xai_base_url"], "https://api.x.ai/v1")
+        self.assertEqual(patch["xai_model"], "grok-2")
+        # Redacted key means re-importing leaves the current key unchanged.
+        self.assertNotIn("xai_api_key", patch)
 
     def test_example_ai_settings_files_import(self) -> None:
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
