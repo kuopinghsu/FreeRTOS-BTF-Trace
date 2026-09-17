@@ -792,6 +792,26 @@ starting an investigation.
 BTFViewer can test model listing, chat, structured output, and tool
 calling when supported by the endpoint.
 
+### Import provider settings
+
+**Settings → AI → Import…** loads preset, base URL, model, API key, and
+authentication mode from a JSON file (see `examples/ai/*.json`). A
+preset name that isn't already in the list — for example `openrouter`
+or `deepseek` — is added as a new preset instead of being folded into
+Custom. Each imported preset keeps its own Base URL, Model, API key,
+authentication mode, and TLS setting, independent from the built-in
+presets and from every other imported preset.
+
+Import updates the Settings dialog immediately, but nothing is written
+to disk (`btf_viewer.rc`) or browser storage until you click **OK**.
+**Cancel** discards the import.
+
+Importing the same preset again — after normalizing case and
+punctuation, so `OpenRouter` and `open-router` match the same entry —
+updates that preset's saved values instead of creating a duplicate. A
+file that lists multiple presets adds all of them, without removing
+presets you imported earlier.
+
 ### Choose a model
 
 For BTFViewer, tool reliability matters more than fluent prose. Prefer a
@@ -821,6 +841,24 @@ task names. Sensitive configurations can block cloud sending.
 Use the credential method provided by the current BTFViewer
 implementation and provider. Do not place API keys in trace files,
 reports, screenshots, or shared investigation packages.
+
+### Reset to Defaults
+
+**Settings → Reset to Defaults** restores every tab in the dialog to
+its built-in default, including layout, Statistics presentation, and
+AI settings. For AI specifically, this means:
+
+-   every preset added by Import… is removed;
+-   the preset list returns to the four built-ins (Custom, Ollama,
+    OpenAI, Gemini);
+-   the current AI investigation/conversation is cleared;
+-   saved API keys and tokens are cleared, for the built-in presets and
+    any imported ones.
+
+Like Import, Reset to Defaults only changes the dialog until you click
+**OK**. Reopening Settings and clicking **Cancel** afterward leaves
+your previous configuration — presets, credentials, and conversation —
+untouched.
 
 ------------------------------------------------------------------------
 

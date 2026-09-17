@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { loadSettings, saveSettings, normalizeSettings } from '../src/utils/settingsStore.js'
 import { sanitizeAiPresetId } from '../src/utils/aiClient.js'
@@ -163,6 +164,49 @@ describe('AI dynamic preset persistence (web)', () => {
       assert.deepEqual(a.aiExtraPresets, b.aiExtraPresets)
       assert.deepEqual(a.aiPresets, b.aiPresets)
       assert.equal(a.aiPreset, b.aiPreset)
+    })
+  })
+
+  // -- 32/33: Cancel (after Import or after Reset to Defaults) must not
+  // persist the dialog's draft. Web's Settings dialog is fully transactional
+  // (parity with desktop): Cancel and Reset both only mutate an in-dialog
+  // draft; only Save/OK ever calls saveSettings(). Reset doesn't close the
+  // dialog either, so "Cancel after Import" and "Cancel after Reset" both
+  // go through the same onSettingsCancel -> closeSettingsDialog wiring.
+  it('Cancel reverts to the pre-open snapshot without persisting (App.vue wiring)', () => {
+    const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+    assert.match(app, /settingsRevertSnapshot = normalizeSettings\(appSettings\)/)
+    const closeFn = app.match(/function closeSettingsDialog\(\) \{[\s\S]*?\n\}/)
+    assert.ok(closeFn, 'closeSettingsDialog not found')
+    assert.match(closeFn[0], /applyAppSettings\(snap, \{ silent: true, persist: false \}\)/)
+    const cancelFn = app.match(/function onSettingsCancel\(\) \{[\s\S]*?\n\}/)
+    assert.ok(cancelFn, 'onSettingsCancel not found')
+    assert.match(cancelFn[0], /closeSettingsDialog\(\)/)
+    // onReset() only mutates the in-dialog draft/emits a live preview — it
+    // never emits 'save', so Reset followed by Cancel takes this same path.
+    const dlg = readFileSync(new URL('../src/components/SettingsDialog.vue', import.meta.url), 'utf8')
+    const resetFn = dlg.match(/function onReset\(\) \{[\s\S]*?\n\}/)
+    assert.ok(resetFn, 'onReset not found')
+    assert.doesNotMatch(resetFn[0], /emit\('save'/)
+  })
+
+  it('discarding an imported draft without saving leaves localStorage untouched', () => {
+    withMemoryLocalStorage(() => {
+      saveSettings(normalizeSettings({ aiPreset: 'ollama' }))
+      const before = globalThis.localStorage.getItem('btf-viewer-settings-v1')
+
+      // "Open Settings" snapshot, then a draft mutated by Import — never saved.
+      const snapshot = loadSettings()
+      const draft = normalizeSettings({
+        ...snapshot,
+        aiPreset: 'openrouter',
+        aiExtraPresets: [{ id: 'openrouter', label: 'OpenRouter' }],
+        aiPresets: { ...snapshot.aiPresets, openrouter: { baseUrl: 'https://openrouter.ai/api/v1', model: '', apiKey: 'or-key', authMode: '', tlsVerify: true } },
+      })
+      void draft // Cancel: the draft is discarded, saveSettings is never called.
+
+      assert.equal(globalThis.localStorage.getItem('btf-viewer-settings-v1'), before)
+      assert.equal(loadSettings().aiPreset, 'ollama')
     })
   })
 

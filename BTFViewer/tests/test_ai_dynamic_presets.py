@@ -319,6 +319,34 @@ class AiDynamicPresetTests(unittest.TestCase):
         self.assertEqual(cfg["preset"], DEFAULT_AI_PRESET)
         self.assertEqual(extra_ai_preset_ids_from_settings(cfg), [])
 
+    # -- 33: Cancel after Reset to Defaults must not persist the reset ------
+
+    def test_cancel_after_reset_restores_original_settings(self) -> None:
+        host = self._host()
+        dlg = self._dlg(**host.dialog_kwargs())
+        dlg.apply_ai_settings_patch({
+            "preset": "openrouter",
+            "extra_presets": '[{"id": "openrouter", "label": "OpenRouter"}]',
+            "openrouter_base_url": "https://openrouter.ai/api/v1",
+            "openrouter_api_key": "or-key",
+        })
+        host.save_dialog_result(dlg)
+
+        host2 = self._host()
+        dlg2 = self._dlg(**host2.dialog_kwargs())
+        dlg2._reset_to_defaults()
+        self.assertEqual(dlg2.ai_extra_presets, [])
+        # Simulate Cancel: the reset dialog state is discarded without ever
+        # reaching save_dialog_result (only reached on QDialog.Accepted).
+        dlg2.deleteLater()
+
+        host3 = self._host()
+        cfg = host3._ai_read_settings()
+        self.assertEqual(cfg["preset"], "openrouter")
+        self.assertEqual(cfg["openrouter_base_url"], "https://openrouter.ai/api/v1")
+        self.assertEqual(cfg["openrouter_api_key"], "or-key")
+        self.assertEqual(extra_ai_preset_ids_from_settings(cfg), ["openrouter"])
+
     # -- 17: malformed imported preset ids never become unsafe .rc keys ----
 
     def test_malformed_preset_ids_never_produce_unsafe_ids(self) -> None:
