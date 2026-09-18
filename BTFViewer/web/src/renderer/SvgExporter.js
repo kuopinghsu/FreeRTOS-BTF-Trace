@@ -12,6 +12,7 @@ import {
 } from './TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { taskColor, taskDisplayName, taskMergeKey, stiNoteColor, lighterColor } from '../utils/colors.js'
+import { cursorColors } from '../utils/cursorColors.js'
 import {
   visiblePriorityEpisodes,
   BOOST_BAND_COLOR,
@@ -489,7 +490,7 @@ export function renderToSvg(trace, viewport, options = {}) {
   )
 
   // ---- Cursor lines ----
-  const CURSOR_COLORS = ['#FF4444','#44FF88','#4499FF','#FFAA22','#FF44FF','#44FFFF','#FFFF44','#CC44FF']
+  const CURSOR_COLORS = cursorColors(darkMode)
   const sortedCursors = cursorSortedPlaced(cursors)
   for (let order = 0; order < sortedCursors.length; order++) {
     const { t, slotIndex } = sortedCursors[order]

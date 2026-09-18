@@ -254,6 +254,7 @@ from .ai_assistant import (  # noqa: F401
     AI_AUTH_BROWSER,
     AI_AUTH_MODE_LABELS,
     AI_AUTH_NONE,
+    AI_PRESET_API_KEY_ENV,
     AI_PRESET_FIELDS,
     AI_PRESET_KEY_URLS,
     AI_PRESET_OLLAMA,
@@ -267,6 +268,7 @@ from .ai_assistant import (  # noqa: F401
     AI_MCP_LOG_FILENAME,
     ai_auth_status,
     ai_list_models,
+    ai_preset_api_key_env,
     ai_preset_display_label,
     ai_preset_info,
     ai_preset_signin_label,
@@ -282,6 +284,7 @@ from .ai_assistant import (  # noqa: F401
     parse_ai_tls_verify,
     parse_extra_ai_presets,
     resolve_ai_api_key,
+    resolve_ai_credential,
     resolve_ai_settings,
     qt_wrap_tooltip,
     sanitize_ai_preset_id,
@@ -313,6 +316,8 @@ class _AiTestWorker(QObject):
         base_url: str,
         model_name: str,
         api_key: str = "",
+        preset_id: str = "",
+        api_key_env: str = "",
         tls_verify: bool = True,
         log_mcp: bool = False,
     ) -> None:
@@ -320,6 +325,8 @@ class _AiTestWorker(QObject):
         self._base_url = base_url
         self._model = model_name
         self._api_key = api_key
+        self._preset_id = preset_id
+        self._api_key_env = api_key_env
         self._tls_verify = tls_verify
         self._log_mcp = bool(log_mcp)
 
@@ -332,6 +339,8 @@ class _AiTestWorker(QObject):
                 base_url=self._base_url,
                 model=self._model,
                 api_key=self._api_key,
+                preset_id=self._preset_id,
+                api_key_env=self._api_key_env,
                 tls_verify=self._tls_verify,
                 on_progress=lambda s: self.progress.emit(s),
                 log_mcp=self._log_mcp,
@@ -353,12 +362,16 @@ class _AiListModelsWorker(QObject):
         *,
         base_url: str,
         api_key: str = "",
+        preset_id: str = "",
+        api_key_env: str = "",
         tls_verify: bool = True,
         log_mcp: bool = False,
     ) -> None:
         super().__init__(parent)
         self._base_url = base_url
         self._api_key = api_key
+        self._preset_id = preset_id
+        self._api_key_env = api_key_env
         self._tls_verify = tls_verify
         self._log_mcp = bool(log_mcp)
 
@@ -369,7 +382,9 @@ class _AiListModelsWorker(QObject):
         try:
             names = ai_list_models(
                 base_url=self._base_url,
-                api_key=resolve_ai_api_key(self._api_key),
+                api_key=resolve_ai_api_key(
+                    self._api_key, preset_id=self._preset_id,
+                    api_key_env=self._api_key_env),
                 tls_verify=self._tls_verify,
                 log_mcp=self._log_mcp,
             )
@@ -20631,6 +20646,7 @@ class _SettingsDialog(QDialog):
                 "base_url": base,
                 "model": str(stored.get("model", "") or _model),
                 "api_key": str(stored.get("api_key", "") or ""),
+                "api_key_env": str(stored.get("api_key_env", "") or ""),
                 "auth_mode": normalize_ai_auth_mode(
                     stored.get("auth_mode", ""),
                     preset_id=_pid,
@@ -20722,8 +20738,9 @@ class _SettingsDialog(QDialog):
         _wide_edit(self._ai_api_key_edit)
         self._tip(
             self._ai_api_key_edit,
-            "API key or access token for this preset (or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). "
-            "Local Ollama needs none. Stored per preset in btf_viewer.rc.")
+            "API key or access token for this preset, or this preset's own "
+            "environment variable (see the status line above). Local Ollama "
+            "needs none. Stored per preset in btf_viewer.rc.")
         _cred.addWidget(self._ai_api_key_edit)
         _auth_btns = QWidget()
         _auth_h = QHBoxLayout(_auth_btns)
@@ -20738,8 +20755,15 @@ class _SettingsDialog(QDialog):
         self._ai_logout_btn = QPushButton("Log out")
         self._tip(self._ai_logout_btn, "Clear the saved key or token for this preset.")
         self._ai_logout_btn.clicked.connect(self._ai_logout)
+        self._ai_env_btn = QPushButton("Clear override")
+        self._tip(
+            self._ai_env_btn,
+            "Clear the saved key for this preset so its environment variable "
+            "takes over. Does not change the environment itself.")
+        self._ai_env_btn.clicked.connect(self._ai_clear_override)
         _auth_h.addWidget(self._ai_signin_btn)
         _auth_h.addWidget(self._ai_logout_btn)
+        _auth_h.addWidget(self._ai_env_btn)
         _auth_h.addStretch()
         _cred.addWidget(_auth_btns)
         self._ai_cred_label = QLabel("API key:")
@@ -20942,10 +20966,15 @@ class _SettingsDialog(QDialog):
     # -- Reset all controls to built-in defaults ---------------------------
     def _stash_ai_preset_fields(self) -> None:
         """Remember the typed values for the preset currently shown."""
+        # api_key_env has no editable widget (only Import… sets a custom one);
+        # carry the stored value through untouched.
+        prior_env = self._ai_preset_values.get(
+            self._ai_active_preset, {}).get("api_key_env", "")
         self._ai_preset_values[self._ai_active_preset] = {
             "base_url": self._ai_url_edit.text().strip(),
             "model": self._ai_model_text(),
             "api_key": self._ai_api_key_edit.text().strip(),
+            "api_key_env": prior_env,
             "auth_mode": normalize_ai_auth_mode(
                 self._ai_auth_combo.currentData(),
                 preset_id=self._ai_active_preset,
@@ -21016,8 +21045,10 @@ class _SettingsDialog(QDialog):
         mode = normalize_ai_auth_mode(
             self._ai_auth_combo.currentData(), preset_id=_pid, base_url=base)
         key = self._ai_api_key_edit.text().strip()
+        stored_env = self._ai_preset_values.get(_pid, {}).get("api_key_env", "")
         status = ai_auth_status(
-            auth_mode=mode, api_key=key, base_url=base, preset_id=_pid)
+            auth_mode=mode, api_key=key, base_url=base, preset_id=_pid,
+            api_key_env=stored_env)
         show_cred = mode != AI_AUTH_NONE
         self._ai_cred_wrap.setVisible(show_cred)
         self._ai_cred_label.setVisible(show_cred)
@@ -21032,6 +21063,9 @@ class _SettingsDialog(QDialog):
         self._ai_signin_btn.setVisible(mode == AI_AUTH_BROWSER)
         self._ai_signin_btn.setText(ai_preset_signin_label(_pid))
         self._ai_logout_btn.setVisible(mode == AI_AUTH_BROWSER and bool(key))
+        self._ai_env_btn.setVisible(
+            mode == AI_AUTH_API_KEY and status["source"] == "saved"
+            and status["env_available"])
         if mode == AI_AUTH_NONE:
             self._ai_auth_status.setText("Local endpoint — no key needed.")
             self._ai_api_key_edit.setPlaceholderText(
@@ -21044,11 +21078,27 @@ class _SettingsDialog(QDialog):
             self._ai_api_key_edit.setPlaceholderText(
                 "Paste key or token after signing in")
         else:
-            self._ai_auth_status.setText(
-                "Key saved for this preset." if key
-                else "Paste a provider API key, or set OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY.")
-            self._ai_api_key_edit.setPlaceholderText(
-                "Required — provider API key")
+            env_name = status["env_name"]
+            if status["source"] == "environment":
+                self._ai_auth_status.setText(f"Using {env_name} from environment.")
+                self._ai_api_key_edit.setPlaceholderText(
+                    f"Using {env_name} — paste a key to override")
+            elif status["source"] == "saved":
+                self._ai_auth_status.setText(
+                    f"Saved key overrides {env_name}." if status["env_available"]
+                    else "Key saved for this preset.")
+                self._ai_api_key_edit.setPlaceholderText(
+                    "Required — provider API key")
+            elif env_name:
+                self._ai_auth_status.setText(
+                    f"{env_name} is not set. Paste a key or define the "
+                    "environment variable.")
+                self._ai_api_key_edit.setPlaceholderText(
+                    "Required — provider API key")
+            else:
+                self._ai_auth_status.setText("Paste a provider API key.")
+                self._ai_api_key_edit.setPlaceholderText(
+                    "Required — provider API key")
         if _pid == AI_PRESET_OLLAMA and mode == AI_AUTH_NONE:
             self._ai_hint.setText(
                 f"Install Ollama and pull a model (`ollama pull {DEFAULT_AI_MODEL}`); "
@@ -21089,6 +21139,18 @@ class _SettingsDialog(QDialog):
         self._ai_api_key_edit.clear()
         self._update_ai_auth_ui()
         self._set_ai_status("Cleared the saved token for this preset.")
+
+    def _ai_clear_override(self) -> None:
+        """Clear the saved key so this preset's env var takes over again.
+        Never touches the environment itself — see AI_SETTINGS_TODO.md item 9."""
+        self._ai_api_key_edit.clear()
+        self._update_ai_auth_ui()
+        env_name = self._ai_preset_values.get(
+            self._ai_active_preset, {}).get("api_key_env", "")
+        env_name = ai_preset_api_key_env(self._ai_active_preset, env_name)
+        self._set_ai_status(
+            f"Cleared the saved key — using {env_name} from environment."
+            if env_name else "Cleared the saved key for this preset.")
 
     def _on_ai_preset_changed(self, *_args) -> None:
         self._stash_ai_preset_fields()
@@ -21144,6 +21206,7 @@ class _SettingsDialog(QDialog):
                 "base_url": "",
                 "model": "",
                 "api_key": "",
+                "api_key_env": "",
                 "auth_mode": default_ai_auth_mode(pid, ""),
                 "tls_verify": "true",
             }
@@ -21285,13 +21348,16 @@ class _SettingsDialog(QDialog):
             f"Exported AI settings to {os.path.basename(path)}. "
             "API keys are not included.", "ok")
 
-    def _ai_test_target(self) -> Tuple[str, str, str, bool]:
+    def _ai_test_target(self) -> Tuple[str, str, str, str, bool]:
         """Typed fields, falling back to the active preset's defaults."""
         _pid, _label, def_base, def_model = ai_preset_info(self._ai_active_preset)
+        stored_env = (
+            self._ai_preset_values.get(self._ai_active_preset, {}).get("api_key_env", ""))
         return (
             self._ai_url_edit.text().strip() or def_base,
             self._ai_model_text() or def_model,
             self._ai_api_key_edit.text().strip(),
+            ai_preset_api_key_env(self._ai_active_preset, stored_env),
             not self._ai_insecure_tls_cb.isChecked(),
         )
 
@@ -21299,13 +21365,15 @@ class _SettingsDialog(QDialog):
         """Fetch ``GET /models`` into the Model combo."""
         if self._ai_list_worker is not None or self._ollama_test_worker is not None:
             return
-        url, _model, api_key, tls_verify = self._ai_test_target()
+        url, _model, api_key, api_key_env, tls_verify = self._ai_test_target()
         self._ai_model_refresh.setEnabled(False)
         self._set_ai_status(f"Listing models at {url}…")
         worker = _AiListModelsWorker(
             self,
             base_url=url,
             api_key=api_key,
+            preset_id=self._ai_active_preset,
+            api_key_env=api_key_env,
             tls_verify=tls_verify,
             log_mcp=self._ai_mcp_log_cb.isChecked(),
         )
@@ -21352,7 +21420,7 @@ class _SettingsDialog(QDialog):
         """Test the configured endpoint with the typed Settings fields."""
         if self._ollama_test_worker is not None or self._ai_list_worker is not None:
             return
-        url, model, api_key, tls_verify = self._ai_test_target()
+        url, model, api_key, api_key_env, tls_verify = self._ai_test_target()
         self._ollama_test_btn.setEnabled(False)
         self._ai_model_refresh.setEnabled(False)
         self._ollama_test_btn.setText("Testing…")
@@ -21363,6 +21431,8 @@ class _SettingsDialog(QDialog):
             base_url=url,
             model_name=model,
             api_key=api_key,
+            preset_id=self._ai_active_preset,
+            api_key_env=api_key_env,
             tls_verify=tls_verify,
             log_mcp=self._ai_mcp_log_cb.isChecked(),
         )
@@ -21450,6 +21520,7 @@ class _SettingsDialog(QDialog):
         for _pid, _label, _base, _model in AI_PRESETS:
             self._ai_preset_values[_pid] = {
                 "base_url": _base, "model": _model, "api_key": "",
+                "api_key_env": "",
                 "auth_mode": default_ai_auth_mode(_pid, _base),
                 "tls_verify": "true",
             }

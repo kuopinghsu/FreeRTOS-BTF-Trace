@@ -46,7 +46,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { CURSOR_COLORS } from '../utils/cursorColors.js'
+import { cursorColors } from '../utils/cursorColors.js'
 import { cursorBarModel } from '../utils/cursorAnalysis.js'
 
 const props = defineProps({
@@ -61,7 +61,8 @@ const emit = defineEmits(['jumpToCursor', 'deleteCursor'])
 const model = computed(() => cursorBarModel(props.cursors, props.timeScale, props.timeDecimals))
 
 function pillStyle(slotIndex) {
-  const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]
+  const palette = cursorColors(props.darkMode)
+  const color = palette[slotIndex % palette.length]
   return {
     '--pill-color': color,
     '--pill-bg': props.darkMode ? '#2A2A2A' : '#F0F0F0',

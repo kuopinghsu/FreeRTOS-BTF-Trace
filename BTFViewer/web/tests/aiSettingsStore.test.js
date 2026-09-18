@@ -43,7 +43,7 @@ describe('AI settings storage', () => {
     assert.deepEqual(Object.keys(s.aiPresets).sort(), ['custom', 'gemini', 'ollama', 'openai'])
     assert.deepEqual(s.aiExtraPresets, [])
     assert.deepEqual(s.aiPresets.gemini, {
-      baseUrl: '', model: '', apiKey: '', authMode: 'api_key', tlsVerify: true,
+      baseUrl: '', model: '', apiKey: '', apiKeyEnv: '', authMode: 'api_key', tlsVerify: true,
     })
     assert.equal(s.aiPresets.ollama.authMode, 'none')
   })

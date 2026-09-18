@@ -682,6 +682,23 @@ class AiWebParityTests(unittest.TestCase):
         ]
         self.assertEqual(js_presets, list(AI_PRESETS))
 
+    def test_ai_preset_api_key_env_matches_web(self) -> None:
+        from btf_viewer_pkg.ai_assistant import AI_PRESET_API_KEY_ENV
+
+        js = (BTF_ROOT / "web/src/utils/aiClient.js").read_text(encoding="utf-8")
+        block = re.search(
+            r"export const AI_PRESET_API_KEY_ENV = \{([\s\S]*?)\n\}", js)
+        self.assertIsNotNone(block)
+        js_id_alias = {
+            "AI_PRESET_OPENAI": "openai",
+            "AI_PRESET_GEMINI": "gemini",
+            "AI_PRESET_OLLAMA": "ollama",
+        }
+        entries = re.findall(r"\[(\w+)\]:\s*'([^']+)'", block.group(1))
+        js_map = {js_id_alias.get(pid, pid): env for pid, env in entries}
+        self.assertEqual(js_map, AI_PRESET_API_KEY_ENV)
+        self.assertNotIn("custom", js_map)
+
     def _assert_investigation_ui_match(self) -> None:
         stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
         dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
@@ -1424,10 +1441,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertEqual(AI_AUTH_API_KEY, "api_key")
         self.assertEqual(AI_AUTH_BROWSER, "browser")
         self.assertEqual(tuple(AI_PRESET_FIELDS), (
-            "base_url", "model", "api_key", "auth_mode", "tls_verify"))
+            "base_url", "model", "api_key", "api_key_env", "auth_mode", "tls_verify"))
         self.assertIn("authMode", js)
         self.assertIn(
-            "AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey', 'authMode', 'tlsVerify']",
+            "AI_PRESET_FIELDS = "
+            "['baseUrl', 'model', 'apiKey', 'apiKeyEnv', 'authMode', 'tlsVerify']",
             js,
         )
 
@@ -1571,36 +1589,48 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("__BTF_AI_ENV__", js)
         self.assertIn("window.__BTF_AI_ENV__", js)
 
+        # ai_assistant.py/aiClient.js keep the generic 3-name mention on
+        # AI_API_KEY_REQUIRED (no key from ANY source, preset-agnostic hint);
+        # cli.py keeps it on the unrelated ai-test benchmark-XML fallback.
+        # stats.py/SettingsDialog.vue deliberately dropped it — AI_SETTINGS_TODO.md
+        # item 10 replaces the generic status line with preset-specific text
+        # naming that preset's own env var, never implying cross-provider fallback.
         for blob, label in (
             (assist, "ai_assistant.py"),
             (js, "aiClient.js"),
-            (stats, "stats.py"),
-            (vue, "SettingsDialog.vue"),
             (cli, "cli.py"),
         ):
             self.assertTrue(
                 env_slash in blob or env_md in blob, label)
+        for blob, label in ((stats, "stats.py"), (vue, "SettingsDialog.vue")):
+            self.assertNotIn(env_slash, blob, label)
 
+        self.assertIn("API key or access token for this preset, or this preset's own", stats)
         self.assertIn(
-            "API key or access token for this preset (or "
-            "OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). ",
-            stats,
-        )
-        self.assertIn(
-            "API key or access token for this preset (or "
-            "OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). ",
+            "API key or access token for this preset, or this preset's own "
+            "environment variable",
             vue,
         )
-        self.assertIn(
-            "Paste a provider API key, or set OPENAI_API_KEY / "
-            "GEMINI_API_KEY / OLLAMA_API_KEY.",
-            stats,
-        )
-        self.assertIn(
-            "Paste a provider API key, or set OPENAI_API_KEY / "
-            "GEMINI_API_KEY / OLLAMA_API_KEY.",
-            vue,
-        )
+        # Preset-specific credential-source status text (item 6-8), lockstep
+        # across Desktop/Web.
+        for needle in (
+            'f"Using {env_name} from environment."',
+            'f"Saved key overrides {env_name}." if status["env_available"]',
+            'f"{env_name} is not set. Paste a key or define the "',
+        ):
+            self.assertIn(needle, stats)
+        for needle in (
+            "`Using ${st.envName} from environment.`",
+            "`Saved key overrides ${st.envName}.`",
+            "`${st.envName} is not set. Paste a key or define the "
+            "environment variable.`",
+        ):
+            self.assertIn(needle, vue)
+        # Item 9 — clearing a saved-key override never touches the environment.
+        self.assertIn("_ai_clear_override", stats)
+        self.assertIn("onAiClearOverride", vue)
+        self.assertIn("Clear override", stats)
+        self.assertIn("Clear override", vue)
 
     def test_gemini_tool_result_name_helpers_match(self) -> None:
         py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8")

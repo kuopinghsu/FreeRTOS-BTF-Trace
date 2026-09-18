@@ -587,12 +587,8 @@
                     class="settings-input settings-input--grow"
                     type="password"
                     autocomplete="off"
-                    title="API key or access token for this preset (or OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY). Local Ollama needs none. Stored per preset in browser storage."
-                    :placeholder="aiAuthMode === 'browser'
-                      ? 'Paste key or token after signing in'
-                      : (isLocalPreset
-                        ? 'Optional — local Ollama needs none'
-                        : 'Required — provider API key')"
+                    title="API key or access token for this preset, or this preset's own environment variable (see the status line above). Local Ollama needs none. Stored per preset in browser storage."
+                    :placeholder="apiKeyPlaceholder"
                   >
                   <div
                     v-if="aiAuthMode === 'browser'"
@@ -614,6 +610,19 @@
                       @click="onAiLogout"
                     >
                       Log out
+                    </button>
+                  </div>
+                  <div
+                    v-if="showClearOverride"
+                    class="settings-ai-actions"
+                  >
+                    <button
+                      type="button"
+                      class="settings-btn secondary"
+                      title="Clear the saved key for this preset so its environment variable takes over. Does not change the environment itself."
+                      @click="onAiClearOverride"
+                    >
+                      Clear override
                     </button>
                   </div>
                 </div>
@@ -927,6 +936,8 @@ function presetField(field) {
 const aiBaseUrl = presetField('baseUrl')
 const aiModel = presetField('model')
 const aiApiKey = presetField('apiKey')
+// No input binds to this — only Import… sets a custom one; read-only in the UI.
+const aiApiKeyEnv = presetField('apiKeyEnv')
 const aiAuthModes = AI_AUTH_MODE_LABELS
 const aiAuthMode = computed({
   get: () => normalizeAiAuthMode(draft.aiPresets?.[aiPreset.value]?.authMode, {
@@ -945,23 +956,46 @@ const aiAuthMode = computed({
   },
 })
 const signInLabel = computed(() => aiPresetSignInLabel(aiPreset.value))
+const authState = computed(() => aiAuthStatus({
+  authMode: aiAuthMode.value,
+  apiKey: aiApiKey.value,
+  baseUrl: aiBaseUrl.value || activePresetInfo.value.baseUrl,
+  presetId: aiPreset.value,
+  apiKeyEnv: aiApiKeyEnv.value,
+}))
 const authStatusText = computed(() => {
-  const st = aiAuthStatus({
-    authMode: aiAuthMode.value,
-    apiKey: aiApiKey.value,
-    baseUrl: aiBaseUrl.value || activePresetInfo.value.baseUrl,
-    presetId: aiPreset.value,
-  })
+  const st = authState.value
   if (aiAuthMode.value === 'none') return 'Local endpoint — no key needed.'
   if (aiAuthMode.value === 'browser') {
     return st.signedIn
       ? 'Signed in — token saved.'
       : 'Not signed in. Open the provider page, then paste the key or token below.'
   }
-  return aiApiKey.value
-    ? 'Key saved for this preset.'
-    : 'Paste a provider API key, or set OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY.'
+  if (st.source === 'environment') return `Using ${st.envName} from environment.`
+  if (st.source === 'saved') {
+    return st.envAvailable ? `Saved key overrides ${st.envName}.` : 'Key saved for this preset.'
+  }
+  return st.envName
+    ? `${st.envName} is not set. Paste a key or define the environment variable.`
+    : 'Paste a provider API key.'
 })
+const apiKeyPlaceholder = computed(() => {
+  if (aiAuthMode.value === 'browser') return 'Paste key or token after signing in'
+  if (isLocalPreset.value) return 'Optional — local Ollama needs none'
+  if (authState.value.source === 'environment') {
+    return `Using ${authState.value.envName} — paste a key to override`
+  }
+  return 'Required — provider API key'
+})
+// Clearing the saved key reveals the preset's env var (item 9) — only
+// offered when a saved key is actually shadowing one that's available.
+const showClearOverride = computed(() => (
+  aiAuthMode.value === 'api_key' && authState.value.source === 'saved'
+  && authState.value.envAvailable
+))
+function onAiClearOverride() {
+  aiApiKey.value = ''
+}
 
 function onAiSignIn() {
   const url = aiPresetSignInUrl(
@@ -1279,6 +1313,7 @@ async function onRefreshModels() {
   try {
     const names = (await aiListModels(active.baseUrl, {
       apiKey: active.apiKey,
+      apiKeyEnv: active.apiKeyEnv,
       preset: active.preset,
       tlsVerify: active.tlsVerify,
       signal: aiAbort.signal,
@@ -1319,6 +1354,7 @@ async function onTestAi() {
       baseUrl: active.baseUrl,
       model: active.model,
       apiKey: active.apiKey,
+      apiKeyEnv: active.apiKeyEnv,
       preset: active.preset,
       tlsVerify: active.tlsVerify,
       signal: aiAbort.signal,

@@ -626,7 +626,7 @@ export const DEFAULT_AI_BASE_URL = 'http://localhost:11434/v1'
 export const DEFAULT_AI_MODEL = 'qwen3.5:9b'
 
 /** Per-preset settings stored in browser storage (parity with btf_viewer.rc). */
-export const AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey', 'authMode', 'tlsVerify']
+export const AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey', 'apiKeyEnv', 'authMode', 'tlsVerify']
 
 export const AI_AUTH_NONE = 'none'
 export const AI_AUTH_API_KEY = 'api_key'
@@ -662,6 +662,17 @@ export const AI_PRESET_KEY_URLS = {
   [AI_PRESET_OPENAI]: 'https://platform.openai.com/api-keys',
   [AI_PRESET_GEMINI]: 'https://aistudio.google.com/apikey',
   [AI_PRESET_OLLAMA]: 'https://ollama.com/settings/keys',
+}
+
+/**
+ * Default env var each built-in preset reads when no key is saved for it.
+ * Custom has no default; imported/extra presets may set their own apiKeyEnv.
+ * Keep in sync with AI_PRESET_API_KEY_ENV in btf_viewer_pkg/ai_assistant.py.
+ */
+export const AI_PRESET_API_KEY_ENV = {
+  [AI_PRESET_OPENAI]: 'OPENAI_API_KEY',
+  [AI_PRESET_GEMINI]: 'GEMINI_API_KEY',
+  [AI_PRESET_OLLAMA]: 'OLLAMA_API_KEY',
 }
 
 export const AI_PRESET_SIGNIN_LABELS = {
@@ -722,6 +733,17 @@ export function normalizeAiPreset(presetId) {
   if (AI_PRESETS.some((p) => p.id === want)) return want
   if (AI_IMPORT_PRESET_ALIASES[want]) return AI_IMPORT_PRESET_ALIASES[want]
   return want
+}
+
+/**
+ * Effective env var name for presetId: an explicit override, else the
+ * built-in default (empty for Custom and un-configured imported presets).
+ * Single source of truth for both credential resolution and the Settings UI.
+ */
+export function aiPresetApiKeyEnv(presetId, storedEnv = '') {
+  const explicit = String(storedEnv || '').trim()
+  if (explicit) return explicit
+  return AI_PRESET_API_KEY_ENV[normalizeAiPreset(presetId)] || ''
 }
 
 export function aiPresetInfo(presetId, extraPresets = []) {
@@ -795,6 +817,7 @@ export function resolveAiSettings(cfg = {}, presetId = null) {
     baseUrl,
     model: String(stored.model || '') || info.model,
     apiKey: String(stored.apiKey || ''),
+    apiKeyEnv: String(stored.apiKeyEnv || ''),
     authMode: normalizeAiAuthMode(stored.authMode, { presetId: preset, baseUrl }),
     tlsVerify: parseAiTlsVerify(stored.tlsVerify, true),
   }
@@ -913,10 +936,11 @@ export function stripAiSettingsJsonc(text) {
  * (`{ preset, base_url, model, api_key, auth_mode }`) or a `presets` object carrying
  * several. Unknown preset names become extra presets added to the combo.
  * Checkbox flags (`enabled`, `redact_task_names`,
- * `trace_sensitive`, `mcp_log`) are imported when present. snake_case and
+ * `trace_sensitive`) are imported when present. snake_case and
  * camelCase key names both work, so files exported from either app import into
- * both. Whole-line `//` comments are ignored. Throws `Error` with a
- * user-facing message when the file cannot be applied.
+ * both. Whole-line `//` comments are ignored. `mcp_log` (Desktop-only MCP
+ * logfile toggle) is not supported on Web and is silently ignored. Throws
+ * `Error` with a user-facing message when the file cannot be applied.
  *
  * @param {string|object} data
  * @returns {{ preset?: string, presets: object, extraPresets?: object[], responseLanguage?: string }}
@@ -961,6 +985,8 @@ export function parseAiSettingsJson(data) {
     if (model) entry.model = model
     const apiKey = normalizeApiKey(jsonStr(fields, 'api_key', 'apiKey', 'key'))
     if (apiKey) entry.apiKey = apiKey
+    const apiKeyEnv = jsonStr(fields, 'api_key_env', 'apiKeyEnv')
+    if (apiKeyEnv) entry.apiKeyEnv = apiKeyEnv
     const authMode = jsonStr(fields, 'auth_mode', 'authMode', 'authentication')
     if (authMode) {
       entry.authMode = normalizeAiAuthMode(authMode, { presetId: target, baseUrl })
@@ -1022,7 +1048,6 @@ export function parseAiSettingsJson(data) {
     ['aiTraceSensitive', [
       'trace_sensitive', 'ai_trace_sensitive', 'aiTraceSensitive', 'sensitive',
     ]],
-    ['aiMcpLog', ['mcp_log', 'ai_mcp_log', 'aiMcpLog']],
   ]
   for (const [dest, keys] of flags) {
     const value = jsonBool(parsed, ...keys)
@@ -1062,6 +1087,7 @@ export function buildAiSettingsJson(settings) {
       base_url: fields.baseUrl || p.baseUrl || '',
       model: fields.model || p.model || '',
       api_key: '',
+      api_key_env: aiPresetApiKeyEnv(p.id, fields.apiKeyEnv || ''),
     }
     if (fields.authMode) entry.auth_mode = fields.authMode
     if (fields.tlsVerify === false) entry.tls_verify = false
@@ -1161,11 +1187,42 @@ export function readAiEnvKey(names = AI_API_KEY_ENV_NAMES) {
   return ''
 }
 
-/** Settings key, else OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY. */
-export function resolveAiApiKey(apiKey = '') {
+/**
+ * Settings key, else the active preset's env var.
+ *
+ * Pass presetId and/or apiKeyEnv to resolve strictly through that preset's
+ * own variable (aiPresetApiKeyEnv) — a Gemini preset with only
+ * OPENAI_API_KEY set must never borrow it. Callers that don't know the
+ * preset keep the legacy generic OPENAI/GEMINI/OLLAMA_API_KEY chain by
+ * omitting both.
+ */
+export function resolveAiApiKey(apiKey = '', { presetId = '', apiKeyEnv = '' } = {}) {
   const key = normalizeApiKey(apiKey)
   if (key) return key
+  if (presetId || apiKeyEnv) {
+    const envName = aiPresetApiKeyEnv(presetId, apiKeyEnv)
+    return envName ? readAiEnvKey([envName]) : ''
+  }
   return readAiEnvKey()
+}
+
+/**
+ * Resolved key plus where it came from, for the Settings UI. `source` is
+ * 'saved' (the preset's stored key wins even when an env var is also
+ * available — see envAvailable), 'environment', or 'none'. Use this instead
+ * of re-deriving source info from resolveAiApiKey independently elsewhere.
+ */
+export function resolveAiCredential(apiKey = '', presetId = '', apiKeyEnv = '') {
+  const saved = normalizeApiKey(apiKey)
+  const envName = aiPresetApiKeyEnv(presetId, apiKeyEnv)
+  const envValue = envName ? readAiEnvKey([envName]) : ''
+  if (saved) {
+    return { key: saved, source: 'saved', envName, envAvailable: !!envValue }
+  }
+  if (envValue) {
+    return { key: envValue, source: 'environment', envName, envAvailable: true }
+  }
+  return { key: '', source: 'none', envName, envAvailable: false }
 }
 
 /**
@@ -1434,25 +1491,30 @@ export function aiPresetSignInLabel(presetId) {
   return AI_PRESET_SIGNIN_LABELS[pid] || 'Sign in…'
 }
 
+/** Chip / CTA state for the active preset, plus the credential source
+ * (source/envName/envAvailable) for the Settings UI. */
 export function aiAuthStatus({
-  authMode = '', apiKey = '', baseUrl = '', presetId = '',
+  authMode = '', apiKey = '', baseUrl = '', presetId = '', apiKeyEnv = '',
 } = {}) {
   const mode = normalizeAiAuthMode(authMode, { presetId, baseUrl })
-  const hasKey = Boolean(resolveAiApiKey(apiKey))
+  const cred = resolveAiCredential(apiKey, presetId, apiKeyEnv)
+  const hasKey = Boolean(cred.key)
+  const src = { source: cred.source, envName: cred.envName, envAvailable: cred.envAvailable }
   if (mode === AI_AUTH_NONE) {
-    return { mode, label: 'Local', needsAuth: false, signedIn: false }
+    return { mode, label: 'Local', needsAuth: false, signedIn: false, ...src }
   }
   if (hasKey) {
     if (mode === AI_AUTH_BROWSER) {
-      return { mode, label: 'Signed in', needsAuth: false, signedIn: true }
+      return { mode, label: 'Signed in', needsAuth: false, signedIn: true, ...src }
     }
-    return { mode, label: 'Key saved', needsAuth: false, signedIn: false }
+    return { mode, label: 'Key saved', needsAuth: false, signedIn: false, ...src }
   }
   return {
     mode,
     label: mode === AI_AUTH_BROWSER ? 'Needs sign-in' : 'Needs API key',
     needsAuth: true,
     signedIn: false,
+    ...src,
   }
 }
 
@@ -1707,6 +1769,7 @@ export async function aiChatCompletion({
   baseUrl = DEFAULT_AI_BASE_URL,
   model = DEFAULT_AI_MODEL,
   apiKey = '',
+  apiKeyEnv = '',
   responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE,
   preset = DEFAULT_AI_PRESET,
   tlsVerify = true,
@@ -1718,7 +1781,7 @@ export async function aiChatCompletion({
 } = {}) {
   const urlBase = normalizeAiBaseUrl(baseUrl)
   const chatModel = String(model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL
-  const key = resolveAiApiKey(apiKey)
+  const key = resolveAiApiKey(apiKey, { presetId: preset, apiKeyEnv })
   if (!key && !isLocalAiHost(urlBase)) {
     throw new Error(AI_API_KEY_REQUIRED)
   }
@@ -1913,10 +1976,11 @@ export async function aiChat(opts = {}) {
 
 /** Model ids from `GET /models` on an OpenAI-compatible API. */
 export async function aiListModels(baseUrl = DEFAULT_AI_BASE_URL, {
-  signal, timeoutMs = AI_LIST_MODELS_TIMEOUT_MS, apiKey = '', preset = DEFAULT_AI_PRESET,
-  tlsVerify = true,
+  signal, timeoutMs = AI_LIST_MODELS_TIMEOUT_MS, apiKey = '', apiKeyEnv = '',
+  preset = DEFAULT_AI_PRESET, tlsVerify = true,
 } = {}) {
   const urlBase = normalizeAiBaseUrl(baseUrl)
+  const key = resolveAiApiKey(apiKey, { presetId: preset, apiKeyEnv })
   const proxyBase = aiSameOriginProxyBase(preset, urlBase)
   const bases = proxyBase ? [proxyBase, urlBase] : [urlBase]
   const timeoutSignal = AbortSignal.timeout(timeoutMs)
@@ -1926,7 +1990,7 @@ export async function aiListModels(baseUrl = DEFAULT_AI_BASE_URL, {
     try {
       const resp = await fetch(`${base}/models`, {
         method: 'GET',
-        headers: aiRequestHeaders(apiKey, urlBase),
+        headers: aiRequestHeaders(key, urlBase),
         signal: combined,
       })
       if (
@@ -1998,6 +2062,7 @@ export async function aiTestConnection({
   baseUrl = DEFAULT_AI_BASE_URL,
   model = DEFAULT_AI_MODEL,
   apiKey = '',
+  apiKeyEnv = '',
   preset = DEFAULT_AI_PRESET,
   tlsVerify = true,
   signal,
@@ -2013,7 +2078,7 @@ export async function aiTestConnection({
   }
   const urlBase = normalizeAiBaseUrl(baseUrl)
   const modelName = String(model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL
-  const key = resolveAiApiKey(apiKey)
+  const key = resolveAiApiKey(apiKey, { presetId: preset, apiKeyEnv })
   const local = isLocalAiHost(urlBase)
   if (!key && !local) {
     throw new Error(AI_API_KEY_REQUIRED)

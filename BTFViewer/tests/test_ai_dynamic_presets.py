@@ -203,6 +203,36 @@ class AiDynamicPresetTests(unittest.TestCase):
         self.assertEqual(cfg["openrouter_api_key"], "or-key")
         self.assertEqual(extra_ai_preset_ids_from_settings(cfg), ["openrouter"])
 
+    # -- AI_SETTINGS_TODO.md item 1-2: api_key_env is a first-class preset
+    # field that persists across save/reload like base_url/model/auth_mode.
+
+    def test_imported_preset_api_key_env_survives_save_and_reload(self) -> None:
+        self.assertIn("api_key_env", AI_PRESET_FIELDS)
+        self.assertIn("baseline_profile", MainWindow._ai_setting_keys())
+
+        host = self._host()
+        dlg = self._dlg(**host.dialog_kwargs())
+        dlg.apply_ai_settings_patch({
+            "preset": "openrouter",
+            "extra_presets": '[{"id": "openrouter", "label": "OpenRouter"}]',
+            "openrouter_base_url": "https://openrouter.ai/api/v1",
+            "openrouter_model": "openrouter/auto",
+            "openrouter_api_key_env": "OPENROUTER_API_KEY",
+        })
+        host.save_dialog_result(dlg)
+
+        host2 = self._host()
+        cfg = host2._ai_read_settings()
+        self.assertEqual(cfg["openrouter_api_key_env"], "OPENROUTER_API_KEY")
+        # No key was saved — the field must not silently gain one.
+        self.assertEqual(cfg.get("openrouter_api_key", ""), "")
+
+        # A dialog rebuilt from this config carries api_key_env into its
+        # in-memory preset values, ready for _update_ai_auth_ui / resolution.
+        dlg2 = self._dlg(**host2.dialog_kwargs())
+        self.assertEqual(
+            dlg2._ai_preset_values["openrouter"]["api_key_env"], "OPENROUTER_API_KEY")
+
     # -- 25/26: unknown preset import survives a simulated restart --------
 
     def test_import_unknown_preset_round_trips_through_rc(self) -> None:

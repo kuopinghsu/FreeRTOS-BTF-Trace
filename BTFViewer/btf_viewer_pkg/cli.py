@@ -1511,6 +1511,7 @@ def _cli_analyze_run(args: argparse.Namespace) -> int:
                 base_url=active.get("base_url", ""),
                 model=active.get("model", ""),
                 api_key=active.get("api_key", ""),
+                api_key_env=active.get("api_key_env", ""),
                 preset=active.get("preset", ""),
                 log_mcp=parse_ai_mcp_log(cfg.get("mcp_log")),
             )
@@ -2592,6 +2593,17 @@ def main() -> None:
         QTimer.singleShot(100, win._restore_session_tabs)
 
     try:
-        raise SystemExit(app.exec())
+        rc = app.exec()
     except KeyboardInterrupt:
-        raise SystemExit(0)
+        rc = 0
+    # Use os._exit to skip interpreter finalization.  PySide6/shiboken can
+    # SIGSEGV during atexit teardown when Qt C++ objects are destroyed after
+    # the extension module state has already been partially freed.  All
+    # important state (settings, trace-state) is persisted in closeEvent()
+    # which fires *before* app.exec() returns.
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(rc)

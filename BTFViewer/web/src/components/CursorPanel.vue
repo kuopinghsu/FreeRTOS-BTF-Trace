@@ -12,7 +12,7 @@
         <template v-if="cur !== null">
           <span
             class="cursor-badge"
-            :style="{ background: CURSOR_COLORS[idx] }"
+            :style="{ background: palette[idx] }"
           >C{{ idx + 1 }}</span>
           <span
             class="cursor-time clickable"
@@ -123,7 +123,7 @@
 <script setup>
 import { computed } from 'vue'
 import { formatTime } from '../utils/timeFormat.js'
-import { CURSOR_COLORS } from '../utils/cursorColors.js'
+import { cursorColors } from '../utils/cursorColors.js'
 import { cursorComparisonRows, cursorSortedPlaced, cursorDeltaSegments } from '../utils/cursorAnalysis.js'
 import CoreFilterChips from './CoreFilterChips.vue'
 
@@ -132,6 +132,7 @@ const props = defineProps({
   trace:        { type: Object, default: null },
   timeScale:    { type: String, default: 'ns' },
   timeDecimals: { type: Number, default: 3 },
+  darkMode:     { type: Boolean, default: true },
   /** Shared with the Legend Core Filter (App `timelineOptions.coreFilterKeys`).
    *  null / empty = every core. */
   coreFilterKeys: { type: Array, default: null },
@@ -140,6 +141,7 @@ const props = defineProps({
 const emit = defineEmits(['deleteCursor', 'jumpToCursor', 'clearAll', 'coreFilterChange'])
 
 const validCursors = computed(() => props.cursors.filter(c => c !== null))
+const palette = computed(() => cursorColors(props.darkMode))
 
 const comparisonRows = computed(() => {
   if (!props.trace) return []

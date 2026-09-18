@@ -185,6 +185,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { coreColor } from '../utils/colors.js'
+import { cursorColors } from '../utils/cursorColors.js'
 import {
   coreViewTaskFilterActive,
   filteredCoreViewTasks,
@@ -214,7 +215,6 @@ import {
 const NUM_BINS = CPU_LOAD_NUM_BINS
 const TITLE_H = 22
 const PLOT_W = 1000
-const CURSOR_COLORS = ['#FF4444', '#44FF88', '#4499FF', '#FFAA22', '#FF44FF', '#44FFFF', '#FFFF44', '#CC44FF']
 const BOOKMARK_COLOR = '#FFD700'
 const ANNOTATION_COLOR = '#FF8C00'
 
@@ -364,6 +364,7 @@ const rows = computed(() => {
 
 const rowModels = computed(() => {
   void props.cpuLoadRowH
+  void props.darkMode   // cursor markers swap to the light-theme palette
   const trace = props.trace
   const timeStart = props.viewport.timeStart
   const timeEnd = props.viewport.timeEnd
@@ -574,6 +575,7 @@ function timeToPlotX(ns, visibleStart, visibleEnd, visibleSpan) {
 }
 
 function buildCursorOverlays(visibleStart, visibleEnd, visibleSpan) {
+  const palette = cursorColors(props.darkMode)
   return (props.cursors || []).flatMap((ns, index) => {
     if (ns == null) return []
     const x = timeToPlotX(ns, visibleStart, visibleEnd, visibleSpan)
@@ -581,7 +583,7 @@ function buildCursorOverlays(visibleStart, visibleEnd, visibleSpan) {
     return [{
       index,
       x,
-      color: CURSOR_COLORS[index % CURSOR_COLORS.length],
+      color: palette[index % palette.length],
     }]
   })
 }

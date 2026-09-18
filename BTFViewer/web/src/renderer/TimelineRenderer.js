@@ -24,7 +24,7 @@ import {
 import { formatTime, formatMigrationGapTime } from '../utils/timeFormat.js'
 import { cursorSortedPlaced } from '../utils/cursorAnalysis.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
-import { CURSOR_COLORS } from '../utils/cursorColors.js'
+import { cursorColors } from '../utils/cursorColors.js'
 import { tagAlias, formatTagValue, interpretTagValue, tagAxisBounds, tagTransform, tagPreferences } from '../utils/tagAnalysis.js'
 import {
   intervalColor,
@@ -1670,6 +1670,7 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
 
   ctx.save()
   const haloStyle = darkMode ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.65)'
+  const palette = cursorColors(darkMode)
 
   // Delta badges get their own row, below every cursor's own badge row -
   // otherwise when two cursors are close together on screen (a common case:
@@ -1686,7 +1687,7 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
     ctx.textBaseline = 'top'
     ctx.textAlign = 'left'
 
-    const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]
+    const color = palette[slotIndex % palette.length]
     // Halo: a solid, theme-contrasting stroke under the dashed colour line so
     // the marker stays visible over task segments of a similar hue.
     ctx.strokeStyle = haloStyle
@@ -2902,6 +2903,7 @@ export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, can
 
   ctx.save()
   const haloStyle = darkMode ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.65)'
+  const palette = cursorColors(darkMode)
 
   for (let order = 0; order < sorted.length; order++) {
     const { t, slotIndex } = sorted[order]
@@ -2912,7 +2914,7 @@ export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, can
     ctx.textBaseline = 'middle'
     ctx.textAlign = 'left'
 
-    const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]
+    const color = palette[slotIndex % palette.length]
     ctx.strokeStyle = haloStyle
     ctx.lineWidth = 3
     ctx.beginPath()

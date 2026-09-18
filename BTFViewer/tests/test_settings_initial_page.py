@@ -154,9 +154,10 @@ class SettingsInitialPageTests(unittest.TestCase):
         dlg._ai_preset_combo.setCurrentIndex(dlg._ai_preset_combo.findData("gemini"))
         dlg._ai_url_edit.clear()
         dlg._set_ai_model_text("")
-        url, model, _key, tls_verify = dlg._ai_test_target()
+        url, model, _key, api_key_env, tls_verify = dlg._ai_test_target()
         self.assertIn("generativelanguage", url)
         self.assertIn("gemini", model)
+        self.assertEqual(api_key_env, "GEMINI_API_KEY")
         self.assertTrue(tls_verify)
 
     def test_import_ai_settings_patch(self) -> None:

@@ -76,6 +76,23 @@ def _install_macos_stderr_filter() -> None:
 
     t = threading.Thread(target=_relay, daemon=True, name="stderr-filter")
     t.start()
+
+    def _shutdown_stderr_filter() -> None:
+        """Restore real stderr and drain the relay thread before interpreter shutdown.
+
+        Without this, the daemon thread is still blocked on pipe.read() when
+        Python tears down C-extension modules (PySide6/shiboken), causing a
+        SIGSEGV in the relay thread.
+        """
+        try:
+            os.dup2(original_fd, 2)  # restore real stderr on fd 2
+        except OSError:
+            pass
+        # fd 2 no longer points to the pipe write-end, so _relay sees EOF.
+        t.join(timeout=2)
+
+    import atexit
+    atexit.register(_shutdown_stderr_filter)
 _XCB_CURSOR_SONAME = "libxcb-cursor.so.0"
 
 def _find_xcb_cursor_lib() -> str:

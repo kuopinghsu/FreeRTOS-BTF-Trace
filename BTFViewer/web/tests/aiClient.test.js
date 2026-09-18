@@ -2,10 +2,12 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import {
+  AI_PRESET_API_KEY_ENV,
   AI_PRESET_CUSTOM,
   AI_PRESET_GEMINI,
   AI_PRESET_OLLAMA,
   AI_PRESET_OPENAI,
+  aiPresetApiKeyEnv,
   AI_TEMPLATE_QUESTIONS,
   AI_TEMPLATE_MENU_GROUPS,
   AI_DEFAULT_TEMPLATE_ORDER,
@@ -334,7 +336,9 @@ describe('AI endpoint helpers', () => {
     assert.equal(patch.aiContextMode, 'compact')
     assert.equal(patch.aiRedactTaskNames, true)
     assert.equal(patch.aiTraceSensitive, true)
-    assert.equal(patch.aiMcpLog, true)
+    // mcp_log is a Desktop-only MCP logfile toggle; Web has no such
+    // feature, so it must be silently ignored rather than surfaced.
+    assert.equal(patch.aiMcpLog, undefined)
     const skipped = parseAiSettingsJson({ preset: 'ollama', model: 'qwen3.5:9b' })
     assert.equal(skipped.aiEnabled, undefined)
   })
@@ -374,6 +378,32 @@ describe('AI endpoint helpers', () => {
     assert.equal(doc.presets.ollama.api_key, '')
     assert.equal(doc.presets.custom.base_url, '')
     assert.equal(doc.presets.gemini.label, undefined) // no label for a builtin preset
+    // apiKeyEnv is not a secret — always emitted, falling back to each
+    // builtin's default even when the user never set one explicitly.
+    assert.equal(doc.presets.gemini.api_key_env, 'GEMINI_API_KEY')
+    assert.equal(doc.presets.openai.api_key_env, 'OPENAI_API_KEY')
+    assert.equal(doc.presets.ollama.api_key_env, 'OLLAMA_API_KEY')
+    assert.equal(doc.presets.custom.api_key_env, '')
+  })
+
+  it('buildAiSettingsJson api_key_env round-trips through parseAiSettingsJson', () => {
+    const doc = buildAiSettingsJson({
+      aiPreset: 'openrouter',
+      aiPresets: {
+        openrouter: {
+          baseUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-5',
+          apiKey: 'or-secret', apiKeyEnv: 'OPENROUTER_API_KEY', authMode: 'api_key',
+        },
+      },
+      aiExtraPresets: [{ id: 'openrouter', label: 'OpenRouter' }],
+    })
+    assert.equal(doc.presets.openrouter.api_key_env, 'OPENROUTER_API_KEY')
+    assert.equal(doc.presets.openrouter.api_key, '')
+    assert.ok(!JSON.stringify(doc).includes('or-secret'))
+
+    const patch = parseAiSettingsJson(doc)
+    assert.equal(patch.presets.openrouter.apiKeyEnv, 'OPENROUTER_API_KEY')
+    assert.equal(patch.presets.openrouter.apiKey, undefined)
   })
 
   it('buildAiSettingsJson labels extra presets and round-trips through parseAiSettingsJson', () => {
@@ -452,7 +482,8 @@ describe('AI endpoint helpers', () => {
       assert.equal(patch.aiEnabled, true)
       assert.equal(patch.aiRedactTaskNames, false)
       assert.equal(patch.aiTraceSensitive, false)
-      assert.equal(patch.aiMcpLog, false)
+      // Desktop-generated examples carry mcp_log; Web must ignore it.
+      assert.equal(patch.aiMcpLog, undefined)
     }
     const multiText = readFileSync(new URL('../../examples/ai/presets.json', import.meta.url), 'utf8')
     assert.match(multiText, /\/\/ auth_mode:/)
@@ -1056,6 +1087,66 @@ describe('AI endpoint helpers', () => {
       assert.equal(resolveAiApiKey(''), 'sk-gemini')
       window.__BTF_AI_ENV__ = { CURSOR_API_KEY: 'cursor-secret' }
       assert.equal(resolveAiApiKey(''), '')
+    } finally {
+      delete window.__BTF_AI_ENV__
+    }
+  })
+
+  it('resolveAiApiKey is preset-specific (AI_SETTINGS_TODO.md item 4)', async () => {
+    const { resolveAiApiKey } = await import('../src/utils/aiClient.js')
+    globalThis.window = globalThis.window || {}
+    try {
+      window.__BTF_AI_ENV__ = { OPENAI_API_KEY: 'sk-openai' }
+      // Gemini must never borrow OPENAI_API_KEY, even though it's set.
+      assert.equal(resolveAiApiKey('', { presetId: AI_PRESET_GEMINI }), '')
+      assert.equal(resolveAiApiKey('', { presetId: AI_PRESET_OPENAI }), 'sk-openai')
+
+      window.__BTF_AI_ENV__ = { GEMINI_API_KEY: 'sk-gemini' }
+      assert.equal(resolveAiApiKey('', { presetId: AI_PRESET_GEMINI }), 'sk-gemini')
+      // A saved key always wins over the env var.
+      assert.equal(
+        resolveAiApiKey('sk-saved', { presetId: AI_PRESET_GEMINI }), 'sk-saved')
+
+      window.__BTF_AI_ENV__ = { MY_KEY: 'sk-custom' }
+      assert.equal(
+        resolveAiApiKey('', { presetId: 'openrouter', apiKeyEnv: 'MY_KEY' }), 'sk-custom')
+      assert.equal(resolveAiApiKey('', { presetId: 'openrouter' }), '')
+    } finally {
+      delete window.__BTF_AI_ENV__
+    }
+  })
+
+  it('aiPresetApiKeyEnv falls back to built-in defaults', () => {
+    assert.equal(aiPresetApiKeyEnv(AI_PRESET_OPENAI), 'OPENAI_API_KEY')
+    assert.equal(aiPresetApiKeyEnv(AI_PRESET_GEMINI), 'GEMINI_API_KEY')
+    assert.equal(aiPresetApiKeyEnv(AI_PRESET_OLLAMA), 'OLLAMA_API_KEY')
+    assert.equal(aiPresetApiKeyEnv(AI_PRESET_CUSTOM), '')
+    assert.equal(aiPresetApiKeyEnv('openrouter'), '')
+    assert.equal(aiPresetApiKeyEnv('openrouter', 'OPENROUTER_KEY'), 'OPENROUTER_KEY')
+    assert.equal(aiPresetApiKeyEnv(AI_PRESET_OPENAI, 'MY_OPENAI_KEY'), 'MY_OPENAI_KEY')
+    assert.ok(!(AI_PRESET_CUSTOM in AI_PRESET_API_KEY_ENV))
+  })
+
+  it('resolveAiCredential reports source/envName/envAvailable', async () => {
+    const { resolveAiCredential } = await import('../src/utils/aiClient.js')
+    globalThis.window = globalThis.window || {}
+    try {
+      window.__BTF_AI_ENV__ = {}
+      assert.deepEqual(resolveAiCredential('', AI_PRESET_GEMINI), {
+        key: '', source: 'none', envName: 'GEMINI_API_KEY', envAvailable: false,
+      })
+      window.__BTF_AI_ENV__ = { GEMINI_API_KEY: 'sk-gemini' }
+      assert.deepEqual(resolveAiCredential('', AI_PRESET_GEMINI), {
+        key: 'sk-gemini', source: 'environment', envName: 'GEMINI_API_KEY', envAvailable: true,
+      })
+      assert.deepEqual(resolveAiCredential('sk-saved', AI_PRESET_GEMINI), {
+        key: 'sk-saved', source: 'saved', envName: 'GEMINI_API_KEY', envAvailable: true,
+      })
+      window.__BTF_AI_ENV__ = {}
+      const saved = resolveAiCredential('sk-saved', AI_PRESET_GEMINI)
+      assert.equal(saved.source, 'saved')
+      assert.equal(saved.envAvailable, false)
+      assert.equal(resolveAiCredential('', AI_PRESET_CUSTOM).envName, '')
     } finally {
       delete window.__BTF_AI_ENV__
     }

@@ -434,6 +434,30 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(doc["presets"][AI_PRESET_OLLAMA]["api_key"], "")
         self.assertEqual(doc["presets"][AI_PRESET_CUSTOM]["base_url"], "")
         self.assertNotIn("label", doc["presets"][AI_PRESET_GEMINI])
+        # api_key_env is not a secret — always emitted, falling back to each
+        # builtin's default even when the user never set one explicitly.
+        self.assertEqual(doc["presets"][AI_PRESET_GEMINI]["api_key_env"], "GEMINI_API_KEY")
+        self.assertEqual(doc["presets"][AI_PRESET_OPENAI]["api_key_env"], "OPENAI_API_KEY")
+        self.assertEqual(doc["presets"][AI_PRESET_OLLAMA]["api_key_env"], "OLLAMA_API_KEY")
+        self.assertEqual(doc["presets"][AI_PRESET_CUSTOM]["api_key_env"], "")
+
+    def test_build_ai_settings_json_api_key_env_round_trips_through_import(self) -> None:
+        preset_values = {
+            "openrouter": {
+                "base_url": "https://openrouter.ai/api/v1", "model": "openai/gpt-5",
+                "api_key": "or-secret", "api_key_env": "OPENROUTER_API_KEY",
+                "auth_mode": "api_key",
+            },
+        }
+        doc = build_ai_settings_json(
+            "openrouter", preset_values, [{"id": "openrouter", "label": "OpenRouter"}])
+        self.assertEqual(doc["presets"]["openrouter"]["api_key_env"], "OPENROUTER_API_KEY")
+        self.assertEqual(doc["presets"]["openrouter"]["api_key"], "")
+        self.assertNotIn("or-secret", json.dumps(doc))
+
+        patch = parse_ai_settings_json(json.dumps(doc))
+        self.assertEqual(patch["openrouter_api_key_env"], "OPENROUTER_API_KEY")
+        self.assertNotIn("openrouter_api_key", patch)
 
     def test_build_ai_settings_json_labels_extras_and_round_trips(self) -> None:
         preset_values = {
@@ -523,6 +547,9 @@ class AiAssistantHelpersTests(unittest.TestCase):
         with patch.dict(os.environ, empty, clear=False):
             self.assertEqual(resolve_ai_api_key("sk-settings"), "sk-settings")
             self.assertEqual(resolve_ai_api_key(""), "")
+        # No preset_id/api_key_env given: legacy generic chain, preserved for
+        # callers that don't know the preset (e.g. resolve_benchmark_api_key's
+        # no-env= fallback in ai_case.py).
         with patch.dict(
             os.environ,
             {**empty, "OPENAI_API_KEY": "sk-openai", "GEMINI_API_KEY": "sk-gemini"},
@@ -541,6 +568,76 @@ class AiAssistantHelpersTests(unittest.TestCase):
             clear=False,
         ):
             self.assertEqual(resolve_ai_api_key(""), "")
+
+    def test_resolve_ai_api_key_is_preset_specific(self) -> None:
+        """AI_SETTINGS_TODO.md item 4: a Gemini preset must never borrow
+        OPENAI_API_KEY, even though it's set and Gemini's own key is not."""
+        from unittest.mock import patch
+
+        from btf_viewer_pkg.ai_assistant import resolve_ai_api_key
+
+        empty = {"OPENAI_API_KEY": "", "GEMINI_API_KEY": "", "OLLAMA_API_KEY": ""}
+        with patch.dict(os.environ, {**empty, "OPENAI_API_KEY": "sk-openai"}, clear=False):
+            self.assertEqual(
+                resolve_ai_api_key("", preset_id=AI_PRESET_GEMINI), "")
+            self.assertEqual(
+                resolve_ai_api_key("", preset_id=AI_PRESET_OPENAI), "sk-openai")
+        with patch.dict(os.environ, {**empty, "GEMINI_API_KEY": "sk-gemini"}, clear=False):
+            self.assertEqual(
+                resolve_ai_api_key("", preset_id=AI_PRESET_GEMINI), "sk-gemini")
+            # A saved key always wins over the env var.
+            self.assertEqual(
+                resolve_ai_api_key("sk-saved", preset_id=AI_PRESET_GEMINI), "sk-saved")
+        # An explicit api_key_env (imported/custom preset) overrides the default.
+        with patch.dict(os.environ, {**empty, "MY_KEY": "sk-custom"}, clear=False):
+            self.assertEqual(
+                resolve_ai_api_key(
+                    "", preset_id="openrouter", api_key_env="MY_KEY"), "sk-custom")
+            self.assertEqual(resolve_ai_api_key("", preset_id="openrouter"), "")
+
+    def test_ai_preset_api_key_env_defaults(self) -> None:
+        from btf_viewer_pkg.ai_assistant import AI_PRESET_API_KEY_ENV, ai_preset_api_key_env
+
+        self.assertEqual(ai_preset_api_key_env(AI_PRESET_OPENAI), "OPENAI_API_KEY")
+        self.assertEqual(ai_preset_api_key_env(AI_PRESET_GEMINI), "GEMINI_API_KEY")
+        self.assertEqual(ai_preset_api_key_env(AI_PRESET_OLLAMA), "OLLAMA_API_KEY")
+        self.assertEqual(ai_preset_api_key_env(AI_PRESET_CUSTOM), "")
+        self.assertEqual(ai_preset_api_key_env("openrouter"), "")
+        self.assertEqual(ai_preset_api_key_env("openrouter", "OPENROUTER_KEY"), "OPENROUTER_KEY")
+        # An explicit override wins even for a builtin preset.
+        self.assertEqual(ai_preset_api_key_env(AI_PRESET_OPENAI, "MY_OPENAI_KEY"), "MY_OPENAI_KEY")
+        self.assertNotIn(AI_PRESET_CUSTOM, AI_PRESET_API_KEY_ENV)
+
+    def test_resolve_ai_credential_reports_source(self) -> None:
+        from unittest.mock import patch
+
+        from btf_viewer_pkg.ai_assistant import resolve_ai_credential
+
+        empty = {"OPENAI_API_KEY": "", "GEMINI_API_KEY": "", "OLLAMA_API_KEY": ""}
+        with patch.dict(os.environ, empty, clear=False):
+            cred = resolve_ai_credential("", AI_PRESET_GEMINI)
+            self.assertEqual(cred, {
+                "key": "", "source": "none",
+                "env_name": "GEMINI_API_KEY", "env_available": False,
+            })
+        with patch.dict(os.environ, {**empty, "GEMINI_API_KEY": "sk-gemini"}, clear=False):
+            cred = resolve_ai_credential("", AI_PRESET_GEMINI)
+            self.assertEqual(cred, {
+                "key": "sk-gemini", "source": "environment",
+                "env_name": "GEMINI_API_KEY", "env_available": True,
+            })
+            # Saved key wins, but reports the env var it's shadowing.
+            cred = resolve_ai_credential("sk-saved", AI_PRESET_GEMINI)
+            self.assertEqual(cred, {
+                "key": "sk-saved", "source": "saved",
+                "env_name": "GEMINI_API_KEY", "env_available": True,
+            })
+        with patch.dict(os.environ, empty, clear=False):
+            cred = resolve_ai_credential("sk-saved", AI_PRESET_GEMINI)
+            self.assertEqual(cred["source"], "saved")
+            self.assertFalse(cred["env_available"])
+        self.assertEqual(
+            resolve_ai_credential("", AI_PRESET_CUSTOM)["env_name"], "")
 
     def test_normalize_api_key(self) -> None:
         from btf_viewer_pkg.ai_assistant import ai_request_headers, normalize_api_key
@@ -582,6 +679,19 @@ class AiAssistantHelpersTests(unittest.TestCase):
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai")
             self.assertTrue(st["needs_auth"])
             self.assertEqual(st["label"], "Needs API key")
+            self.assertEqual(st["source"], "none")
+            self.assertEqual(st["env_name"], "GEMINI_API_KEY")
+            self.assertFalse(st["env_available"])
+        with patch.dict(os.environ, {**empty, "GEMINI_API_KEY": "sk-gemini"}, clear=False):
+            env_st = ai_auth_status(
+                auth_mode=AI_AUTH_API_KEY, api_key="", preset_id=AI_PRESET_GEMINI)
+            self.assertFalse(env_st["needs_auth"])
+            self.assertEqual(env_st["source"], "environment")
+            self.assertTrue(env_st["env_available"])
+            saved_st = ai_auth_status(
+                auth_mode=AI_AUTH_API_KEY, api_key="sk-saved", preset_id=AI_PRESET_GEMINI)
+            self.assertEqual(saved_st["source"], "saved")
+            self.assertTrue(saved_st["env_available"])
         signed = ai_auth_status(
             auth_mode=AI_AUTH_BROWSER, api_key="tok", preset_id=AI_PRESET_GEMINI)
         self.assertTrue(signed["signed_in"])

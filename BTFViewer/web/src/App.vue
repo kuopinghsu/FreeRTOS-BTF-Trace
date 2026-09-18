@@ -721,6 +721,7 @@
                     :cursors="cursors"
                     :trace="trace"
                     :time-scale="trace.timeScale"
+                    :dark-mode="timelineOptions.darkMode"
                     :core-filter-keys="timelineOptions.coreFilterKeys"
                     @delete-cursor="onDeleteCursor"
                     @jump-to-cursor="timelinePanelRef?.jumpToNs($event)"

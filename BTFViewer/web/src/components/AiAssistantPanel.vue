@@ -1492,6 +1492,7 @@ const authState = computed(() => aiAuthStatus({
   apiKey: activeAi.value.apiKey,
   baseUrl: activeAi.value.baseUrl,
   presetId: activeAi.value.preset,
+  apiKeyEnv: activeAi.value.apiKeyEnv,
 }))
 const authChipLabel = computed(() => (
   `${aiPresetInfo(activeAi.value.preset).label} · ${authState.value.label}`
@@ -2360,6 +2361,7 @@ async function runCompletion(active, finalRound = false) {
     baseUrl: active.baseUrl,
     model: active.model,
     apiKey: active.apiKey,
+    apiKeyEnv: active.apiKeyEnv,
     preset: active.preset,
     tlsVerify: active.tlsVerify,
     responseLanguage: props.responseLanguage,

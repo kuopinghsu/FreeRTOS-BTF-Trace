@@ -1042,7 +1042,7 @@ AI_LIVE_RETRY_DELAY_S = 10.0
 
 # Per-preset settings stored in btf_viewer.rc / browser storage.
 AI_PRESET_FIELDS: Tuple[str, ...] = (
-    "base_url", "model", "api_key", "auth_mode", "tls_verify",
+    "base_url", "model", "api_key", "api_key_env", "auth_mode", "tls_verify",
 )
 
 AI_AUTH_NONE = "none"
@@ -1070,6 +1070,15 @@ AI_PRESET_KEY_URLS: Dict[str, str] = {
     AI_PRESET_OPENAI: "https://platform.openai.com/api-keys",
     AI_PRESET_GEMINI: "https://aistudio.google.com/apikey",
     AI_PRESET_OLLAMA: "https://ollama.com/settings/keys",
+}
+
+# Default env var each built-in preset reads when no key is saved for it.
+# Custom has no default; imported/extra presets may set their own api_key_env.
+# Keep in sync with AI_PRESET_API_KEY_ENV in web/src/utils/aiClient.js.
+AI_PRESET_API_KEY_ENV: Dict[str, str] = {
+    AI_PRESET_OPENAI: "OPENAI_API_KEY",
+    AI_PRESET_GEMINI: "GEMINI_API_KEY",
+    AI_PRESET_OLLAMA: "OLLAMA_API_KEY",
 }
 
 AI_PRESET_SIGNIN_LABELS: Dict[str, str] = {
@@ -1167,6 +1176,17 @@ def apply_ai_preset(preset_id: str) -> Dict[str, str]:
 def ai_preset_setting_key(preset_id: str, field: str) -> str:
     """Settings key holding *field* for *preset_id* (e.g. ``ollama_base_url``)."""
     return f"{normalize_ai_preset(preset_id)}_{field}"
+
+
+def ai_preset_api_key_env(preset_id: str, stored_env: str = "") -> str:
+    """Effective env var name for *preset_id*: an explicit override, else the
+    built-in default (empty for Custom and un-configured imported presets).
+    Single source of truth for both credential resolution and the Settings UI.
+    """
+    explicit = str(stored_env or "").strip()
+    if explicit:
+        return explicit
+    return AI_PRESET_API_KEY_ENV.get(normalize_ai_preset(preset_id), "")
 
 
 def parse_extra_ai_presets(raw: Any) -> List[Dict[str, str]]:
@@ -1283,6 +1303,7 @@ def resolve_ai_settings(
         "base_url": base_url,
         "model": str(c.get(f"{preset}_model", "") or def_model),
         "api_key": str(c.get(f"{preset}_api_key", "") or ""),
+        "api_key_env": str(c.get(f"{preset}_api_key_env", "") or ""),
         "auth_mode": normalize_ai_auth_mode(
             c.get(f"{preset}_auth_mode", ""),
             preset_id=preset,
@@ -1500,6 +1521,7 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
             "model": _ai_json_str(fields, "model", "model_id", "modelId"),
             "api_key": normalize_api_key(
                 _ai_json_str(fields, "api_key", "apiKey", "key")),
+            "api_key_env": _ai_json_str(fields, "api_key_env", "apiKeyEnv"),
         }
         auth_raw = _ai_json_str(
             fields, "auth_mode", "authMode", "authentication")
@@ -1625,6 +1647,7 @@ def build_ai_settings_json(
             "base_url": fields.get("base_url") or def_base,
             "model": fields.get("model") or def_model,
             "api_key": "",
+            "api_key_env": ai_preset_api_key_env(pid, fields.get("api_key_env", "")),
         }
         if fields.get("auth_mode"):
             entry["auth_mode"] = fields["auth_mode"]
@@ -1725,12 +1748,56 @@ def read_ai_env_key(names: Optional[Any] = None) -> str:
     return ""
 
 
-def resolve_ai_api_key(api_key: Optional[str] = None) -> str:
-    """Settings *api_key*, else OPENAI / GEMINI / OLLAMA_API_KEY."""
+def resolve_ai_api_key(
+    api_key: Optional[str] = None,
+    *,
+    preset_id: str = "",
+    api_key_env: str = "",
+) -> str:
+    """Settings *api_key*, else the active preset's env var.
+
+    Pass *preset_id* and/or *api_key_env* to resolve strictly through that
+    preset's own variable (``ai_preset_api_key_env``) — a Gemini preset with
+    only ``OPENAI_API_KEY`` set must never borrow it. Callers that don't know
+    the preset (e.g. ``resolve_benchmark_api_key``'s no-``env=`` fallback)
+    keep the legacy generic OPENAI/GEMINI/OLLAMA_API_KEY chain by omitting
+    both.
+    """
     key = normalize_api_key(api_key)
     if key:
         return key
+    if preset_id or api_key_env:
+        env_name = ai_preset_api_key_env(preset_id, api_key_env)
+        return read_ai_env_key((env_name,)) if env_name else ""
     return read_ai_env_key()
+
+
+def resolve_ai_credential(
+    api_key: str = "",
+    preset_id: str = "",
+    api_key_env: str = "",
+) -> Dict[str, Any]:
+    """Resolved key plus where it came from, for the Settings UI.
+
+    ``source`` is ``"saved"`` (the preset's stored key wins even when an env
+    var is also available — see ``env_available``), ``"environment"``, or
+    ``"none"``. Use this instead of re-deriving source info from
+    ``resolve_ai_api_key`` independently in more than one place.
+    """
+    saved = normalize_api_key(api_key)
+    env_name = ai_preset_api_key_env(preset_id, api_key_env)
+    env_value = read_ai_env_key((env_name,)) if env_name else ""
+    if saved:
+        return {
+            "key": saved, "source": "saved",
+            "env_name": env_name, "env_available": bool(env_value),
+        }
+    if env_value:
+        return {
+            "key": env_value, "source": "environment",
+            "env_name": env_name, "env_available": True,
+        }
+    return {"key": "", "source": "none", "env_name": env_name, "env_available": False}
 
 
 def ai_request_headers(
@@ -1908,17 +1975,26 @@ def ai_auth_status(
     api_key: str = "",
     base_url: str = "",
     preset_id: str = "",
+    api_key_env: str = "",
 ) -> Dict[str, Any]:
-    """Chip / CTA state for the active preset."""
+    """Chip / CTA state for the active preset, plus the credential source
+    (``source``/``env_name``/``env_available``) for the Settings UI."""
     mode = normalize_ai_auth_mode(
         auth_mode, preset_id=preset_id, base_url=base_url)
-    has_key = bool(resolve_ai_api_key(api_key))
+    cred = resolve_ai_credential(api_key, preset_id, api_key_env)
+    has_key = bool(cred["key"])
+    src = {
+        "source": cred["source"],
+        "env_name": cred["env_name"],
+        "env_available": cred["env_available"],
+    }
     if mode == AI_AUTH_NONE:
         return {
             "mode": mode,
             "label": "Local",
             "needs_auth": False,
             "signed_in": False,
+            **src,
         }
     if has_key:
         if mode == AI_AUTH_BROWSER:
@@ -1927,18 +2003,21 @@ def ai_auth_status(
                 "label": "Signed in",
                 "needs_auth": False,
                 "signed_in": True,
+                **src,
             }
         return {
             "mode": mode,
             "label": "Key saved",
             "needs_auth": False,
             "signed_in": False,
+            **src,
         }
     return {
         "mode": mode,
         "label": "Needs sign-in" if mode == AI_AUTH_BROWSER else "Needs API key",
         "needs_auth": True,
         "signed_in": False,
+        **src,
     }
 
 
@@ -4010,6 +4089,7 @@ def ai_chat_completion(
     base_url: str = DEFAULT_AI_BASE_URL,
     model: str = DEFAULT_AI_MODEL,
     api_key: str = "",
+    api_key_env: str = "",
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
     timeout_s: float = AI_CHAT_TIMEOUT_S,
     history: Optional[Sequence[Dict[str, str]]] = None,
@@ -4029,7 +4109,9 @@ def ai_chat_completion(
     url_base = normalize_ai_base_url(base_url)
     url = url_base + "/chat/completions"
     chat_model = (model or DEFAULT_AI_MODEL).strip() or DEFAULT_AI_MODEL
-    if not resolve_ai_api_key(api_key) and not is_local_ai_host(url_base):
+    resolved_key = resolve_ai_api_key(
+        api_key, preset_id=preset, api_key_env=api_key_env)
+    if not resolved_key and not is_local_ai_host(url_base):
         raise RuntimeError(AI_API_KEY_REQUIRED)
     if cancel_event is not None and cancel_event.is_set():
         raise OllamaCancelled("Stopped")
@@ -4073,7 +4155,7 @@ def ai_chat_completion(
         req = urllib.request.Request(
             url,
             data=payload,
-            headers=ai_request_headers(api_key, base_url=url_base),
+            headers=ai_request_headers(resolved_key, base_url=url_base),
             method="POST",
         )
         try:
@@ -4531,6 +4613,8 @@ def ai_test_connection(
     model: str = DEFAULT_AI_MODEL,
     *,
     api_key: str = "",
+    preset_id: str = "",
+    api_key_env: str = "",
     tls_verify: bool = True,
     timeout_s: float = AI_TEST_TIMEOUT_S,
     on_progress: Optional[Callable[[str], None]] = None,
@@ -4547,7 +4631,7 @@ def ai_test_connection(
     do_log = _want_ai_mcp_log(log_mcp)
     url_base = normalize_ai_base_url(base_url)
     model_name = (model or DEFAULT_AI_MODEL).strip() or DEFAULT_AI_MODEL
-    key = resolve_ai_api_key(api_key)
+    key = resolve_ai_api_key(api_key, preset_id=preset_id, api_key_env=api_key_env)
     if not key and not is_local_ai_host(url_base):
         raise RuntimeError(AI_API_KEY_REQUIRED)
 
@@ -6339,6 +6423,7 @@ def create_ai_assistant_panel(
                 api_key=active.get("api_key", ""),
                 base_url=active.get("base_url", ""),
                 preset_id=active["preset"],
+                api_key_env=active.get("api_key_env", ""),
             )
             self._auth_chip.setText(f"{label} · {st['label']}")
             cfg = self._settings_dict()
@@ -9112,6 +9197,7 @@ def create_ai_assistant_panel(
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
+                "api_key_env": active.get("api_key_env", ""),
                 "preset": active["preset"],
                 "tls_verify": parse_ai_tls_verify(active.get("tls_verify")),
                 "response_language": cfg.get(
@@ -9275,6 +9361,7 @@ def create_ai_assistant_panel(
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
+                "api_key_env": active.get("api_key_env", ""),
                 "preset": active["preset"],
                 "tls_verify": parse_ai_tls_verify(active.get("tls_verify")),
                 "response_language": cfg.get(
