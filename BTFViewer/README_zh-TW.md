@@ -1,6 +1,6 @@
 # BTF Trace Viewer
 
-**版本 1.0.0 — 桌面版與網頁版**
+**版本 1.0.1 — 桌面版與網頁版**
 
 ![BTFViewer AI 輔助分析](../images/btfviewer-ai.png)
 
@@ -212,7 +212,7 @@ BTFViewer 使用一致的檢視介面、控制項目與分析流程。判讀結�
 | 縮放 | **Zoom in / Zoom out**、**1:1**、**Fit Trace**、**Fit Cursors**、縮放預設值 | 調整可見時間範圍，或選擇固定的每像素時間尺度 |
 | 檢視 | **Task / Core**、展開或收合所有核心、**Load** | 選擇時間軸分組方式，並顯示或隱藏 CPU 負載圖 |
 | 調查 | **Find**、**Migration & Corridor Inspector**、**Analysis**、**Compare** | 尋找證據、檢查多核心移動、開啟分析結果，或比較基準與候選追蹤資料 |
-| 條件式控制 | **All tasks**、**Log<sub>2</sub>** | 清除已套用的 Migration Filter，或切換已展開 STI 波形的線性／對數刻度 |
+| 條件式控制 | **All tasks** | 清除已套用的 Migration Filter，並將時間軸還原為顯示所有工作 |
 | 顯示 | 明亮／深色佈景主題 | 不需開啟 Settings 即可切換介面佈景主題 |
 | 支援 | **C1–Cn**、**Demo**、**Record**、**Settings**、**Help** | 以色彩顯示 Statistics 是否限定於 C1–Cn、載入內建示範、將目前分頁錄製為 WebM、設定檢視器，或開啟快捷鍵與說明 |
 
