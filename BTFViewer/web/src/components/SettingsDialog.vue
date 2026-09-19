@@ -71,12 +71,15 @@
                 :options="themeOptions"
               />
             </label>
-            <label class="settings-check">
+            <label
+              class="settings-check"
+              title="Use the Okabe-Ito palette for task and core colors. Important status information also uses text, symbols, or labels so meaning does not depend on color alone."
+            >
               <input
                 v-model="draft.colorblindSafe"
                 type="checkbox"
               >
-              Colorblind-safe colors (Okabe-Ito palette)
+              Colorblind-safe palette (Okabe-Ito)
             </label>
 
             <h3 class="settings-section">

@@ -19994,6 +19994,15 @@ class _BatchRowItem(QGraphicsItem):
         _hide_popup()
         super().hoverLeaveEvent(event)
 
+def _sti_marker_apex_flipped(ev) -> bool:
+    """True when the STI marker triangle should point the opposite way.
+
+    take_mutex flips to apex-down, every other note (give_mutex included)
+    keeps apex-up - a shape cue so take/give never rely on the red/green
+    fill alone (matches web stiMarkerShape()).
+    """
+    return ev is not None and ev.note == "take_mutex"
+
 class _BatchStiItem(QGraphicsItem):
     """Renders all STI markers for one channel in a single paint() pass.
 
@@ -20043,16 +20052,23 @@ class _BatchStiItem(QGraphicsItem):
                     painter.drawLine(QLineF(x, axis - h, x, axis + h))
             else:
                 last_color = None
-                for x, color, _ev in markers:
+                for x, color, ev in markers:
                     if color is not last_color:
                         painter.setBrush(QBrush(color))
                         painter.setPen(QPen(color.darker(150), 0.5))
                         last_color = color
-                    painter.drawPolygon(QPolygonF([
-                        QPointF(x,     axis - h),
-                        QPointF(x + w, axis + h),
-                        QPointF(x - w, axis + h),
-                    ]))
+                    if _sti_marker_apex_flipped(ev):
+                        painter.drawPolygon(QPolygonF([
+                            QPointF(x,     axis + h),
+                            QPointF(x + w, axis - h),
+                            QPointF(x - w, axis - h),
+                        ]))
+                    else:
+                        painter.drawPolygon(QPolygonF([
+                            QPointF(x,     axis - h),
+                            QPointF(x + w, axis + h),
+                            QPointF(x - w, axis + h),
+                        ]))
         else:
             if lod < _PAINT_LOD_COARSE:
                 for y, color, _ev in markers:
@@ -20060,16 +20076,23 @@ class _BatchStiItem(QGraphicsItem):
                     painter.drawLine(QLineF(axis - h, y, axis + h, y))
             else:
                 last_color = None
-                for y, color, _ev in markers:
+                for y, color, ev in markers:
                     if color is not last_color:
                         painter.setBrush(QBrush(color))
                         painter.setPen(QPen(color.darker(150), 0.5))
                         last_color = color
-                    painter.drawPolygon(QPolygonF([
-                        QPointF(axis - h, y),
-                        QPointF(axis + h, y - w),
-                        QPointF(axis + h, y + w),
-                    ]))
+                    if _sti_marker_apex_flipped(ev):
+                        painter.drawPolygon(QPolygonF([
+                            QPointF(axis + h, y),
+                            QPointF(axis - h, y - w),
+                            QPointF(axis - h, y + w),
+                        ]))
+                    else:
+                        painter.drawPolygon(QPolygonF([
+                            QPointF(axis - h, y),
+                            QPointF(axis + h, y - w),
+                            QPointF(axis + h, y + w),
+                        ]))
         painter.restore()
 
     def hoverMoveEvent(self, event) -> None:
@@ -83374,12 +83397,13 @@ class _SettingsDialog(QDialog):
         self._tip(self._theme_combo, "Application colour theme")
         f1.addRow("Theme:", _inp(self._theme_combo))
 
-        self._colorblind_cb = _switch("Colorblind-safe colors (Okabe-Ito palette)")
+        self._colorblind_cb = _switch("Colorblind-safe palette (Okabe-Ito)")
         self._colorblind_cb.setChecked(colorblind_safe)
         self._tip(
             self._colorblind_cb,
-            "Replace the task colour palette with the Okabe-Ito 8-colour set,\n"
-            "designed to be distinguishable for deuteranopia and protanopia.")
+            "Use the Okabe-Ito palette for task and core colors.\n"
+            "Important status information also uses text, symbols, or labels "
+            "so meaning does not depend on color alone.")
         f1.addRow("", self._colorblind_cb)
 
         f1.addRow(self._section("Font sizes"))

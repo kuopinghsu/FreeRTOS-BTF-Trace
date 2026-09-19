@@ -20339,12 +20339,13 @@ class _SettingsDialog(QDialog):
         self._tip(self._theme_combo, "Application colour theme")
         f1.addRow("Theme:", _inp(self._theme_combo))
 
-        self._colorblind_cb = _switch("Colorblind-safe colors (Okabe-Ito palette)")
+        self._colorblind_cb = _switch("Colorblind-safe palette (Okabe-Ito)")
         self._colorblind_cb.setChecked(colorblind_safe)
         self._tip(
             self._colorblind_cb,
-            "Replace the task colour palette with the Okabe-Ito 8-colour set,\n"
-            "designed to be distinguishable for deuteranopia and protanopia.")
+            "Use the Okabe-Ito palette for task and core colors.\n"
+            "Important status information also uses text, symbols, or labels "
+            "so meaning does not depend on color alone.")
         f1.addRow("", self._colorblind_cb)
 
         f1.addRow(self._section("Font sizes"))

@@ -28,6 +28,21 @@ To install, close Eclipse, remove any older `com.btfviewer.eclipse_*.jar` from
 Eclipse's `dropins/` directory, and copy the plug-in JAR into that directory.
 Restart Eclipse with `-clean` once so its bundle cache is refreshed.
 
+The committed JAR is a generated build artifact, like `builds/btf_viewer.{html,py}`,
+and has its own freshness gates:
+
+```sh
+make -C BTFViewer check-eclipse-resources # CI-safe: packaged web/plugin.xml/icons/
+                                           # manifest version/class list vs. sources
+make -C BTFViewer check-eclipse           # + full recompile-and-bytecode-diff
+                                           # (needs ECLIPSE_HOME; skips without one)
+```
+
+`check-eclipse-resources` runs in CI on every push/PR (no Eclipse SDK needed);
+`check-eclipse` is the stronger local gate for a machine with Eclipse installed.
+After changing plug-in sources, the embedded web viewer, `plugin.xml`, or icons,
+re-run `eclipse-package` and commit the updated JAR.
+
 The build defaults to `/Applications/Eclipse.app/Contents/Eclipse` on macOS.
 For another installation, pass its root explicitly:
 

@@ -345,7 +345,18 @@ export function stiChannelColor(channel) {
   return color
 }
 
-export { CORE_PALETTE, PALETTE }
+/**
+ * Marker shape for a STI note - take/give get distinct triangle orientations
+ * (matches desktop _sti_marker_apex_flipped) so mutex direction never relies
+ * on the red/green fill alone. Everything else keeps the default diamond.
+ */
+export function stiMarkerShape(note) {
+  if (note === 'take_mutex') return 'take'
+  if (note === 'give_mutex') return 'give'
+  return 'diamond'
+}
+
+export { CORE_PALETTE, PALETTE, PALETTE_COLORBLIND, PALETTE_COLORBLIND_DARK }
 
 // ---- Segment highlight colour helpers ------------------------------------
 

@@ -12,7 +12,7 @@
  *   - Timeline body occupies remaining canvas area
  */
 
-import { taskColor, taskDisplayName, taskMergeKey, parseTaskName, coreTint, coreColor, stiNoteColor, lighterColor, complementaryColor } from '../utils/colors.js'
+import { taskColor, taskDisplayName, taskMergeKey, parseTaskName, coreTint, coreColor, stiNoteColor, stiMarkerShape, lighterColor, complementaryColor } from '../utils/colors.js'
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
 import { visibleSegs } from '../parser/btfParser.js'
 import {
@@ -1438,10 +1438,24 @@ function drawStiRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, ca
     if (color === undefined) { color = stiNoteColor(noteKey); stiColorCache.set(noteKey, color) }
     ctx.fillStyle = color
     ctx.beginPath()
-    ctx.moveTo(cx,            cy - markerR)
-    ctx.lineTo(cx + markerR,  cy)
-    ctx.lineTo(cx,            cy + markerR)
-    ctx.lineTo(cx - markerR,  cy)
+    // take/give get distinct triangle shapes (apex down / apex up) so the
+    // mutex direction never relies on the red/green fill alone; every other
+    // note keeps the default diamond.
+    const shape = stiMarkerShape(noteKey)
+    if (shape === 'take') {
+      ctx.moveTo(cx,            cy + markerR)
+      ctx.lineTo(cx + markerR,  cy - markerR)
+      ctx.lineTo(cx - markerR,  cy - markerR)
+    } else if (shape === 'give') {
+      ctx.moveTo(cx,            cy - markerR)
+      ctx.lineTo(cx + markerR,  cy + markerR)
+      ctx.lineTo(cx - markerR,  cy + markerR)
+    } else {
+      ctx.moveTo(cx,            cy - markerR)
+      ctx.lineTo(cx + markerR,  cy)
+      ctx.lineTo(cx,            cy + markerR)
+      ctx.lineTo(cx - markerR,  cy)
+    }
     ctx.closePath()
     ctx.fill()
     ctx.stroke()
@@ -2744,10 +2758,21 @@ function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, da
     if (color === undefined) { color = stiNoteColor(noteKey); stiColorCache.set(noteKey, color) }
     ctx.fillStyle = color
     ctx.beginPath()
-    ctx.moveTo(cx,             cy - markerR)
-    ctx.lineTo(cx + markerR,   cy)
-    ctx.lineTo(cx,             cy + markerR)
-    ctx.lineTo(cx - markerR,   cy)
+    const shape = stiMarkerShape(noteKey)
+    if (shape === 'take') {
+      ctx.moveTo(cx,             cy + markerR)
+      ctx.lineTo(cx + markerR,   cy - markerR)
+      ctx.lineTo(cx - markerR,   cy - markerR)
+    } else if (shape === 'give') {
+      ctx.moveTo(cx,             cy - markerR)
+      ctx.lineTo(cx + markerR,   cy + markerR)
+      ctx.lineTo(cx - markerR,   cy + markerR)
+    } else {
+      ctx.moveTo(cx,             cy - markerR)
+      ctx.lineTo(cx + markerR,   cy)
+      ctx.lineTo(cx,             cy + markerR)
+      ctx.lineTo(cx - markerR,   cy)
+    }
     ctx.closePath()
     ctx.fill()
     ctx.stroke()

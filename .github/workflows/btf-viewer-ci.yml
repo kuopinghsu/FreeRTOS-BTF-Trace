@@ -69,6 +69,10 @@ jobs:
         working-directory: BTFViewer
         run: make check-web
 
+      - name: Eclipse plug-in packaged resource freshness
+        working-directory: BTFViewer
+        run: make check-eclipse-resources
+
   docs-gate:
     name: Docs links, parity, PDF freshness
     runs-on: ubuntu-latest

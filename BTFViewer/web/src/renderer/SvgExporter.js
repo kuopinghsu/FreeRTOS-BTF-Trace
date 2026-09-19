@@ -11,7 +11,7 @@ import {
   buildRowLayout, formatTime,
 } from './TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
-import { taskColor, taskDisplayName, taskMergeKey, stiNoteColor, lighterColor } from '../utils/colors.js'
+import { taskColor, taskDisplayName, taskMergeKey, stiNoteColor, stiMarkerShape, lighterColor } from '../utils/colors.js'
 import { cursorColors } from '../utils/cursorColors.js'
 import {
   visiblePriorityEpisodes,
@@ -408,14 +408,23 @@ export function renderToSvg(trace, viewport, options = {}) {
         els.push(`<circle cx="${(OX + (ev.time - timeStart) * pxPerNs).toFixed(1)}" cy="${valToY(v).toFixed(1)}" r="2.5" fill="${dotColor}" clip-path="url(#${wfClipId})"/>`)
       }
     } else {
-      // ---- Collapsed: diamond markers ----
+      // ---- Collapsed: diamond markers (take/give get a triangle shape cue
+      // so mutex direction never relies on the red/green fill alone) ----
       const midY = row.y + L().stiRowH / 2
       for (const ev of evs) {
         if (ev.time < timeStart || ev.time > timeEnd) continue
         const x     = OX + (ev.time - timeStart) * pxPerNs
         const color = stiNoteColor(ev.note)
         const hw = 4, h = 6
-        const pts = `${x.toFixed(1)},${(midY - h).toFixed(1)} ${(x - hw).toFixed(1)},${midY.toFixed(1)} ${x.toFixed(1)},${(midY + h).toFixed(1)} ${(x + hw).toFixed(1)},${midY.toFixed(1)}`
+        const shape = stiMarkerShape(ev.note)
+        let pts
+        if (shape === 'take') {
+          pts = `${x.toFixed(1)},${(midY + h).toFixed(1)} ${(x + hw).toFixed(1)},${(midY - h).toFixed(1)} ${(x - hw).toFixed(1)},${(midY - h).toFixed(1)}`
+        } else if (shape === 'give') {
+          pts = `${x.toFixed(1)},${(midY - h).toFixed(1)} ${(x + hw).toFixed(1)},${(midY + h).toFixed(1)} ${(x - hw).toFixed(1)},${(midY + h).toFixed(1)}`
+        } else {
+          pts = `${x.toFixed(1)},${(midY - h).toFixed(1)} ${(x - hw).toFixed(1)},${midY.toFixed(1)} ${x.toFixed(1)},${(midY + h).toFixed(1)} ${(x + hw).toFixed(1)},${midY.toFixed(1)}`
+        }
         els.push(`<polygon points="${pts}" fill="${color}"/>`)
       }
     }

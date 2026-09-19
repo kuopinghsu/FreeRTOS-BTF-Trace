@@ -2,6 +2,10 @@
 
 Since v1.0.0 (2026-09-13)
 
+## 2026-09-19
+- Accessibility: colorblind-safe palette setting renamed to "Colorblind-safe palette (Okabe-Ito)" with a clearer tooltip describing its task/core-color scope (desktop/web)
+- Fixed: take_mutex/give_mutex STI markers relied on red/green alone; they now also use distinct triangle shapes so mutex direction is never color-only (desktop/web)
+
 ## 2026-09-16
 - Evidence Pack export moved from Marks panel to Analysis Findings (new on desktop)
 - Keyboard shortcuts: fixed Ctrl/Cmd and Alt modifiers leaking into bare-key shortcuts (web)

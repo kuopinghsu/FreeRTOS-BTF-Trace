@@ -48,21 +48,27 @@ AI_CASES ?=
 AI_CONTEXT ?=
 AI_REPLACE ?=
 
-.PHONY: all help web bundle eclipse-poc eclipse-package check-bundle check-web check-docs check-builds \
+.PHONY: all help web bundle eclipse-poc eclipse-package eclipse-auto check-bundle check-web check-docs check-builds \
+	check-eclipse-resources check-eclipse \
 	test test-web test-all ai-test ai-test-live ai-test-context ai-prompts \
 	ci ci-gate doc docs-html update-images demo demo-voice demo-pack
 
 help:
 	@echo "BTF Viewer — make targets"
 	@echo ""
-	@echo "  make              Build web + desktop (default)"
+	@echo "  make              Build web + desktop (default); also refreshes the Eclipse"
+	@echo "                    plug-in JAR if it's stale and an Eclipse SDK is installed"
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
-	@echo "  make eclipse-package  Installable Eclipse plug-in JAR"
+	@echo "  make eclipse-package  Installable Eclipse plug-in JAR (fails without ECLIPSE_HOME)"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Fail if builds/btf_viewer.py ≠ fresh bundle from sources"
 	@echo "  make check-web    Rebuild web HTML (local: fail if artifact drifts; CI: build only)"
+	@echo "  make check-eclipse-resources  Fail if the Eclipse plug-in JAR's packaged"
+	@echo "                    resources/classes drift from sources (no Eclipse SDK needed; CI-safe)"
+	@echo "  make check-eclipse  Full rebuild-and-diff of the Eclipse plug-in JAR"
+	@echo "                    (needs ECLIPSE_HOME; skips cleanly when no Eclipse SDK is found)"
 	@echo "  make check-docs   Links, EN/zh-TW heading parity + section IDs, PDF freshness"
-	@echo "  make check-builds check-bundle + check-web"
+	@echo "  make check-builds check-bundle + check-web + check-eclipse-resources"
 	@echo "  make doc          Convert README/STATISTICS/AI/WORKFLOWS (+ zh-TW) → docs/*.pdf (+ docs-html)"
 	@echo "  make docs-html    Rebuild Statistics Reference HTML from STATISTICS*.md (btf_viewer.hlp + web inline)"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
@@ -89,7 +95,7 @@ help:
 	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  MARP=$(MARP)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)  DEMO=$(DEMO)  DEMO_LANG=$(DEMO_LANG)  DEMO_LANGS=$(DEMO_LANGS)  DEMO_VOICE_FOLDER=$(DEMO_VOICE_FOLDER)  AI_DATASET=$(AI_DATASET)  AI_FAIL_UNDER=$(AI_FAIL_UNDER)  AI_CONFIG=$(AI_CONFIG)  AI_MODELS=$(AI_MODELS)  AI_CASES=$(AI_CASES)  AI_CONTEXT=$(AI_CONTEXT)  AI_REPLACE=$(AI_REPLACE)"
 
 
-all: web bundle
+all: web bundle eclipse-auto
 
 web:
 	$(MAKE) -C web
@@ -99,6 +105,13 @@ eclipse-poc: web
 
 eclipse-package: web
 	$(MAKE) -C eclipse package
+
+# Opportunistic: rebuilds the Eclipse plug-in JAR only when it is stale
+# relative to the just-built web viewer (or plugin sources), and only when an
+# Eclipse SDK is installed - see eclipse/Makefile's $(PLUGIN_JAR) rule. Silent
+# no-op otherwise, so `make` still succeeds without Eclipse installed.
+eclipse-auto: web
+	$(MAKE) -C eclipse package-if-sdk
 
 bundle:
 	mkdir -p $(BUILDS)
@@ -195,7 +208,22 @@ check-web:
 check-docs:
 	$(PYTHON) scripts/ci_gate.py --links --parity --pdf --docs-html
 
-check-builds: check-bundle check-web
+# CI-safe: fails if the committed Eclipse plug-in JAR's packaged web viewer,
+# plugin.xml, icons, manifest version, or class list drift from sources.
+# Compares against whatever builds/btf_viewer.html currently is (run `make
+# web` first if stale) — no Eclipse SDK / javac needed, so this always runs.
+check-eclipse-resources:
+	$(MAKE) -C eclipse check-eclipse-resources
+
+# Full freshness gate: recompiles the plug-in against a real Eclipse SDK and
+# diffs bytecode against the committed JAR. Needs ECLIPSE_HOME (see
+# eclipse-package); skips cleanly with a message when no SDK is found, so it
+# is safe to run anywhere but only a real gate on a machine with Eclipse
+# installed.
+check-eclipse:
+	$(MAKE) -C eclipse check-eclipse
+
+check-builds: check-bundle check-web check-eclipse-resources
 
 ci-gate: test-all check-builds check-docs
 
