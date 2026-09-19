@@ -189,7 +189,7 @@ function enrichStartsMaps(store, trace) {
   trace.coreSegStarts = startsMapFromSegMap(store, trace.coreSegs)
   trace.coreSegLodStarts = startsMapFromSegMap(store, trace.coreSegLod)
   trace.coreSegLodUltraStarts = startsMapFromSegMap(store, trace.coreSegLodUltra)
-  trace.coreTaskSegStarts = nestedStartsMapFromSegMap(store, trace.coreTaskSegLod)
+  trace.coreTaskSegStarts = nestedStartsMapFromSegMap(store, trace.coreTaskSegs)
   trace.coreTaskSegLodStarts = nestedStartsMapFromSegMap(store, trace.coreTaskSegLod)
   trace.coreTaskSegLodUltraStarts = nestedStartsMapFromSegMap(store, trace.coreTaskSegLodUltra)
 }
