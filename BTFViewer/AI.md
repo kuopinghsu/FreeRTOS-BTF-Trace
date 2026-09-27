@@ -35,7 +35,7 @@ user-facing record; AI suggestions remain opt-in and do not edit it automaticall
 
 ## Contents
 
-### User guide
+**[User guide](#user-guide)**
 
 1. [What the AI Assistant does](#what-the-ai-assistant-does)
 2. [Using the AI panel](#using-the-ai-panel)
@@ -51,7 +51,7 @@ user-facing record; AI suggestions remain opt-in and do not edit it automaticall
 12. [Viewer behavior](#viewer-behavior)
 13. [Troubleshooting](#troubleshooting)
 
-### Engineering reference
+**[Engineering reference](#engineering-reference)**
 
 14. [Investigation Case](#investigation-case)
 15. [Investigation planner](#investigation-planner)
@@ -67,9 +67,13 @@ user-facing record; AI suggestions remain opt-in and do not edit it automaticall
 ------------------------------------------------------------------------
 
 
+<a id="user-guide" name="user-guide"></a>
+
+## User guide
+
 <a id="what-the-ai-assistant-does" name="what-the-ai-assistant-does"></a>
 
-## What the AI Assistant does
+### What the AI Assistant does
 
 The AI Assistant receives structured information from BTFViewer. It does
 **not** read the full raw `.btf` file as free-form text.
@@ -90,7 +94,7 @@ It can use:
 
 It does not read firmware source code or ELF files.
 
-### What AI is good for
+#### What AI is good for
 
 Use AI when you want to:
 
@@ -103,7 +107,7 @@ Use AI when you want to:
 -   summarize an investigation;
 -   compare two traces in plain language.
 
-### What AI should not decide by itself
+#### What AI should not decide by itself
 
 Do not treat these as measured facts unless BTFViewer provides
 supporting evidence:
@@ -120,12 +124,12 @@ Return to Statistics and the timeline whenever a conclusion matters.
 
 <a id="using-the-ai-panel" name="using-the-ai-panel"></a>
 
-## Using the AI panel
+### Using the AI panel
 
 The AI panel is designed around the current trace and investigation
 state.
 
-### Main controls
+#### Main controls
 
 **Question box**
 
@@ -174,7 +178,7 @@ Sets the requested reply language.
 
 Opens AI connection, model, context, privacy, and related options.
 
-### Context modes
+#### Context modes
 
 BTFViewer provides three context sizes:
 
@@ -190,14 +194,14 @@ Confidence should come from evidence.
 
 <a id="built-in-actions" name="built-in-actions"></a>
 
-## Built-in actions
+### Built-in actions
 
 The AI panel provides shortcuts for common tasks. The visible shortcuts are
 context-sensitive, and additional templates are available from **More templates…**.
 Treat them as different questions that reuse the same investigation context, not
 as separate analysis systems.
 
-### Start Investigation
+#### Start Investigation
 
 **Use when:** you do not know which AI action to choose.
 
@@ -207,7 +211,7 @@ chooses the next useful checks.
 **Expected result:** a leading explanation, evidence,
 confidence/quality, and a next check.
 
-### Analysis Findings
+#### Analysis Findings
 
 **Use when:** you want a short summary of the most important current
 Findings.
@@ -217,7 +221,7 @@ to the relevant Statistics or timeline check.
 
 **Does not:** prove root cause.
 
-### Triage findings
+#### Triage findings
 
 **Use when:** there are many Findings.
 
@@ -225,21 +229,21 @@ to the relevant Statistics or timeline check.
 
 **Does not:** perform a full root-cause analysis.
 
-### Explain region
+#### Explain region
 
 **Use when:** C1--Cn surrounds an incident.
 
 **What it does:** explains events inside the cursor range and keeps
 cited timestamps inside that range.
 
-### Investigate
+#### Investigate
 
 **Use when:** you already have a concrete performance problem.
 
 **What it does:** gathers missing evidence, correlates related events,
 tests the leading explanation, and identifies an alternative.
 
-### Verify finding
+#### Verify finding
 
 **Use when:** you want to check whether a selected Finding is actually
 supported.
@@ -247,7 +251,7 @@ supported.
 **What it does:** checks the claim against available evidence and
 returns **Confirmed**, **Rejected**, or **Inconclusive**.
 
-### Explain finding
+#### Explain finding
 
 **Use when:** a Finding is technically correct but difficult to
 understand.
@@ -255,7 +259,7 @@ understand.
 **What it does:** explains the Finding and points to supporting
 evidence.
 
-### What-if
+#### What-if
 
 **Use when:** evidence is strong enough to consider one possible change.
 
@@ -264,7 +268,7 @@ evidence.
 **Important:** the result is an estimate, not a scheduler simulation or
 measured result.
 
-### Optimize
+#### Optimize
 
 **Use when:** you want candidate improvement ideas after the problem has
 been verified.
@@ -273,7 +277,7 @@ been verified.
 
 **Important:** validate every useful idea with a new trace.
 
-### Trace Compare
+#### Trace Compare
 
 **Use when:** two traces are open.
 
@@ -283,7 +287,7 @@ been verified.
 
 <a id="choosing-the-right-entry-point" name="choosing-the-right-entry-point"></a>
 
-## Choosing the right entry point
+### Choosing the right entry point
 
 You can ask AI from several places. Each entry point should carry the
 evidence that is already visible there.
@@ -302,7 +306,7 @@ evidence that is already visible there.
 -   **AI panel:** use the current trace, Scope, Filters, selection, and
     investigation state.
 
-### Scope matters
+#### Scope matters
 
 Use **Limit to C1--Cn** when the problem belongs to one phase of the
 trace. AI evidence should then stay inside that interval unless it
@@ -315,11 +319,11 @@ affect the analysis context.
 
 <a id="investigation-workflows" name="investigation-workflows"></a>
 
-## Investigation workflows
+### Investigation workflows
 
 Use these workflows after selecting the task, Finding, or time window to investigate.
 
-### Investigation workflow
+#### Investigation workflow
 
 | Step | Template or tool | Purpose |
 | ---: | --- | --- |
@@ -342,7 +346,7 @@ The sequence is not a requirement to run every tool. The Investigation planner s
 The shortcuts are easier to understand when they are placed in a
 complete workflow.
 
-### First investigation
+#### First investigation
 
 Use this sequence when opening an unfamiliar trace:
 
@@ -381,7 +385,7 @@ Verification / contradiction
 Measured experiment result
 ```
 
-### Explain one event
+#### Explain one event
 
 Use this when you already see a suspicious timeline segment.
 
@@ -395,7 +399,7 @@ Use this when you already see a suspicious timeline segment.
 This path is intended for a local question. It should not automatically
 become a full-trace root-cause analysis.
 
-### Explain one region
+#### Explain one region
 
 Use this when the important behavior is contained between cursors.
 
@@ -408,7 +412,7 @@ Use this when the important behavior is contained between cursors.
 6.  Expand the range only when evidence shows that an earlier cause or
     later effect must be inspected.
 
-### Verify a Finding
+#### Verify a Finding
 
 A Finding is a clue produced by deterministic rules or statistics. It is
 not automatically a cause.
@@ -429,7 +433,7 @@ logs.
 
 <a id="what-if-and-optimize-workflow" name="what-if-and-optimize-workflow"></a>
 
-### What-if and Optimize workflow
+#### What-if and Optimize workflow
 
 `what_if` and `optimize_experiment` are **heuristic slice-replay** tools. They reuse measured execution slices and estimate the effect of changes such as task placement, migration reduction, blocking reduction, or priority adjustment.
 
@@ -464,43 +468,43 @@ The new trace, not the estimate, determines whether the change worked.
 
 <a id="common-use-cases" name="common-use-cases"></a>
 
-## Common use cases
+### Common use cases
 
-### Long response-time tail
+#### Long response-time tail
 
 Start with the response-time distribution and p95/p99/Max. Scope one
 slow instance, then inspect execution, dispatch, blocking, and nearby
 preemption. AI can help organize these components, but the cited values
 should remain traceable to Statistics.
 
-### Blocking or synchronization problem
+#### Blocking or synchronization problem
 
 Start from blocking or mutex-related Statistics. Scope one incident and
 inspect the owner/waiter sequence that is actually visible in the trace.
 Treat inferred handoff or waiter relationships as heuristic when the
 trace format does not contain the kernel's real wait queue.
 
-### Core migration or ping-pong
+#### Core migration or ping-pong
 
 Use Migration & Corridor Inspector first. Check migration count, dwell,
 ping-pong behavior, load balance, and the selected path. AI can
 correlate the path with nearby scheduling or synchronization evidence. A
 migration by itself is not proof of a performance problem.
 
-### Suspected priority inversion
+#### Suspected priority inversion
 
 Use the relevant priority, blocking, mutex, and scheduling evidence. AI
 may use `detect_priority_inversion`, but the conclusion still depends on
 what the trace recorded. Missing kernel state must not be invented.
 
-### Regression after a change
+#### Regression after a change
 
 Open comparable baseline and candidate traces. Use Trace Compare before
 asking AI. AI should explain the measured differences, localize the
 likely task/region, and identify the next check. The comparison result
 is stronger evidence than an estimated improvement.
 
-### Periodic task jitter
+#### Periodic task jitter
 
 Start with period, dispatch, execution, and response distributions. Use
 C1--Cn around a representative outlier. Check whether the disturbance
@@ -511,7 +515,7 @@ another workload phase.
 
 <a id="workflows-and-use-cases" name="workflows-and-use-cases"></a>
 
-## Worked example
+### Worked example
 
 Suppose Analysis Findings reports unusually high response-time p99 for
 `Worker`.
@@ -556,7 +560,7 @@ One measurable change or one additional evidence check.
 
 <a id="continue-the-investigation" name="continue-the-investigation"></a>
 
-## Continue the investigation
+### Continue the investigation
 
 The AI conversation should continue from the current investigation instead of restarting after every reply.
 
@@ -585,9 +589,9 @@ A sensible stopping condition is reached when:
 
 <a id="understanding-the-result" name="understanding-the-result"></a>
 
-## Understanding the result
+### Understanding the result
 
-### Evidence & Validation
+#### Evidence & Validation
 
 This panel is the quickest place to decide whether the AI answer is
 useful.
@@ -608,7 +612,7 @@ Read it in this order:
 Do not start with the deepest details. For normal use, the first seven
 items are enough.
 
-### Evidence strength
+#### Evidence strength
 
 BTFViewer may distinguish evidence as measured, derived, heuristic,
 configured, or simulated/estimated. These are not equally strong.
@@ -625,7 +629,7 @@ heuristic interpretation
 estimate / simulation
 ```
 
-### Confidence
+#### Confidence
 
 Confidence describes how well the available evidence supports the
 explanation. It is not the probability that the AI is correct.
@@ -633,7 +637,7 @@ explanation. It is not the probability that the AI is correct.
 A high-confidence causal statement should have trace evidence and
 verification, not only a plausible narrative.
 
-### Apply, Skip, and Undo
+#### Apply, Skip, and Undo
 
 Read-only evidence queries can run immediately.
 
@@ -654,12 +658,12 @@ zoom, cursors, highlight, Scope, and Filters.
 
 <a id="ai-tools" name="ai-tools"></a>
 
-## AI tools
+### AI tools
 
 Most users do not need to call tools by name. The AI Assistant chooses
 them when needed. This section explains what each group is for.
 
-### 1. Navigate and show evidence
+#### 1. Navigate and show evidence
 
 These tools change what you see in the viewer.
 
@@ -675,7 +679,7 @@ These tools change what you see in the viewer.
 -   `clear_marks` --- clear selected marks/cursors/bookmarks.
 -   `reset_view` --- return to the full trace view.
 
-### 2. Measure and search
+#### 2. Measure and search
 
 These are read-only evidence tools.
 
@@ -691,7 +695,7 @@ These are read-only evidence tools.
 -   `decompose_response_time` --- show relative response-delay
     components.
 
-### 3. Find and connect related problems
+#### 3. Find and connect related problems
 
 -   `detect_anomalies` --- rank current Analysis Findings.
 -   `cluster_findings` --- group related Findings.
@@ -713,7 +717,7 @@ These are read-only evidence tools.
     links without silently treating correlation as causation.
 -   `rank_root_causes` --- rank supported explanations.
 
-### 4. Verify and challenge an explanation
+#### 4. Verify and challenge an explanation
 
 -   `verify_claim` --- classify a claim as supported, partial, or
     unsupported.
@@ -728,7 +732,7 @@ These are read-only evidence tools.
     priority inversion.
 -   `explain_finding` --- explain a selected Finding.
 
-### 5. Compare traces and tasks
+#### 5. Compare traces and tasks
 
 -   `trigger_compare` --- obtain/open Trace Compare for two traces.
 -   `compare_performance` --- return structured A/B metric differences.
@@ -743,7 +747,7 @@ These are read-only evidence tools.
 -   `generate_fingerprint` --- summarize scheduling, synchronization,
     and timing bands.
 
-### 6. Plan and validate an experiment
+#### 6. Plan and validate an experiment
 
 These tools come after evidence gathering.
 
@@ -760,7 +764,7 @@ These tools come after evidence gathering.
 -   `find_similar_investigations` --- find recorded cases with a similar
     fingerprint.
 
-### 7. Report and preserve the investigation
+#### 7. Report and preserve the investigation
 
 -   `generate_report` --- generate structured engineering text.
 -   `export_report` --- save a diagnostic report.
@@ -772,7 +776,7 @@ These tools come after evidence gathering.
 -   `close_investigation` --- close the current investigation with its
     conclusion and confidence.
 
-### Supporting host tool
+#### Supporting host tool
 
 -   `interpret_query` --- interprets a free-form question and prepares
     the appropriate investigation request before the main run.
@@ -781,9 +785,9 @@ These tools come after evidence gathering.
 
 <a id="configuration-and-privacy" name="configuration-and-privacy"></a>
 
-## Configuration and privacy
+### Configuration and privacy
 
-### Connect an endpoint
+#### Connect an endpoint
 
 Open **Settings → AI** and configure the provider, endpoint, model, and
 authentication required by that provider. Use **Test connection** before
@@ -792,7 +796,7 @@ starting an investigation.
 BTFViewer can test model listing, chat, structured output, and tool
 calling when supported by the endpoint.
 
-### Import provider settings
+#### Import provider settings
 
 **Settings → AI → Import…** loads preset, base URL, model, API key, and
 authentication mode from a JSON file (see `examples/ai/*.json`). A
@@ -812,7 +816,7 @@ updates that preset's saved values instead of creating a duplicate. A
 file that lists multiple presets adds all of them, without removing
 presets you imported earlier.
 
-### Choose a model
+#### Choose a model
 
 For BTFViewer, tool reliability matters more than fluent prose. Prefer a
 model that can:
@@ -827,7 +831,7 @@ Use the project's benchmark results when choosing between supported
 models. Model recommendations change over time and should not be
 inferred from this document alone.
 
-### Privacy
+#### Privacy
 
 The AI panel indicates whether the configured endpoint is local or
 cloud-based. Review the current privacy state before sending
@@ -836,13 +840,13 @@ trace-derived information to a remote service.
 Cloud privacy handling may sanitize annotations and optionally alias
 task names. Sensitive configurations can block cloud sending.
 
-### Credentials
+#### Credentials
 
 Use the credential method provided by the current BTFViewer
 implementation and provider. Do not place API keys in trace files,
 reports, screenshots, or shared investigation packages.
 
-### Reset to Defaults
+#### Reset to Defaults
 
 **Settings → Reset to Defaults** restores every tab in the dialog to
 its built-in default, including layout, Statistics presentation, and
@@ -864,7 +868,7 @@ untouched.
 
 <a id="viewer-behavior" name="viewer-behavior"></a>
 
-## Viewer behavior
+### Viewer behavior
 
 A few rules are important when interpreting AI actions:
 
@@ -883,14 +887,14 @@ A few rules are important when interpreting AI actions:
 
 <a id="troubleshooting" name="troubleshooting"></a>
 
-## Troubleshooting
+### Troubleshooting
 
-### AI is unavailable
+#### AI is unavailable
 
 Check **Settings → AI**, the configured endpoint, model, authentication,
 and **Test connection**.
 
-### The answer is too broad
+#### The answer is too broad
 
 Narrow the problem first:
 
@@ -899,23 +903,23 @@ Narrow the problem first:
 3.  enable **Limit to C1--Cn** if appropriate;
 4.  ask one specific question.
 
-### The answer cites the wrong region
+#### The answer cites the wrong region
 
 Confirm the current Scope and Filters. If C1--Cn is active, verify that
 cited `jump:TIME` evidence lies inside the range.
 
-### The answer sounds plausible but has weak evidence
+#### The answer sounds plausible but has weak evidence
 
 Use **Verify finding** or ask the assistant to challenge the conclusion.
 Then check the cited Statistics and timeline events yourself.
 
-### The model repeats tool calls
+#### The model repeats tool calls
 
 Use a more focused Scope, clear an excessively long conversation, or use
 a model with more reliable tool calling. A verification action should
 reuse existing evidence whenever possible.
 
-### A local model's reply or proposal is cut off
+#### A local model's reply or proposal is cut off
 
 If **Gather evidence with AI** (or another Notebook collaboration) returns
 an incomplete answer -- a `btf-viewer-nb-proposal` JSON block that stops
@@ -940,7 +944,7 @@ the server:
 context mode is fine for Notebook collaboration -- the 4096-token proposal
 budget overrides its usual 500-token reply cap.
 
-### Connection errors
+#### Connection errors
 
 For browser CORS, authentication, TLS, model-not-found, timeout, or
 provider-specific errors, first use **Test connection**. If the endpoint
@@ -949,9 +953,13 @@ investigation workflow.
 
 ------------------------------------------------------------------------
 
+<a id="engineering-reference" name="engineering-reference"></a>
+
+## Engineering reference
+
 <a id="investigation-case" name="investigation-case"></a>
 
-## Investigation Case
+### Investigation Case
 
 BTFViewer keeps one shared **Investigation Case** (`btf-investigation-case`) so that several AI actions can continue the same investigation instead of rebuilding context from the conversation each time.
 
@@ -976,7 +984,7 @@ The case can contain:
 
 The Investigation Case is a continuity mechanism. It does **not** make an AI conclusion true. The important part is still the evidence that can be checked in BTFViewer.
 
-### Validation
+#### Validation
 
 After a final assistant reply, the host-side validator checks claims that can be verified mechanically. It extracts references such as:
 
@@ -991,7 +999,7 @@ and can flag:
 
 This protects the investigation from claims that sound plausible but cannot be mapped back to the trace.
 
-### Model capability check
+#### Model capability check
 
 **Test connection** can append a model-capability result covering supported features such as:
 
@@ -1001,20 +1009,23 @@ This protects the investigation from claims that sound plausible but cannot be m
 
 These checks describe endpoint capability. They are separate from the benchmark suite, which measures investigation quality on known cases.
 
-### Headless evaluation
+#### Headless evaluation
 
 The same investigation behavior can be checked without the GUI:
 
 ```bash
 make -C BTFViewer ai-test
+```
 
-# or
+or:
+
+```bash
 python builds/btf_viewer.py ai-test \
   --dataset tests/ai \
   --fail-under 70
 ```
 
-### Investigation modes
+#### Investigation modes
 
 Host-side modes such as:
 
@@ -1034,7 +1045,7 @@ Regardless of the mode, important conclusions should still be verified against S
 
 <a id="investigation-planner" name="investigation-planner"></a>
 
-## Investigation planner
+### Investigation planner
 
 The Investigation planner is host-side logic that decides **what evidence should be checked next**.
 
@@ -1057,7 +1068,7 @@ flowchart TD
   next -->|Current explanation weakened| revise["REVISE HYPOTHESIS"]
 ```
 
-### Planner flow
+#### Planner flow
 
 The planner normally proceeds in this order:
 
@@ -1072,7 +1083,7 @@ The planner normally proceeds in this order:
 
 This is intended to prevent a full investigation from becoming a fixed sequence of every available tool.
 
-### Planner tools and helpers
+#### Planner tools and helpers
 
 | Tool / helper | Purpose | Result |
 | --- | --- | --- |
@@ -1092,7 +1103,7 @@ This is intended to prevent a full investigation from becoming a fixed sequence 
 
 `build_causal_chain` must keep causal, correlated, and temporal edges distinct. A disclaimer is required when the evidence does not support a true causal claim.
 
-### Investigation quality metrics
+#### Investigation quality metrics
 
 When an investigation is closed, host-side scoring can include:
 
@@ -1105,7 +1116,7 @@ When an investigation is closed, host-side scoring can include:
 
 These metrics can also contribute to benchmark-case scoring, including adversarial-case rates.
 
-### Stop conditions
+#### Stop conditions
 
 The planner should stop when:
 
@@ -1116,7 +1127,7 @@ The planner should stop when:
 
 If the evidence weakens the current explanation, the planner should **revise the hypothesis**, not simply collect more supporting evidence.
 
-### UI rule
+#### UI rule
 
 Do **not** solve planner limitations by adding more chat templates or more primary buttons. The planner is intended to improve the depth and efficiency of the existing investigation workflow.
 
@@ -1124,7 +1135,7 @@ Do **not** solve planner limitations by adding more chat templates or more prima
 
 <a id="saved-results-and-reports" name="saved-results-and-reports"></a>
 
-## Saved results and reports
+### Saved results and reports
 
 The AI conversation can be useful during exploration, but the
 engineering result should be preserved separately.
@@ -1148,7 +1159,7 @@ raw tool logs the main report.
 
 <a id="engine-limits" name="engine-limits"></a>
 
-## Engine limits
+### Engine limits
 
 Some tools summarize or infer relationships from BTF evidence. Their names should not be interpreted as capabilities beyond the recorded trace.
 
@@ -1168,7 +1179,7 @@ BTFViewer does not reconstruct unrecorded kernel state, inspect ELF/source code,
 
 <a id="complete-tool-reference" name="complete-tool-reference"></a>
 
-## Complete tool reference
+### Complete tool reference
 
 This section is intended for implementation and debugging. Normal users
 can stop at [AI tools](#ai-tools).
@@ -1223,7 +1234,7 @@ native tool calling is preferred.
 
 <a id="cli-and-regression-checks" name="cli-and-regression-checks"></a>
 
-## CLI and regression checks
+### CLI and regression checks
 
 The Desktop CLI includes `ai-test` for AI evidence and validator regression
 testing. Offline fixtures are used by default; `--models` runs configured live
@@ -1246,13 +1257,13 @@ available.
 <a id="benchmark-suite" name="benchmark-suite"></a>
 <a id="benchmark-results" name="benchmark-results"></a>
 
-## Benchmark results
+### Benchmark results
 
 BTFViewer's benchmark suite checks whether an AI model can investigate known BTF trace problems reliably. It is designed for **BTFViewer use**, not as a general-purpose LLM ranking.
 
 The recorded results below are from **2026-09-04** using **17 test cases**. Unless noted otherwise, the model table uses **Full evidence**.
 
-### What the score means
+#### What the score means
 
 The benchmark evaluates the parts of an investigation that matter most in BTFViewer:
 
@@ -1268,7 +1279,7 @@ The **Overall** value is a weighted engineering score. It is **not a probability
 
 The suite also includes adversarial cases. These contain plausible but misleading clues, such as mutex activity near a CPU-starvation problem or correlation that does not establish causation. They test whether the model follows evidence instead of simply accepting the most obvious explanation.
 
-### Recorded model results
+#### Recorded model results
 
 | Model | Use | Overall | Passed | Mean time / case | Main observation |
 | --- | --- | ---: | ---: | ---: | --- |
@@ -1295,7 +1306,7 @@ Two additional cloud models were recorded from private configurations. They are 
 | `gpt-5.6-sol` | **88** | 15/17 | 9.6 s |
 | `claude-sonnet-5` | 82 | 12/17 | 15.9 s |
 
-### How to read the results
+#### How to read the results
 
 The results show that a higher model size or a larger context does not automatically produce a better BTFViewer investigation.
 
@@ -1306,7 +1317,7 @@ The results show that a higher model size or a larger context does not automatic
 **Root-cause score deserves special attention.** Several models identify the right Finding and cite valid evidence but score lower when deciding what actually caused the problem. BTFViewer therefore keeps verification and contradiction checks separate from the first explanation.
 
 <a id="context-mode-benchmarking" name="context-mode-benchmarking"></a>
-### Context mode results
+#### Context mode results
 
 BTFViewer can provide three levels of AI context:
 
@@ -1326,7 +1337,7 @@ The recorded benchmark shows:
 
 The practical conclusion is to use **Balanced** for normal investigation and move to **Full evidence** when the case needs broader evidence. Compact is useful when token use matters and the question is narrow.
 
-### What the test cases cover
+#### What the test cases cover
 
 The 17-case suite includes normal and deliberately misleading trace problems. Major areas include:
 
@@ -1344,7 +1355,7 @@ The 17-case suite includes normal and deliberately misleading trace problems. Ma
 
 A benchmark case defines expected facts and evidence rather than requiring one exact wording. This allows different models to explain the same correct diagnosis in different ways.
 
-### Why evidence validation matters
+#### Why evidence validation matters
 
 BTFViewer checks more than whether the answer sounds reasonable. The benchmark can reject behaviors such as:
 
@@ -1356,7 +1367,7 @@ BTFViewer checks more than whether the answer sounds reasonable. The benchmark c
 
 This is why a model with a strong general answer can still receive a lower BTFViewer benchmark score.
 
-### Using the results
+#### Using the results
 
 Use the benchmark as a **model-selection guide**, not as a permanent ranking.
 
@@ -1372,12 +1383,12 @@ The benchmark can be rerun with the BTFViewer `ai-test` workflow and the detaile
 
 <a id="implementation-notes" name="implementation-notes"></a>
 
-## Implementation notes
+### Implementation notes
 
 
 <a id="analysis-vs-ai-tools" name="analysis-vs-ai-tools"></a>
 
-### Analysis vs AI tools
+#### Analysis vs AI tools
 
 Measured facts should come from BTFViewer's deterministic Statistics and Analysis Findings first. AI is responsible for **organizing, explaining, ranking, correlating, and challenging** those facts.
 
@@ -1401,29 +1412,29 @@ The responsibility boundary is:
 AI must not invent kernel response time, inspect source/ELF data that BTFViewer did not provide, or claim to simulate the real scheduler.
 
 
-### Keep measured evidence separate from AI interpretation
+#### Keep measured evidence separate from AI interpretation
 
 BTFViewer Statistics, Findings, timeline events, and Trace Compare are
 the evidence layer. AI organizes and tests that evidence.
 
-### Reuse evidence
+#### Reuse evidence
 
 A later verification step should reuse evidence already collected in the
 same investigation. It should query again only when information is
 missing, stale, or outside the required Scope.
 
-### Do not hide state changes
+#### Do not hide state changes
 
 Navigation, Scope, Filter, and annotation changes should remain visible
 to the user and reversible where supported.
 
-### Avoid premature root-cause language
+#### Avoid premature root-cause language
 
 Use **Leading explanation** until the evidence chain has been verified.
 Use **Root cause** only when the available trace evidence supports that
 stronger statement.
 
-### Keep the interface usable without AI
+#### Keep the interface usable without AI
 
 Statistics, timeline verification, Investigation Notebook, and Trace
 Compare must remain sufficient for a complete manual investigation.
@@ -1432,7 +1443,7 @@ Compare must remain sufficient for a complete manual investigation.
 
 <a id="documentation-navigation" name="documentation-navigation"></a>
 
-## Documentation navigation
+### Documentation navigation
 
 -   [README.md](README.md) --- basic BTFViewer operation.
 -   [WORKFLOWS.md](WORKFLOWS.md) --- step-by-step investigation

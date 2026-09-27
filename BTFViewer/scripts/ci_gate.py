@@ -5,6 +5,7 @@ Checks (no pandoc / no Qt / no npm required unless regenerating builds):
 
 * Markdown relative links and in-document anchors
 * EN ↔ zh-TW heading-count / level parity for the shipped manuals
+* Heading hierarchy (one top-level ``#``, no skipped levels, no ``# or`` / ``# 或``)
 * Stable section-ID mappings (shared ``<a id>`` + translated zh-TW titles)
 * PDF freshness vs matching Markdown (git history + dirty tree)
 * Statistics Reference HTML freshness vs STATISTICS.md (git history + dirty tree)
@@ -99,6 +100,20 @@ SECTION_MAPPINGS: Sequence[SectionMapping] = (
         "Guided first review",
         "引導式首次檢視",
     ),
+    SectionMapping(
+        "user-guide",
+        "AI.md",
+        "AI_zh-TW.md",
+        "User guide",
+        "使用指南",
+    ),
+    SectionMapping(
+        "engineering-reference",
+        "AI.md",
+        "AI_zh-TW.md",
+        "Engineering reference",
+        "工程參考",
+    ),
 )
 
 # Shared ``<a id>`` prefixes that must appear in both EN and zh-TW of a pair
@@ -117,6 +132,8 @@ SHARED_ID_PREFIXES: Sequence[Tuple[str, str, str]] = (
     # user action). Prefix sets must be identical EN ↔ zh-TW.
     ("AI.md", "AI_zh-TW.md", "ai-topic-"),
     ("AI.md", "AI_zh-TW.md", "ai-action-"),
+    ("AI.md", "AI_zh-TW.md", "user-guide"),
+    ("AI.md", "AI_zh-TW.md", "engineering-reference"),
     ("AI.md", "AI_zh-TW.md", "analysis-vs-ai-tools"),
     ("AI.md", "AI_zh-TW.md", "engine-limits"),
     ("AI.md", "AI_zh-TW.md", "what-if-and-optimize-workflow"),
@@ -395,6 +412,66 @@ def check_heading_parity() -> List[str]:
     return errors
 
 
+_BOGUS_HEADING_TITLES = {"or", "或"}
+
+
+def check_heading_hierarchy() -> List[str]:
+    """Reject a flat or broken outline that heading-*count* parity can miss.
+
+    * Exactly one top-level ``#`` title, and it is the first heading.
+    * Heading levels never skip (``##`` must not jump to ``####``).
+    * No ``# or`` / ``# 或`` (or colon variants), including inside fences —
+      those lines look like H1s to naive outlines even when a fence-aware
+      parser skips them.
+    """
+    errors: List[str] = []
+    manuals = [rel for pair in MANUAL_PAIRS for rel in pair]
+    for rel in manuals:
+        path = ROOT / rel
+        if not path.is_file():
+            errors.append(f"hierarchy: missing {rel}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        headings = collect_headings(path)
+        if not headings:
+            errors.append(f"hierarchy: {rel} has no headings")
+            continue
+        if headings[0][0] != "#":
+            errors.append(
+                f"hierarchy: {rel} first heading is {headings[0][0]} {headings[0][1]!r}, "
+                f"not a top-level #"
+            )
+        h1s = [title for marks, title in headings if marks == "#"]
+        if len(h1s) != 1:
+            errors.append(
+                f"hierarchy: {rel} has {len(h1s)} top-level # titles: {h1s}"
+            )
+        prev = 1
+        for marks, title in headings:
+            level = len(marks)
+            bare = title.strip().rstrip(":：").strip().lower()
+            if bare in _BOGUS_HEADING_TITLES:
+                errors.append(
+                    f"hierarchy: {rel} has bogus heading {marks} {title!r}"
+                )
+            if level > prev + 1:
+                errors.append(
+                    f"hierarchy: {rel} skips from h{prev} to h{level} at {title!r}"
+                )
+            prev = level
+        for lineno, line in enumerate(text.splitlines(), 1):
+            match = _HEADING_RE.match(line)
+            if not match:
+                continue
+            bare = strip_md_inline(match.group(2)).strip().rstrip(":：").strip().lower()
+            if bare in _BOGUS_HEADING_TITLES:
+                errors.append(
+                    f"hierarchy: {rel}:{lineno} looks like a top-level "
+                    f"{match.group(1)} {match.group(2)!r} title"
+                )
+    return errors
+
+
 def check_section_mappings() -> List[str]:
     """Stable section IDs + translated zh-TW titles (not English copies)."""
     errors: List[str] = []
@@ -473,6 +550,8 @@ def check_section_mappings() -> List[str]:
                     "investigation-planner",
                     "btf-analysis-pages",
                     "headless-cli-desktop-only",
+                    "user-guide",
+                    "engineering-reference",
                     "analysis-vs-ai-tools",
                     "engine-limits",
                     "what-if-and-optimize-workflow",
@@ -619,6 +698,7 @@ def run_selected(args: argparse.Namespace) -> int:
         selected.append(("documentation links", check_links))
     if args.all or args.parity:
         selected.append(("heading parity", check_heading_parity))
+        selected.append(("heading hierarchy", check_heading_hierarchy))
         selected.append(("section mappings", check_section_mappings))
     if args.all or args.pdf:
         selected.append(("PDF freshness", check_pdf_freshness))
@@ -633,6 +713,7 @@ def run_selected(args: argparse.Namespace) -> int:
         selected = [
             ("documentation links", check_links),
             ("heading parity", check_heading_parity),
+            ("heading hierarchy", check_heading_hierarchy),
             ("section mappings", check_section_mappings),
             ("PDF freshness", check_pdf_freshness),
             ("docs-html freshness", check_docs_html_freshness),
