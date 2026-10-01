@@ -28,32 +28,58 @@
       >
         {{ contextRowSummary.mode }}
       </button>
-    </div>
-    <div class="ai-header-actions">
-      <button
-        type="button"
-        class="ai-link-btn"
-        title="Clear replies, usage cost, and current investigation issues"
-        @click="clear"
-      >
-        Clear
-      </button>
-      <button
-        type="button"
-        class="ai-link-btn"
-        title="Preferred language for assistant replies"
-        @click="langOpen = true"
-      >
-        Language…
-      </button>
-      <button
-        type="button"
-        class="ai-link-btn"
-        title="Configure the AI preset, endpoint, and model"
-        @click="emit('openSettings')"
-      >
-        Settings…
-      </button>
+      <div class="ai-header-actions">
+        <button
+          type="button"
+          class="ai-overflow-btn"
+          data-testid="ai-overflow-btn"
+          title="Language, Settings, and Clear"
+          aria-label="Panel actions"
+          aria-haspopup="menu"
+          :aria-expanded="overflowOpen"
+          @click="overflowOpen = !overflowOpen"
+        >
+          ⋯
+        </button>
+        <div
+          v-if="overflowOpen"
+          class="ai-overflow-menu"
+          role="menu"
+          data-testid="ai-overflow-menu"
+        >
+          <button
+            type="button"
+            class="ai-overflow-item"
+            role="menuitem"
+            title="Preferred language for assistant replies"
+            @click="langOpen = true; overflowOpen = false"
+          >
+            Language…
+          </button>
+          <button
+            type="button"
+            class="ai-overflow-item"
+            role="menuitem"
+            title="Configure the AI preset, endpoint, and model"
+            @click="emit('openSettings'); overflowOpen = false"
+          >
+            Settings…
+          </button>
+          <div
+            class="ai-overflow-sep"
+            role="separator"
+          />
+          <button
+            type="button"
+            class="ai-overflow-item"
+            role="menuitem"
+            title="Clear replies, usage cost, and current investigation issues"
+            @click="clear(); overflowOpen = false"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
     </div>
 
     <div
@@ -284,7 +310,7 @@
               <div><strong>Filters:</strong> {{ intentContext.filters }}</div>
             </div>
             <div class="ai-intent-prompt">
-              What do you want to investigate?
+              {{ emptyStateMessage('noAi') }}
             </div>
             <div
               v-for="group in intentTemplateGroups"
@@ -653,6 +679,21 @@
       >
         Save As HTML…
       </button>
+      <div class="ai-ctx-sep" />
+      <button
+        type="button"
+        class="ai-ctx-item"
+        @click="langOpen = true; logMenu.visible = false"
+      >
+        Language…
+      </button>
+      <button
+        type="button"
+        class="ai-ctx-item"
+        @click="clear(); logMenu.visible = false"
+      >
+        Clear
+      </button>
     </div>
 
     <div class="ai-status-row">
@@ -661,7 +702,7 @@
         :class="{ error: !!error }"
         :title="statusText"
       >
-        {{ statusText }}
+        {{ statusCueText(statusText, error ? 'error' : 'info') }}
       </div>
       <div
         class="ai-usage-bar"
@@ -696,6 +737,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import DomSelect from './DomSelect.vue'
+import { emptyStateMessage } from '../utils/emptyState.js'
+import { statusCueText } from '../utils/uiTheme.js'
 import {
   AI_COMPARE_TEMPLATE_ID,
   AI_RESPONSE_LANGUAGES,
@@ -960,6 +1003,7 @@ const error = ref('')
 const status = ref('')
 const logRef = ref(null)
 const langOpen = ref(false)
+const overflowOpen = ref(false)
 const collabContextOpen = ref(false)
 const collabDigestHtml = computed(() => {
   const md = props.notebookCollab?.digest
@@ -2912,6 +2956,7 @@ defineExpose({
 }
 .ai-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
@@ -2939,11 +2984,58 @@ defineExpose({
   gap: 8px;
 }
 .ai-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-wrap: wrap;
+  margin-left: auto;
   flex-shrink: 0;
+  position: relative;
+}
+.ai-overflow-btn {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted, #8b98a8);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ai-overflow-btn:hover,
+.ai-overflow-btn[aria-expanded="true"] {
+  color: var(--text, #e8eef7);
+  border-color: var(--border, #3a4658);
+}
+.ai-overflow-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 8;
+  min-width: 148px;
+  padding: 4px 0;
+  border: 1px solid var(--border, #3a4658);
+  border-radius: 6px;
+  background: var(--panel-bg, #1d2430);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+.ai-overflow-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text, #e8eef7);
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.ai-overflow-item:hover {
+  background: var(--app-hover-bg, rgba(122, 169, 255, 0.12));
+}
+.ai-overflow-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border, #3a4658);
 }
 .ai-nb-collab {
   display: flex;
@@ -3889,7 +3981,7 @@ defineExpose({
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.ai-status.error { color: #e07070; }
+.ai-status.error { color: var(--destructive, #e07070); }
 .ai-usage-bar {
   flex-shrink: 0;
   font-size: 0.85em;

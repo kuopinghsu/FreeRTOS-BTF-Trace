@@ -2535,6 +2535,174 @@ _STI_COLORS: Dict[str, QColor] = {
 }
 
 # ===========================================================================
+# Shared semantic UI tokens (Modern UX)
+# ===========================================================================
+
+# Modern UX palette. Existing shell tokens (accent, win_bg, …) remain the live
+# chrome backgrounds; text roles and new surfaces use these keys.
+# ``divider`` is decorative (no contrast target); ``control_border`` outlines
+# interactive controls and must reach 3:1 against workspace and surface.
+UI_THEME: Dict[str, Dict[str, object]] = {
+    "dark": {
+        "workspace": "#151A22",
+        "surface": "#1D2430",
+        "fg": "#E6EDF5",
+        "fg_dim": "#A6B3C4",
+        "divider": "#344052",
+        "control_border": "#6B7C93",
+        "accent_ui": "#78A9FF",
+        "on_accent": "#0B1220",
+        "warning": "#E67E22",
+        "success": "#7DCEA0",
+        "focus": "#78A9FF",
+        "destructive": "#FF8585",
+        "ctrl_h": 28,
+        "radius_ctrl": 6,
+        "radius_card": 8,
+        "sp_1": 4,
+        "sp_2": 8,
+        "sp_3": 12,
+        "sp_4": 16,
+    },
+    "light": {
+        "workspace": "#F5F7FA",
+        "surface": "#FFFFFF",
+        "fg": "#182230",
+        "fg_dim": "#526173",
+        "divider": "#DCE3EC",
+        "control_border": "#7A8799",
+        "accent_ui": "#2563EB",
+        "on_accent": "#FFFFFF",
+        "warning": "#9A4D00",
+        "success": "#166534",
+        "focus": "#2563EB",
+        "destructive": "#B3261E",
+        "ctrl_h": 28,
+        "radius_ctrl": 6,
+        "radius_card": 8,
+        "sp_1": 4,
+        "sp_2": 8,
+        "sp_3": 12,
+        "sp_4": 16,
+    },
+}
+
+BUTTON_ROLES = ("primary", "secondary", "quiet", "destructive")
+
+REPORT_EXPAND_TABS = ("stats", "ai")
+REPORT_EXPAND_FRACTION = 0.82
+REPORT_EXPAND_MIN_TIMELINE = 240
+REPORT_EXPAND_MIN_REPORT = 180
+
+TEXT_CONTRAST_MIN = 4.5
+UI_CONTRAST_MIN = 3.0
+
+
+def ui_theme_tokens(is_dark: bool) -> Dict[str, object]:
+    """Return a copy of the semantic token table for *is_dark*."""
+    return dict(UI_THEME["dark" if is_dark else "light"])
+
+
+def _relative_luminance(hex_color: str) -> float:
+    h = hex_color.lstrip("#")
+    chans = [int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in chans]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def contrast_ratio(a: str, b: str) -> float:
+    """WCAG 2.x contrast ratio between two ``#RRGGBB`` colors."""
+    la, lb = sorted((_relative_luminance(a), _relative_luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def report_expand_allowed(tab: str) -> bool:
+    return tab in REPORT_EXPAND_TABS
+
+
+def expanded_report_width(
+    available_px: float,
+    fraction: float = REPORT_EXPAND_FRACTION,
+    min_report: int = REPORT_EXPAND_MIN_REPORT,
+    current: int = 0,
+) -> int:
+    """Report width in expanded mode: ~82% of the workspace, but always leaving
+    the timeline ``REPORT_EXPAND_MIN_TIMELINE`` px, never below the panel
+    minimum, and never narrower than the report already is (*current*)."""
+    avail = max(0, int(available_px or 0))
+    wanted = min(int(avail * fraction), avail - REPORT_EXPAND_MIN_TIMELINE)
+    return max(min_report, wanted, int(current or 0))
+
+
+STATUS_CUES: Dict[str, str] = {"error": "✖", "warning": "⚠", "success": "✓", "info": ""}
+
+
+def status_cue_text(msg: str, severity: str = "info") -> str:
+    """Prefix a status line with a severity glyph so meaning never depends on
+    color alone. Idempotent; info lines stay quiet."""
+    text = str(msg or "")
+    cue = STATUS_CUES.get(severity, "")
+    if not text or not cue or text.startswith(cue):
+        return text
+    return f"{cue} {text}"
+
+
+def report_expand_button(expanded: bool, return_pending: bool = False) -> Dict[str, str]:
+    """Header button state for the report expand / restore / return cycle."""
+    if expanded:
+        return {"label": "Restore layout", "tooltip": "Restore the previous panel width"}
+    if return_pending:
+        return {"label": "Back to report", "tooltip": "Re-expand the report you were reading"}
+    return {"label": "Expand report", "tooltip": "Give the report most of the workspace"}
+
+
+def button_qss(role: str, tokens: Dict[str, object], *, object_name: str = "") -> str:
+    """QSS for a primary / secondary / quiet / destructive push button."""
+    if role not in BUTTON_ROLES:
+        raise ValueError(f"unknown button role: {role}")
+    sel = f"QPushButton#{object_name}" if object_name else "QPushButton"
+    radius = int(tokens["radius_ctrl"])
+    height = int(tokens["ctrl_h"])
+    pad = f"{int(tokens['sp_1'])}px {int(tokens['sp_3'])}px"
+    accent = str(tokens["accent_ui"])
+    on_accent = str(tokens["on_accent"])
+    fg = str(tokens["fg"])
+    fg_dim = str(tokens["fg_dim"])
+    divider = str(tokens["divider"])
+    border = str(tokens["control_border"])
+    surface = str(tokens["surface"])
+    destructive = str(tokens["destructive"])
+    focus = str(tokens["focus"])
+    focus_rule = f"{sel}:focus {{ border:2px solid {focus}; }}"
+    if role == "primary":
+        return (
+            f"{sel} {{ background:{accent}; color:{on_accent}; border:1px solid {accent};"
+            f" border-radius:{radius}px; min-height:{height}px; padding:{pad}; }}"
+            f"{sel}:hover {{ border-color:{fg}; }}"
+            f"{sel}:disabled {{ background:{divider}; color:{fg_dim}; border-color:{divider}; }}"
+            + focus_rule
+        )
+    if role == "destructive":
+        return (
+            f"{sel} {{ background:transparent; color:{destructive}; border:1px solid {destructive};"
+            f" border-radius:{radius}px; min-height:{height}px; padding:{pad}; }}"
+            f"{sel}:hover {{ background:{destructive}; color:{surface}; }}"
+            + focus_rule
+        )
+    if role == "quiet":
+        return (
+            f"{sel} {{ background:transparent; color:{fg_dim}; border:1px solid transparent;"
+            f" border-radius:{radius}px; min-height:{height}px; padding:{pad}; }}"
+            f"{sel}:hover {{ color:{fg}; border-color:{border}; }}"
+            + focus_rule
+        )
+    return (
+        f"{sel} {{ background:{surface}; color:{fg}; border:1px solid {border};"
+        f" border-radius:{radius}px; min-height:{height}px; padding:{pad}; }}"
+        f"{sel}:hover {{ border-color:{accent}; }}"
+        + focus_rule
+    )
+# ===========================================================================
 # zip_container
 # ===========================================================================
 
@@ -2702,12 +2870,12 @@ _BTF_HTML_REPORT_CSS = """
   --paper: #ffffff;
   --paper-2: #f1f5fb;
   --ink: #182230;
-  --muted: #5f6f82;
-  --line: #d9e0ea;
+  --muted: #526173;
+  --line: #dce3ec;
   --line-strong: #c3cee0;
   --header: #16324f;
   --header-2: #21496f;
-  --accent: #2a6fb2;
+  --accent: #2563eb;
   --accent-soft: #eaf2ff;
   --accent-2: #0f766e;
   --success: #1f6b45;
@@ -2726,15 +2894,15 @@ _BTF_HTML_REPORT_CSS = """
 html[data-theme="dark"] {
   --bg: #14181e;
   --bg-elev: #181d24;
-  --paper: #1c2128;
+  --paper: #1d2430;
   --paper-2: #20262e;
-  --ink: #d6dde6;
-  --muted: #9aa7b4;
-  --line: #2d333b;
+  --ink: #e6edf5;
+  --muted: #a6b3c4;
+  --line: #344052;
   --line-strong: #3a4149;
   --header: #16324f;
   --header-2: #21496f;
-  --accent: #6cb0e6;
+  --accent: #78a9ff;
   --accent-soft: #1d3348;
   --accent-2: #4ec6bb;
   --success: #57c191;
@@ -2752,15 +2920,15 @@ html[data-theme="dark"] {
   html:not([data-theme="light"]) {
     --bg: #14181e;
     --bg-elev: #181d24;
-    --paper: #1c2128;
+    --paper: #1d2430;
     --paper-2: #20262e;
-    --ink: #d6dde6;
-    --muted: #9aa7b4;
-    --line: #2d333b;
+    --ink: #e6edf5;
+    --muted: #a6b3c4;
+    --line: #344052;
     --line-strong: #3a4149;
     --header: #16324f;
     --header-2: #21496f;
-    --accent: #6cb0e6;
+    --accent: #78a9ff;
     --accent-soft: #1d3348;
     --accent-2: #4ec6bb;
     --success: #57c191;
@@ -50059,7 +50227,7 @@ def _clear_layout(layout) -> None:
 
 
 # Chip / More-menu colors match web `.ai-tpl-btn` / `.ai-more-item` (enabled vs disabled).
-_AI_TPL_DISABLED_COLOR = "#8a96a8"
+_AI_TPL_DISABLED_COLOR = str(ui_theme_tokens(True)["fg_dim"])
 _AI_CHIP_MIN_HEIGHT = 28  # match web `.ai-tpl-btn { min-height: 28px }`
 # Intent empty-state chips match web `.ai-chip` (compact, transparent).
 _AI_INTENT_CHIP_HEIGHT = 24
@@ -50101,29 +50269,30 @@ class _AiSplitter(QSplitter):
 
 
 def _ai_chrome_colors(is_dark: bool) -> dict:
+    ui = ui_theme_tokens(is_dark)
     if is_dark:
         return dict(
             panel="#1a2230",
             btn="#243044",
-            text="#e8eef7",
+            text=ui["fg"],
             muted=_AI_TPL_DISABLED_COLOR,
             border="#3a4658",
             hover="#243044",
             accent="#2a6fb2",
-            chip_hover="#dbe2ea",
-            guide_now="#dbe2ea",
+            chip_hover=ui["fg"],
+            guide_now=ui["fg"],
             guide_done="#6fbf9a",
         )
     return dict(
         panel="#F5F5F5",
         btn="#E8E8E8",
-        text="#1E1E1E",
-        muted="#666666",
+        text=ui["fg"],
+        muted=ui["fg_dim"],
         border="#DDDDDD",
         hover="#E0E8F0",
         accent="#0066CC",
-        chip_hover="#1E1E1E",
-        guide_now="#1E1E1E",
+        chip_hover=ui["fg"],
+        guide_now=ui["fg"],
         guide_done="#2e7d57",
     )
 
@@ -50440,7 +50609,12 @@ def create_ai_assistant_panel(
 
             header_host = QWidget()
             header_host.setObjectName("aiHeader")
-            header_row = _FlowLayout(header_host, spacing=8)
+            header_bar = QHBoxLayout(header_host)
+            header_bar.setContentsMargins(0, 0, 0, 0)
+            header_bar.setSpacing(4)
+            header_chips = QWidget()
+            header_row = _FlowLayout(header_chips, spacing=8)
+            header_bar.addWidget(header_chips, 1)
             title = QLabel("AI Assistant")
             title.setStyleSheet("font-weight:600;")
             header_row.addWidget(title)
@@ -50498,14 +50672,23 @@ def create_ai_assistant_panel(
             self._mode_chip.setStyleSheet(_chip_css % ("ai_mode_chip", "ai_mode_chip"))
             self._mode_chip.clicked.connect(self._on_auth_chip)
             header_row.addWidget(self._mode_chip)
-            root.addWidget(header_host)
 
-            # Match web `.ai-header-actions { flex-wrap }`. objectName
-            # "aiActions" is excluded from dock width-relax (Ignored policy
-            # was collapsing these buttons to 0 width).
-            actions_host = QWidget()
-            actions_host.setObjectName("aiActions")
-            actions_row = _FlowLayout(actions_host, spacing=4)
+            self._overflow_btn = QToolButton()
+            self._overflow_btn.setObjectName("aiOverflowBtn")
+            self._overflow_btn.setText("\u22ef")
+            self._overflow_btn.setToolTip("Language, Settings, and Clear")
+            self._overflow_btn.setAccessibleName("Panel actions")
+            self._overflow_btn.setAutoRaise(True)
+            self._overflow_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._overflow_btn.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            self._overflow_btn.setFixedSize(28, 24)
+            self._overflow_btn.setStyleSheet(
+                "QToolButton#aiOverflowBtn { font-size:16px; padding:0; }")
+            self._overflow_btn.clicked.connect(self._show_overflow_menu)
+            header_bar.addWidget(
+                self._overflow_btn, 0, Qt.AlignmentFlag.AlignTop)
+            root.addWidget(header_host)
 
             def _ai_action_btn(label: str, tip: str, *, primary: bool = False) -> QPushButton:
                 btn = QPushButton(label)
@@ -50528,23 +50711,6 @@ def create_ai_assistant_panel(
                         "}"
                     )
                 return btn
-
-            self._clear_btn = _ai_action_btn(
-                "Clear",
-                "Clear replies, usage cost, and current investigation issues")
-            self._clear_btn.clicked.connect(self.clear_conversation)
-            actions_row.addWidget(self._clear_btn)
-            self._lang_btn = _ai_action_btn(
-                "Language\u2026", "Preferred language for assistant replies")
-            self._lang_btn.clicked.connect(self._choose_language)
-            actions_row.addWidget(self._lang_btn)
-            self._settings_btn = _ai_action_btn(
-                "Settings\u2026",
-                "Configure the AI preset, endpoint, and model")
-            self._settings_btn.clicked.connect(self._open_settings)
-            actions_row.addWidget(self._settings_btn)
-
-            root.addWidget(actions_host)
 
             split_top = QWidget()
             split_top.setObjectName("aiSplitTop")
@@ -50589,7 +50755,7 @@ def create_ai_assistant_panel(
             self._intent_context.setWordWrap(True)
             self._intent_context.setStyleSheet(
                 "QLabel { color:#8a96a8; font-size:11px; padding:2px 0; }")
-            self._intent_prompt = QLabel("What do you want to investigate?")
+            self._intent_prompt = QLabel(empty_state_message("no_ai"))
             self._intent_prompt.setStyleSheet(
                 "QLabel { color:#dbe2ea; font-size:12px; font-weight:600; padding:2px 0; }")
             # Intent chip groups live inside the empty log (Web `.ai-log > .ai-empty`).
@@ -50721,12 +50887,15 @@ def create_ai_assistant_panel(
             start_lay = QVBoxLayout(self._start_inv_host)
             start_lay.setContentsMargins(0, 0, 0, 0)
             start_lay.setSpacing(6)
-            self._start_inv_btn = QPushButton("Start Investigation")
-            self._start_inv_btn.setToolTip(qt_wrap_tooltip(
-                "Triage findings, scope the top issue, gather evidence, "
-                "and verify the cause."))
+            self._start_inv_btn = _ai_action_btn(
+                "Start Investigation",
+                qt_wrap_tooltip(
+                    "Triage findings, scope the top issue, gather evidence, "
+                    "and verify the cause."),
+                primary=True)
             self._start_inv_btn.clicked.connect(self._start_investigation)
-            start_lay.addWidget(self._start_inv_btn)
+            start_lay.addWidget(
+                self._start_inv_btn, 0, Qt.AlignmentFlag.AlignLeft)
             g_lay.addWidget(self._start_inv_host)
             self._issue_view = QLabel("")
             self._issue_view.setWordWrap(True)
@@ -51126,8 +51295,7 @@ def create_ai_assistant_panel(
             if getattr(self, "_status_row", None) is not None:
                 self._status_row.setStyleSheet(
                     f"QWidget#aiStatusRow {{ border-top:1px solid {c['border']}; }}")
-            if getattr(self, "_status", None) is not None:
-                self._status.setStyleSheet(f"color:{c['muted']};font-size:11px;")
+            self._style_status()
             if getattr(self, "_usage", None) is not None:
                 self._usage.setStyleSheet(f"color:{c['muted']};font-size:11px;")
             if getattr(self, "_split", None) is not None:
@@ -51444,11 +51612,9 @@ def create_ai_assistant_panel(
                 pass
 
         def _set_status(self, msg: str, *, error: bool = False) -> None:
-            self._status.setText(str(msg or ""))
-            self._status.setStyleSheet(
-                "color:#e07070;font-size:11px;" if error
-                else "color:#999;font-size:11px;"
-            )
+            self._status_is_error = bool(error)
+            self._status.setText(status_cue_text(msg, "error" if error else "info"))
+            self._style_status()
             self._refresh_usage()
             if error:
                 self._flash_main_status(msg)
@@ -51456,6 +51622,15 @@ def create_ai_assistant_panel(
                 self.status_changed.emit(str(msg or ""))
             except RuntimeError:
                 pass
+
+        def _style_status(self) -> None:
+            status = getattr(self, "_status", None)
+            if status is None:
+                return
+            ui = ui_theme_tokens(bool(getattr(self, "_is_dark", True)))
+            err = bool(getattr(self, "_status_is_error", False))
+            status.setStyleSheet(
+                f"color:{ui['destructive'] if err else ui['fg_dim']};font-size:11px;")
 
         def _refresh_usage(self) -> None:
             bar = getattr(self, "_usage", None)
@@ -52293,7 +52468,32 @@ def create_ai_assistant_panel(
             save_html = menu.addAction("Save As HTML…")
             save_html.setEnabled(has_log)
             save_html.triggered.connect(lambda: self.save_conversation_as("html"))
+            menu.addSeparator()
+            lang_act = menu.addAction("Language\u2026")
+            lang_act.triggered.connect(self._choose_language)
+            clear_act = menu.addAction("Clear")
+            clear_act.setEnabled(has_log or bool(self._input.toPlainText().strip()))
+            clear_act.triggered.connect(self.clear_conversation)
             menu.exec(self._log.mapToGlobal(pos))
+
+        def _show_overflow_menu(self) -> None:
+            menu = QMenu(self)
+            lang_act = menu.addAction("Language\u2026")
+            lang_act.triggered.connect(self._choose_language)
+            settings_act = menu.addAction("Settings\u2026")
+            settings_act.triggered.connect(self._open_settings)
+            menu.addSeparator()
+            clear_act = menu.addAction("Clear")
+            clear_act.setToolTip(
+                "Clear replies, usage cost, and current investigation issues")
+            clear_act.triggered.connect(self.clear_conversation)
+            btn = getattr(self, "_overflow_btn", None)
+            if btn is not None:
+                anchor = btn.rect().bottomRight()
+                anchor.setX(anchor.x() - menu.sizeHint().width() + 1)
+                menu.exec(btn.mapToGlobal(anchor))
+            else:
+                menu.exec(self.mapToGlobal(self.rect().topLeft()))
 
         def _copy_log_selection(self, text: Optional[str] = None) -> None:
             selected = str(
@@ -67259,6 +67459,7 @@ class _TraceCompareDialog(QDialog):
                 item = _StatsSortItem(text, compare_cell_sort_key(val))
                 if ci < left_cols:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                    item.setToolTip(text)
                 else:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
                 table.setItem(ri, ci, item)
@@ -73483,11 +73684,8 @@ class _StatsPanel(QWidget):
         self._scroll_tail.setObjectName("stats_scroll_tail")
         self._scroll_tail.setMinimumHeight(0)
         self._scroll_tail.setFixedHeight(0)
-        empty = self._lbl(
-            "Open a trace file to view statistics.",
-            color="#888888",
-            ui_fs=self._ui_fs(),
-        )
+        empty = self._lbl(empty_state_message("no_stats"), ui_fs=self._ui_fs())
+        empty.setObjectName("stats_empty_hint")
         self._stats_summary = empty
         self._ilay.addWidget(empty)
         self._ilay.addWidget(self._scroll_tail)
@@ -79762,11 +79960,8 @@ class _StatsPanel(QWidget):
         self._scope_cb.setEnabled(False)
         self._clear()
         self._update_scope_header()
-        empty = self._lbl(
-            "Open a trace file to view statistics.",
-            color="#888888",
-            ui_fs=self._ui_fs(),
-        )
+        empty = self._lbl(empty_state_message("no_stats"), ui_fs=self._ui_fs())
+        empty.setObjectName("stats_empty_hint")
         self._stats_summary = empty
         self._ilay.addWidget(empty)
 
@@ -93064,6 +93259,7 @@ class _IconRail(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("icon_rail")
+        self.setAccessibleName("Right panel navigation")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(self.RAIL_W)
         self._lay = QVBoxLayout(self)
@@ -93082,6 +93278,7 @@ class _IconRail(QWidget):
         btn.setObjectName("rail_btn")
         btn.setText(label)                       # accessibility / tests
         btn.setToolTip(label)
+        btn.setAccessibleName(label)
         btn.setCheckable(True)
         btn.setAutoRaise(True)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -93107,6 +93304,7 @@ class _IconRail(QWidget):
         btn.setObjectName("rail_collapse")
         btn.setToolTip("Collapse panel")
         btn.setText("Collapse panel")            # accessibility / tests
+        btn.setAccessibleName("Collapse panel")
         btn.setAutoRaise(True)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -93126,6 +93324,7 @@ class _IconRail(QWidget):
             self._IC_EXPAND if collapsed else self._IC_COLLAPSE, color, 16))
         btn.setToolTip("Expand panel" if collapsed else "Collapse panel")
         btn.setText("Expand panel" if collapsed else "Collapse panel")
+        btn.setAccessibleName(btn.text())
 
     def set_active(self, index: int) -> None:
         if 0 <= index < len(self._buttons):
@@ -93186,6 +93385,7 @@ class _ActivityRail(QWidget):
         btn.setObjectName("act_btn")
         btn.setText(label)                       # accessibility / tests
         btn.setToolTip(label)
+        btn.setAccessibleName(label)
         btn.setAutoRaise(True)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -93338,8 +93538,8 @@ class _MarkRowWidget(QWidget):
         del_btn.setToolTip("Delete mark")
         del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         del_btn.setStyleSheet(
-            "QToolButton { border:none; color:#999; padding:1px 4px; }"
-            "QToolButton:hover { color:#FF5555; }")
+            f"QToolButton {{ border:none; color:{_dim_text_color()}; padding:1px 4px; }}"
+            f"QToolButton:hover {{ color:{_palette_ui_tokens()['destructive']}; }}")
         del_btn.clicked.connect(lambda: self.deleteRequested.emit(self.kind, self.mark_id))
         lay.addWidget(del_btn, 0)
 
@@ -93376,8 +93576,8 @@ class _CursorListWidget(QWidget):
         # Web `.cursor-empty-msg` is muted monospace — NOT italic (unlike the
         # Cursor-Range / Marks hints).
         self._empty = QLabel("Click timeline to place cursors")
-        self._empty.setStyleSheet(
-            f"color:#999; font-family:'{_get_fixed_font_family()}';")
+        self._empty.setObjectName("muted_mono")
+        self._empty.setStyleSheet(f"font-family:'{_get_fixed_font_family()}';")
         self._lay.addWidget(self._empty)
         self._rows: list = []
 
@@ -93450,7 +93650,7 @@ class _CursorListWidget(QWidget):
             sep = QFrame()
             sep.setFrameShape(QFrame.Shape.HLine)
             sep.setFrameShadow(QFrame.Shadow.Plain)
-            sep.setStyleSheet("color:#555;")
+            sep.setStyleSheet(f"color:{ui_theme_tokens(is_dark)['divider']};")
             self._lay.addWidget(sep)
             self._rows.append(sep)
             for i in range(1, len(sorted_t)):
@@ -93461,12 +93661,12 @@ class _CursorListWidget(QWidget):
                 rl.setContentsMargins(0, 0, 0, 0)
                 rl.setSpacing(6)
                 lbl = QLabel(f"Δ{i}")
-                lbl.setStyleSheet("color:#999;")
+                lbl.setStyleSheet(f"color:{ui_theme_tokens(is_dark)['fg_dim']};")
                 lbl.setMinimumWidth(48)                       # web .delta-label
                 val = QLabel(_format_time_web(d, ts, decimals=decimals))
                 val.setStyleSheet("font-weight:500;")         # web .delta-value
                 frq = QLabel(f"({freq})")
-                frq.setStyleSheet("color:#999;")
+                frq.setStyleSheet(f"color:{ui_theme_tokens(is_dark)['fg_dim']};")
                 rl.addWidget(lbl, 0)
                 rl.addWidget(val, 0)
                 rl.addWidget(frq, 0)
@@ -94229,13 +94429,15 @@ class _NbStepTab(QWidget):
         self._sync_style()
 
     def _sync_style(self) -> None:
+        ui = _palette_ui_tokens()
+        accent, on_accent = ui["accent_ui"], ui["on_accent"]
         if self._active:
             self._badge.setStyleSheet(
-                "background:#2E86DE;color:white;border-radius:10px;font-weight:700;")
-            self._label.setStyleSheet("color:#2E86DE;font-weight:700;")
+                f"background:{accent};color:{on_accent};border-radius:10px;font-weight:700;")
+            self._label.setStyleSheet(f"color:{accent};font-weight:700;")
         elif self._done:
             self._badge.setStyleSheet(
-                "background:transparent;color:#2E86DE;border:1.5px solid #2E86DE;"
+                f"background:transparent;color:{accent};border:1.5px solid {accent};"
                 "border-radius:10px;font-weight:700;")
             self._label.setStyleSheet("color:palette(text);font-weight:600;")
         else:
@@ -94376,21 +94578,23 @@ class _InvestigationNotebookDialog(QDialog):
         # dialog's own font (set above from Settings -> UI font size) rather
         # than hardcode a literal px value that ignores it (reported live).
         _dim = _dim_text_color()
+        _ui = _palette_ui_tokens()
+        _acc, _warn = _ui["accent_ui"], _ui["warning"]
         self.setStyleSheet(
             f"QLabel#nb_pill{{border:1px solid {_dim};border-radius:9px;"
             f"padding:1px 8px;color:{_dim};}}"
             f"QLabel#nb_chip{{border:1px solid {_dim};border-radius:9px;"
             f"padding:1px 8px;color:{_dim};}}"
             f"QFrame#nb_card{{border:1px solid {_dim};border-radius:9px;}}"
-            "QFrame#nb_card[measured=\"true\"]{border-left:3px solid #2E86DE;}"
-            "QFrame#nb_card[stale=\"true\"]{border-color:#E0A030;}"
-            "QFrame#nb_card[broken=\"true\"]{border-color:#E0A030;}"
+            f"QFrame#nb_card[measured=\"true\"]{{border-left:3px solid {_acc};}}"
+            f"QFrame#nb_card[stale=\"true\"]{{border-color:{_warn};}}"
+            f"QFrame#nb_card[broken=\"true\"]{{border-color:{_warn};}}"
             f"QFrame#nb_side{{border:1px solid {_dim};border-radius:9px;}}"
             f"QLabel#nb_badge{{border:1px solid {_dim};border-radius:5px;"
             f"padding:0 6px;color:{_dim};font-weight:700;}}"
-            "QLabel#nb_badge[kind=\"measured\"]{color:#2E86DE;border-color:#2E86DE;}"
-            "QLabel#nb_badge[kind=\"estimate\"]{color:#E0A030;border-color:#E0A030;}"
-            "QLabel#nb_stale{color:#E0A030;font-weight:700;}"
+            f"QLabel#nb_badge[kind=\"measured\"]{{color:{_acc};border-color:{_acc};}}"
+            f"QLabel#nb_badge[kind=\"estimate\"]{{color:{_warn};border-color:{_warn};}}"
+            f"QLabel#nb_stale{{color:{_warn};font-weight:700;}}"
             f"QLabel#nb_hint{{color:{_dim};}}"
             f"QToolButton#nb_ref_chip{{border:1px solid {_dim};"
             f"border-radius:9px;padding:1px 7px;color:{_dim};}}"
@@ -94804,7 +95008,7 @@ class _InvestigationNotebookDialog(QDialog):
         self._side_host.setVisible(True)
         head = QHBoxLayout()
         star = QLabel("✦")
-        star.setStyleSheet("color:#2E86DE;")
+        star.setStyleSheet(f"color:{_palette_ui_tokens()['accent_ui']};")
         head.addWidget(star)
         ai_title = QLabel("AI assistance")
         ai_title.setStyleSheet("font-weight:700;color:palette(text);")
@@ -94953,7 +95157,7 @@ class _InvestigationNotebookDialog(QDialog):
         col.addWidget(line)
         if op.get("status") == "needs_confirmation":
             conf = QCheckBox(f"Confirm — {op.get('reason') or ''}")
-            conf.setStyleSheet("color:#E0A030;font-size:11px;")
+            conf.setStyleSheet(f"color:{_palette_ui_tokens()['warning']};font-size:11px;")
             conf.setChecked(i in self._ai_proposal_confirmed)
 
             def _toggle_conf(checked, k=i):
@@ -95884,7 +96088,7 @@ class _InvestigationNotebookDialog(QDialog):
         ll.addWidget(self._caption("LIMITATIONS"))
         if open_checks:
             lim = QLabel(f"⚠ {len(open_checks)} unresolved check(s) — the export will label them explicitly.")
-            lim.setStyleSheet("color:#E0A030;")
+            lim.setStyleSheet(f"color:{_palette_ui_tokens()['warning']};")
         else:
             lim = QLabel("None recorded.")
         lim.setWordWrap(True)
@@ -96051,24 +96255,22 @@ class _InvestigationNotebookDialog(QDialog):
 
 
 def _dim_text_color() -> str:
-    """A muted/secondary text color, blended halfway between the app's
-    current window-text and window-background colors.
+    """The shared ``fg_dim`` token for the live theme (4.5:1 on its surfaces).
 
     Not ``palette(mid)`` — ``QPalette::Mid`` is a bevel/divider shading role
     the app's theme setup (``MainWindow._apply_theme``) never assigns a
     value to, so it falls back to a Qt-computed default that can land very
     close to the window background (near-invisible "dim" text, reported
-    live in dark theme). This blend is always readable against the actual
-    background because it is derived from it, in either theme.
+    live in dark theme).
     """
+    return str(_palette_ui_tokens()["fg_dim"])
+
+
+def _palette_ui_tokens() -> dict:
+    """Shared UI tokens for whichever theme the live app palette is in."""
     app = QApplication.instance()
     pal = app.palette() if app is not None else QPalette()
-    fg = pal.color(QPalette.ColorRole.WindowText)
-    bg = pal.color(QPalette.ColorRole.Window)
-    r = (fg.red() + bg.red()) // 2
-    g = (fg.green() + bg.green()) // 2
-    b = (fg.blue() + bg.blue()) // 2
-    return f"#{r:02x}{g:02x}{b:02x}"
+    return ui_theme_tokens(pal.color(QPalette.ColorRole.Window).lightness() < 128)
 
 
 def _evidence_ref_list(ids, label_fn) -> QLabel:
@@ -96400,7 +96602,7 @@ class _CommandPaletteDialog(QDialog):
             QListWidget {{ background:transparent; border:none; }}
             QListWidget::item {{ border-radius:7px; margin:1px 0; }}
             QListWidget::item:selected {{ background:{_sel_bg}; color:palette(text); }}
-            QLabel#palette_hint {{ color:#8a96a8; font-size:11px; }}
+            QLabel#palette_hint {{ color:{_dim_text_color()}; font-size:11px; }}
         """)
         self.resize(460, 392)
         self._edit.textChanged.connect(self._filter)
@@ -96445,7 +96647,7 @@ class _CommandPaletteDialog(QDialog):
             )
             item.setToolTip(tip)
             if not available:
-                item.setForeground(QBrush(QColor("#8a96a8")))
+                item.setForeground(QBrush(QColor(_dim_text_color())))
             row_w = QWidget()
             row_w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             hl = QHBoxLayout(row_w)
@@ -96453,11 +96655,11 @@ class _CommandPaletteDialog(QDialog):
             hl.setSpacing(8)
             lab = QLabel(label)
             if not available:
-                lab.setStyleSheet("color:#8a96a8;")
+                lab.setStyleSheet(f"color:{_dim_text_color()};")
             hl.addWidget(lab, 1)
             if shortcut:
                 sc = QLabel(shortcut)
-                sc.setStyleSheet("color:#8a96a8;font-size:11px;")
+                sc.setStyleSheet(f"color:{_dim_text_color()};font-size:11px;")
                 hl.addWidget(sc, 0, Qt.AlignmentFlag.AlignRight)
             item.setSizeHint(QSize(0, 30))
             self._list.addItem(item)
@@ -97767,6 +97969,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             dark = bool(getattr(self, "_is_dark", True))
             rail.set_collapsed_look(collapsed, "#9E9E9E" if dark else "#666666")
         if collapsed:
+            if getattr(self, "_report_expanded", False):
+                self._set_report_expanded(False, persist_width=False)
             w = int(dock.width())
             if w > _IconRail.RAIL_W + 8:
                 self._panel_saved_width = w
@@ -97783,6 +97987,75 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if persist and hasattr(self, "_settings"):
             self._settings.set("panel", "collapsed",
                                "true" if collapsed else "false", flush=False)
+        self._sync_report_expand_button()
+
+    def _report_expand_tab_id(self, index: int | None = None) -> str:
+        tabs = getattr(self, "_panel_tabs", None)
+        idx = self._panel_tabs.currentIndex() if index is None and tabs is not None else index
+        if idx == _PANEL_TAB_STATS:
+            return "stats"
+        if idx == _PANEL_TAB_AI:
+            return "ai"
+        return ""
+
+    def _toggle_report_expanded(self) -> None:
+        self._set_report_expanded(not getattr(self, "_report_expanded", False))
+
+    def _suspend_report_expansion_for_evidence(self) -> None:
+        """Evidence jumps need the timeline: drop to the normal layout and
+        offer "Back to report" to re-expand the same report."""
+        if not getattr(self, "_report_expanded", False):
+            return
+        self._set_report_expanded(False)
+        self._report_return_pending = True
+        self._sync_report_expand_button()
+
+    def _set_report_expanded(self, expanded: bool, *, persist_width: bool = True) -> None:
+        """Widen Statistics/AI to ~82% of the window, or restore the prior width."""
+        dock = getattr(self, "_panel_dock", None)
+        if dock is None:
+            return
+        expanded = bool(expanded)
+        self._report_return_pending = False
+        if expanded:
+            if not report_expand_allowed(self._report_expand_tab_id()):
+                return
+            if getattr(self, "_panel_collapsed", False):
+                self._set_panel_collapsed(False)
+            if persist_width and not getattr(self, "_report_expanded", False):
+                w = int(dock.width())
+                if w > _IconRail.RAIL_W + 8:
+                    self._panel_pre_expand_width = w
+            self._report_expanded = True
+            target = max(_RIGHT_DOCK_MIN_W, expanded_report_width(
+                self.width(), current=getattr(self, "_panel_pre_expand_width", 0)))
+            self._resize_right_dock_column(target)
+        else:
+            self._report_expanded = False
+            target = (
+                getattr(self, "_panel_pre_expand_width", 0)
+                or getattr(self, "_panel_saved_width", 0)
+                or _RIGHT_DOCK_DEFAULT_W
+            )
+            target = min(max(_RIGHT_DOCK_MIN_W, int(target)), _RIGHT_DOCK_MAX_W)
+            self._resize_right_dock_column(target)
+        self._sync_report_expand_button()
+
+    def _sync_report_expand_button(self) -> None:
+        btn = getattr(self, "_rp_expand_btn", None)
+        if btn is None:
+            return
+        allowed = (
+            report_expand_allowed(self._report_expand_tab_id())
+            and not getattr(self, "_panel_collapsed", False)
+        )
+        btn.setVisible(allowed)
+        state = report_expand_button(
+            getattr(self, "_report_expanded", False),
+            getattr(self, "_report_return_pending", False))
+        btn.setText(state["label"])
+        btn.setToolTip(state["tooltip"])
+        btn.setAccessibleName(state["label"])
 
     def _apply_panel_collapsed_from_settings(self) -> None:
         """Restore the collapsed state after the window is shown and the dock
@@ -97845,6 +98118,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tabs = getattr(self, "_panel_tabs", None)
         if hdr is not None and tabs is not None and 0 <= index < tabs.count():
             hdr.setText(tabs.tabText(index))
+        if getattr(self, "_report_expanded", False) and not report_expand_allowed(
+                self._report_expand_tab_id(index)):
+            self._set_report_expanded(False)
+        else:
+            self._sync_report_expand_button()
         if index != _PANEL_TAB_AI:
             return
         panel = getattr(self, "_ai_panel", None)
@@ -98506,7 +98784,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         finally:
             for dock in docks:
                 dock.setMinimumWidth(_RIGHT_DOCK_MIN_W)
-                dock.setMaximumWidth(_RIGHT_DOCK_MAX_W)
+                if getattr(self, "_report_expanded", False):
+                    dock.setMaximumWidth(16777215)
+                else:
+                    dock.setMaximumWidth(_RIGHT_DOCK_MAX_W)
 
     def _schedule_stabilize_right_dock_layout(self) -> None:
         """Coalesce native dock splitter resizes into one stabilization pass."""
@@ -98523,6 +98804,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Reconcile dock/central split after native splitter drags."""
         if getattr(self, "_panel_collapsed", False):
             return
+        if getattr(self, "_report_expanded", False):
+            return
         self._apply_right_dock_width(self._current_right_dock_width())
 
     def _apply_right_dock_width(self, width: float) -> None:
@@ -98533,6 +98816,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if self._dock_width_apply_guard:
             return
         if getattr(self, "_panel_collapsed", False):
+            self._dock_width_pending = None
+            return
+        if getattr(self, "_report_expanded", False):
             self._dock_width_pending = None
             return
         if self._dock_width_pending is None:
@@ -98845,6 +99131,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         super().resizeEvent(event)
         self._sync_panel_seam_resizers()
         self._unify_tab_strip_heights()
+        if getattr(self, "_report_expanded", False):
+            target = max(_RIGHT_DOCK_MIN_W, expanded_report_width(
+                self.width(), current=getattr(self, "_panel_pre_expand_width", 0)))
+            self._resize_right_dock_column(target)
         if (self._shutting_down or self._cpu_splitter_user_sized
                 or not self._show_cpu_load or self._active_tab is None):
             return
@@ -99172,7 +99462,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         QPalette.  Edit only this method to change any theme color.
         """
         if is_dark:
-            return dict(
+            tokens = dict(
                 accent        = "#0E4D80",
                 win_bg        = "#1E1E1E",
                 win_base      = "#121212",
@@ -99223,7 +99513,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 sem_warn      = "#e67e22",
                 sem_err       = "#e74c3c",
             )
-        return dict(
+            return MainWindow._merge_ui_theme(tokens, True)
+        tokens = dict(
             accent        = "#005A9E",
             win_bg        = "#F5F5F5",
             win_base      = "#FFFFFF",
@@ -99268,6 +99559,23 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             sem_warn      = "#9a4d00",
             sem_err       = "#c0392b",
         )
+        return MainWindow._merge_ui_theme(tokens, False)
+
+    @staticmethod
+    def _merge_ui_theme(tokens: dict, is_dark: bool) -> dict:
+        """Overlay the shared semantic palette onto the shell tokens.
+
+        Text and control-boundary roles follow ``ui_theme`` (same values the
+        web app writes onto ``.app``); shell backgrounds stay as they are.
+        """
+        ui = ui_theme_tokens(is_dark)
+        tokens.update(ui)
+        tokens["text"] = ui["fg"]
+        tokens["input_fg"] = ui["fg"]
+        tokens["muted_text"] = ui["fg_dim"]
+        tokens["input_border"] = ui["control_border"]
+        tokens["cb_border"] = ui["control_border"]
+        return tokens
 
     def _apply_theme(self, is_dark: bool, *, op: int | None = None) -> None:
         """Apply the dark or light UI theme to the entire application.
@@ -99518,19 +99826,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QSpinBox, QDoubleSpinBox {{ background:{c['input_bg']}; color:{c['input_fg']};
                          border:1px solid {c['input_border']}; border-radius:6px; font-size:{_ui_fs};
                          padding:3px 8px; min-height:1.6em; }}
-            QSpinBox:focus, QDoubleSpinBox:focus {{ border-color:{c['accent']}; }}
+            QSpinBox:focus, QDoubleSpinBox:focus {{ border-color:{c['focus']}; }}
             QLineEdit   {{ background:{c['input_bg']}; color:{c['input_fg']};
                          border:1px solid {c['input_border']}; border-radius:6px;
                          padding:3px 8px; }}
-            QLineEdit:focus {{ border-color:{c['accent']}; }}
+            QLineEdit:focus {{ border-color:{c['focus']}; }}
             QPlainTextEdit, QTextEdit, QTextBrowser {{
                          background:{c['input_bg']}; color:{c['input_fg']};
                          border:1px solid {c['input_border']}; border-radius:6px; }}
-            QPlainTextEdit:focus, QTextEdit:focus {{ border-color:{c['accent']}; }}
+            QPlainTextEdit:focus, QTextEdit:focus {{ border-color:{c['focus']}; }}
             QComboBox   {{ background:{c['combo_bg']}; color:{c['text']};
                          border:1px solid {c['input_border']}; border-radius:6px; font-size:{_ui_fs};
                          padding:3px 8px; min-height:1.6em; }}
-            QComboBox:focus, QComboBox:on {{ border-color:{c['accent']}; }}
+            QComboBox:focus, QComboBox:on {{ border-color:{c['focus']}; }}
             QComboBox QAbstractItemView {{ background:{c['combo_view_bg']}; color:{c['text']};
                          border:1px solid {c['sep']}; border-radius:6px; padding:4px; outline:0;
                          selection-background-color:{c['accent']}; selection-color:#FFFFFF;
@@ -99545,7 +99853,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          padding:5px 14px; font-size:{_ui_fs}; }}
             QPushButton:hover   {{ background:{c['tb_hover']}; }}
             QPushButton:pressed {{ background:{c['tb_pressed']}; color:#FFFFFF; }}
-            QPushButton:focus   {{ border-color:{c['accent']}; }}
+            QPushButton:focus   {{ border-color:{c['focus']}; }}
             QPushButton:disabled {{ color:{c['tb_disabled']}; background:{c['mid']}; }}
             QListWidget {{ background:{c['win_base']}; color:{c['text']};
                          border:1px solid {c['input_border']}; border-radius:6px; font-size:{_ui_fs}; }}
@@ -99569,7 +99877,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          min-height:1px; max-height:1px; }}
             /* Marks-tab collapsible cards — web App.vue .rp-card */
             QWidget#rp_card {{ background:{c['win_base']};
-                         border:1px solid {c['input_border']};
+                         border:1px solid {c['divider']};
                          border-radius:6px; }}
             QToolButton#rp_card_head {{ background:transparent; border:none;
                          color:{c['text']}; font-weight:600; text-align:left;
@@ -99587,8 +99895,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QToolButton#rail_btn {{ background:transparent; border:none;
                          border-left:2px solid transparent; }}
             QToolButton#rail_btn:hover {{ background:{c['list_hover']}; }}
-            QToolButton#rail_btn:checked {{ background:{c['win_base']};
-                         border-left:2px solid {c['accent']}; }}
+            QToolButton#rail_btn:checked {{ background:{c.get('list_hover', c['win_base'])};
+                         border-left:2px solid {c.get('accent_ui', c['accent'])}; }}
+            QToolButton#rail_btn:focus {{
+                         border:1px solid {c.get('focus', c.get('accent_ui', c['accent']))}; }}
+            QToolButton#rail_btn:checked:focus {{
+                         background:{c.get('list_hover', c['win_base'])};
+                         border-left:2px solid {c.get('accent_ui', c['accent'])}; }}
+            QPushButton#rp_expand_btn {{
+                         background:transparent; color:{c['fg_dim']};
+                         border:1px solid {c['control_border']};
+                         border-radius:{int(c.get('radius_ctrl', 6))}px;
+                         padding:2px 8px; min-height:24px; }}
+            QPushButton#rp_expand_btn:hover {{ color:{c.get('fg', c['text'])};
+                         border-color:{c.get('accent_ui', c['accent'])}; }}
+            QWidget#welcome_page {{ background:{c.get('workspace', c['win_bg'])}; }}
+            QLabel#welcome_title {{ color:{c.get('fg', c['text'])}; font-size:18px;
+                         font-weight:700; }}
+            QLabel#welcome_msg {{ color:{c.get('fg_dim', c['muted_text'])}; }}
             QToolButton#rail_collapse {{ background:transparent; border:none;
                          border-top:1px solid {c['sep']}; }}
             QToolButton#rail_collapse:hover {{ background:{c['list_hover']}; }}
@@ -99623,6 +99947,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QLabel#find_mode_label {{ color:{c['muted_text']}; }}
             QLabel#find_note {{ color:{c['muted_text']}; font-size:11px; }}
             QLabel#find_empty_text {{ color:{c['muted_text']}; font-size:11px; }}
+            QLabel#find_mode_help {{ color:{c['muted_text']}; font-size:11px; }}
+            QLabel#marks_empty_hint {{ color:{c['muted_text']}; font-style:italic; }}
+            QLabel#muted_mono {{ color:{c['muted_text']}; }}
+            QLabel#stats_empty_hint {{ color:{c['muted_text']}; }}
             QToolButton#findbar_step {{ border:none; background:transparent;
                          color:{c['muted_text']}; font-size:15px;
                          padding:0 5px; }}
@@ -99723,7 +100051,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          border:1px solid {c['sep']}; top:-1px; }}
             QTabWidget#marks_tab_widget QTabBar#marks_tab_bar {{
                          background:{c['win_bg']}; }}
-        """)
+        """ + button_qss("primary", c, object_name="welcome_open_btn")
+              + button_qss("secondary", c, object_name="welcome_demo_btn"))
             _ok = True
         finally:
             self.setUpdatesEnabled(True)
@@ -100011,9 +100340,38 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._undo_suppress: bool = False
 
         self._welcome_page = QWidget()
+        self._welcome_page.setObjectName("welcome_page")
         _wl = QVBoxLayout(self._welcome_page)
-        _wl.setContentsMargins(0, 0, 0, 0)
+        _wl.setContentsMargins(24, 24, 24, 24)
+        _wl.setSpacing(12)
         _wl.addStretch(1)
+        welcome_title = QLabel("BTF Trace Viewer")
+        welcome_title.setObjectName("welcome_title")
+        welcome_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _wl.addWidget(welcome_title)
+        welcome_msg = QLabel(empty_state_message("no_trace"))
+        welcome_msg.setObjectName("welcome_msg")
+        welcome_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        welcome_msg.setWordWrap(True)
+        _wl.addWidget(welcome_msg)
+        welcome_row = QHBoxLayout()
+        welcome_row.setSpacing(8)
+        welcome_row.addStretch(1)
+        self._welcome_open_btn = QPushButton("Open…")
+        self._welcome_open_btn.setObjectName("welcome_open_btn")
+        self._welcome_open_btn.setToolTip("Open a BTF trace, demo pack, or workspace")
+        self._welcome_open_btn.setAccessibleName("Open a BTF trace")
+        self._welcome_open_btn.clicked.connect(self._on_open)
+        welcome_row.addWidget(self._welcome_open_btn)
+        self._welcome_demo_btn = QPushButton("Load bundled demo")
+        self._welcome_demo_btn.setObjectName("welcome_demo_btn")
+        self._welcome_demo_btn.setToolTip("Load the bundled demo trace")
+        self._welcome_demo_btn.setAccessibleName("Load the bundled demo trace")
+        self._welcome_demo_btn.clicked.connect(self._on_welcome_demo)
+        welcome_row.addWidget(self._welcome_demo_btn)
+        welcome_row.addStretch(1)
+        _wl.addLayout(welcome_row)
+        _wl.addStretch(2)
 
         self._tab_widget = _StretchTabWidget()
         self._tab_widget.setTabBar(_LeftAlignedTabBar(self._tab_widget))
@@ -100323,7 +100681,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             row_lay.setContentsMargins(2, 0, 2, 0)
             row_lay.setSpacing(6)
             key_lbl = QLabel(key)
-            key_lbl.setStyleSheet(f"color:#999; font-family:'{_mono_fam}';")
+            key_lbl.setObjectName("muted_mono")
+            key_lbl.setStyleSheet(f"font-family:'{_mono_fam}';")
             val_lbl = QLabel("")
             val_lbl.setStyleSheet(f"font-family:'{_mono_fam}';")
             row_lay.addWidget(key_lbl, 0)
@@ -100349,7 +100708,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cr_v.addWidget(self._cr_max_row)
         _range_card_v.addWidget(self._cursor_range_body)
         self._cursor_range_hint = QLabel("Place 2+ cursors to measure range")
-        self._cursor_range_hint.setStyleSheet("color:#999; font-style:italic;")
+        self._cursor_range_hint.setObjectName("marks_empty_hint")
         self._cursor_range_hint.setWordWrap(True)
         _range_card_v.addWidget(self._cursor_range_hint)
         self._cursor_range_body.setVisible(False)
@@ -100379,9 +100738,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _mark_del_key.activated.connect(self._delete_selected_mark)
         _marks_card_v.addWidget(self._marks_list, 1)
 
-        self._marks_empty_hint = QLabel("Right-click timeline to add · Double-click or press B / A")
+        self._marks_empty_hint = QLabel(empty_state_message("no_marks"))
+        self._marks_empty_hint.setObjectName("marks_empty_hint")
         self._marks_empty_hint.setWordWrap(True)
-        self._marks_empty_hint.setStyleSheet("color:#999; font-style:italic;")
         self._marks_empty_hint.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         # When the list is hidden (no marks) the hint takes the list's slack so
@@ -100507,7 +100866,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_mode_help.setWordWrap(True)
         self._find_mode_help.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self._find_mode_help.setStyleSheet("color:#8b98a8; font-size:11px;")
         # Long explanation stays in the combo Tooltip only, not a visible line.
         self._find_mode_help.setVisible(False)
         find_v.addWidget(self._find_mode_help)
@@ -100528,9 +100886,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _fe_icon.setPixmap(_svg_icon(_IC_FIND, "#8b98a8", 22).pixmap(22, 22))
         _fe_icon.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         _fe.addWidget(_fe_icon)
-        _fe_text = QLabel(
-            "Search across tasks, annotations and migration events "
-            "in the active trace.")
+        _fe_text = QLabel(empty_state_message("no_find_query"))
         _fe_text.setObjectName("find_empty_text")
         _fe_text.setWordWrap(True)
         _fe_text.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -100590,8 +100946,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _rp_hdr_wrap.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         _rp_hw = QHBoxLayout(_rp_hdr_wrap)
         _rp_hw.setContentsMargins(10, 6, 10, 6)
-        _rp_hw.setSpacing(0)
+        _rp_hw.setSpacing(8)
         _rp_hw.addWidget(self._rp_page_header, 1)
+        self._rp_expand_btn = QPushButton("Expand report")
+        self._rp_expand_btn.setObjectName("rp_expand_btn")
+        self._rp_expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rp_expand_btn.setToolTip("Give the report most of the workspace")
+        self._rp_expand_btn.setAccessibleName("Expand report")
+        # Fixed keeps _relax_widget_tree() from forcing Ignored (zero width).
+        self._rp_expand_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._rp_expand_btn.clicked.connect(self._toggle_report_expanded)
+        self._rp_expand_btn.hide()
+        _rp_hw.addWidget(self._rp_expand_btn, 0)
+        self._report_expanded = False
+        self._report_return_pending = False
+        self._panel_pre_expand_width = 0
 
         self._rp_content = QWidget()
         _rp_content = self._rp_content
@@ -100642,6 +101011,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         self._sync_panel_tab_visibility()
         self._focus_statistics_panel()
+        self._sync_report_expand_button()
         # Default dock sizes are applied in _restore_settings via QTimer.singleShot
         # AFTER the window is shown, where resizeDocks() is actually effective.
 
@@ -100664,6 +101034,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _clear_panels_for_empty_session(self) -> None:
         """Drop last-trace chrome after Close All / last tab close."""
+        if getattr(self, "_report_expanded", False):
+            self._set_report_expanded(False)
+        self._report_return_pending = False
+        self._sync_report_expand_button()
         if hasattr(self, "_stats_panel"):
             self._stats_panel.clear_trace()
         if hasattr(self, "_legend"):
@@ -101170,7 +101544,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     parts.append(block)
             if details_lbl is not None:
                 details_lbl.setText("<br><br>".join(parts) if parts else summary)
-            summary_lbl.setText(summary)
+            summary_lbl.setText(status_cue_text(summary, "warning"))
             banner.setVisible(True)
             open_ = bool(getattr(self, "_trace_quality_details_open", False))
             if details_lbl is not None:
@@ -101435,6 +101809,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._evidence_history = push_evidence_entry(
             getattr(self, "_evidence_history", None), entry)
         self._update_evidence_inspector_bar()
+        self._suspend_report_expansion_for_evidence()
 
     def _update_evidence_inspector_bar(self) -> None:
         bar = getattr(self, "_evidence_inspector_bar", None)
@@ -106796,7 +107171,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._set_find_counter("")
         note = "" if (not has_q or n) else (
-            f"No matches for \u201c{str(q).strip()}\u201d. "
+            f"{empty_state_message('no_find_hits')} "
             "Try a different Match mode.")
         self._set_find_ui_state(has_q, n, note)
 
@@ -108823,6 +109198,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     # -- Help -----------------------------------------------------------
 
     @_dialog_guard
+    def _on_welcome_demo(self) -> None:
+        """Welcome-page CTA: bundled example trace, else the guided demo pack."""
+        root = Path(__file__).resolve().parents[1]
+        for cand in (
+            root / "web" / "example-2cores.btf.gz",
+            root.parent / "tracedata" / "example-8cores.btf.gz",
+        ):
+            if cand.is_file():
+                self._open_file(str(cand))
+                return
+        self._on_open_guided_demo()
+
     def _on_open_guided_demo(self) -> None:
         """Help ▸ Open Guided Demo — launch the bundled investigation-workflow
         tour (demos/demo_8cores). Uses the same demo runner as a dropped .btfw

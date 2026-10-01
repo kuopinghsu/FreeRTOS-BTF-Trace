@@ -68,7 +68,7 @@ pip install -r requirements.txt
 python builds/btf_viewer.py trace.btf
 ```
 
-請將 `trace.btf` 換成實際的追蹤檔案路徑。若未指定檔案，BTFViewer 會還原上一次的工作階段。也可以透過 **File → Open**、**File → Open Recent** 或拖放方式開啟檔案。
+請將 `trace.btf` 換成實際的追蹤檔案路徑。若未指定檔案，BTFViewer 會還原上一次的工作階段。若沒有可還原的工作階段，歡迎頁會提供 **Open…** 與 **Load bundled demo**。也可以透過 **File → Open**、**File → Open Recent** 或拖放方式開啟檔案。
 
 ### 網頁應用程式
 
@@ -179,7 +179,7 @@ BTFViewer 使用一致的檢視介面、控制項目與分析流程。判讀結�
 | 4 | **圖例／工作清單（Legend / task list）** | 各列的顏色對照。將滑鼠移到項目上為 **Highlight**，點選為 **Selection**；在 Core View 中，**Cores** 核取方塊即為 Core Filter。 |
 | 5 | **時間軸與時間刻度（Timeline and time ruler）** | 依比例呈現的事件檢視。`Ctrl`+滾輪以游標為中心縮放、拖曳可平移、點選可放置游標，將滑鼠移到區段上會顯示工作、核心、起訖時間與長度。右下角的小方框是整份擷取的概覽圖。 |
 | 6 | **CPU 負載圖（CPU load graph）** | 時間軸下方的使用率；以 **Load** 切換顯示，拖曳分隔線可調整高度。選取某個工作後，Task View 可在此顯示該工作在各核心的使用率。 |
-| 7 | **右側面板（Right panel）** | 圖示列可在 **Statistics**、**Marks**、**Find**、**Legend** 與 **AI Assistant** 之間切換。Statistics（圖中所示）包含 **Limit to C1–Cn** 開關、調查分類篩選、摘要、可摺疊的指標區塊，以及底部的 **Anonymize** 與 **Export HTML**。 |
+| 7 | **右側面板（Right panel）** | 圖示列可在 **Statistics**、**Marks**、**Find**、**Legend** 與 **AI Assistant** 之間切換。Statistics（圖中所示）包含 **Limit to C1–Cn** 開關、調查分類篩選、摘要、可摺疊的指標區塊，以及底部的 **Anonymize** 與 **Export HTML**。在 Statistics 或 AI 上，**Expand report** 會把報告拉到大部分工作區；**Restore layout** 會還原先前寬度。展開時跳到證據會回到一般版面以顯示時間軸；按 **Back to report** 可再次展開。時間軸至少保留 240 px。狀態列除顏色外另以符號標示（✖ 錯誤、⚠ 警告）。 |
 | 8 | **狀態列（Status bar）** | 目前追蹤資料摘要、選取項目、分析範圍、**Filtered:** 狀態、縮放（µs/px 與可見範圍），以及 **Find** 的 `k of N` 結果。 |
 
 ### 調查用語
@@ -415,7 +415,7 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 選配的 **AI Assistant** 可說明 BTFViewer 量測出的分析結果與統計資料。它不能取代時間軸驗證，也無法補出追蹤資料中未記錄的量測資料。
 
-可從右側面板的圖示列（**AI Assistant**）開啟。
+可從右側面板的圖示列（**AI Assistant**）開啟。**Language…**、**Settings…** 與 **Clear** 收在 **AI Assistant** 標題列右端的 **⋯** 選單（以及對話右鍵選單）。**Start Investigation** 仍是主要動作。
 
 ![AI Assistant panel](../images/btfviewer-web-ai.png)
 

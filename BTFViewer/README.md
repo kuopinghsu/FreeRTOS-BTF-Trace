@@ -68,7 +68,7 @@ pip install -r requirements.txt
 python builds/btf_viewer.py trace.btf
 ```
 
-Replace `trace.btf` with the path to the trace file. If no file is specified, BTFViewer restores the previous session. Files can also be opened through **File → Open**, **File → Open Recent**, or drag and drop.
+Replace `trace.btf` with the path to the trace file. If no file is specified, BTFViewer restores the previous session. With no session to restore, the welcome page offers **Open…** and **Load bundled demo**. Files can also be opened through **File → Open**, **File → Open Recent**, or drag and drop.
 
 ### Web application
 
@@ -179,7 +179,7 @@ The Desktop and Web builds share one layout.
 | 4 | **Legend / task list** | Colour key for the rows. Hover an entry for **Highlight**, click it for **Selection**; in Core View the **Cores** checkboxes act as the Core Filter. |
 | 5 | **Timeline and time ruler** | The scaled event view. `Ctrl`+scroll zooms toward the pointer, drag to pan, click to place a cursor, and hover a segment for task, core, start/end, and duration. The small framed box at the lower right is a whole-capture overview. |
 | 6 | **CPU load graph** | Utilisation below the timeline; toggle it with **Load** and drag the divider to resize. With a task selected, Task View can show that task's per-core utilisation here. |
-| 7 | **Right panel** | The icon rail switches between **Statistics**, **Marks**, **Find**, **Legend**, and the **AI Assistant**. Statistics (shown) holds the **Limit to C1–Cn** toggle, the investigation-category filter, the summary, the collapsible metric sections, and **Anonymize** + **Export HTML** in its footer. |
+| 7 | **Right panel** | The icon rail switches between **Statistics**, **Marks**, **Find**, **Legend**, and the **AI Assistant**. Statistics (shown) holds the **Limit to C1–Cn** toggle, the investigation-category filter, the summary, the collapsible metric sections, and **Anonymize** + **Export HTML** in its footer. On Statistics or AI, **Expand report** gives the report most of the workspace; **Restore layout** returns the previous width. Jumping to evidence while expanded drops back to the normal layout so the timeline is visible; **Back to report** re-expands it. The timeline always keeps at least 240 px. Status lines pair color with a glyph (✖ error, ⚠ warning). |
 | 8 | **Status bar** | Active-trace summary, current **Selection**, **Scope**, **Filtered:** state, zoom (µs/px and visible span), and Find `k of N` results. |
 
 ### Investigation terminology
@@ -415,7 +415,7 @@ The Investigation Notebook (question, evidence, links, and conclusion) is includ
 
 The optional AI Assistant explains Analysis Findings and Statistics measured by BTFViewer. It does not replace timeline verification or create measurements that are missing from the trace.
 
-Open it from the right panel's icon rail (**AI Assistant**).
+Open it from the right panel's icon rail (**AI Assistant**). **Language…**, **Settings…**, and **Clear** live in the **⋯** menu at the right end of the **AI Assistant** header line (and the conversation context menu). **Start Investigation** stays the primary action.
 
 ![AI Assistant panel](../images/btfviewer-web-ai.png)
 

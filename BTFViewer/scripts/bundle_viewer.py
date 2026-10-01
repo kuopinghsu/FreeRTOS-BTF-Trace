@@ -27,6 +27,7 @@ GENERATED_BANNER = (
 # Monolith section order for the bundled single file.
 BUNDLE_MODULES: list[str] = [
     "config",
+    "ui_theme",
     "zip_container",
     "html_report",
     "stats_html",
@@ -105,6 +106,7 @@ SECTION_MARKERS: dict[str, str] = {
     "evidence_nav": "# Universal Evidence Navigation",
     "loading_state": "# Loading-state UX (Step 3)",
     "empty_state": "# Empty-state messages (Step 3)",
+    "ui_theme": "# Shared semantic UI tokens (Modern UX)",
     "disabled_reason": "# Disabled-state prerequisites (Step 3)",
     "error_format": "# User-facing error formatting (Step 3)",
     "numeric_format": "# Numeric presentation (Step 3)",

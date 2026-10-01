@@ -575,6 +575,7 @@
                   <input
                     :value="it.text"
                     class="nb-ev-title-input"
+                    data-inline-edit
                     type="text"
                     @change="commit(updateBm(it.bookmark_id, { title: $event.target.value }))"
                   >
@@ -595,6 +596,7 @@
                 <textarea
                   :value="it.note"
                   class="nb-ev-note"
+                  data-inline-edit
                   rows="1"
                   placeholder="Explanation (your words)"
                   @change="commit(editExplanation(it.bookmark_id, $event.target.value))"
@@ -849,6 +851,7 @@
                 <input
                   :value="it.text"
                   class="nb-exp-title-input"
+                  data-inline-edit
                   type="text"
                   @change="commit(updateBm(it.bookmark_id, { title: $event.target.value }))"
                 >
@@ -2401,7 +2404,7 @@ onBeforeUnmount(() => {
 }
 .nb-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #7f8c8d; }
 .nb-status-dot.s-needs_evidence { background: var(--semantic-warning, #e67e22); }
-.nb-status-dot.s-ready_to_conclude { background: #2e86de; }
+.nb-status-dot.s-ready_to_conclude { background: var(--accent-ui, #2e86de); }
 .nb-status-dot.s-closed { background: #27ae60; }
 .nb-header-right { display: flex; align-items: center; gap: 6px; flex: none; }
 .nb-icon-btn {
@@ -2452,7 +2455,7 @@ onBeforeUnmount(() => {
   display: inline-flex; align-items: center; justify-content: center; font-size: 11px; flex: none;
 }
 .nb-step-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-.nb-step-tab.active .nb-step-num { background: var(--accent); border-color: var(--accent); color: #fff; }
+.nb-step-tab.active .nb-step-num { background: var(--accent-ui, var(--accent)); border-color: var(--accent-ui, var(--accent)); color: var(--on-accent, #fff); }
 .nb-step-nav-compact {
   position: relative; min-height: 52px; display: flex; align-items: center; padding: 0 18px;
   border-bottom: 1px solid var(--app-border-soft, var(--border));
@@ -2538,7 +2541,7 @@ onBeforeUnmount(() => {
 }
 .nb-btn:hover:not(:disabled) { background: var(--tb-btn-hover, var(--bg)); }
 .nb-btn:disabled { opacity: 0.45; cursor: default; }
-.nb-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.nb-btn.primary { background: var(--accent-ui, var(--accent)); border-color: var(--accent-ui, var(--accent)); color: var(--on-accent, #fff); }
 .nb-btn.primary:disabled { opacity: 0.5; }
 .nb-btn.small { padding: 4px 10px; font-size: 11.5px; }
 

@@ -119,7 +119,7 @@ describe('AI conversation turn layout', () => {
     assert.match(aiPanel, /class="ai-plan-status"/)
     assert.match(aiPanel, /Language…/)
     assert.match(aiPanel, /Settings…/)
-    assert.doesNotMatch(aiPanel, /overflowOpen/)
+    assert.match(aiPanel, /data-testid="ai-overflow-btn"/)
     assert.match(aiPanel, /formatEvidencePanelMarkdown/)
     assert.match(aiPanel, /ai-ev-panel/)
     assert.match(aiPanel, /toggleEvidenceSubfolds/)

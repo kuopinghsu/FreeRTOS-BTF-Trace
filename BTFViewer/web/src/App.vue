@@ -204,7 +204,7 @@
         class="trace-quality-banner ctx-row ctx-row--warn"
         role="status"
       >
-        <span>{{ traceQualityReportData.summary }}</span>
+        <span>{{ statusCueText(traceQualityReportData.summary, 'warning') }}</span>
         <button
           type="button"
           class="first-run-btn"
@@ -384,6 +384,7 @@
           v-if="heatmapEnabled"
           type="button"
           class="rail-btn act-btn"
+          aria-label="Migration &amp; Corridor Inspector"
           data-demo-target="rail_heatmap"
           @click="onOpenHeatmap"
         >
@@ -423,6 +424,7 @@
         <button
           type="button"
           class="rail-btn act-btn"
+          aria-label="Analysis findings"
           data-demo-target="rail_analysis"
           @click="analysisOpen = true"
         >
@@ -439,6 +441,7 @@
         <button
           type="button"
           class="rail-btn act-btn"
+          aria-label="Investigation notebook"
           data-demo-target="rail_notebook"
           @click="openNotebookDialog"
         >
@@ -458,6 +461,7 @@
           type="button"
           class="rail-btn act-btn"
           data-demo-target="rail_compare"
+          aria-label="Compare traces"
           :disabled="compareTabs.length < 2"
           :title="compareTabs.length < 2 ? 'Compare traces — open a second trace to enable' : 'Compare traces'"
           @click="onOpenTraceCompare"
@@ -485,6 +489,7 @@
           v-if="traceInfo"
           type="button"
           class="rail-btn act-btn"
+          aria-label="Snapshot Editor"
           data-demo-target="rail_snapshot"
           @click="onCopyScreenshot"
         >
@@ -509,6 +514,7 @@
         <button
           type="button"
           class="rail-btn act-btn"
+          aria-label="Help &amp; keyboard shortcuts"
           data-demo-target="rail_help"
           @click="openHelpDialog"
         >
@@ -530,6 +536,7 @@
         <button
           type="button"
           class="rail-btn act-btn"
+          aria-label="Settings"
           data-demo-target="rail_settings"
           @click="openSettingsDialog"
         >
@@ -555,6 +562,34 @@
         class="left-pane"
       >
         <div class="timeline-wrap">
+          <div
+            v-if="!loading && !trace"
+            class="welcome-page"
+            data-testid="welcome-page"
+          >
+            <h2 class="welcome-title">BTF Trace Viewer</h2>
+            <p class="welcome-msg">{{ emptyStateMessage('noTrace') }}</p>
+            <div class="welcome-actions">
+              <button
+                type="button"
+                class="btn-primary"
+                data-testid="welcome-open"
+                title="Open a BTF trace, demo pack, or workspace"
+                @click="toolbarRef?.triggerOpen()"
+              >
+                Open…
+              </button>
+              <button
+                type="button"
+                class="btn-secondary"
+                data-testid="welcome-demo"
+                title="Load the bundled demo trace"
+                @click="onLoadDemo"
+              >
+                Load bundled demo
+              </button>
+            </div>
+          </div>
           <!-- First-load skeleton: placeholder lanes so the layout is already
                the right shape when TimelinePanel takes over. -->
           <div
@@ -672,7 +707,7 @@
         v-if="trace"
         class="right-panel"
         :class="{ collapsed: rightPanelCollapsed }"
-        :style="{ width: (rightPanelCollapsed ? 44 : rightPanelWidth) + 'px' }"
+        :style="{ width: (rightPanelCollapsed ? 44 : effectiveRightPanelWidth) + 'px' }"
       >
         <div
           v-show="!rightPanelCollapsed"
@@ -682,6 +717,17 @@
             <h2 class="rp-title">
               {{ rightPanelTitle }}
             </h2>
+            <button
+              v-if="reportExpandAllowed"
+              type="button"
+              class="rp-expand-btn"
+              data-testid="rp-expand-btn"
+              :title="reportExpandBtn.tooltip"
+              :aria-label="reportExpandBtn.label"
+              @click="toggleReportExpanded"
+            >
+              {{ reportExpandBtn.label }}
+            </button>
           </div>
 
           <div class="panel-page-wrap">
@@ -1007,6 +1053,7 @@
           <button
             v-if="appSettings.showStats"
             class="rail-btn"
+            aria-label="Statistics"
             data-demo-target="stats_tab"
             :class="{ active: rightPanelTab === 'stats' }"
             role="tab"
@@ -1025,6 +1072,7 @@
           <button
             v-if="appSettings.showMarks"
             class="rail-btn"
+            aria-label="Marks"
             data-demo-target="marks_tab"
             :class="{ active: rightPanelTab === 'marks' }"
             role="tab"
@@ -1043,6 +1091,7 @@
           <button
             v-if="appSettings.showFind"
             class="rail-btn"
+            aria-label="Find"
             data-demo-target="find_tab"
             :class="{ active: rightPanelTab === 'find' }"
             role="tab"
@@ -1065,6 +1114,7 @@
           <button
             v-if="appSettings.showLegend"
             class="rail-btn"
+            aria-label="Legend"
             data-demo-target="legend_tab"
             :class="{ active: rightPanelTab === 'legend' }"
             role="tab"
@@ -1100,6 +1150,7 @@
           <button
             v-if="aiTabVisible"
             class="rail-btn"
+            aria-label="AI"
             data-demo-target="ai_tab"
             :class="{ active: rightPanelTab === 'ai' }"
             role="tab"
@@ -2048,6 +2099,15 @@ import {
 } from './utils/loadingState.js'
 import { formatErrorToast, formatParseError } from './utils/errorFormat.js'
 import { checkPrerequisite, buildPrerequisiteContext } from './utils/disabledReason.js'
+import { emptyStateMessage } from './utils/emptyState.js'
+import {
+  expandedReportWidth,
+  reportExpandAllowed as reportExpandTabAllowed,
+  reportExpandButton,
+  statusCueText,
+  REPORT_EXPAND_FRACTION,
+  uiThemeTokens,
+} from './utils/uiTheme.js'
 import { installViewerHostApi, notifyViewerHost } from './utils/viewerHost.js'
 import { experimentPercentsFromCompare, newUserInvestigationTemplate } from './utils/aiCase.js'
 import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
@@ -2402,6 +2462,7 @@ function loadRpCollapsed() {
 }
 const rightPanelCollapsed = ref(loadRpCollapsed())
 function setRightPanelCollapsed(next) {
+  if (next && reportExpanded.value) setReportExpanded(false)
   rightPanelCollapsed.value = next
   try { localStorage.setItem(RP_COLLAPSED_KEY, next ? '1' : '0') } catch { /* private mode */ }
   scheduleRender()
@@ -2413,6 +2474,78 @@ function toggleRightPanelCollapsed() {
 function selectRightPanelTab(tab) {
   rightPanelTab.value = tab
   if (rightPanelCollapsed.value) setRightPanelCollapsed(false)
+  if (reportExpanded.value && !reportExpandTabAllowed(tab)) setReportExpanded(false)
+}
+
+const reportExpanded = ref(false)
+const reportReturnPending = ref(false)
+const reportExpandBtn = computed(() => reportExpandButton(reportExpanded.value, reportReturnPending.value))
+const rightPanelPreExpandWidth = ref(RIGHT_PANEL_WIDTH)
+const reportExpandAllowed = computed(() => reportExpandTabAllowed(rightPanelTab.value))
+const effectiveRightPanelWidth = computed(() => {
+  if (reportExpanded.value) return expandedReportWidth(window.innerWidth, REPORT_EXPAND_FRACTION, undefined, rightPanelPreExpandWidth.value)
+  return rightPanelWidth.value
+})
+
+function applyExpandedReportWidth() {
+  rightPanelWidth.value = expandedReportWidth(window.innerWidth, REPORT_EXPAND_FRACTION, undefined, rightPanelPreExpandWidth.value)
+}
+
+/** Evidence jumps need the timeline: drop to the normal layout and offer
+ *  "Back to report" to re-expand the same report. */
+function suspendReportExpansionForEvidence() {
+  if (!reportExpanded.value) return
+  setReportExpanded(false)
+  reportReturnPending.value = true
+}
+
+watch(() => tabs.value.length, (n) => {
+  if (n > 0) return
+  if (reportExpanded.value) setReportExpanded(false)
+  reportReturnPending.value = false
+})
+
+function setReportExpanded(next) {
+  const on = !!next
+  reportReturnPending.value = false
+  if (on) {
+    if (rightPanelCollapsed.value) setRightPanelCollapsed(false)
+    if (!reportExpanded.value) rightPanelPreExpandWidth.value = rightPanelWidth.value
+    reportExpanded.value = true
+    applyExpandedReportWidth()
+  } else {
+    reportExpanded.value = false
+    rightPanelWidth.value = Math.max(
+      RIGHT_PANEL_MIN_W,
+      Math.min(RIGHT_PANEL_MAX_W, rightPanelPreExpandWidth.value || RIGHT_PANEL_WIDTH),
+    )
+  }
+  scheduleRender()
+}
+
+function toggleReportExpanded() {
+  setReportExpanded(!reportExpanded.value)
+}
+
+function onWorkspaceResize() {
+  if (reportExpanded.value) applyExpandedReportWidth()
+}
+
+function applyUiThemeVars() {
+  const t = uiThemeTokens(!!timelineOptions.darkMode)
+  const el = document.querySelector('.app')
+  if (!el) return
+  for (const [key, value] of Object.entries(t)) {
+    if (typeof value === 'number') {
+      el.style.setProperty(`--${key.replace(/_/g, '-')}`, `${value}px`)
+    } else {
+      el.style.setProperty(`--${key.replace(/_/g, '-')}`, String(value))
+    }
+  }
+  // Text roles follow the shared palette (Desktop _merge_ui_theme lockstep).
+  el.style.setProperty('--text', String(t.fg))
+  el.style.setProperty('--muted', String(t.fg_dim))
+  el.style.setProperty('--semantic-focus', String(t.focus))
 }
 
 /** Focus mode: hide every chrome pane but the timeline (+ toolbar / status bar).
@@ -2523,6 +2656,7 @@ const findingsContextStale = computed(() =>
 
 function recordEvidenceJump(entry) {
   evidenceHistory.value = pushEvidenceEntry(evidenceHistory.value, entry)
+  suspendReportExpansionForEvidence()
 }
 
 function stepEvidenceBack() {
@@ -3277,7 +3411,10 @@ const timelineOptions = reactive({
 
 // Keep colors.js's dark-mode tracking in sync so the colorblind palette can
 // swap its black entry for white (pure black is invisible on a dark bg).
-watch(() => timelineOptions.darkMode, (v) => setDarkMode(v), { immediate: true })
+watch(() => timelineOptions.darkMode, (v) => {
+  setDarkMode(v)
+  applyUiThemeVars()
+}, { immediate: true })
 
 function tabUndoStack(tab = activeTab.value) {
   if (!tab) return null
@@ -7533,6 +7670,7 @@ let uninstallViewerHost = null
 
 onMounted(async () => {
   applyAppSettings(loadSettings(), { silent: true })
+  applyUiThemeVars()
   let saved = loadSession()
   if (!saved?.openTabNames?.length) {
     const fromOpfs = await loadSessionOpfs()
@@ -7556,6 +7694,7 @@ onMounted(async () => {
   })
   rightPanelTab.value = firstVisibleRightPanelTab(appSettings)
   window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('resize', onWorkspaceResize)
   uninstallViewerHost = installViewerHostApi({
     openTraceUrl: openHostTraceUrl,
     setTheme(theme) {
@@ -7614,6 +7753,7 @@ onBeforeUnmount(() => {
     demoRecording.value = false
   }
   window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('resize', onWorkspaceResize)
 })
 
 // ---- Marks (bookmarks + annotations) -------------------------------------
@@ -8108,6 +8248,20 @@ body:has(.app:not(.dark)) {
   outline-offset: 2px;
 }
 
+/* Meaningful control boundaries reach 3:1 (ui_theme control_border). Elements
+   drawn with border:none are unaffected — only the colour is overridden.
+   [data-inline-edit] fields keep their borderless look until focused. */
+.app input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([data-inline-edit]),
+.app select,
+.app textarea:not([data-inline-edit]) {
+  border-color: var(--control-border, var(--border)) !important;
+}
+.app input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):focus,
+.app select:focus,
+.app textarea:focus {
+  border-color: var(--focus, var(--accent)) !important;
+}
+
 button:focus:not(:focus-visible),
 a:focus:not(:focus-visible),
 input:focus:not(:focus-visible),
@@ -8568,6 +8722,80 @@ body {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+}
+
+.welcome-page {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3, 12px);
+  padding: var(--sp-4, 16px);
+  background: var(--workspace, var(--bg));
+}
+.welcome-title {
+  margin: 0;
+  color: var(--fg);
+  font-size: 18px;
+  font-weight: 700;
+}
+.welcome-msg {
+  margin: 0;
+  color: var(--fg-dim);
+  text-align: center;
+  max-width: 28rem;
+}
+.welcome-actions {
+  display: flex;
+  gap: var(--sp-2, 8px);
+}
+
+.btn-primary,
+.btn-secondary,
+.btn-quiet,
+.btn-destructive {
+  appearance: none;
+  font: inherit;
+  min-height: var(--ctrl-h, 28px);
+  padding: 4px 12px;
+  border-radius: var(--radius-ctrl, 6px);
+  cursor: pointer;
+}
+.btn-primary {
+  background: var(--accent-ui, var(--accent));
+  color: var(--on-accent, #fff);
+  border: 1px solid var(--accent-ui, var(--accent));
+}
+.btn-primary:hover { border-color: var(--fg); }
+.btn-secondary {
+  background: var(--surface, var(--panel-bg));
+  color: var(--fg);
+  border: 1px solid var(--control-border, var(--border));
+}
+.btn-secondary:hover { border-color: var(--accent-ui, var(--accent)); }
+.btn-quiet:hover { color: var(--fg); border-color: var(--control-border, var(--border)); }
+.btn-destructive:hover { background: var(--destructive, #b3261e); color: var(--surface, #fff); }
+.btn-quiet {
+  background: transparent;
+  color: var(--fg-dim);
+  border: 1px solid transparent;
+}
+.btn-destructive {
+  background: transparent;
+  color: var(--destructive, #b3261e);
+  border: 1px solid var(--destructive, #b3261e);
+}
+
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.btn-quiet:focus-visible,
+.btn-destructive:focus-visible {
+  outline: 2px solid var(--focus, var(--accent-ui, var(--accent)));
+  outline-offset: 1px;
 }
 
 .panel-resizer-h {
@@ -8680,27 +8908,8 @@ body.row-resizing * {
   background: var(--app-surface-3);
 }
 
-.timeline-skeleton::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--fg) 6%, transparent) 50%,
-    transparent 100%
-  );
-  transform: translateX(-100%);
-  animation: tl-skel-shimmer 1.4s ease-in-out infinite;
-}
-
-@keyframes tl-skel-shimmer {
-  100% { transform: translateX(100%); }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .load-progressbar-fill.indeterminate,
-  .timeline-skeleton::after { animation: none; }
+  .load-progressbar-fill.indeterminate { animation: none; }
 }
 
 .demo-message-overlay {
@@ -9118,6 +9327,24 @@ body.row-resizing * {
   flex-shrink: 0;
 }
 
+.rp-expand-btn {
+  flex: none;
+  appearance: none;
+  font: inherit;
+  font-size: var(--type-meta, 12px);
+  color: var(--fg-dim);
+  background: transparent;
+  border: 1px solid var(--control-border, var(--border));
+  border-radius: var(--radius-ctrl, 6px);
+  min-height: 24px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.rp-expand-btn:hover {
+  color: var(--fg);
+  border-color: var(--accent-ui, var(--accent));
+}
+
 .rp-title {
   flex: 1;
   min-width: 0;
@@ -9165,6 +9392,11 @@ body.row-resizing * {
 .rail-btn:hover {
   background: var(--app-surface-3);
   color: var(--fg);
+}
+
+.rail-btn:focus-visible {
+  outline: 2px solid var(--focus, var(--accent-ui, var(--accent)));
+  outline-offset: 1px;
 }
 
 .rail-btn:disabled {

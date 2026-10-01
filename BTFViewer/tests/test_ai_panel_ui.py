@@ -25,7 +25,7 @@ from PySide6.QtCore import QEvent, QPoint, Qt, QUrl  # noqa: E402
 from PySide6.QtGui import QKeyEvent  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication, QGridLayout, QLabel, QMainWindow, QPushButton, QScrollArea,
-    QVBoxLayout, QWidget,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
@@ -41,6 +41,9 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     visible_ai_templates,
 )
 from btf_viewer_pkg.ai_mermaid import mermaid_zoom_token  # noqa: E402
+from btf_viewer_pkg.ui_theme import UI_THEME  # noqa: E402
+
+_LIGHT_FG_DIM = str(UI_THEME["light"]["fg_dim"])
 from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_ANALYZE_TRACES,
@@ -164,11 +167,21 @@ class AiPanelUiTests(unittest.TestCase):
         panel._set_busy(False)
         self.assertIn("Send", panel._send_btn.toolTip())
         self.assertFalse(panel._send_btn.isEnabled())
-        actions = panel.findChild(QWidget, "aiActions")
-        labels = [b.text() for b in actions.findChildren(QPushButton)]
+        self.assertIsNone(panel.findChild(QWidget, "aiActions"))
+        header = panel.findChild(QWidget, "aiHeader")
+        labels = [b.text() for b in header.findChildren(QPushButton)]
         self.assertNotIn("Stop", labels)
         self.assertNotIn("Ask", labels)
-        self.assertIn("Clear", labels)
+        self.assertNotIn("Clear", labels)
+        self.assertNotIn("Actions…", labels)
+        overflow = panel.findChild(QToolButton, "aiOverflowBtn")
+        self.assertIsNotNone(overflow)
+        self.assertTrue(header.isAncestorOf(overflow))
+        self.assertEqual(overflow.text(), "\u22ef")
+        self.assertEqual(overflow.accessibleName(), "Panel actions")
+        start = panel._start_inv_btn
+        self.assertTrue(start.isDefault())
+        self.assertIn("background: #2a6fb2", start.styleSheet())
         composer = panel.findChild(QWidget, "aiComposer")
         self.assertIsNotNone(composer)
         self.assertTrue(composer.isAncestorOf(panel._send_btn))
@@ -217,7 +230,7 @@ class AiPanelUiTests(unittest.TestCase):
         panel.apply_theme(False)
         panel._refresh_guide_ui()
         idle_ss = panel._guide_step_btns["triage"].styleSheet()
-        self.assertIn("#666666", idle_ss)
+        self.assertIn(_LIGHT_FG_DIM, idle_ss)
         self.assertNotIn("#dbe2ea", idle_ss)
         panel._evidence_payload = {
             "finding": {"title": "Queue bounce", "task": "CS[1]"},
@@ -227,7 +240,8 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertTrue(panel._start_inv_btn.isHidden())
         self.assertTrue(panel._start_inv_host.isHidden())
         self.assertIn("Investigate", panel._guide_step_btns["investigate"].text())
-        self.assertIn("#1E1E1E", panel._guide_step_btns["investigate"].styleSheet())
+        self.assertIn(str(UI_THEME["light"]["fg"]),
+                      panel._guide_step_btns["investigate"].styleSheet())
         self.assertIn("Queue bounce", panel._issue_view.text())
 
     def test_context_mode_chip_on_header_line(self) -> None:
@@ -248,7 +262,7 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertFalse(hasattr(panel, "_context_body"))
         self.assertIsInstance(panel._mode_chip, QPushButton)
         hdr = panel.findChild(QWidget, "aiHeader")
-        self.assertIs(panel._mode_chip.parentWidget(), hdr)
+        self.assertTrue(hdr.isAncestorOf(panel._mode_chip))
         src = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(encoding="utf-8")
         self.assertLess(
             src.index('header_row.addWidget(self._privacy_chip)'),
@@ -367,16 +381,22 @@ class AiPanelUiTests(unittest.TestCase):
         wnd.setCentralWidget(panel)
         wnd.show()
         panel._on_err("HTTP 503: This model is currently experiencing high demand.")
-        self.assertIn("HTTP 503:", panel._status.text())
-        self.assertIn("#e07070", panel._status.styleSheet())
+        self.assertTrue(panel._status.text().startswith("✖ HTTP 503:"))
+        dark = UI_THEME["dark" if panel._is_dark else "light"]
+        self.assertIn(str(dark["destructive"]), panel._status.styleSheet())
         self.assertIn(
             "(Error) HTTP 503: This model is currently experiencing high demand.",
             panel._log.toPlainText(),
         )
         self.assertIn("AI: HTTP 503:", wnd.statusBar().currentMessage())
+        panel.apply_theme(not panel._is_dark)
+        flipped = UI_THEME["dark" if panel._is_dark else "light"]
+        self.assertIn(str(flipped["destructive"]), panel._status.styleSheet())
+        panel.apply_theme(not panel._is_dark)
         panel._set_status("Done.")
-        self.assertIn("#999", panel._status.styleSheet())
-        self.assertNotIn("#e07070", panel._status.styleSheet())
+        self.assertEqual(panel._status.text(), "Done.")
+        self.assertIn(str(dark["fg_dim"]), panel._status.styleSheet())
+        self.assertNotIn(str(dark["destructive"]), panel._status.styleSheet())
 
     def test_log_keeps_prompt_and_reply_apart(self) -> None:
         """Template / follow-up prompts must not continue the previous assistant block."""
@@ -1604,7 +1624,7 @@ class AiPanelUiTests(unittest.TestCase):
         )
 
         panel = self._panel()
-        self.assertEqual(_AI_TPL_DISABLED_COLOR, "#8a96a8")
+        self.assertEqual(_AI_TPL_DISABLED_COLOR, UI_THEME["dark"]["fg_dim"])
         self.assertIn("QPushButton:disabled", _AI_TPL_BTN_STYLE)
         self.assertIn(_AI_TPL_DISABLED_COLOR, _AI_TPL_BTN_STYLE)
         self.assertIn("QPushButton#aiMoreItem:disabled", _AI_MORE_MENU_STYLE)
@@ -1624,7 +1644,7 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIsNotNone(heading)
         self.assertTrue(heading.isEnabled())
         self.assertIn("background: #F5F5F5", heading.styleSheet())
-        self.assertIn("color: #666666", heading.styleSheet())
+        self.assertIn(f"color: {_LIGHT_FG_DIM}", heading.styleSheet())
         panel._append("user", "theme prompt")
         panel._append("assistant", "theme reply")
         html = panel._log.toHtml().lower()

@@ -4205,6 +4205,7 @@ class _TraceCompareDialog(QDialog):
                 item = _StatsSortItem(text, compare_cell_sort_key(val))
                 if ci < left_cols:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                    item.setToolTip(text)
                 else:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
                 table.setItem(ri, ci, item)
@@ -10423,11 +10424,8 @@ class _StatsPanel(QWidget):
         self._scroll_tail.setObjectName("stats_scroll_tail")
         self._scroll_tail.setMinimumHeight(0)
         self._scroll_tail.setFixedHeight(0)
-        empty = self._lbl(
-            "Open a trace file to view statistics.",
-            color="#888888",
-            ui_fs=self._ui_fs(),
-        )
+        empty = self._lbl(empty_state_message("no_stats"), ui_fs=self._ui_fs())
+        empty.setObjectName("stats_empty_hint")
         self._stats_summary = empty
         self._ilay.addWidget(empty)
         self._ilay.addWidget(self._scroll_tail)
@@ -16704,11 +16702,8 @@ class _StatsPanel(QWidget):
         self._scope_cb.setEnabled(False)
         self._clear()
         self._update_scope_header()
-        empty = self._lbl(
-            "Open a trace file to view statistics.",
-            color="#888888",
-            ui_fs=self._ui_fs(),
-        )
+        empty = self._lbl(empty_state_message("no_stats"), ui_fs=self._ui_fs())
+        empty.setObjectName("stats_empty_hint")
         self._stats_summary = empty
         self._ilay.addWidget(empty)
 

@@ -93,7 +93,7 @@
       v-else-if="localQuery && !hitCount"
       class="find-note"
     >
-      No matches for &ldquo;{{ localQuery }}&rdquo;. Try a different Match mode.
+      {{ emptyStateMessage('noFindHits') }} Try a different Match mode.
     </p>
     <div
       v-else-if="!localQuery"
@@ -110,7 +110,7 @@
         cy="11"
         r="7"
       /><path d="M21 21l-4.3-4.3" /></svg>
-      <p>Search across tasks, annotations and migration events in the active trace.</p>
+      <p>{{ emptyStateMessage('noFindQuery') }}</p>
       <div class="find-examples">
         <button
           v-for="ex in EXAMPLES"
@@ -129,6 +129,7 @@
 import { ref, computed, watch } from 'vue'
 import DomSelect from './DomSelect.vue'
 import { FIND_MODE_CHOICES, findModeHelp } from '../utils/findAnalysis.js'
+import { emptyStateMessage } from '../utils/emptyState.js'
 
 const EXAMPLES = ['IDLE', 'TICK', 'Core_0']
 

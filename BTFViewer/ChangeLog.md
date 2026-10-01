@@ -2,6 +2,15 @@
 
 Since v1.0.0 (2026-09-13)
 
+## 2026-10-01
+- Modern UI refresh: unified light/dark theme colors with improved text and focus contrast (desktop/web)
+- AI Assistant: Language, Settings, and Clear moved into a ⋯ menu on the header line (desktop/web)
+- AI Assistant: status messages show error/warning icons, not color alone (desktop/web)
+- Expand report: "Back to report" after jumping to evidence; layout restores when the last trace closes; no longer shrinks the report in narrow windows (desktop/web)
+- Statistics: clearer empty-state guidance and tooltips for long labels (desktop/web)
+- Icon rails: accessible names for screen readers (desktop/web)
+- HTML report: follows the shared theme colors
+
 ## 2026-09-19
 - Accessibility: colorblind-safe palette setting renamed to "Colorblind-safe palette (Okabe-Ito)" with a clearer tooltip describing its task/core-color scope (desktop/web)
 - Fixed: take_mutex/give_mutex STI markers relied on red/green alone; they now also use distinct triangle shapes so mutex direction is never color-only (desktop/web)

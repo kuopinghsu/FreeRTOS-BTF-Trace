@@ -346,7 +346,7 @@
                         @keydown.enter.prevent="emit('highlightTask', row.core)"
                         @keydown.space.prevent="emit('highlightTask', row.core)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.core ?? '')">
                           {{ row.core }}
                         </td>
                         <td>{{ (100 * row.activeNs / row.spanNs).toFixed(1) }}%</td>
@@ -434,7 +434,7 @@
                         @keydown.enter.prevent="openConcurrencyPlot(row.activeCores)"
                         @keydown.space.prevent="openConcurrencyPlot(row.activeCores)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.activeCores ?? '')">
                           {{ row.activeCores }}
                         </td>
                         <td>{{ row.duration }}</td>
@@ -560,7 +560,7 @@
                         @keydown.enter.prevent="emit('highlightTask', row.mk)"
                         @keydown.space.prevent="emit('highlightTask', row.mk)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.name ?? '')">
                           {{ row.name }}
                         </td>
                         <td>{{ row.preempted }}</td>
@@ -667,7 +667,7 @@
                         @keydown.enter.prevent="onSchedLoadRowClick(row)"
                         @keydown.space.prevent="onSchedLoadRowClick(row)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(fmtTime(row.start) ?? '')">
                           {{ fmtTime(row.start) }}
                         </td>
                         <td>{{ row.ctx }}</td>
@@ -800,7 +800,7 @@
                         @keydown.enter.prevent="openTaskPlot(row.mk, 'activation')"
                         @keydown.space.prevent="openTaskPlot(row.mk, 'activation')"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.name ?? '')">
                           {{ row.name }}
                         </td>
                         <td>{{ row.count }}</td>
@@ -919,7 +919,7 @@
                         @keydown.enter.prevent="openTaskPlot(row.mk, 'ready_gap')"
                         @keydown.space.prevent="openTaskPlot(row.mk, 'ready_gap')"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.name ?? '')">
                           {{ row.name }}
                         </td>
                         <td>{{ row.count }}</td>
@@ -1026,7 +1026,7 @@
                         @keydown.enter.prevent="openIdlePlot(row.core)"
                         @keydown.space.prevent="openIdlePlot(row.core)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.core ?? '')">
                           {{ row.core }}
                         </td>
                         <td>{{ fmtTime(row.totalNs) }}</td>
@@ -1134,7 +1134,7 @@
                         @keydown.enter.prevent="onSyncLevelRowClick(row)"
                         @keydown.space.prevent="onSyncLevelRowClick(row)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
                         <td>{{ row.kind }}</td>
@@ -1246,7 +1246,7 @@
                         @keydown.enter.prevent="openSwitchOverheadPlot(row.core)"
                         @keydown.space.prevent="openSwitchOverheadPlot(row.core)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.core ?? '')">
                           {{ row.core }}
                         </td>
                         <td>{{ row.switches }}</td>
@@ -1600,7 +1600,7 @@
                         @keydown.enter.prevent="openTaskPlot(row.mk, 'mig_dwell')"
                         @keydown.space.prevent="openTaskPlot(row.mk, 'mig_dwell')"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.name ?? '')">
                           {{ row.name }}
                         </td>
                         <td>{{ row.migrations }}</td>
@@ -1740,10 +1740,10 @@
                         @keydown.enter.prevent="selectCorePair(row)"
                         @keydown.space.prevent="selectCorePair(row)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.fromCore ?? '')">
                           {{ row.fromCore }}
                         </td>
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.toCore ?? '')">
                           {{ row.toCore }}
                         </td>
                         <td>{{ row.count }}</td>
@@ -1859,7 +1859,7 @@
                           {{ formatTime(row.start, timeScale) }}
                         </td>
                         <td>{{ uxKindLabel(row.kind) }}</td>
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.task ?? '')">
                           {{ row.task }}
                         </td>
                         <td>{{ formatTime(row.duration, timeScale) }}</td>
@@ -1958,7 +1958,7 @@
                           {{ formatTime(row.start, timeScale) }}
                         </td>
                         <td>{{ uxKindLabel(row.kind) }}</td>
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.task ?? '')">
                           {{ row.task }}
                         </td>
                         <td>{{ formatTime(row.duration, timeScale) }}</td>
@@ -2197,7 +2197,7 @@
                         @keydown.space.prevent="onUxEventClick(row)"
                         @click="onUxEventClick(row)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.task ?? '')">
                           {{ row.task }}
                         </td>
                         <td>{{ uxKindLabel(row.kind) }}</td>
@@ -2333,7 +2333,7 @@
                         @keydown.enter.prevent="openTaskPlot(row.mk, 'exec')"
                         @keydown.space.prevent="openTaskPlot(row.mk, 'exec')"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.name ?? '')">
                           {{ row.name }}
                         </td>
                         <td>{{ row.runs }}</td>
@@ -2505,7 +2505,7 @@
                         @keydown.enter.prevent="openTaskPlot(row.mk, 'block')"
                         @keydown.space.prevent="openTaskPlot(row.mk, 'block')"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.name ?? '')">
                           {{ row.name }}
                         </td>
                         <td>{{ row.gaps }}</td>
@@ -2676,7 +2676,7 @@
                         @keydown.enter.prevent="openTaskPlot(row.mk, 'dispatch')"
                         @keydown.space.prevent="openTaskPlot(row.mk, 'dispatch')"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
                         <td>{{ row.activations }}</td>
@@ -2841,7 +2841,7 @@
                         @keydown.enter.prevent="openTaskPlot(row.mk, 'inter')"
                         @keydown.space.prevent="openTaskPlot(row.mk, 'inter')"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.name ?? '')">
                           {{ row.name }}
                         </td>
                         <td>{{ row.runs }}</td>
@@ -3758,10 +3758,10 @@
                         @keydown.enter.prevent="openPreemptPlot(row.mk, row.preemptor)"
                         @keydown.space.prevent="openPreemptPlot(row.mk, row.preemptor)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.victim ?? '')">
                           {{ row.victim }}
                         </td>
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.preemptor ?? '')">
                           {{ row.preemptor }}
                         </td>
                         <td>{{ row.count }}</td>
@@ -3865,7 +3865,7 @@
                           @keydown.space.prevent="onUxEventClick(row.worst)"
                           @click="onUxEventClick(row.worst)"
                         >
-                          <td class="task-col">
+                          <td class="task-col" :title="String(row.task ?? '')">
                             {{ row.task }}
                           </td>
                           <td>{{ row.count }}</td>
@@ -3918,7 +3918,7 @@
                           @keydown.enter.prevent="emit('highlightTask', victim.mk)"
                           @keydown.space.prevent="emit('highlightTask', victim.mk)"
                         >
-                          <td class="task-col">
+                          <td class="task-col" :title="String(victim.task ?? '')">
                             {{ victim.task }}
                           </td>
                           <td
@@ -4047,7 +4047,7 @@
                         @keydown.enter.prevent="onPriorityRowClick(row)"
                         @keydown.space.prevent="onPriorityRowClick(row)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
                         <td>{{ row.basePri }}</td>
@@ -4207,7 +4207,7 @@
                         @keydown.enter.prevent="openSyncHoldPlot(row.key)"
                         @keydown.space.prevent="openSyncHoldPlot(row.key)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
                         <td>{{ row.kind }}</td>
@@ -4386,7 +4386,7 @@
                         @keydown.enter.prevent="emit('highlightTask', waiter.mk)"
                         @keydown.space.prevent="emit('highlightTask', waiter.mk)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(waiter.task ?? '')">
                           {{ waiter.task }}
                         </td>
                         <td
@@ -4499,7 +4499,7 @@
                         @keydown.space.prevent="onMutexBlockClick(row)"
                         @click="onMutexBlockClick(row)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.task ?? '')">
                           {{ row.task }}
                         </td>
                         <td>{{ row.object }}</td>
@@ -4578,7 +4578,7 @@
                         @keydown.space.prevent="onUxEventClick({ ...(row.worst || row), mk: row.mk, task: row.task, section: 'mutex_block' })"
                         @click="onUxEventClick({ ...(row.worst || row), mk: row.mk, task: row.task, section: 'mutex_block' })"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.task ?? '')">
                           {{ row.task }}
                         </td>
                         <td>{{ formatTime(row.mutex_ns, timeScale) }}</td>
@@ -4715,7 +4715,7 @@
                         @keydown.enter.prevent="openSyncHoldPlot(row.key)"
                         @keydown.space.prevent="openSyncHoldPlot(row.key)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
                         <td>{{ row.kind }}</td>
@@ -4842,7 +4842,7 @@
                         @keydown.enter.prevent="onLifecycleRowClick(row)"
                         @keydown.space.prevent="onLifecycleRowClick(row)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
                         <td>{{ row.createNs != null ? formatTime(row.createNs, trace.timeScale) : '—' }}</td>
@@ -4936,7 +4936,7 @@
                         @keydown.enter.prevent="emit('highlightTask', row.mk)"
                         @keydown.space.prevent="emit('highlightTask', row.mk)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
                         <td>{{ row.maskHex }}</td>
@@ -5246,7 +5246,7 @@
                         @keydown.enter.prevent="onDeadlineSliceClick(v)"
                         @keydown.space.prevent="onDeadlineSliceClick(v)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(v.label ?? '')">
                           {{ v.label }}
                         </td>
                         <td>{{ v.duration }}</td>
@@ -5299,7 +5299,7 @@
                         @keydown.enter.prevent="emit('highlightTask', v.mk)"
                         @keydown.space.prevent="emit('highlightTask', v.mk)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(v.label ?? '')">
                           {{ v.label }}
                         </td>
                         <td class="sev-error">
@@ -5548,7 +5548,7 @@
                         @keydown.enter.prevent="openIntervalPlot(row.id)"
                         @keydown.space.prevent="openIntervalPlot(row.id)"
                       >
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
                         <td>{{ row.count }}</td>
@@ -5684,7 +5684,7 @@
                         @keydown.space.prevent="openTagPlot(row.channel)"
                       >
                         <td>{{ row.channel }}</td>
-                        <td class="task-col">
+                        <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
                         <td
@@ -11829,9 +11829,10 @@ defineExpose({
 }
 
 .stats-table td.task-col {
-  max-width: 140px;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stats-table tr:last-child td {
@@ -11840,7 +11841,7 @@ defineExpose({
 
 /* Row hover for every stats table (clickable and read-only). */
 .stats-table tbody tr:hover td {
-  background: var(--tb-btn-hover);
+  background: color-mix(in srgb, var(--accent-ui, var(--accent)) 10%, var(--surface, var(--tb-btn-hover)));
 }
 
 .stats-table-row.clickable,

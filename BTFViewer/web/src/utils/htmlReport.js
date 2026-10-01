@@ -49,12 +49,12 @@ export const BTF_HTML_REPORT_CSS = `
   --paper: #ffffff;
   --paper-2: #f1f5fb;
   --ink: #182230;
-  --muted: #5f6f82;
-  --line: #d9e0ea;
+  --muted: #526173;
+  --line: #dce3ec;
   --line-strong: #c3cee0;
   --header: #16324f;
   --header-2: #21496f;
-  --accent: #2a6fb2;
+  --accent: #2563eb;
   --accent-soft: #eaf2ff;
   --accent-2: #0f766e;
   --success: #1f6b45;
@@ -73,15 +73,15 @@ export const BTF_HTML_REPORT_CSS = `
 html[data-theme="dark"] {
   --bg: #14181e;
   --bg-elev: #181d24;
-  --paper: #1c2128;
+  --paper: #1d2430;
   --paper-2: #20262e;
-  --ink: #d6dde6;
-  --muted: #9aa7b4;
-  --line: #2d333b;
+  --ink: #e6edf5;
+  --muted: #a6b3c4;
+  --line: #344052;
   --line-strong: #3a4149;
   --header: #16324f;
   --header-2: #21496f;
-  --accent: #6cb0e6;
+  --accent: #78a9ff;
   --accent-soft: #1d3348;
   --accent-2: #4ec6bb;
   --success: #57c191;
@@ -99,15 +99,15 @@ html[data-theme="dark"] {
   html:not([data-theme="light"]) {
     --bg: #14181e;
     --bg-elev: #181d24;
-    --paper: #1c2128;
+    --paper: #1d2430;
     --paper-2: #20262e;
-    --ink: #d6dde6;
-    --muted: #9aa7b4;
-    --line: #2d333b;
+    --ink: #e6edf5;
+    --muted: #a6b3c4;
+    --line: #344052;
     --line-strong: #3a4149;
     --header: #16324f;
     --header-2: #21496f;
-    --accent: #6cb0e6;
+    --accent: #78a9ff;
     --accent-soft: #1d3348;
     --accent-2: #4ec6bb;
     --success: #57c191;

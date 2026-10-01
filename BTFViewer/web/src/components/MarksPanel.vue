@@ -29,6 +29,7 @@
           >{{ fmt(m.ns) }}</span>
           <input
             class="mark-label"
+            data-inline-edit
             placeholder="label…"
             :value="editingId === m.id ? editingLabel : m.label"
             @focus="editingId = m.id; editingLabel = m.label"
@@ -58,7 +59,7 @@
           stroke-width="1.6"
           aria-hidden="true"
         ><path d="M6 3h12v18l-6-4-6 4z" /></svg>
-        <span>No marks yet. Right-click the timeline to add one, or press <b>B</b> / <b>A</b>.</span>
+        <span>{{ emptyStateMessage('noMarks') }}</span>
       </div>
     </div>
 
@@ -130,6 +131,7 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
+import { emptyStateMessage } from '../utils/emptyState.js'
 
 const props = defineProps({
   marks:        { type: Array, default: () => [] },

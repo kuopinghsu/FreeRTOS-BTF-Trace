@@ -22,6 +22,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from ._imports import *  # noqa: F403,F401
 from .config import UI_FONT_SIZE, _application_ui_font, _svg_icon, rasterize_svg_pixmap
+from .empty_state import empty_state_message
+from .ui_theme import status_cue_text, ui_theme_tokens
 from .ai_mermaid import (
     _link_row_html,
     decode_mermaid_zoom_token,
@@ -5079,7 +5081,7 @@ def _clear_layout(layout) -> None:
 
 
 # Chip / More-menu colors match web `.ai-tpl-btn` / `.ai-more-item` (enabled vs disabled).
-_AI_TPL_DISABLED_COLOR = "#8a96a8"
+_AI_TPL_DISABLED_COLOR = str(ui_theme_tokens(True)["fg_dim"])
 _AI_CHIP_MIN_HEIGHT = 28  # match web `.ai-tpl-btn { min-height: 28px }`
 # Intent empty-state chips match web `.ai-chip` (compact, transparent).
 _AI_INTENT_CHIP_HEIGHT = 24
@@ -5121,29 +5123,30 @@ class _AiSplitter(QSplitter):
 
 
 def _ai_chrome_colors(is_dark: bool) -> dict:
+    ui = ui_theme_tokens(is_dark)
     if is_dark:
         return dict(
             panel="#1a2230",
             btn="#243044",
-            text="#e8eef7",
+            text=ui["fg"],
             muted=_AI_TPL_DISABLED_COLOR,
             border="#3a4658",
             hover="#243044",
             accent="#2a6fb2",
-            chip_hover="#dbe2ea",
-            guide_now="#dbe2ea",
+            chip_hover=ui["fg"],
+            guide_now=ui["fg"],
             guide_done="#6fbf9a",
         )
     return dict(
         panel="#F5F5F5",
         btn="#E8E8E8",
-        text="#1E1E1E",
-        muted="#666666",
+        text=ui["fg"],
+        muted=ui["fg_dim"],
         border="#DDDDDD",
         hover="#E0E8F0",
         accent="#0066CC",
-        chip_hover="#1E1E1E",
-        guide_now="#1E1E1E",
+        chip_hover=ui["fg"],
+        guide_now=ui["fg"],
         guide_done="#2e7d57",
     )
 
@@ -5460,7 +5463,12 @@ def create_ai_assistant_panel(
 
             header_host = QWidget()
             header_host.setObjectName("aiHeader")
-            header_row = _FlowLayout(header_host, spacing=8)
+            header_bar = QHBoxLayout(header_host)
+            header_bar.setContentsMargins(0, 0, 0, 0)
+            header_bar.setSpacing(4)
+            header_chips = QWidget()
+            header_row = _FlowLayout(header_chips, spacing=8)
+            header_bar.addWidget(header_chips, 1)
             title = QLabel("AI Assistant")
             title.setStyleSheet("font-weight:600;")
             header_row.addWidget(title)
@@ -5518,14 +5526,23 @@ def create_ai_assistant_panel(
             self._mode_chip.setStyleSheet(_chip_css % ("ai_mode_chip", "ai_mode_chip"))
             self._mode_chip.clicked.connect(self._on_auth_chip)
             header_row.addWidget(self._mode_chip)
-            root.addWidget(header_host)
 
-            # Match web `.ai-header-actions { flex-wrap }`. objectName
-            # "aiActions" is excluded from dock width-relax (Ignored policy
-            # was collapsing these buttons to 0 width).
-            actions_host = QWidget()
-            actions_host.setObjectName("aiActions")
-            actions_row = _FlowLayout(actions_host, spacing=4)
+            self._overflow_btn = QToolButton()
+            self._overflow_btn.setObjectName("aiOverflowBtn")
+            self._overflow_btn.setText("\u22ef")
+            self._overflow_btn.setToolTip("Language, Settings, and Clear")
+            self._overflow_btn.setAccessibleName("Panel actions")
+            self._overflow_btn.setAutoRaise(True)
+            self._overflow_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._overflow_btn.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            self._overflow_btn.setFixedSize(28, 24)
+            self._overflow_btn.setStyleSheet(
+                "QToolButton#aiOverflowBtn { font-size:16px; padding:0; }")
+            self._overflow_btn.clicked.connect(self._show_overflow_menu)
+            header_bar.addWidget(
+                self._overflow_btn, 0, Qt.AlignmentFlag.AlignTop)
+            root.addWidget(header_host)
 
             def _ai_action_btn(label: str, tip: str, *, primary: bool = False) -> QPushButton:
                 btn = QPushButton(label)
@@ -5548,23 +5565,6 @@ def create_ai_assistant_panel(
                         "}"
                     )
                 return btn
-
-            self._clear_btn = _ai_action_btn(
-                "Clear",
-                "Clear replies, usage cost, and current investigation issues")
-            self._clear_btn.clicked.connect(self.clear_conversation)
-            actions_row.addWidget(self._clear_btn)
-            self._lang_btn = _ai_action_btn(
-                "Language\u2026", "Preferred language for assistant replies")
-            self._lang_btn.clicked.connect(self._choose_language)
-            actions_row.addWidget(self._lang_btn)
-            self._settings_btn = _ai_action_btn(
-                "Settings\u2026",
-                "Configure the AI preset, endpoint, and model")
-            self._settings_btn.clicked.connect(self._open_settings)
-            actions_row.addWidget(self._settings_btn)
-
-            root.addWidget(actions_host)
 
             split_top = QWidget()
             split_top.setObjectName("aiSplitTop")
@@ -5609,7 +5609,7 @@ def create_ai_assistant_panel(
             self._intent_context.setWordWrap(True)
             self._intent_context.setStyleSheet(
                 "QLabel { color:#8a96a8; font-size:11px; padding:2px 0; }")
-            self._intent_prompt = QLabel("What do you want to investigate?")
+            self._intent_prompt = QLabel(empty_state_message("no_ai"))
             self._intent_prompt.setStyleSheet(
                 "QLabel { color:#dbe2ea; font-size:12px; font-weight:600; padding:2px 0; }")
             # Intent chip groups live inside the empty log (Web `.ai-log > .ai-empty`).
@@ -5741,12 +5741,15 @@ def create_ai_assistant_panel(
             start_lay = QVBoxLayout(self._start_inv_host)
             start_lay.setContentsMargins(0, 0, 0, 0)
             start_lay.setSpacing(6)
-            self._start_inv_btn = QPushButton("Start Investigation")
-            self._start_inv_btn.setToolTip(qt_wrap_tooltip(
-                "Triage findings, scope the top issue, gather evidence, "
-                "and verify the cause."))
+            self._start_inv_btn = _ai_action_btn(
+                "Start Investigation",
+                qt_wrap_tooltip(
+                    "Triage findings, scope the top issue, gather evidence, "
+                    "and verify the cause."),
+                primary=True)
             self._start_inv_btn.clicked.connect(self._start_investigation)
-            start_lay.addWidget(self._start_inv_btn)
+            start_lay.addWidget(
+                self._start_inv_btn, 0, Qt.AlignmentFlag.AlignLeft)
             g_lay.addWidget(self._start_inv_host)
             self._issue_view = QLabel("")
             self._issue_view.setWordWrap(True)
@@ -6146,8 +6149,7 @@ def create_ai_assistant_panel(
             if getattr(self, "_status_row", None) is not None:
                 self._status_row.setStyleSheet(
                     f"QWidget#aiStatusRow {{ border-top:1px solid {c['border']}; }}")
-            if getattr(self, "_status", None) is not None:
-                self._status.setStyleSheet(f"color:{c['muted']};font-size:11px;")
+            self._style_status()
             if getattr(self, "_usage", None) is not None:
                 self._usage.setStyleSheet(f"color:{c['muted']};font-size:11px;")
             if getattr(self, "_split", None) is not None:
@@ -6464,11 +6466,9 @@ def create_ai_assistant_panel(
                 pass
 
         def _set_status(self, msg: str, *, error: bool = False) -> None:
-            self._status.setText(str(msg or ""))
-            self._status.setStyleSheet(
-                "color:#e07070;font-size:11px;" if error
-                else "color:#999;font-size:11px;"
-            )
+            self._status_is_error = bool(error)
+            self._status.setText(status_cue_text(msg, "error" if error else "info"))
+            self._style_status()
             self._refresh_usage()
             if error:
                 self._flash_main_status(msg)
@@ -6476,6 +6476,15 @@ def create_ai_assistant_panel(
                 self.status_changed.emit(str(msg or ""))
             except RuntimeError:
                 pass
+
+        def _style_status(self) -> None:
+            status = getattr(self, "_status", None)
+            if status is None:
+                return
+            ui = ui_theme_tokens(bool(getattr(self, "_is_dark", True)))
+            err = bool(getattr(self, "_status_is_error", False))
+            status.setStyleSheet(
+                f"color:{ui['destructive'] if err else ui['fg_dim']};font-size:11px;")
 
         def _refresh_usage(self) -> None:
             bar = getattr(self, "_usage", None)
@@ -7313,7 +7322,32 @@ def create_ai_assistant_panel(
             save_html = menu.addAction("Save As HTML…")
             save_html.setEnabled(has_log)
             save_html.triggered.connect(lambda: self.save_conversation_as("html"))
+            menu.addSeparator()
+            lang_act = menu.addAction("Language\u2026")
+            lang_act.triggered.connect(self._choose_language)
+            clear_act = menu.addAction("Clear")
+            clear_act.setEnabled(has_log or bool(self._input.toPlainText().strip()))
+            clear_act.triggered.connect(self.clear_conversation)
             menu.exec(self._log.mapToGlobal(pos))
+
+        def _show_overflow_menu(self) -> None:
+            menu = QMenu(self)
+            lang_act = menu.addAction("Language\u2026")
+            lang_act.triggered.connect(self._choose_language)
+            settings_act = menu.addAction("Settings\u2026")
+            settings_act.triggered.connect(self._open_settings)
+            menu.addSeparator()
+            clear_act = menu.addAction("Clear")
+            clear_act.setToolTip(
+                "Clear replies, usage cost, and current investigation issues")
+            clear_act.triggered.connect(self.clear_conversation)
+            btn = getattr(self, "_overflow_btn", None)
+            if btn is not None:
+                anchor = btn.rect().bottomRight()
+                anchor.setX(anchor.x() - menu.sizeHint().width() + 1)
+                menu.exec(btn.mapToGlobal(anchor))
+            else:
+                menu.exec(self.mapToGlobal(self.rect().topLeft()))
 
         def _copy_log_selection(self, text: Optional[str] = None) -> None:
             selected = str(
