@@ -201,11 +201,13 @@ class ReportExpandTest(unittest.TestCase):
         self.assertIsInstance(find, QLineEdit)
         bar = find.parentWidget()
         self.assertEqual(bar.objectName(), "findbar")
+        # Height follows the platform UI font (Linux CI fonts render ~3px
+        # shorter than macOS), so allow a band around the 28px target.
         h = bar.sizeHint().height()
-        self.assertTrue(26 <= h <= 36, h)
+        self.assertTrue(24 <= h <= 36, h)
         probe = QPushButton("OK", win._welcome_open_btn.parentWidget())
         probe.ensurePolished()
-        self.assertTrue(26 <= probe.sizeHint().height() <= 36, probe.sizeHint().height())
+        self.assertTrue(24 <= probe.sizeHint().height() <= 36, probe.sizeHint().height())
         qss = win.styleSheet() or self._app.styleSheet()
         focus = str(ui_theme_tokens(bool(win._is_dark))["focus"])
         self.assertIn(f"QLineEdit:focus", qss)
