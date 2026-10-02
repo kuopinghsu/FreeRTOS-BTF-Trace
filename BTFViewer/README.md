@@ -415,7 +415,7 @@ The Investigation Notebook (question, evidence, links, and conclusion) is includ
 
 The optional AI Assistant explains Analysis Findings and Statistics measured by BTFViewer. It does not replace timeline verification or create measurements that are missing from the trace.
 
-Open it from the right panel's icon rail (**AI Assistant**). **Language…**, **Settings…**, and **Clear** live in the **⋯** menu at the right end of the **AI Assistant** header line (and the conversation context menu). **Start Investigation** stays the primary action.
+Open it from the right panel's icon rail (**AI Assistant**). **Language…**, **Settings…**, and **Clear** are labeled buttons on the toolbar under the header, so they stay visible. **Language…** also shows the current reply language. The conversation context menu still offers **Language…** and **Clear**. **Start Investigation** stays the primary action.
 
 ![AI Assistant panel](../images/btfviewer-web-ai.png)
 

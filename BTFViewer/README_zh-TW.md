@@ -415,7 +415,7 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 選配的 **AI Assistant** 可說明 BTFViewer 量測出的分析結果與統計資料。它不能取代時間軸驗證，也無法補出追蹤資料中未記錄的量測資料。
 
-可從右側面板的圖示列（**AI Assistant**）開啟。**Language…**、**Settings…** 與 **Clear** 收在 **AI Assistant** 標題列右端的 **⋯** 選單（以及對話右鍵選單）。**Start Investigation** 仍是主要動作。
+可從右側面板的圖示列（**AI Assistant**）開啟。**Language…**、**Settings…** 與 **Clear** 是標題下方工具列上的文字按鈕，不需要打開選單就能看到。**Language…** 也會顯示目前的回覆語言。對話右鍵選單仍提供 **Language…** 與 **Clear**。**Start Investigation** 仍是主要動作。
 
 ![AI Assistant panel](../images/btfviewer-web-ai.png)
 

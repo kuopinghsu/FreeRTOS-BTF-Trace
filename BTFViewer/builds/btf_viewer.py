@@ -21027,7 +21027,7 @@ def _in_ai_actions_bar(w: QWidget) -> bool:
     p: Optional[QWidget] = w
     while p is not None:
         if p.objectName() in (
-                "aiActions", "aiTemplates", "aiHeader", "aiMoreMenu",
+                "aiActions", "aiToolbar", "aiTemplates", "aiHeader", "aiMoreMenu",
                 "aiComposer", "aiGuide", "aiGuideStepper",
                 "aiIntentGroups", "aiIntentEmpty", "aiLogFrame",
                 "aiIntentChipRow", "aiIntentChip"):
@@ -50672,23 +50672,50 @@ def create_ai_assistant_panel(
             self._mode_chip.setStyleSheet(_chip_css % ("ai_mode_chip", "ai_mode_chip"))
             self._mode_chip.clicked.connect(self._on_auth_chip)
             header_row.addWidget(self._mode_chip)
-
-            self._overflow_btn = QToolButton()
-            self._overflow_btn.setObjectName("aiOverflowBtn")
-            self._overflow_btn.setText("\u22ef")
-            self._overflow_btn.setToolTip("Language, Settings, and Clear")
-            self._overflow_btn.setAccessibleName("Panel actions")
-            self._overflow_btn.setAutoRaise(True)
-            self._overflow_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._overflow_btn.setSizePolicy(
-                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            self._overflow_btn.setFixedSize(28, 24)
-            self._overflow_btn.setStyleSheet(
-                "QToolButton#aiOverflowBtn { font-size:16px; padding:0; }")
-            self._overflow_btn.clicked.connect(self._show_overflow_menu)
-            header_bar.addWidget(
-                self._overflow_btn, 0, Qt.AlignmentFlag.AlignTop)
             root.addWidget(header_host)
+
+            toolbar = QWidget()
+            toolbar.setObjectName("aiToolbar")
+            toolbar.setAccessibleName("AI panel actions")
+            toolbar_row = _FlowLayout(toolbar, spacing=6)
+
+            def _toolbar_btn(label: str, tip: str, name: str) -> QPushButton:
+                btn = QPushButton(label)
+                btn.setObjectName(name)
+                btn.setToolTip(tip)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+                btn.setMinimumHeight(24)
+                return btn
+
+            self._lang_btn = _toolbar_btn(
+                "Language\u2026",
+                "Preferred language for assistant replies",
+                "aiLanguageBtn",
+            )
+            self._lang_btn.clicked.connect(self._choose_language)
+            toolbar_row.addWidget(self._lang_btn)
+            self._lang_value = QLabel("")
+            self._lang_value.setObjectName("aiLanguageValue")
+            self._lang_value.setMinimumWidth(0)
+            self._lang_value.setMaximumWidth(160)
+            toolbar_row.addWidget(self._lang_value)
+            self._settings_btn = _toolbar_btn(
+                "Settings\u2026",
+                "Configure the AI preset, endpoint, and model",
+                "aiSettingsBtn",
+            )
+            self._settings_btn.clicked.connect(self._open_settings)
+            toolbar_row.addWidget(self._settings_btn)
+            self._clear_btn = _toolbar_btn(
+                "Clear",
+                "Clear replies, usage cost, and current investigation issues",
+                "aiClearBtn",
+            )
+            self._clear_btn.clicked.connect(self.clear_conversation)
+            toolbar_row.addWidget(self._clear_btn)
+            root.addWidget(toolbar)
 
             def _ai_action_btn(label: str, tip: str, *, primary: bool = False) -> QPushButton:
                 btn = QPushButton(label)
@@ -51279,6 +51306,27 @@ def create_ai_assistant_panel(
                     "ai_mode_chip", c["muted"], c["border"],
                     "ai_mode_chip", c["chip_hover"], c["accent"],
                 ))
+            action = (
+                "QPushButton#%s {"
+                "  background: transparent; color: %s;"
+                "  border: 1px solid %s; border-radius: 6px;"
+                "  padding: 2px 8px;"
+                "}"
+                "QPushButton#%s:hover { color: %s; border-color: %s; }"
+            )
+            for name, btn in (
+                ("aiLanguageBtn", getattr(self, "_lang_btn", None)),
+                ("aiSettingsBtn", getattr(self, "_settings_btn", None)),
+                ("aiClearBtn", getattr(self, "_clear_btn", None)),
+            ):
+                if btn is not None:
+                    btn.setStyleSheet(action % (
+                        name, c["text"], c["border"],
+                        name, c["chip_hover"], c["accent"],
+                    ))
+            if getattr(self, "_lang_value", None) is not None:
+                self._lang_value.setStyleSheet(
+                    f"color:{c['muted']};font-size:11px;")
             if getattr(self, "_plan_view", None) is not None:
                 self._plan_view.setStyleSheet(
                     f"color:{c['muted']};font-size:11px;padding:1px 0;"
@@ -51591,6 +51639,22 @@ def create_ai_assistant_panel(
                 st["mode"] == AI_AUTH_BROWSER or bool(url)
             )
             self._auth_cta_signin.setText(ai_preset_signin_label(active["preset"]))
+            self._refresh_lang_label()
+
+        def _refresh_lang_label(self, language: Optional[str] = None) -> None:
+            lang_btn = getattr(self, "_lang_btn", None)
+            if lang_btn is None:
+                return
+            lang = (language or self._reply_language()).strip() \
+                or DEFAULT_AI_RESPONSE_LANGUAGE
+            lang_btn.setToolTip(
+                f"Reply language: {lang}\n"
+                "Preferred language for assistant replies")
+            lang_value = getattr(self, "_lang_value", None)
+            if lang_value is not None:
+                lang_value.setToolTip(lang)
+                lang_value.setText(lang_value.fontMetrics().elidedText(
+                    lang, Qt.TextElideMode.ElideRight, 160))
 
         def _on_auth_chip(self) -> None:
             self._open_settings()
@@ -51730,6 +51794,7 @@ def create_ai_assistant_panel(
                 (language or self._reply_language()).strip()
                 or DEFAULT_AI_RESPONSE_LANGUAGE
             )
+            self._refresh_lang_label(lang)
             if self._investigation_plan:
                 self._plan_view.setText(format_investigation_plan_status(
                     self._investigation_plan, lang))
@@ -52475,25 +52540,6 @@ def create_ai_assistant_panel(
             clear_act.setEnabled(has_log or bool(self._input.toPlainText().strip()))
             clear_act.triggered.connect(self.clear_conversation)
             menu.exec(self._log.mapToGlobal(pos))
-
-        def _show_overflow_menu(self) -> None:
-            menu = QMenu(self)
-            lang_act = menu.addAction("Language\u2026")
-            lang_act.triggered.connect(self._choose_language)
-            settings_act = menu.addAction("Settings\u2026")
-            settings_act.triggered.connect(self._open_settings)
-            menu.addSeparator()
-            clear_act = menu.addAction("Clear")
-            clear_act.setToolTip(
-                "Clear replies, usage cost, and current investigation issues")
-            clear_act.triggered.connect(self.clear_conversation)
-            btn = getattr(self, "_overflow_btn", None)
-            if btn is not None:
-                anchor = btn.rect().bottomRight()
-                anchor.setX(anchor.x() - menu.sizeHint().width() + 1)
-                menu.exec(btn.mapToGlobal(anchor))
-            else:
-                menu.exec(self.mapToGlobal(self.rect().topLeft()))
 
         def _copy_log_selection(self, text: Optional[str] = None) -> None:
             selected = str(

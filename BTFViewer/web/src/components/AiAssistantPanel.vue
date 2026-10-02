@@ -28,58 +28,41 @@
       >
         {{ contextRowSummary.mode }}
       </button>
-      <div class="ai-header-actions">
-        <button
-          type="button"
-          class="ai-overflow-btn"
-          data-testid="ai-overflow-btn"
-          title="Language, Settings, and Clear"
-          aria-label="Panel actions"
-          aria-haspopup="menu"
-          :aria-expanded="overflowOpen"
-          @click="overflowOpen = !overflowOpen"
-        >
-          ⋯
-        </button>
-        <div
-          v-if="overflowOpen"
-          class="ai-overflow-menu"
-          role="menu"
-          data-testid="ai-overflow-menu"
-        >
-          <button
-            type="button"
-            class="ai-overflow-item"
-            role="menuitem"
-            title="Preferred language for assistant replies"
-            @click="langOpen = true; overflowOpen = false"
-          >
-            Language…
-          </button>
-          <button
-            type="button"
-            class="ai-overflow-item"
-            role="menuitem"
-            title="Configure the AI preset, endpoint, and model"
-            @click="emit('openSettings'); overflowOpen = false"
-          >
-            Settings…
-          </button>
-          <div
-            class="ai-overflow-sep"
-            role="separator"
-          />
-          <button
-            type="button"
-            class="ai-overflow-item"
-            role="menuitem"
-            title="Clear replies, usage cost, and current investigation issues"
-            @click="clear(); overflowOpen = false"
-          >
-            Clear
-          </button>
-        </div>
-      </div>
+    </div>
+    <div
+      class="ai-toolbar"
+      role="toolbar"
+      aria-label="AI panel actions"
+      data-testid="ai-toolbar"
+    >
+      <button
+        type="button"
+        class="ai-toolbar-btn"
+        data-testid="ai-language-btn"
+        :title="`Reply language: ${responseLanguage || 'English'}. Preferred language for assistant replies`"
+        @click="langOpen = true"
+      >
+        Language…
+        <span class="ai-toolbar-lang">{{ responseLanguage || 'English' }}</span>
+      </button>
+      <button
+        type="button"
+        class="ai-toolbar-btn"
+        data-testid="ai-settings-btn"
+        title="Configure the AI preset, endpoint, and model"
+        @click="emit('openSettings')"
+      >
+        Settings…
+      </button>
+      <button
+        type="button"
+        class="ai-toolbar-btn"
+        data-testid="ai-clear-btn"
+        title="Clear replies, usage cost, and current investigation issues"
+        @click="clear()"
+      >
+        Clear
+      </button>
     </div>
 
     <div
@@ -1003,7 +986,6 @@ const error = ref('')
 const status = ref('')
 const logRef = ref(null)
 const langOpen = ref(false)
-const overflowOpen = ref(false)
 const collabContextOpen = ref(false)
 const collabDigestHtml = computed(() => {
   const md = props.notebookCollab?.digest
@@ -2983,59 +2965,39 @@ defineExpose({
   flex-wrap: wrap;
   gap: 8px;
 }
-.ai-header-actions {
-  margin-left: auto;
+.ai-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
-  position: relative;
 }
-.ai-overflow-btn {
-  width: 28px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted, #8b98a8);
-  font: inherit;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-}
-.ai-overflow-btn:hover,
-.ai-overflow-btn[aria-expanded="true"] {
-  color: var(--text, #e8eef7);
-  border-color: var(--border, #3a4658);
-}
-.ai-overflow-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 8;
-  min-width: 148px;
-  padding: 4px 0;
+.ai-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 2px 8px;
   border: 1px solid var(--border, #3a4658);
   border-radius: 6px;
-  background: var(--panel-bg, #1d2430);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
-}
-.ai-overflow-item {
-  display: block;
-  width: 100%;
-  text-align: left;
   background: transparent;
-  border: none;
-  color: var(--text, #e8eef7);
-  padding: 6px 12px;
+  color: var(--fg, #dbe2ea);
   font: inherit;
+  font-size: 0.92em;
   cursor: pointer;
 }
-.ai-overflow-item:hover {
-  background: var(--app-hover-bg, rgba(122, 169, 255, 0.12));
+.ai-toolbar-btn:hover {
+  border-color: var(--accent, #5b9bd5);
+  color: var(--text, #e8eef7);
 }
-.ai-overflow-sep {
-  height: 1px;
-  margin: 4px 0;
-  background: var(--border, #3a4658);
+.ai-toolbar-lang {
+  color: var(--muted, #8b98a8);
+  font-weight: 500;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ai-nb-collab {
   display: flex;
