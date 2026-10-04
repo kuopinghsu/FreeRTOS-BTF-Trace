@@ -98,6 +98,8 @@ class PriorityEpisode:
     inversion_suspect: bool = False
     medium_tasks: List[str] = field(default_factory=list)
     pattern: str = ""
+    # Still open at trace end: stop_ns is time_max, not an observed return to base.
+    truncated: bool = False
 
 @dataclass
 class SyncIssueRef:
@@ -689,7 +691,7 @@ def _build_interval_data(
             if not stack:
                 continue
             start_ev = stack.pop()
-            if ev.time > start_ev.time:
+            if ev.time >= start_ev.time:
                 instances.append(IntervalInstance(
                     id=display_id,
                     start_ns=start_ev.time,
@@ -721,7 +723,26 @@ def _interval_overlaps_range(inst: "IntervalInstance",
                              lo: Optional[int], hi: Optional[int]) -> bool:
     if lo is None or hi is None:
         return True
-    return inst.stop_ns > lo and inst.start_ns < hi
+    return inst.stop_ns >= lo and inst.start_ns <= hi
+
+
+def _interval_fully_in_range(inst: "IntervalInstance",
+                             lo: Optional[int], hi: Optional[int]) -> bool:
+    """Both endpoints inside the window — the rule for interval statistics."""
+    if lo is None or hi is None:
+        return True
+    return inst.start_ns >= lo and inst.stop_ns <= hi
+
+
+def _interval_boundary_count(trace: "BtfTrace",
+                             lo: Optional[int], hi: Optional[int]) -> int:
+    """Interval spans that cross the window edge (shown, but not in statistics)."""
+    if lo is None or hi is None:
+        return 0
+    return sum(
+        1 for insts in trace.interval_instances_by_id.values() for inst in insts
+        if _interval_overlaps_range(inst, lo, hi)
+        and not _interval_fully_in_range(inst, lo, hi))
 
 
 def _nearest_rank_index(n: int, p: float) -> int:
@@ -795,7 +816,7 @@ def _all_timing_samples(trace: "BtfTrace", kind: str,
         if kind == "block":
             out.extend(_blocking_time_samples(list(segs), lo, hi))
         else:
-            out.extend(_exec_slice_samples(list(segs), lo, hi))
+            out.extend(_exec_slice_samples(list(segs), lo, hi, trace))
     return out
 
 
@@ -841,7 +862,7 @@ def _interval_stats_rows(
     for iid in trace.interval_ids:
         _insts = [
             inst for inst in trace.interval_instances_by_id.get(iid, [])
-            if _interval_overlaps_range(inst, lo, hi)
+            if _interval_fully_in_range(inst, lo, hi)
         ]
         samples = [inst.stop_ns - inst.start_ns for inst in _insts]
         if not samples:
@@ -1117,6 +1138,7 @@ def _build_sti_derived(
     Dict[str, dict],
     List[str],
     Dict[str, List[TagSample]],
+    int,
 ]:
     """Single-pass STI post-processing: channels, intervals, markers, tags.
 
@@ -1166,6 +1188,7 @@ def _build_sti_derived(
     open_stacks: Dict[str, list] = {}
     instances: List[IntervalInstance] = []
     unmatched = 0
+    unmatched_stops = 0
     marker_by_id: Dict[str, dict] = {}
 
     for _t, _ord, is_start, ev, display_id, task_id, pair_key in markers:
@@ -1180,9 +1203,10 @@ def _build_sti_derived(
         else:
             stack = open_stacks.get(pair_key)
             if not stack:
+                unmatched_stops += 1
                 continue
             start_ev = stack.pop()
-            if ev.time > start_ev.time:
+            if ev.time >= start_ev.time:
                 instances.append(IntervalInstance(
                     id=display_id,
                     start_ns=start_ev.time,
@@ -1228,6 +1252,7 @@ def _build_sti_derived(
         marker_by_id,
         tag_channels,
         dict(by_ch),
+        unmatched_stops,
     )
 
 def _tag_overlaps_range(sample: TagSample,
@@ -1345,7 +1370,10 @@ def _task_lifecycle_rows(
         if not _in_scope(ev.time):
             continue
         action = m.group(1).lower()
-        task_label = note[m.end():].strip() or note
+        task_label = note[m.end():].strip()
+        # Bare `resume` / `resume/isr` carries no task name in the BTF row.
+        if not task_label or task_label.startswith("/"):
+            continue
         mk = _task_merge_key(task_label)
         row = _row(mk, task_label)
         row["event_count"] += 1
@@ -1884,7 +1912,7 @@ def _build_priority_data(
                 return "Boost"
             return "—"
 
-        def _close(stop_ns: int) -> None:
+        def _close(stop_ns: int, truncated: bool = False) -> None:
             nonlocal open_ep
             if not open_ep or stop_ns <= open_ep[0]:
                 open_ep = None
@@ -1901,9 +1929,11 @@ def _build_priority_data(
                 start_ns=open_ep[0],
                 stop_ns=stop_ns,
                 inherited=inherited,
-                inversion_suspect=inherited or bool(medium),
+                # Inheritance alone is the fix, not an inversion: needs a medium-priority task.
+                inversion_suspect=bool(medium),
                 medium_tasks=medium,
                 pattern=_pattern_label(peak, inherited, medium),
+                truncated=truncated,
             )
             episodes.append(ep)
             episodes_by_mk.setdefault(mk, []).append(ep)
@@ -1926,7 +1956,7 @@ def _build_priority_data(
                 if effective <= base_pri or is_disinherit:
                     _close(t_ns)
         if open_ep is not None:
-            _close(time_max)
+            _close(time_max, truncated=True)
 
     episodes.sort(key=lambda e: (e.start_ns, e.stop_ns))
     return task_base_priority, episodes, episodes_by_mk, True
@@ -2112,7 +2142,7 @@ def _priority_plot_points(
 ) -> List[Tuple[int, int, PriorityEpisode]]:
     pts: List[Tuple[int, int, PriorityEpisode]] = []
     for ep in trace.priority_episodes_by_mk.get(mk, []):
-        if not _priority_overlaps_range(ep, lo, hi):
+        if ep.truncated or not _priority_overlaps_range(ep, lo, hi):
             continue
         dur = ep.stop_ns - ep.start_ns
         pts.append((ep.stop_ns, dur, ep))
@@ -2169,6 +2199,23 @@ def _format_sync_issue_note(iss: dict) -> str:
         return f"{kind} {ptr}: {detail}".strip()
     return iss.get("detail") or iss.get("kind") or "sync issue"
 
+# What a paired sync span measures, by object kind and pairing order.
+_SYNC_SPAN_LABELS = {
+    "mutex_hold": "hold",
+    "sem_take_give": "take→give",
+    "sem_give_take": "give→take",
+    "queue_send_recv": "send→recv",
+}
+
+
+def _sync_span_kind(obj_kind: str, take_first: bool) -> str:
+    if obj_kind == "queue":
+        return "queue_send_recv"
+    if obj_kind == "sem":
+        return "sem_take_give" if take_first else "sem_give_take"
+    return "mutex_hold"
+
+
 def _build_sync_object_data(
     sti_events: List["StiEvent"],
     core_segs: Dict[str, list],
@@ -2203,16 +2250,20 @@ def _build_sync_object_data(
             "open_takes": [],
             "open_gives": [],
             # Review item A7: distinct tasks that took/recv'd while the object
-            # was already held, and the deepest simultaneously-open take count.
+            # had an earlier take still open, and the deepest simultaneously-open take count.
             "waiters": set(),
             "max_nest": 0,
+            "generation": 1,
+            # Gives within _POST_CREATE_GIVE_MAX_NS of create (kernel init), not paired.
+            "post_create_gives": 0,
         }
 
     def _is_post_create_kernel_give(obj: dict, time_ns: int) -> bool:
         create_ns = obj.get("create_ns")
         return create_ns is not None and time_ns - create_ns <= _POST_CREATE_GIVE_MAX_NS
 
-    def _record_hold(obj: dict, take: dict, give: dict, take_first: bool) -> None:
+    def _record_hold(obj: dict, take: dict, give: dict, take_first: bool,
+                     cross_task: bool = False) -> None:
         start = take if take_first else give
         stop = give if take_first else take
         obj["holds"].append({
@@ -2221,6 +2272,9 @@ def _build_sync_object_data(
             "holder_mk": take.get("task_mk"), "holder_label": take["task_label"],
             "take_core": take.get("core", ""), "give_core": give.get("core", ""),
             "signal": not take_first,
+            "span_kind": _sync_span_kind(obj["kind"], take_first),
+            # Mutex released by a task other than the taker: not a hold-time sample.
+            "cross_task": cross_task,
         })
 
     # Sync STI events are time-sorted: advance a per-core segment cursor instead
@@ -2263,6 +2317,15 @@ def _build_sync_object_data(
         if action == "create":
             obj = _empty_obj(ev.target, ptr)
             obj["create_ns"] = ev.time
+            prev = objects.get(key)
+            if prev is not None and (prev["holds"] or prev["issues"]
+                                     or prev["create_ns"] is not None
+                                     or prev["delete_ns"] is not None):
+                # Same handle re-created: keep the earlier lifetime as its own row.
+                gen = prev["generation"]
+                prev["key"] = f"{key}#{gen}"
+                objects[prev["key"]] = prev
+                obj["generation"] = gen + 1
             objects[key] = obj
         else:
             if key not in objects:
@@ -2278,8 +2341,8 @@ def _build_sync_object_data(
                     send = obj["open_gives"].pop(0)
                     _record_hold(obj, send, rec, True)
                 else:
-                    # Contended acquire: something is already held, and it is a
-                    # different task → the taker had to wait (review item A7).
+                    # Take by another task while one is still open: recursion or
+                    # a missing give. STI takes mark acquisition, not waiting.
                     if (obj["open_takes"] and task_mk
                             and task_mk != obj["open_takes"][-1].get("task_mk")):
                         obj["waiters"].add(task_mk)
@@ -2288,6 +2351,7 @@ def _build_sync_object_data(
                         obj["max_nest"] = len(obj["open_takes"])
             elif action in ("give", "send"):
                 if action == "give" and _is_post_create_kernel_give(obj, ev.time):
+                    obj["post_create_gives"] += 1
                     continue
                 give_rec = {"time_ns": ev.time, "task_mk": task_mk, "task_label": task_label,
                             "core": ev.core or ""}
@@ -2300,15 +2364,16 @@ def _build_sync_object_data(
                         })
                     else:
                         take = obj["open_takes"].pop()
-                        if (take.get("task_mk") and task_mk
-                                and take["task_mk"] != task_mk):
+                        cross_task = bool(take.get("task_mk") and task_mk
+                                          and take["task_mk"] != task_mk)
+                        if cross_task:
                             obj["issues"].append({
                                 "kind": "cross_task_give", "severity": "warning",
                                 "time_ns": ev.time, "core": ev.core or "",
                                 "task_mk": task_mk, "task_label": task_label,
                                 "detail": f"give by {task_label}, held by {take['task_label']}",
                             })
-                        _record_hold(obj, take, give_rec, True)
+                        _record_hold(obj, take, give_rec, True, cross_task)
                         if (take.get("core") and give_rec.get("core")
                                 and take["core"] != give_rec["core"]):
                             obj["issues"].append({
@@ -2403,6 +2468,81 @@ def _sync_object_status(obj: dict, lo: Optional[int], hi: Optional[int]) -> str:
         return "error"
     return "warning"
 
+def _sync_object_label(obj: dict) -> str:
+    label = f"{obj['kind']} {obj['ptr']}"
+    gen = int(obj.get("generation") or 1)
+    if gen > 1 or "#" in str(obj.get("key") or ""):
+        label += f" (gen {gen})"
+    return label
+
+
+def _sync_stat_holds(holds: List[dict], lo: Optional[int], hi: Optional[int]
+                     ) -> Tuple[List[dict], int, int]:
+    """Split window-touching holds into hold-time samples and exclusions.
+
+    Returns ``(samples, cross_task, boundary)``: cross-task mutex gives are not
+    hold samples, and with a cursor window both endpoints must lie inside it.
+    """
+    samples: List[dict] = []
+    cross_task = boundary = 0
+    scoped = lo is not None and hi is not None
+    for h in holds:
+        if h.get("cross_task"):
+            cross_task += 1
+        elif scoped and (h["start_ns"] < lo or h["stop_ns"] > hi):
+            boundary += 1
+        else:
+            samples.append(h)
+    return samples, cross_task, boundary
+
+
+def _sync_span_summary(holds: List[dict], obj_kind: str) -> str:
+    """Span kinds behind an object's hold-time samples, e.g. ``give→take``."""
+    kinds = {h.get("span_kind") or _sync_span_kind(obj_kind, not h.get("signal"))
+             for h in holds}
+    if not kinds:
+        return ""
+    order = list(_SYNC_SPAN_LABELS)
+    return ", ".join(_SYNC_SPAN_LABELS[k] for k in sorted(kinds, key=order.index))
+
+
+_QUEUE_PAIRING_NOTE = (
+    "Send→recv spans pair each recv with the oldest open send (FIFO). The trace "
+    "does not record overwrite, send-to-front or reset, so queues using those "
+    "can pair the wrong send.")
+
+
+def _sync_kind_display(row: tuple) -> str:
+    """Kind column text: object kind plus what its spans measure."""
+    span = row[20] if len(row) > 20 else ""
+    return f"{row[1]} · {span}" if span else str(row[1])
+
+
+def _sync_exclusion_note(rows: List[tuple]) -> str:
+    """Caption for spans left out of the Holds / hold-time columns, or ''."""
+    cross = sum(r[18] for r in rows if len(r) > 19)
+    boundary = sum(r[19] for r in rows if len(r) > 19)
+    post_create = sum(r[21] for r in rows if len(r) > 21)
+    bits = []
+    if cross:
+        bits.append(f"{cross:,} cross-task mutex give(s)")
+    if boundary:
+        bits.append(f"{boundary:,} span(s) crossing the cursor window")
+    if post_create:
+        bits.append(f"{post_create:,} kernel give(s) right after create")
+    if not bits:
+        return ""
+    return "Not counted as hold-time samples: " + "; ".join(bits) + "."
+
+
+def _interval_boundary_note(n: int) -> str:
+    """Caption for interval spans left out of statistics at the window edge, or ''."""
+    if n <= 0:
+        return ""
+    return (f"{n:,} interval span(s) cross the cursor window and are left out of "
+            "these statistics (both endpoints must be inside).")
+
+
 def _sync_object_stats_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
@@ -2416,10 +2556,11 @@ def _sync_object_stats_rows(
     for obj in trace.sync_objects.values():
         if kind_filter is not None and obj["kind"] != kind_filter:
             continue
-        holds = [h for h in obj.get("holds", [])
-                 if lo is None or hi is None or (h["stop_ns"] > lo and h["start_ns"] < hi)]
+        touching = [h for h in obj.get("holds", [])
+                    if lo is None or hi is None or (h["stop_ns"] > lo and h["start_ns"] < hi)]
+        holds, cross_task_n, boundary_n = _sync_stat_holds(touching, lo, hi)
         issues = [i for i in obj.get("issues", []) if _sync_in_scope(i["time_ns"], lo, hi)]
-        if lo is not None and hi is not None and not holds and not issues:
+        if lo is not None and hi is not None and not touching and not issues:
             if obj.get("create_ns") is None or not _sync_in_scope(obj["create_ns"], lo, hi):
                 continue
         status = _sync_object_status(obj, lo, hi)
@@ -2448,7 +2589,7 @@ def _sync_object_stats_rows(
             obj["key"],
             obj["kind"],
             obj["ptr"],
-            f"{obj['kind']} {obj['ptr']}",
+            _sync_object_label(obj),
             n_holds,
             len(issues),
             _format_time(avg_ns, scale) if holds else "—",
@@ -2463,6 +2604,10 @@ def _sync_object_stats_rows(
             max_nest,
             p95_hold_ns,
             p99_hold_ns,
+            cross_task_n,
+            boundary_n,
+            _sync_span_summary(holds, obj["kind"]),
+            int(obj.get("post_create_gives") or 0),
         ))
     rows.sort(key=lambda r: (
         0 if r[8] == "error" else 1 if r[8] == "warning" else 2,
@@ -2485,7 +2630,10 @@ def _sync_object_hold_detail_rows(
                 if not (h["stop_ns"] > lo and h["start_ns"] < hi):
                     continue
             rows.append({
-                "object": f"{obj['kind']} {obj['ptr']}",
+                "object": _sync_object_label(obj),
+                "span": _SYNC_SPAN_LABELS.get(
+                    h.get("span_kind") or _sync_span_kind(obj["kind"], not h.get("signal")),
+                    "hold"),
                 "holder": h.get("holder_label") or "—",
                 "start": _format_time(h["start_ns"], scale),
                 "start_ns": h["start_ns"],
@@ -2494,6 +2642,7 @@ def _sync_object_hold_detail_rows(
                 "duration_ns": h["duration_ns"],
                 "take_core": h.get("take_core") or "",
                 "give_core": h.get("give_core") or "",
+                "cross_task": bool(h.get("cross_task")),
             })
     # Tie-break by the raw start timestamp (not the formatted label) so equal
     # durations sort chronologically rather than lexicographically.
@@ -2514,14 +2663,17 @@ def _priority_episode_detail_rows(
         if lo is not None and hi is not None:
             if not (ep.stop_ns > lo and ep.start_ns < hi):
                 continue
+        dur = _format_time(ep.stop_ns - ep.start_ns, scale)
         rows.append({
             "task": ep.task_label,
             "pri": f"{ep.base_pri}→{ep.peak_pri}",
             "start": _format_time(ep.start_ns, scale),
-            "stop": _format_time(ep.stop_ns, scale),
-            "duration": _format_time(ep.stop_ns - ep.start_ns, scale),
+            "stop": "open at trace end" if ep.truncated else _format_time(ep.stop_ns, scale),
+            "duration": f"≥ {dur}" if ep.truncated else dur,
             "start_ns": ep.start_ns,
             "pattern": ep.pattern or "—",
+            "truncated": ep.truncated,
+            **_priority_episode_cpu_fields(trace, ep),
         })
     rows.sort(key=lambda r: (r["start_ns"], r.get("stop", "")))
     return rows[:limit] if limit > 0 else rows
@@ -2534,6 +2686,7 @@ def _interval_instance_detail_rows(
 ) -> List[dict]:
     scale = trace.time_scale
     rows: List[dict] = []
+    _exec_cache: Dict[str, tuple] = {}
     for iid in trace.interval_ids:
         for inst in trace.interval_instances_by_id.get(iid, []):
             if not _interval_overlaps_range(inst, lo, hi):
@@ -2548,6 +2701,7 @@ def _interval_instance_detail_rows(
                 "duration_ns": inst.stop_ns - inst.start_ns,
                 "start_core": inst.start_core or "",
                 "stop_core": inst.stop_core or "",
+                **_interval_exec_fields(trace, inst, _exec_cache),
             })
     # Tie-break by the raw start timestamp (not the formatted label) so equal
     # durations sort chronologically rather than lexicographically.
@@ -2573,6 +2727,19 @@ def _plot_point_mark_ns(payload, x_ns: int) -> int:
     if isinstance(payload, TaskSegment):
         return payload.start
     return x_ns
+
+def _plot_point_endpoints(payload) -> Optional[Tuple[int, int]]:
+    """``(start_ns, stop_ns)`` for outliers whose jump marks both ends."""
+    if isinstance(payload, PriorityEpisode):
+        return payload.start_ns, payload.stop_ns
+    if isinstance(payload, dict) and "start_ns" in payload and "stop_ns" in payload:
+        return int(payload["start_ns"]), int(payload["stop_ns"])
+    return None
+
+
+def _plot_point_endpoint_notes(note: str) -> Tuple[str, str]:
+    return f"{note} — start", f"{note} — end"
+
 
 def _format_plot_point_note(
     trace: "BtfTrace",
@@ -2669,13 +2836,12 @@ def _format_extreme_segment_note(
     label = "max" if find_max else "min"
     if kind == "exec":
         dur = seg.end - seg.start
-        extreme = "WCET" if find_max else "BCET"
-        return f"{name} {extreme}: {fmt(dur)} at {fmt(seg.start)}"
+        return f"{name} {label} observed slice: {fmt(dur)} at {fmt(seg.start)}"
     segs = trace.seg_map_by_merge_key.get(mk, [])
     gap = _gap_before_segment(segs, seg, kind)
     gap_s = fmt(gap) if gap is not None else "?"
     if kind == "block":
-        return f"{name} {label} blocking: {gap_s} before {fmt(seg.start)}"
+        return f"{name} {label} off-CPU gap: {gap_s} before {fmt(seg.start)}"
     if kind == "inter":
         return f"{name} {label} inter-arrival: {gap_s} at {fmt(seg.start)}"
     return f"{name} at {fmt(seg.start)}"
@@ -2813,6 +2979,9 @@ class BtfTrace:
     core_util_pct: Dict[str, float]                                         = field(default_factory=dict)
     interval_marker_by_id: Dict[str, dict]                                  = field(default_factory=dict)
     interval_unmatched_starts: int                                          = 0
+    interval_unmatched_stops: int                                           = 0
+    # Raw task names whose last slice was still open at trace end (closed at time_max).
+    open_at_end_tasks: frozenset                                            = field(default_factory=frozenset)
     tag_channels: List[str]                                                 = field(default_factory=list)
     tag_samples_by_channel: Dict[str, List["TagSample"]]                    = field(default_factory=dict)
     tag_representations: Dict[str, Union[str, dict]]                                     = field(default_factory=dict)
@@ -3120,6 +3289,8 @@ def _dispatch_latency_by_mk(
     time; ``t_resume`` is the next switch-in (segment start) for that task.
     ISR resumes without a task name are skipped. Sync-object wakes are not
     attributed (BTF notes carry the object pointer, not the woken task).
+    Several ready events before the same switch-in keep only the earliest;
+    ``sources`` parallels ``samples`` with ``create`` / ``resume``.
     """
     by_mk: Dict[str, dict] = {}
 
@@ -3128,6 +3299,8 @@ def _dispatch_latency_by_mk(
             by_mk[mk] = {
                 "samples": [],
                 "points": [],  # (dispatch_ns, latency_ns, seg)
+                "sources": [],
+                "duplicates": 0,
                 "min_seg": None,
                 "max_seg": None,
                 "min_ns": None,
@@ -3135,38 +3308,9 @@ def _dispatch_latency_by_mk(
             }
         return by_mk[mk]
 
-    def _add(mk: str, ready_ns: int) -> None:
-        segs = trace.seg_map_by_merge_key.get(mk, ())
-        if not segs:
-            return
-        if lo is not None and hi is not None and not (lo <= ready_ns <= hi):
-            return
-        best = None
-        for s in segs:
-            if s.start < ready_ns:
-                continue
-            if lo is not None and hi is not None and not (lo <= s.start <= hi):
-                continue
-            if best is None or s.start < best.start:
-                best = s
-        if best is None:
-            return
-        lat = best.start - ready_ns
-        if lat < 0:
-            return
-        e = _ensure(mk)
-        e["samples"].append(lat)
-        e["points"].append((best.start, lat, best))
-        if e["min_ns"] is None or lat < e["min_ns"]:
-            e["min_ns"] = lat
-            e["min_seg"] = best
-        if e["max_ns"] is None or lat > e["max_ns"]:
-            e["max_ns"] = lat
-            e["max_seg"] = best
-
+    ready: Dict[str, List[Tuple[int, int, str]]] = defaultdict(list)
     for mk, create_ns in getattr(trace, "task_create_times", {}).items():
-        _add(mk, create_ns)
-
+        ready[mk].append((create_ns, 0, "create"))
     for ev in trace.sti_events:
         if ev.target != "task":
             continue
@@ -3175,10 +3319,445 @@ def _dispatch_latency_by_mk(
         if not m or m.group(1).lower() != "resume":
             continue
         task_label = note[m.end():].strip()
-        if not task_label:
+        if not task_label or task_label.startswith("/"):
             continue
-        _add(_task_merge_key(task_label), ev.time)
+        ready[_task_merge_key(task_label)].append((ev.time, 1, "resume"))
+
+    for mk, events in ready.items():
+        segs = trace.seg_map_by_merge_key.get(mk, ())
+        if not segs:
+            continue
+        events.sort()
+        used: set = set()
+        for ready_ns, _ord, source in events:
+            if lo is not None and hi is not None and not (lo <= ready_ns <= hi):
+                continue
+            best = None
+            for s in segs:
+                if s.start < ready_ns:
+                    continue
+                if lo is not None and hi is not None and not (lo <= s.start <= hi):
+                    continue
+                if best is None or s.start < best.start:
+                    best = s
+            if best is None:
+                continue
+            lat = best.start - ready_ns
+            if lat < 0:
+                continue
+            e = _ensure(mk)
+            key = (best.start, best.core)
+            if key in used:
+                e["duplicates"] += 1
+                continue
+            used.add(key)
+            e["samples"].append(lat)
+            e["sources"].append(source)
+            e["points"].append((best.start, lat, best))
+            if e["min_ns"] is None or lat < e["min_ns"]:
+                e["min_ns"] = lat
+                e["min_seg"] = best
+            if e["max_ns"] is None or lat > e["max_ns"]:
+                e["max_ns"] = lat
+                e["max_seg"] = best
     return by_mk
+
+
+PERCENTILE_METHOD_NOTE = (
+    "Percentiles use nearest rank: the value at position ⌈n·p⌉ of the sorted samples.")
+
+
+METRIC_DEFINITIONS = (
+    ("exec", "Execution time",
+     "Duration of one continuous on-CPU slice of a task. A preempted operation appears as several slices; Max is an observed maximum, not a proven WCET.",
+     ("exec", "execution")),
+    ("off_cpu_gap", "Off-CPU gap",
+     "Time from the end of one task slice to the start of the same task’s next slice. It covers preemption, sleep, waiting and suspension alike, so it is not proof of blocking.",
+     ("off-cpu", "off_cpu", "gap", "block")),
+    ("response", "Response time (heuristic)",
+     "Estimated ready-to-completion window: from the end of the previous slice to the end of the current one. Not a recorded release/completion pair.",
+     ("response",)),
+    ("dispatch", "Dispatch latency",
+     "Time from a recorded ready point (task create or STI resume) to the task’s next switch-in. Wakeups without a task ID are not covered; when several ready events precede one switch-in, only the earliest is kept.",
+     ("dispatch", "scheduling latency")),
+    ("migration", "Core migration",
+     "A task’s consecutive slices running on different cores. The gap between them is compared against the same task’s same-core gaps as a baseline.",
+     ("migration", "migrate")),
+    ("affinity", "Affinity change to run",
+     "Time from an affinity_set note to the task’s next slice on a core the new mask allows.",
+     ("affinity",)),
+    ("priority", "Priority inheritance episode",
+     "Span from a priority_inherit note to the matching priority_restore (or the end of the trace). On-CPU and off-CPU split the span by the holder’s slices; boost→run is the delay until the holder first runs after the boost.",
+     ("priority", "inherit", "boost")),
+    ("sync_hold", "Mutex / semaphore span",
+     "Time from a take to the paired give on the same object generation. Spans are labelled by kind (owned hold, binary/counting token, or cross-task give); a recreated handle starts a new generation.",
+     ("mutex", "semaphore", "hold", "sync")),
+    ("queue", "Queue residence",
+     "Time from a send to the receive it is paired with. Pairing assumes FIFO order, which the trace does not record directly.",
+     ("queue",)),
+    ("interval", "Interval instance",
+     "Span between instrumented start and stop markers. On-CPU and off-CPU split the span by the task running on the start core.",
+     ("interval",)),
+    ("suspended", "Suspended time",
+     "Time from a task’s suspend note to its resume note; spans still open at the end of the trace are counted separately.",
+     ("suspend",)),
+    ("percentile", "Percentiles (p50/p95/p99)",
+     "Nearest-rank: the value at position ⌈n·p⌉ of the sorted samples. Below 20 samples p95 and p99 equal the max; below 100 samples p99 equals the max.",
+     ("p50", "p95", "p99", "percentile")),
+)
+
+
+def _metric_definitions_for(names) -> list:
+    """Definitions whose keywords appear in any of ``names`` (case-insensitive)."""
+    low = [str(n or "").lower() for n in names or []]
+    out = []
+    for key, term, text, kws in METRIC_DEFINITIONS:
+        if any(kw in n for n in low for kw in kws):
+            out.append({"key": key, "term": term, "definition": text})
+    return out
+
+
+def _percentile_sample_note(counts) -> str:
+    """Caption for rows whose p95/p99 collapse to the max, or ''."""
+    ns = []
+    for c in counts:
+        try:
+            ns.append(int(c))
+        except (TypeError, ValueError):
+            continue
+    lt20 = sum(1 for n in ns if 0 < n < 20)
+    lt100 = sum(1 for n in ns if 20 <= n < 100)
+    bits = []
+    if lt20:
+        bits.append(f"{lt20:,} row(s) with fewer than 20 samples: p95 and p99 are the max")
+    if lt100:
+        bits.append(f"{lt100:,} row(s) with 20–99 samples: p99 is the max")
+    if not bits:
+        return ""
+    return "Small samples — " + "; ".join(bits) + ". " + PERCENTILE_METHOD_NOTE
+
+
+def _nearest_rank(sorted_vals: List[int], p: float) -> int:
+    n = len(sorted_vals)
+    return sorted_vals[min(n - 1, max(0, math.ceil(n * p) - 1))]
+
+
+def _avg_int(vals: List[int]) -> int:
+    return int(round(sum(vals) / len(vals))) if vals else 0
+
+
+def _is_background_task(trace: "BtfTrace", mk: str) -> bool:
+    _, _, tname = _parse_task_name(trace.task_repr.get(mk, mk))
+    return _is_idle_task_name(tname) or tname == "TICK"
+
+
+def _dispatch_source_note(trace: "BtfTrace", by_mk: Dict[str, dict]) -> str:
+    """Create vs resume split of dispatch samples, or ''."""
+    create: List[int] = []
+    resume: List[int] = []
+    dups = 0
+    for mk, data in by_mk.items():
+        if _is_background_task(trace, mk):
+            continue
+        dups += int(data.get("duplicates") or 0)
+        for lat, src in zip(data.get("samples") or (), data.get("sources") or ()):
+            (create if src == "create" else resume).append(lat)
+    if not create and not resume:
+        return ""
+    scale = trace.time_scale
+    bits = []
+    if create:
+        bits.append(f"create→first run avg {_format_time_web(_avg_int(create), scale)} "
+                    f"(n={len(create):,})")
+    if resume:
+        bits.append(f"resume→run avg {_format_time_web(_avg_int(resume), scale)} "
+                    f"(n={len(resume):,})")
+    note = "Ready source: " + "; ".join(bits) + "."
+    if dups:
+        note += (f" {dups:,} repeated ready event(s) before the same switch-in "
+                 "were merged into the earliest.")
+    return note
+
+
+def _same_core_gap_samples(trace: "BtfTrace",
+                           lo: Optional[int] = None, hi: Optional[int] = None) -> List[int]:
+    """Off-CPU gaps where a task resumed on the core it left (no migration)."""
+    out: List[int] = []
+    for mk, segs in trace.seg_map_by_merge_key.items():
+        if len(segs) < 2 or _is_background_task(trace, mk):
+            continue
+        ordered = sorted(segs, key=lambda s: s.start)
+        for prev, nxt in zip(ordered, ordered[1:]):
+            if prev.core != nxt.core:
+                continue
+            if lo is not None and hi is not None and not (
+                    _seg_fully_in_range(prev, lo, hi) and _seg_fully_in_range(nxt, lo, hi)):
+                continue
+            gap = nxt.start - prev.end
+            if gap >= 0:
+                out.append(gap)
+    return out
+
+
+def _migration_gap_baseline_note(trace: "BtfTrace",
+                                 lo: Optional[int] = None, hi: Optional[int] = None) -> str:
+    vals = sorted(_same_core_gap_samples(trace, lo, hi))
+    if not vals:
+        return ""
+    scale = trace.time_scale
+    return (f"Same-core baseline (task resumed on the core it left): avg "
+            f"{_format_time_web(_avg_int(vals), scale)}, p95 "
+            f"{_format_time_web(_nearest_rank(vals, 0.95), scale)} over {len(vals):,} gap(s). "
+            "Compare with the Gap columns to see what a migration adds.")
+
+
+def _priority_episode_cpu_split(trace: "BtfTrace", ep: "PriorityEpisode"
+                                ) -> Tuple[int, int, Optional[int]]:
+    """``(on_cpu_ns, off_cpu_ns, boost_to_run_ns)`` for one boosted episode.
+
+    ``boost_to_run_ns`` is 0 when the task is already running at the boost and
+    None when it never runs before the episode ends.
+    """
+    on = 0
+    first: Optional[int] = None
+    for s in trace.seg_map_by_merge_key.get(ep.mk, ()):
+        a = max(s.start, ep.start_ns)
+        b = min(s.end, ep.stop_ns)
+        if b > a:
+            on += b - a
+            if first is None or a < first:
+                first = a
+    dur = max(0, ep.stop_ns - ep.start_ns)
+    return on, max(0, dur - on), (first - ep.start_ns) if first is not None else None
+
+
+def _priority_episode_cpu_fields(trace: "BtfTrace", ep: "PriorityEpisode") -> dict:
+    on, off, b = _priority_episode_cpu_split(trace, ep)
+    scale = trace.time_scale
+    return {
+        "boost_to_run": _format_time_web(b, scale) if b is not None else "did not run",
+        "on_cpu": _format_time_web(on, scale),
+        "off_cpu": _format_time_web(off, scale),
+    }
+
+
+def _priority_holder_note(trace: "BtfTrace",
+                          lo: Optional[int] = None, hi: Optional[int] = None) -> str:
+    """On/off-CPU split and boost→run for completed boost episodes, or ''."""
+    on_t = off_t = never = 0
+    b2r: List[int] = []
+    for ep in trace.priority_episodes:
+        if ep.truncated:
+            continue
+        if lo is not None and hi is not None and not (lo <= ep.start_ns and ep.stop_ns <= hi):
+            continue
+        on, off, b = _priority_episode_cpu_split(trace, ep)
+        on_t += on
+        off_t += off
+        if b is None:
+            never += 1
+        else:
+            b2r.append(b)
+    total = on_t + off_t
+    if total <= 0:
+        return ""
+    scale = trace.time_scale
+    note = (f"While boosted, tasks were on-CPU {_format_time_web(on_t, scale)} "
+            f"({100.0 * on_t / total:.0f}%) and off-CPU {_format_time_web(off_t, scale)}")
+    if b2r:
+        vals = sorted(b2r)
+        note += (f"; boost→run median {_format_time_web(_nearest_rank(vals, 0.5), scale)}, "
+                 f"max {_format_time_web(vals[-1], scale)} over {len(vals):,} episode(s)")
+    if never:
+        note += f"; {never:,} episode(s) ended before the task ran"
+    return note + "."
+
+
+def _affinity_change_to_run_samples(trace: "BtfTrace",
+                                    lo: Optional[int] = None, hi: Optional[int] = None
+                                    ) -> Tuple[List[Tuple[int, int, str]], int]:
+    """``([(change_ns, latency_ns, mk)], no_run_count)`` per ``affinity_set``.
+
+    Latency runs from the change to the first slice on a core the new mask
+    allows (0 if already running on one). A change with no such slice before
+    the next change or trace end counts in ``no_run_count``.
+    """
+    histories: Dict[str, List[tuple]] = defaultdict(list)
+    for ev in trace.sti_events:
+        if ev.target != "task":
+            continue
+        m = _AFFINITY_NOTE_RE.match((ev.note or "").strip())
+        if not m:
+            continue
+        histories[_task_merge_key(m.group(1).strip())].append(
+            (ev.time, _parse_int_token(m.group(2))))
+    samples: List[Tuple[int, int, str]] = []
+    no_run = 0
+    for mk, hist in histories.items():
+        hist.sort(key=lambda x: x[0])
+        segs = sorted(trace.seg_map_by_merge_key.get(mk, ()), key=lambda s: s.start)
+        for i, (t, mask) in enumerate(hist):
+            if lo is not None and hi is not None and not (lo <= t <= hi):
+                continue
+            allowed = _cores_allowed_by_mask(mask, trace.core_names)
+            if not allowed:
+                continue
+            t_next = hist[i + 1][0] if i + 1 < len(hist) else None
+            lat: Optional[int] = None
+            for seg in segs:
+                if seg.end <= t:
+                    continue
+                if t_next is not None and seg.start >= t_next:
+                    break
+                if seg.core in allowed:
+                    lat = max(0, seg.start - t)
+                    break
+            if lat is None:
+                no_run += 1
+                continue
+            if lo is not None and hi is not None and t + lat > hi:
+                continue
+            samples.append((t, lat, mk))
+    return samples, no_run
+
+
+def _affinity_change_note(trace: "BtfTrace",
+                          lo: Optional[int] = None, hi: Optional[int] = None) -> str:
+    samples, no_run = _affinity_change_to_run_samples(trace, lo, hi)
+    if not samples and not no_run:
+        return ""
+    scale = trace.time_scale
+    bits = []
+    if samples:
+        vals = sorted(lat for _t, lat, _mk in samples)
+        bits.append(f"Affinity change → first run on an allowed core: avg "
+                    f"{_format_time_web(_avg_int(vals), scale)}, max "
+                    f"{_format_time_web(vals[-1], scale)} over {len(vals):,} change(s)")
+    if no_run:
+        bits.append(f"{no_run:,} change(s) with no run on an allowed core before the "
+                    "next change or trace end")
+    return "; ".join(bits) + "."
+
+
+def _suspended_spans(trace: "BtfTrace",
+                     lo: Optional[int] = None, hi: Optional[int] = None
+                     ) -> Tuple[List[Tuple[int, int, str]], int]:
+    """``([(suspend_ns, resume_ns, mk)], still_suspended)`` from named STI notes."""
+    open_by_mk: Dict[str, int] = {}
+    spans: List[Tuple[int, int, str]] = []
+    task_evs = sorted((ev for ev in trace.sti_events if ev.target == "task"),
+                      key=lambda ev: ev.time)
+    for ev in task_evs:
+        note = (ev.note or "").strip()
+        m = _LIFECYCLE_NOTE_RE.match(note)
+        if not m:
+            continue
+        label = note[m.end():].strip()
+        if not label or label.startswith("/"):
+            continue
+        action = m.group(1).lower()
+        mk = _task_merge_key(label)
+        if action == "suspend":
+            open_by_mk.setdefault(mk, ev.time)
+        elif action == "resume":
+            t0 = open_by_mk.pop(mk, None)
+            if t0 is None:
+                continue
+            if lo is not None and hi is not None and not (lo <= t0 and ev.time <= hi):
+                continue
+            spans.append((t0, ev.time, mk))
+        elif action == "delete":
+            open_by_mk.pop(mk, None)
+    return spans, len(open_by_mk)
+
+
+def _suspended_duration_note(trace: "BtfTrace",
+                             lo: Optional[int] = None, hi: Optional[int] = None) -> str:
+    spans, still = _suspended_spans(trace, lo, hi)
+    if not spans and not still:
+        return ""
+    scale = trace.time_scale
+    bits = []
+    if spans:
+        vals = sorted(b - a for a, b, _mk in spans)
+        bits.append(f"Suspended (suspend → resume of the same task): avg "
+                    f"{_format_time_web(_avg_int(vals), scale)}, max "
+                    f"{_format_time_web(vals[-1], scale)} over {len(vals):,} span(s)")
+    if still:
+        bits.append(f"{still:,} task(s) still suspended at trace end")
+    return "; ".join(bits) + "."
+
+
+def _interval_exec_split(trace: "BtfTrace", inst: "IntervalInstance",
+                         cache: Optional[Dict[str, tuple]] = None
+                         ) -> Optional[Tuple[str, int, int]]:
+    """``(task_mk, on_cpu_ns, waiting_ns)`` for the task running on the start
+    core when *inst* started, or None when no task (or only idle) was running."""
+    segs = trace.core_segs.get(inst.start_core) or []
+    if not segs:
+        return None
+    starts = trace.core_seg_starts.get(inst.start_core) or [s.start for s in segs]
+    i = bisect_right(starts, inst.start_ns) - 1
+    if i < 0 or segs[i].end < inst.start_ns:
+        return None
+    mk = _task_merge_key(segs[i].task)
+    if _is_background_task(trace, mk):
+        return None
+    if cache is None:
+        cache = {}
+    if mk not in cache:
+        own_sorted = sorted(trace.seg_map_by_merge_key.get(mk) or [], key=lambda s: s.start)
+        cache[mk] = (own_sorted, [s.start for s in own_sorted])
+    own, own_starts = cache[mk]
+    on = 0
+    j = max(0, bisect_left(own_starts, inst.start_ns) - 1)
+    while j < len(own) and own[j].start < inst.stop_ns:
+        a = max(own[j].start, inst.start_ns)
+        b = min(own[j].end, inst.stop_ns)
+        if b > a:
+            on += b - a
+        j += 1
+    dur = max(0, inst.stop_ns - inst.start_ns)
+    return mk, on, max(0, dur - on)
+
+
+def _interval_exec_fields(trace: "BtfTrace", inst: "IntervalInstance",
+                          cache: Optional[Dict[str, tuple]] = None) -> dict:
+    split = _interval_exec_split(trace, inst, cache)
+    if split is None:
+        return {"exec_task": "—", "on_cpu": "—", "off_cpu": "—"}
+    mk, on, off = split
+    scale = trace.time_scale
+    return {
+        "exec_task": _task_display_name(trace.task_repr.get(mk, mk)),
+        "on_cpu": _format_time_web(on, scale),
+        "off_cpu": _format_time_web(off, scale),
+    }
+
+
+def _interval_exec_note(trace: "BtfTrace",
+                        lo: Optional[int] = None, hi: Optional[int] = None) -> str:
+    on_t = wait_t = n = 0
+    cache: Dict[str, tuple] = {}
+    for iid in trace.interval_ids:
+        for inst in trace.interval_instances_by_id.get(iid, []):
+            if not _interval_fully_in_range(inst, lo, hi):
+                continue
+            split = _interval_exec_split(trace, inst, cache)
+            if split is None:
+                continue
+            on_t += split[1]
+            wait_t += split[2]
+            n += 1
+    total = on_t + wait_t
+    if not n or total <= 0:
+        return ""
+    scale = trace.time_scale
+    return (f"The task running when each interval started was on-CPU "
+            f"{100.0 * on_t / total:.0f}% of interval time (avg on-CPU "
+            f"{_format_time_web(on_t // n, scale)}, avg off-CPU "
+            f"{_format_time_web(wait_t // n, scale)} over {n:,} instance(s)); the rest is "
+            "preemption, blocking or work done by other tasks.")
 
 
 def _switch_overhead_rows(
@@ -3736,13 +4315,16 @@ def _migration_gap_plot_points(
     trace: "BtfTrace", mk: str,
     lo: Optional[int] = None, hi: Optional[int] = None,
 ) -> List[Tuple[int, int, "MigrationEvent"]]:
-    """One point per migration event with a positive post-migration blocking gap."""
+    """One point per migration event: x = migration time, y = gap until the next run.
+
+    Zero gaps (the task resumed on the new core immediately) are kept.
+    """
     migs = trace.migrations_by_mk.get(mk, ())
     pts: List[Tuple[int, int, MigrationEvent]] = []
     for m in migs:
         if lo is not None and hi is not None and (m.ns < lo or m.ns > hi):
             continue
-        if m.gap_ns > 0:
+        if m.gap_ns >= 0:
             pts.append((m.ns, m.gap_ns, m))
     return pts
 
@@ -3812,6 +4394,30 @@ def _pair_rate_plot_points(
     return pts
 
 _TICK_HEALTH_PERIOD = 1000   # expected tick period in trace units (1 ms @ us scale)
+_TICK_HEALTH_DEFAULT_HZ = 1000
+_TICK_RATE_META_KEYS = ("tickrate", "tick_rate", "tickratehz", "tick_rate_hz",
+                        "configtick_rate_hz", "tickhz", "tick_hz")
+_TIME_UNITS_PER_SECOND = {"ps": 1e12, "ns": 1e9, "us": 1e6, "ms": 1e3, "s": 1.0}
+
+
+def _tick_expected_period(trace: "BtfTrace") -> Tuple[float, str]:
+    """Expected RTOS tick period in trace time units, plus its source.
+
+    Uses a tick-rate header (e.g. ``#tickRate 1000``) when present; otherwise
+    assumes the FreeRTOS default 1000 Hz. ``core_clock`` is a counter
+    frequency, not the tick rate, and is never used here.
+    """
+    per_s = _TIME_UNITS_PER_SECOND.get((getattr(trace, "time_scale", "") or "ns").lower(), 1e9)
+    meta = getattr(trace, "meta", None) or {}
+    for key, value in meta.items():
+        if str(key).lower() not in _TICK_RATE_META_KEYS:
+            continue
+        hz = _try_parse_btf_int(str(value).strip().lower().removesuffix("hz").strip())
+        if hz and hz > 0:
+            return per_s / hz, "metadata"
+    return per_s / _TICK_HEALTH_DEFAULT_HZ, "default"
+
+
 _TICK_HEALTH_GAP_FACTOR = 2.0
 # Coefficient-of-variation threshold for tickless-mode detection.
 # In tick mode CV is near 0; tickless idle suppresses ticks during sleep
@@ -4365,9 +4971,9 @@ def _sync_hold_plot_points(
             continue
         start = int(h.get("start_ns") or 0)
         stop = int(h.get("stop_ns") or 0)
-        if stop <= start:
+        if stop < start:
             continue
-        if lo is not None and hi is not None and not (stop > lo and start < hi):
+        if lo is not None and hi is not None and not (stop >= lo and start <= hi):
             continue
         pts.append((start, stop - start, h))
     return pts
@@ -4550,12 +5156,14 @@ def _tick_health_report(trace: "BtfTrace",
         ]
         times = [p[0] for p in pairs]
         counts = [p[1] for p in pairs]
+    period, period_source = _tick_expected_period(trace)
     if not times:
         return {"tick_count": 0, "health": "unknown", "large_gaps": [],
                 "avg_period": 0, "max_gap": 0, "missed_estimate": 0,
-                "is_tickless": False, "tick_deltas": [], "tick_cv": 0.0}
+                "is_tickless": False, "tick_deltas": [], "tick_cv": 0.0,
+                "expected_period": period, "expected_period_source": period_source}
 
-    threshold = _TICK_HEALTH_PERIOD * _TICK_HEALTH_GAP_FACTOR
+    threshold = period * _TICK_HEALTH_GAP_FACTOR
     large_gaps = []
     tick_deltas = []
     sum_delta = 0
@@ -4572,12 +5180,12 @@ def _tick_health_report(trace: "BtfTrace",
         if delta > max_gap:
             max_gap = delta
         if delta > threshold:
-            missed = max(0, round(delta / _TICK_HEALTH_PERIOD) - 1)
+            missed = max(0, round(delta / period) - 1)
             missed_total += missed
             large_gaps.append((times[i - 1], times[i], delta, missed))
 
     n = len(tick_deltas)
-    avg_period = sum_delta / n if n > 0 else _TICK_HEALTH_PERIOD
+    avg_period = sum_delta / n if n > 0 else period
 
     # Tickless-mode detection via CV = stddev / mean
     tick_cv = 0.0
@@ -4588,8 +5196,10 @@ def _tick_health_report(trace: "BtfTrace",
 
     health = "good"
     if large_gaps:
-        health = "critical" if max_gap / _TICK_HEALTH_PERIOD > 10 else "warning"
+        health = "critical" if max_gap / period > 10 else "warning"
     return {
+        "expected_period": period,
+        "expected_period_source": period_source,
         "tick_count": len(times),
         "avg_period": int(round(avg_period)),
         "max_gap": max_gap,
@@ -6081,15 +6691,30 @@ def _core_util_pct_rows(
     return rows
 
 
+def _seg_open_at_end(s, trace: Optional["BtfTrace"]) -> bool:
+    """True when *s* is a slice still running at trace end, cut at ``time_max``.
+
+    Its length is only a lower bound, so slice-duration samples and the
+    max/min/percentile finders skip it (CPU% still counts it).
+    """
+    if trace is None:
+        return False
+    open_tasks = getattr(trace, "open_at_end_tasks", None)
+    return bool(open_tasks) and s.end == trace.time_max and s.task in open_tasks
+
+
 def _exec_slice_samples(
     segs: list,
     lo: Optional[int] = None,
     hi: Optional[int] = None,
+    trace: Optional["BtfTrace"] = None,
 ) -> List[int]:
     if lo is not None and hi is not None:
         return [s.end - s.start for s in segs
-                if (s.end - s.start) > 0 and _seg_fully_in_range(s, lo, hi)]
-    return [s.end - s.start for s in segs if (s.end - s.start) > 0]
+                if (s.end - s.start) > 0 and _seg_fully_in_range(s, lo, hi)
+                and not _seg_open_at_end(s, trace)]
+    return [s.end - s.start for s in segs
+            if (s.end - s.start) > 0 and not _seg_open_at_end(s, trace)]
 
 
 def _inter_arrival_samples(
@@ -6132,6 +6757,12 @@ def _summarize_time_samples(samples: List[int], scale: str) -> Optional[dict]:
     }
 
 
+def _call_sample_fn(sample_fn, segs, lo, hi, trace):
+    if sample_fn is _exec_slice_samples:
+        return sample_fn(segs, lo, hi, trace)
+    return sample_fn(segs, lo, hi)
+
+
 def _task_metric_compare_by_name(
     trace: "BtfTrace",
     sample_fn,
@@ -6153,13 +6784,13 @@ def _task_metric_compare_by_name(
         _, _, tname = _parse_task_name(raw)
         if not include_system and (_is_idle_task_name(tname) or tname == "TICK"):
             continue
-        samples = sample_fn(segs, lo, hi)
+        samples = _call_sample_fn(sample_fn, segs, lo, hi, trace)
         summary = _summarize_time_samples(samples, scale)
         if summary is None:
             continue
         entry = dict(summary)
         if include_cpu:
-            entry["cpu"] = 100.0 * sum(samples) / span_ns
+            entry["cpu"] = 100.0 * sum(sample_fn(segs, lo, hi)) / span_ns
         out[_task_display_name(raw)] = entry
     return out
 
@@ -6176,7 +6807,7 @@ def _task_samples_by_name(trace: "BtfTrace", sample_fn,
         _, _, tname = _parse_task_name(raw)
         if _is_idle_task_name(tname) or tname == "TICK":
             continue
-        out[_task_display_name(raw)] = sample_fn(segs, lo, hi)
+        out[_task_display_name(raw)] = _call_sample_fn(sample_fn, segs, lo, hi, trace)
     return out
 
 
@@ -6519,7 +7150,7 @@ def _blocking_total_ns(
     lo: Optional[int] = None,
     hi: Optional[int] = None,
 ) -> int:
-    """Sum of off-CPU blocking gaps for user tasks in scope."""
+    """Sum of off-CPU gaps for user tasks in scope."""
     total = 0
     for mk, segs in (getattr(trace, "seg_map_by_merge_key", None) or {}).items():
         raw = (getattr(trace, "task_repr", None) or {}).get(mk, mk)
@@ -7130,7 +7761,7 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         "Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ max,Shape Δ",
         tables.get("execution", []), 9)
     _section(
-        "Blocking Time",
+        "Off-CPU Gap",
         "Task,Gaps A,Gaps B,Avg A,Avg B,Max A,Max B,Δ avg,Shape Δ",
         tables.get("blocking", []), 9)
     _section(
@@ -7489,7 +8120,7 @@ COMPARE_TOC_GROUPS = (
         "Top Tasks", "Core Utilization", "Core Migrations", "Core Distribution Change", "Migration Concentration",
     )),
     ("Timing", (
-        "Execution Time", "Blocking Time", "Inter-Arrival Time", "Response P99", "Timing Change Candidates",
+        "Execution Time", "Off-CPU Gap", "Inter-Arrival Time", "Response P99", "Timing Change Candidates",
     )),
     ("Contention", (
         "Preemption Chains", "Sync Objects", "Mutex Blocking",
@@ -7732,7 +8363,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
               lead_html=paired_leads.get("execution", ""),
               note="Per-slice run durations between consecutive context switches. "
                    "Shape Δ is the two-sample KS statistic (0 = same distribution)."),
-        _card("Blocking Time",
+        _card("Off-CPU Gap",
               ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Max A", "Max B",
                "Δ avg", "Shape Δ"],
               tables.get("blocking", []), "No blocking samples in either trace",
@@ -7812,7 +8443,8 @@ def _trace_is_multi_core(trace: "BtfTrace") -> bool:
     return len(trace.core_names) >= 2
 
 def _find_wcet_segment(segs: list,
-                       lo: Optional[int] = None, hi: Optional[int] = None
+                       lo: Optional[int] = None, hi: Optional[int] = None,
+                       trace: Optional["BtfTrace"] = None,
                        ) -> Optional[TaskSegment]:
     """Return the longest-duration slice in *segs* (respecting cursor scope)."""
     best: Optional[TaskSegment] = None
@@ -7823,13 +8455,16 @@ def _find_wcet_segment(segs: list,
             continue
         if lo is not None and hi is not None and not _seg_fully_in_range(s, lo, hi):
             continue
+        if _seg_open_at_end(s, trace):
+            continue
         if d > best_d:
             best_d = d
             best = s
     return best
 
 def _find_bcet_segment(segs: list,
-                       lo: Optional[int] = None, hi: Optional[int] = None
+                       lo: Optional[int] = None, hi: Optional[int] = None,
+                       trace: Optional["BtfTrace"] = None,
                        ) -> Optional[TaskSegment]:
     """Return the shortest-duration slice in *segs* (respecting cursor scope)."""
     best: Optional[TaskSegment] = None
@@ -7839,6 +8474,8 @@ def _find_bcet_segment(segs: list,
         if d <= 0:
             continue
         if lo is not None and hi is not None and not _seg_fully_in_range(s, lo, hi):
+            continue
+        if _seg_open_at_end(s, trace):
             continue
         if best_d is None or d < best_d:
             best_d = d
@@ -7896,7 +8533,8 @@ def _percentile_sample_index(n: int, p: float) -> int:
 
 def _find_percentile_exec_segment(segs: list, p: float,
                                   lo: Optional[int] = None,
-                                  hi: Optional[int] = None
+                                  hi: Optional[int] = None,
+                                  trace: Optional["BtfTrace"] = None,
                                   ) -> Optional[TaskSegment]:
     """Return the slice at percentile *p* of duration."""
     samples: List[Tuple[int, TaskSegment]] = []
@@ -7905,6 +8543,8 @@ def _find_percentile_exec_segment(segs: list, p: float,
         if d <= 0:
             continue
         if lo is not None and hi is not None and not _seg_fully_in_range(s, lo, hi):
+            continue
+        if _seg_open_at_end(s, trace):
             continue
         samples.append((d, s))
     if not samples:
@@ -8214,6 +8854,7 @@ def _parse_btf(filepath: str,
                         if src_core is not None:
                             last_core[tgt] = src_core
 
+    open_at_end_tasks = frozenset(t for t, (s, _c) in open_seg.items() if time_max > s)
     for task in list(open_seg.keys()):
         _close_seg(task, time_max)
 
@@ -8278,7 +8919,7 @@ def _parse_btf(filepath: str,
 
     sti_channels, sti_by_target, _interval_instances, _interval_ids, \
         _interval_by_id, _interval_unmatched, _interval_marker_by_id, \
-        _tag_channels, _tag_by_ch = _build_sti_derived(sti_events)
+        _tag_channels, _tag_by_ch, _interval_unmatched_stops = _build_sti_derived(sti_events)
 
     _seg_start_key = _attrgetter('start')
     segs_by_mk: Dict[str, list] = dict(segs_by_mk_build)
@@ -8523,6 +9164,8 @@ def _parse_btf(filepath: str,
         core_util_pct=_core_util_pct,
         interval_marker_by_id=_interval_marker_by_id,
         interval_unmatched_starts=_interval_unmatched,
+        interval_unmatched_stops=_interval_unmatched_stops,
+        open_at_end_tasks=open_at_end_tasks,
         tag_channels=_tag_channels,
         tag_samples_by_channel=_tag_by_ch,
         task_base_priority=_task_base_pri,

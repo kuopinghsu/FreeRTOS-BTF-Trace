@@ -1154,7 +1154,7 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 "name": AI_TOOL_WHAT_IF,
                 "description": (
                     "Heuristic what-if simulation from measured execution slices, "
-                    "migrations, blocking gaps, and core util (not an RTOS kernel)."
+                    "migrations, off-CPU gaps, and core util (not an RTOS kernel)."
                 ),
                 "parameters": {
                     "type": "object",
@@ -4618,11 +4618,11 @@ def query_raw_metric(
             "gaps": gaps[:_MAX_RAW_METRIC_ROWS],
             "truncated": truncated,
         })
-        msg = f"{len(gaps)} blocking gap(s) for {label}"
+        msg = f"{len(gaps)} off-CPU gap(s) for {label}"
         return tool_result_payload(True, msg, data=data)
 
     if metric_id == AI_RAW_METRIC_ACTIVATION:
-        # Release latency vs a fitted ideal periodic grid (Activation Latency,
+        # Release latency vs a fitted ideal periodic grid (Fitted Periodic Deviation,
         # review item A3) — the per-task summary the section shows, raw ns.
         from .parser import _nearest_rank_index, _sample_variability
         from .ux_explore import analyze_task_periods, harvest_ux_events
@@ -5000,6 +5000,8 @@ def dependency_trace_context(
                 "stop_ns": stop,
                 "duration_ns": dur or 0,
                 "signal": bool(h.get("signal")),
+                "span_kind": str(h.get("span_kind") or h.get("spanKind") or ""),
+                "cross_task": bool(h.get("cross_task") or h.get("crossTask")),
             })
 
     preemptions: List[dict] = []

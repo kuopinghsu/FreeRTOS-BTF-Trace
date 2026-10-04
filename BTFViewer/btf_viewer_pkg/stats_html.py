@@ -7,6 +7,7 @@ from typing import Optional, Sequence
 
 from .html_report import html_section_slug
 from .parser import _tag_axis_bounds, _tag_transform, _tag_inverse, _format_tag_value
+from .parser import METRIC_DEFINITIONS
 
 STATS_TOC_GROUPS = (
     ("Overview and Findings", (
@@ -26,8 +27,8 @@ STATS_TOC_GROUPS = (
     )),
     ("Timing, Latency and Jitter", (
         "Investigate Anomalies", "Execution Time Per Slice",
-        "Off-CPU Time", "Dispatch / Scheduling Latency", "Inter-Arrival Time",
-        "Activation Latency", "Ready-Gap (Starvation)",
+        "Off-CPU Gap", "Dispatch / Scheduling Latency", "Inter-Arrival Time",
+        "Fitted Periodic Deviation", "Ready-Gap (Starvation)",
         "Period / Jitter", "Response Time", "Unified Jitter",
     )),
     ("Synchronization and Custom Events", (
@@ -905,6 +906,20 @@ _TRACE_HEALTH_STATUS_META = {
 }
 
 
+def html_metric_definitions_card() -> str:
+    """Report card listing how each latency metric is measured."""
+    items = "".join(
+        f"<dt>{html.escape(term)}</dt><dd>{html.escape(text)}</dd>"
+        for _key, term, text, _kws in METRIC_DEFINITIONS)
+    return (
+        '<section class="report-card notes metric-definitions">'
+        '<h2 id="metric-definitions">Metric definitions</h2>'
+        '<p class="detail-note">How the timing values in this report are measured.</p>'
+        f'<dl class="metric-defs">{items}</dl>'
+        '</section>'
+    )
+
+
 def html_trace_health_card(
     result: dict,
     *,
@@ -983,6 +998,18 @@ def html_trace_health_card(
             '<h3 class="sub">Limited metrics</h3>'
             '<p class="detail-note">These sections may show <em>Insufficient data</em> '
             "or a limitation notice instead of a value.</p>"
+            f"<ul>{lis}</ul>"
+        )
+    avail = [a for a in (result.get("metric_availability") or [])
+             if a.get("state") != "available"]
+    if avail:
+        lis = "".join(
+            f"<li><strong>{_esc(a.get('metric'))}</strong>: {_esc(a.get('state'))}"
+            f"{' — ' + _esc(a.get('reason')) if a.get('reason') else ''}</li>"
+            for a in avail)
+        lim_html += (
+            '<h3 class="sub">Metric availability</h3>'
+            '<p class="detail-note">Metrics this trace cannot measure fully, and why.</p>'
             f"<ul>{lis}</ul>"
         )
 
@@ -1554,7 +1581,7 @@ def html_glossary(*, range_note: str = "") -> str:
         "<strong>Highest CPU consumers</strong> are tasks with the largest share of active CPU time. "
         "They are not automatically WCET candidates. Largest execution-time maxima live in Execution Time Per Slice.",
         "<strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start).",
-        "<strong>Off-CPU Time (Blocking Time):</strong> Gap between the end of one slice and the start of the next for the same task. "
+        "<strong>Off-CPU Gap:</strong> Gap between the end of one slice and the start of the next for the same task. "
         "It may include preemption, suspension, periodic waiting, or scheduling delay — not necessarily resource blocking. "
         "It is not end-to-end response time.",
         "<strong>CPU% (task):</strong> Share of total non-IDLE/TICK <em>active CPU time</em> in scope, not wall-clock span and not total multicore capacity.",

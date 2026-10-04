@@ -556,7 +556,7 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "or blocking tail. Preferred tools: analyze_distribution for the "
         "relevant metric; decompose_response_time when response data exists; "
         "query_raw_metric for missing samples. Distinguish response, dispatch, "
-        "execution, and blocking. Open Activation Latency for release jitter "
+        "execution, and blocking. Open Fitted Periodic Deviation for release jitter "
         "versus the ideal periodic grid and Ready-Gap (Starvation) for time "
         "spent ready but not running. Output: Task; Tail evidence; Leading "
         "explanation; One relevant next check.",

@@ -520,7 +520,7 @@ def _hypotheses_for_finding(title: str, text: str) -> List[Dict[str, str]]:
     if "inversion" in blob or "l/m/h" in blob or "inherit" in blob:
         add("Priority inversion on shared mutex", "L/M/H geometry in findings")
     if "wcet" in blob or "cpu" in blob or "execution" in blob or "spike" in blob:
-        add("Long execution slices / WCET spike", "Max vs typical execution diverge")
+        add("Long execution slices / max-slice spike", "Max vs typical execution diverge")
         add("Interrupt or critical-section stretch", "Unexplained Max growth")
     if "load" in blob or "imbalance" in blob or "balance" in blob:
         add("Uneven core placement", "Load Balance Score / σ warning")
@@ -546,7 +546,7 @@ def _suggested_tools_for_finding(
     if task:
         if "block" in blob or "inversion" in blob or "latency" in blob:
             add("query_raw_metric", {"task": task, "metric": "blocking"},
-                "Inspect blocking gaps")
+                "Inspect off-CPU gaps")
             add("query_raw_metric", {"task": task, "metric": "priority_inheritance"},
                 "Check inherit episodes")
         if "wcet" in blob or "cpu" in blob or "execution" in blob or "spike" in blob:
@@ -779,7 +779,7 @@ def append_wcet_anomaly_finding(
         findings.append({
             "id": "wcet_anomaly",
             "severity": "warning",
-            "title": "Anomaly: WCET spike vs typical execution",
+            "title": "Anomaly: max observed slice far above typical execution",
             "text": (
                 "Execution Max is much larger than Avg — multimodal or bursty "
                 "slices: " + "; ".join(spikes[:5])
@@ -1023,7 +1023,7 @@ def build_root_cause_chain(finding: Optional[dict]) -> List[Dict[str, Any]]:
     if task:
         add(f"Focus task {task}", "Extracted from finding text", kind="task")
     if "block" in blob or "latency" in blob or "dispatch" in blob:
-        add("Off-CPU / blocking gap", "Inspect Blocking Time + STI wait")
+        add("Off-CPU gap", "Inspect Off-CPU Gap + STI wait")
         add("Synchronization hold", "Check mutex/semaphore owner")
     if "inversion" in blob or "l/m/h" in blob or "inherit" in blob:
         add("Priority relationship", "L/M/H or inherit episode")
@@ -1032,7 +1032,7 @@ def build_root_cause_chain(finding: Optional[dict]) -> List[Dict[str, Any]]:
         add("Core migration / thrash", "Corridor + migration rate")
         add("Likely affinity / lock bounce", kind="cause")
     if "wcet" in blob or "spike" in blob or "execution" in blob or "cpu" in blob:
-        add("Execution / WCET spike", "Jump to Max slice")
+        add("Execution / max-slice spike", "Jump to Max slice")
         add("Likely long critical section or preemption stretch", kind="cause")
     if "deadline" in blob or "budget" in blob:
         add("Deadline / budget breach", kind="cause")

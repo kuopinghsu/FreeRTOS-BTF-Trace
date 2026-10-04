@@ -3793,7 +3793,7 @@ AVAILABLE_STATISTICS_PAGES: Tuple[str, ...] = (
     "Core Utilization Over Time",
     "Switch Reason Breakdown",
     "Scheduling Load Over Time",
-    "Activation Latency",
+    "Fitted Periodic Deviation",
     "Ready-Gap (Starvation)",
     "Idle Analysis",
     "Queue Backlog / Semaphore Level",

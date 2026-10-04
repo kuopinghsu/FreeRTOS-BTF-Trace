@@ -136,7 +136,7 @@ RULE_CATALOG: Dict[str, RuleSpec] = {
               "Execution Time Per Slice"),
         _spec("blocking", "info", "blocking", "latency_outlier",
               "off-CPU gap count and Max vs peers",
-              "Off-CPU Time (Blocking Time)"),
+              "Off-CPU Gap"),
         _spec("wakeup_latency_outlier", "warning", "dispatch", "latency_outlier",
               "ready-to-run delay vs the entity's p95",
               "Dispatch / Scheduling Latency"),

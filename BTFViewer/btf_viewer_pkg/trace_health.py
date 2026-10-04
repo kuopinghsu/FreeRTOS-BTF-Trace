@@ -282,12 +282,21 @@ def _check_unmatched_intervals(trace: Any) -> Optional[dict]:
         n = int(getattr(trace, "interval_unmatched_starts", 0) or 0)
     except (TypeError, ValueError):
         n = 0
-    if n <= 0:
+    try:
+        n_stop = int(getattr(trace, "interval_unmatched_stops", 0) or 0)
+    except (TypeError, ValueError):
+        n_stop = 0
+    if n <= 0 and n_stop <= 0:
         return None
+    bits = []
+    if n > 0:
+        bits.append(f"{n:,} interval_start event(s) never received a matching "
+                    "interval_stop")
+    if n_stop > 0:
+        bits.append(f"{n_stop:,} interval_stop event(s) had no open interval_start")
     return _check(
         CHECK_UNMATCHED_INTERVALS, "warning",
-        f"{n:,} interval_start event(s) never received a matching "
-        "interval_stop. Those spans are dropped from interval statistics.",
+        "; ".join(bits) + ". Those spans are dropped from interval statistics.",
         metric_limitations=["Interval Analysis", "Period / Jitter"],
     )
 
@@ -404,6 +413,104 @@ def _check_prerequisites(
     )
 
 
+_LIFECYCLE_NAMED_RE = re.compile(r"^(suspend|resume)\s+(?!/)\S", re.IGNORECASE)
+_AFFINITY_SET_RE = re.compile(r"^affinity_set\s", re.IGNORECASE)
+
+AVAILABILITY_AVAILABLE = "available"
+AVAILABILITY_LIMITED = "limited"
+AVAILABILITY_UNAVAILABLE = "unavailable"
+
+
+def _metric_availability(
+    trace: Any, segs: list, lo: Optional[int], hi: Optional[int], checks: List[dict]
+) -> List[Dict[str, str]]:
+    """Per-metric ``{metric, state, reason}`` — available / limited / unavailable."""
+    ids = {c.get("id") for c in checks}
+    channels = {str(c).lower() for c in (getattr(trace, "sti_channels", None) or [])}
+    cores = {s.core for s in segs} or set(getattr(trace, "core_names", None) or [])
+    has_resume = has_suspend = has_affinity = False
+    for ev in getattr(trace, "sti_events", None) or []:
+        if getattr(ev, "target", "") != "task":
+            continue
+        note = str(getattr(ev, "note", "") or "").strip()
+        m = _LIFECYCLE_NAMED_RE.match(note)
+        if m:
+            if m.group(1).lower() == "resume":
+                has_resume = True
+            else:
+                has_suspend = True
+        elif _AFFINITY_SET_RE.match(note):
+            has_affinity = True
+    out: List[Dict[str, str]] = []
+
+    def add(metric: str, state: str, reason: str = "") -> None:
+        out.append({"metric": metric, "state": state, "reason": reason})
+
+    if not segs:
+        add("Execution Time / Off-CPU Gap", AVAILABILITY_UNAVAILABLE, "no task slices in scope")
+    elif getattr(trace, "open_at_end_tasks", None) or CHECK_CAPTURE_TRUNCATION in ids:
+        add("Execution Time / Off-CPU Gap", AVAILABILITY_LIMITED,
+            "slices still open at trace end are left out of slice samples")
+    else:
+        add("Execution Time / Off-CPU Gap", AVAILABILITY_AVAILABLE)
+    if not (getattr(trace, "task_create_times", None) or has_resume):
+        add("Dispatch / Scheduling Latency", AVAILABILITY_UNAVAILABLE,
+            "no task create or named resume events")
+    elif not has_resume:
+        add("Dispatch / Scheduling Latency", AVAILABILITY_LIMITED,
+            "create→first run only; no named resume events")
+    else:
+        add("Dispatch / Scheduling Latency", AVAILABILITY_AVAILABLE)
+    if len(cores) < 2:
+        add("Core Migrations", AVAILABILITY_UNAVAILABLE, "single core in scope")
+    else:
+        add("Core Migrations", AVAILABILITY_AVAILABLE)
+    if not has_affinity:
+        add("Core Affinity", AVAILABILITY_UNAVAILABLE, "no affinity_set events")
+    else:
+        add("Core Affinity", AVAILABILITY_AVAILABLE)
+    if not getattr(trace, "has_priority_instrumentation", False):
+        add("Priority Inheritance", AVAILABILITY_UNAVAILABLE,
+            "no create pri:/set_priority events")
+    else:
+        add("Priority Inheritance", AVAILABILITY_AVAILABLE)
+    if not getattr(trace, "has_sync_object_instrumentation", False) and not (
+            channels & {"mutex", "sem", "queue"}):
+        add("Mutex / Semaphore / Queue", AVAILABILITY_UNAVAILABLE,
+            "no mutex/semaphore/queue events")
+    elif CHECK_SYNC_PAIRING in ids:
+        add("Mutex / Semaphore / Queue", AVAILABILITY_LIMITED,
+            "pairing issues leave some spans unpaired")
+    else:
+        add("Mutex / Semaphore / Queue", AVAILABILITY_AVAILABLE)
+    if not (getattr(trace, "interval_ids", None) or "interval_start" in channels):
+        add("Interval Analysis", AVAILABILITY_UNAVAILABLE, "no interval_start/stop events")
+    elif CHECK_UNMATCHED_INTERVALS in ids:
+        add("Interval Analysis", AVAILABILITY_LIMITED, "unmatched interval start/stop events")
+    else:
+        add("Interval Analysis", AVAILABILITY_AVAILABLE)
+    if not has_suspend:
+        add("Suspended time", AVAILABILITY_UNAVAILABLE, "no named suspend events")
+    else:
+        add("Suspended time", AVAILABILITY_AVAILABLE)
+    if not _scoped_times(getattr(trace, "tick_sti_times", None), lo, hi):
+        add("Trace Health (TICK)", AVAILABILITY_UNAVAILABLE, "no TICK events")
+    else:
+        add("Trace Health (TICK)", AVAILABILITY_AVAILABLE)
+    return out
+
+
+def metric_availability_lines(result: Optional[Dict[str, Any]]) -> List[str]:
+    """``Metric: state — reason`` for every metric that is not fully available."""
+    lines: List[str] = []
+    for a in (result or {}).get("metric_availability") or []:
+        if a.get("state") == AVAILABILITY_AVAILABLE:
+            continue
+        reason = f" — {a['reason']}" if a.get("reason") else ""
+        lines.append(f"{a.get('metric')}: {a.get('state')}{reason}")
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -436,6 +543,7 @@ def build_trace_health_result(
             )],
             "issue_count": 1,
             "metric_limitations": ["All statistics"],
+            "metric_availability": [],
             "scoped": False,
         }
 
@@ -489,6 +597,7 @@ def build_trace_health_result(
             1 for c in checks if c["severity"] in ("warning", "error")
         ),
         "metric_limitations": limitations,
+        "metric_availability": _metric_availability(trace, segs, lo, hi, checks),
         "scoped": bool(lo is not None or hi is not None),
     }
 

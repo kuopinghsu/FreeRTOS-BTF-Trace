@@ -302,7 +302,7 @@ BTFViewer calculates all results from recorded BTF events. It does not inspect s
 | Uneven SMP load | **Core Utilization** | Concurrent active cores, then migrations |
 | High scheduler cost | **Kernel Switch Overhead** | Core time breakdown |
 | Slow task execution | **Execution Time** | Preemption and mutex activity |
-| Long wait time | **Blocking Time** | Mutex owner and preemption activity |
+| Long wait time | **Off-CPU Gap** | Mutex owner and preemption activity |
 | Ready-to-run delay | **Dispatch Latency** | Blocking and preemption |
 | Priority inversion | **Priority Inheritance** | Mutex pairing and blocking |
 | Frequent core movement | **Core Migrations** | Load balance, Migration & Corridor Inspector, and synchronization handoff suspects |

@@ -205,7 +205,7 @@ flowchart TD
 
 1. 使用 **Find** 或圖例找到 `ControlTask`。
 2. 選取該工作，方便持續追蹤它的時間軸列。
-3. 在 **Statistics** 開啟 **Response Time、Execution Time Per Slice、Blocking Time** 與 **Period / Jitter**。
+3. 在 **Statistics** 開啟 **Response Time、Execution Time Per Slice、Off-CPU Gap** 與 **Period / Jitter**。
 4. 除非其他工作讓資料無法閱讀，否則先不要套用工作篩選條件。其他工作可能正是搶佔或同步延遲的來源。
 5. 記錄目前分析範圍與所有作用中的篩選條件。
 
@@ -350,7 +350,7 @@ flowchart TD
 |---|---|---|---|
 | **Response Time** | 啟發式的前一執行片段結束至目前片段結束區間 | Execution、Blocking、Dispatch、Interval | 不是明確的 release-to-completion 配對 |
 | **Execution Time** | 一個連續的 On-CPU 執行片段 | Distribution、Interval、Tags、Preemption | 一次工作可能包含多個執行片段 |
-| **Blocking Time** | 連續執行片段之間的 Off-CPU 間隔 | Preemption、Mutex Blocking、Period | Off-CPU 不能證明互斥鎖阻塞 |
+| **Off-CPU Gap** | 連續執行片段之間的 Off-CPU 間隔 | Preemption、Mutex Blocking、Period | Off-CPU 不能證明互斥鎖阻塞 |
 | **Dispatch Latency** | 記錄的 ready/create 事件至下一次 switch-in | Timeline、Preemption、Core Time | 需要適當的 STI ready 證據 |
 | **Critical Path** | 啟發式 ready-to-completion 區間與重疊證據 | Execution、Blocking、Preemption、Migration | 各成分可能重疊，不能當成彼此互斥的時間拆分 |
 | **Interval Analysis** | 應用程式明確記錄的 start-to-stop 時間 | Timeline、Execution、Tags | 正確性取決於應用程式追蹤事件 |
@@ -738,7 +738,7 @@ Headless：
 | 把畫面縮放範圍當成分析範圍 | 啟用 **Limit to C1–Cn** 並確認 分析範圍標示 |
 | 用很少的樣本解讀 p99 | 先看 Count，對小樣本百分位數保持保守 |
 | 把 Max 稱為保證的 WCET | 使用「此追蹤資料與分析範圍內觀測到的最大值」 |
-| 把所有 Off-CPU 間隔都稱為互斥鎖阻塞 | 要求同步證據，否則只稱 Off-CPU／Blocking Time |
+| 把所有 Off-CPU 間隔都稱為互斥鎖阻塞 | 要求同步證據，否則只稱 Off-CPU Gap |
 | 認為所有核心遷移都有害 | 檢查負載平衡、Affinity、Rate、Dwell 與相關延遲 |
 | 認為時間接近就能證明因果 | 檢查事件順序、其他可能性與矛盾證據 |
 | 比較不同工作負載階段 | 對齊工作負載、追蹤事件、分析範圍與篩選條件 |

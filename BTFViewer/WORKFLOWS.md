@@ -205,7 +205,7 @@ Keep the first investigation narrow. For the running example, the subject is `Co
 
 1. Use **Find** or the Legend to locate `ControlTask`.
 2. Select it so its timeline row remains easy to follow.
-3. In **Statistics**, open **Response Time**, **Execution Time Per Slice**, **Blocking Time**, and **Period / Jitter**.
+3. In **Statistics**, open **Response Time**, **Execution Time Per Slice**, **Off-CPU Gap**, and **Period / Jitter**.
 4. Do not apply a task Filter yet unless unrelated tasks make the data unreadable. Other tasks may explain preemption or synchronization delay.
 5. Record the current Scope and any active Filters.
 
@@ -350,7 +350,7 @@ flowchart TD
 |---|---|---|---|
 | **Response Time** | Heuristic previous-slice-end to current-slice-end window | Execution, Blocking, Dispatch, Interval | Not an explicit release-to-completion pair |
 | **Execution Time** | One continuous on-CPU slice | Distribution, Interval, Tags, Preemption | A task job may contain several slices |
-| **Blocking Time** | Off-CPU gap between consecutive slices | Preemption, Mutex Blocking, Period | Off-CPU does not prove mutex blocking |
+| **Off-CPU Gap** | Off-CPU gap between consecutive slices | Preemption, Mutex Blocking, Period | Off-CPU does not prove mutex blocking |
 | **Dispatch Latency** | Recorded ready/create event to next switch-in | Timeline, Preemption, Core Time | Requires suitable STI ready evidence |
 | **Critical Path** | Heuristic ready-to-completion window with overlapping evidence | Execution, Blocking, Preemption, Migration | Components can overlap; they are not a stacked duration split |
 | **Interval Analysis** | Explicit instrumented start-to-stop duration | Timeline, Execution, Tags | Correctness depends on application instrumentation |
@@ -738,7 +738,7 @@ The following example shows the entire path without inventing numeric results.
 | Treating viewport zoom as Scope | Enable **Limit to C1–Cn** and confirm the Scope label |
 | Reading p99 from very few samples | Read Count first and treat a small-sample percentile cautiously |
 | Calling Max a guaranteed WCET | Say “maximum observed in this capture and Scope” |
-| Calling every off-CPU gap mutex blocking | Require synchronization evidence or keep the term Off-CPU / Blocking Time |
+| Calling every off-CPU gap mutex blocking | Require synchronization evidence or keep the term Off-CPU Gap |
 | Calling every migration harmful | Check load balance, affinity, rate, dwell, and correlated delay |
 | Assuming two nearby events prove causation | Check event order, alternatives, and contradictory evidence |
 | Comparing different workload phases | Match workload, instrumentation, Scope, and Filters |

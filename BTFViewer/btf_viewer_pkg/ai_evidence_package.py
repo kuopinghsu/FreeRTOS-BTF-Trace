@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Sequence
 
+from .parser import _metric_definitions_for
+
 EVIDENCE_PACKAGE_SCHEMA = "btf-viewer-evidence/1"
 
 RESPONSE_CONTRACT = [
@@ -121,6 +123,13 @@ def build_evidence_package(
             "issue_count": int(health.get("issue_count", health.get("issueCount", 0)) or 0),
             "limitations": list(
                 health.get("metric_limitations") or health.get("metricLimitations") or []),
+            "availability": [
+                {"metric": str(a.get("metric") or ""), "state": str(a.get("state") or ""),
+                 "reason": str(a.get("reason") or "")}
+                for a in (health.get("metric_availability")
+                          or health.get("metricAvailability") or [])
+                if isinstance(a, dict) and a.get("state") != "available"
+            ],
         }
 
     package: Dict[str, Any] = {
@@ -140,6 +149,7 @@ def build_evidence_package(
         "entities": [red(e) for e in (entities or [])],
         "cores": [str(c) for c in (cores or [])],
         "statistics": stats,
+        "definitions": _metric_definitions_for(s["name"] for s in stats),
         "event_context": evc,
         "findings": fnd,
         "bookmarks": bms,
@@ -206,6 +216,9 @@ def format_evidence_package_preview(package: Dict[str, Any]) -> str:
     if th:
         lim = f"; limited: {', '.join(th['limitations'])}" if th.get("limitations") else ""
         lines.append(f"Trace health: {th['status']} ({th['issue_count']} issue(s)){lim}")
+        for a in th.get("availability") or []:
+            reason = f" — {a['reason']}" if a.get("reason") else ""
+            lines.append(f"  {a['metric']}: {a['state']}{reason}")
     if package.get("entities"):
         lines.append(f"Entities: {', '.join(package['entities'][:20])}")
     if package.get("statistics"):
@@ -214,6 +227,10 @@ def format_evidence_package_preview(package: Dict[str, Any]) -> str:
             sc = f", n={s['sample_count']}" if s.get("sample_count") is not None else ""
             ent = f" [{s['entity']}]" if s.get("entity") else ""
             lines.append(f"  - {s['name']}{ent} = {s['value']} {s['unit']}{sc}".rstrip())
+    if package.get("definitions"):
+        lines.append(f"Definitions ({len(package['definitions'])}):")
+        for d in package["definitions"]:
+            lines.append(f"  - {d['term']}: {d['definition']}")
     if package.get("findings"):
         lines.append(f"Findings ({len(package['findings'])}):")
         for f in package["findings"]:

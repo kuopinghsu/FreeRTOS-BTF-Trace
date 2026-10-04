@@ -399,7 +399,7 @@ Analysis Finding
 | 只需要定性建議 | `optimize` | 說明可能的改善方向，不進行實驗評分 |
 | 決定下一項實機測試 | `recommend_experiments` | 把估算結果轉成實際驗證實驗 |
 
-閱讀結果時，應比較實際量測的 **baseline** 與 **simulated** 估算值。依問題不同，可檢查遷移次數、阻塞時間、負載平衡分數與實驗成本。
+閱讀結果時，應比較實際量測的 **baseline** 與 **simulated** 估算值。依問題不同，可檢查遷移次數、Off-CPU 間隔、負載平衡分數與實驗成本。
 
 **Medium confidence** 表示這個想法可能值得在實際系統上測試；**Low confidence** 通常表示修改描述太模糊，或追蹤資料提供的證據太少。
 

@@ -36,7 +36,7 @@ SYMPTOM_CARDS: List[Dict[str, Any]] = [
         "id": "blocking",
         "title": "Blocking / off-CPU wait",
         "first_section": "blocking",
-        "path": ["Blocking Time", "Mutex Blocking", "Waiter × Owner"],
+        "path": ["Off-CPU Gap", "Mutex Blocking", "Waiter × Owner"],
     },
     {
         "id": "jitter",

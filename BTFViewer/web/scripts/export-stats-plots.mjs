@@ -67,7 +67,7 @@ function buildBlockPlot(trace, mk) {
     yValue: pt.yValue,
   }))
   return {
-    title: `${taskDisplayName(repr)} — Blocking Time`,
+    title: `${taskDisplayName(repr)} — Off-CPU Gap`,
     color: taskColor(mk, repr),
     points,
   }

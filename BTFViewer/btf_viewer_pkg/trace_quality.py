@@ -96,7 +96,7 @@ _AFFECTED_BY_GROUP = {
         "Timeline Anomalies", "Worst Events", "Response Time", "AI conclusions",
     ],
     "missing_event_type": [
-        "Blocking Time", "Mutex Blocking", "Waiter × Owner", "Dispatch latency",
+        "Off-CPU Gap", "Mutex Blocking", "Waiter × Owner", "Dispatch latency",
     ],
     "invalid_pairing": ["Period / Jitter", "Recurring Patterns", "Intervals"],
     "timestamp_order": ["All time-ordered statistics", "Critical Path"],

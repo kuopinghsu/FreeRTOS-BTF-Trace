@@ -198,6 +198,7 @@ from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_j
 from .trace_quality import trace_quality_summary
 from .trace_health import (
     build_trace_health_result,
+    metric_availability_lines,
     trace_health_status_label,
     trace_health_summary,
 )
@@ -5056,6 +5057,14 @@ class _TraceHealthDetailDialog(QDialog):
                 list_lay.addWidget(row)
             scroll.setWidget(list_host)
             outer.addWidget(scroll)
+
+        avail = metric_availability_lines(result)
+        if avail:
+            avail_lbl = QLabel("Not fully available:\n" + "\n".join(avail))
+            avail_lbl.setWordWrap(True)
+            avail_lbl.setStyleSheet(
+                f"font-size:{note_fs}; color:{c['sub_text']}; margin-top:8px;")
+            outer.addWidget(avail_lbl)
 
         self.setStyleSheet(f"QDialog {{ background:{c['menu_bg']}; }}")
         self.setMinimumWidth(400)
@@ -11800,7 +11809,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         mk = _task_merge_key(resolved)
         self._ai_highlight_task(resolved)
         segs = self._trace.seg_map_by_merge_key.get(mk, [])
-        seg = _find_wcet_segment(segs)
+        seg = _find_wcet_segment(segs, trace=self._trace)
         if seg is None:
             return {"task": resolved, "found": False}
         self._ai_zoom_to_range(seg.start, seg.end)
@@ -14960,9 +14969,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._scroll_to_priority_episode(payload, mark_ns)
         elif isinstance(payload, SyncIssueRef):
             self._scroll_to_sync_issue(payload, mark_ns)
+        elif _plot_point_endpoints(payload) is not None:
+            a, b = _plot_point_endpoints(payload)
+            sc = self._view._scene
+            vp = self._view.viewport().rect()
+            vp_px = max(vp.width() if sc._horizontal else vp.height(), 100)
+            margin = max(1, (b - a) // 10)
+            self._view._fit_mode = False
+            sc.zoom_to_range(max(self._trace.time_min, a - margin),
+                             min(self._trace.time_max, b + margin), vp_px)
         else:
             self._view.scroll_to_ns(mark_ns)
-        self._ensure_stats_plot_annotation(mark_ns, note)
+        ends = _plot_point_endpoints(payload)
+        if ends is not None and ends[1] > ends[0]:
+            start_note, end_note = _plot_point_endpoint_notes(note)
+            self._ensure_stats_plot_annotation(ends[0], start_note)
+            self._ensure_stats_plot_annotation(ends[1], end_note)
+        else:
+            self._ensure_stats_plot_annotation(mark_ns, note)
         # Annotation list rebuild can steal focus onto the Marks tab (Qt).
         if stay_tab is not None and self._panel_tabs.currentIndex() != stay_tab:
             self._panel_tabs.setCurrentIndex(stay_tab)

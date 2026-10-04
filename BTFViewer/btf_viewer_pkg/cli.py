@@ -420,7 +420,7 @@ Views (--view):
                tag_interval  time between consecutive samples on a tag channel (--channel)
                mig_dwell  on-core dwell time per migrated run    (--task)
                mig_rate   time between consecutive migrations    (--task)
-               mig_gap    post-migration blocking-gap distribution (--task)
+               mig_gap    migration gap distribution (--task)
                pair_gap   post-migration gap for a core pair     (--from-core + --to-core)
                pair_rate  time between migrations on a core pair (--from-core + --to-core)
                dispatch   task dispatch/scheduling latency       (--task)

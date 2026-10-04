@@ -64,6 +64,13 @@ Always record the Scope when comparing results. A 10 ms start-up phase and a 10 
 
 Boundary effects are especially important for gaps, intervals, mutex holds, queues, and lifecycle events. A start event may be outside the Scope while its matching end event is inside it. An unmatched event near a boundary may therefore indicate partial capture rather than an application error.
 
+Sample validity rules applied by both desktop and web:
+
+- **Truncated at trace end.** A slice or priority episode still running when the trace stops is closed at the last timestamp. Its length is only a lower bound, so it is left out of slice-duration samples, Max/Min/percentile jumps, and priority plots. Detail rows show it as "open at trace end" with a `≥` duration. CPU% still counts its time.
+- **Both endpoints in range.** With a cursor range, Interval and Mutex / Semaphore hold statistics use only spans whose start and end are both inside the range. A note under each table counts the spans crossing the edge; detail rows and plots still show them.
+- **Zero-length spans** (interval start and stop on the same timestamp, a migration with no gap) are valid samples and are kept.
+- **Cross-task mutex give.** A mutex given back by a different task than the one that took it is reported as an issue and kept in detail rows, but it is not a hold-time sample.
+
 ### Common summary values
 
 For samples `x_1 ... x_n`, BTFViewer uses the following concepts throughout the Statistics panel:
@@ -83,7 +90,9 @@ For samples `x_1 ... x_n`, BTFViewer uses the following concepts throughout the 
 
 Samples are sorted before percentiles are selected. For example, p95 uses the sample at `ceil(n × 0.95) − 1`, with the index limited to the valid range. Percentiles require enough samples. With 10 samples, p99 is effectively the maximum and does not describe a stable one-percent tail. Always read the sample count before treating a high percentile as representative.
 
-**Trace resolution.** Execution Time and Blocking Time show a note when a large share of samples are at or below one unit of the trace's display scale (`us` → 1 µs, `ms` → 1 ms) — the grid the exported timestamps sit on. When that share is high, percentiles near that value describe the timestamp grid rather than task behavior; use a finer capture clock or an instrumented Interval for those cases.
+**Small-sample notice.** BTFViewer uses the nearest-rank method shown above (the header tooltip of every p50/p95/p99 column states it). When a table contains rows with fewer than 20 samples (p95 and p99 equal Max) or 20–99 samples (p99 equals Max), a caption under the table reports how many rows are affected.
+
+**Trace resolution.** Execution Time and Off-CPU Gap show a note when a large share of samples are at or below one unit of the trace's display scale (`us` → 1 µs, `ms` → 1 ms) — the grid the exported timestamps sit on. When that share is high, percentiles near that value describe the timestamp grid rather than task behavior; use a finer capture clock or an instrumented Interval for those cases.
 
 In task tables, **CPU%** normally means `task on-CPU time ÷ Scope wall-clock duration × 100`. IDLE and TICK tasks are omitted from user-task rankings, but they are not subtracted from the denominator. On a multicore system, CPU% values across tasks can therefore add to more than 100%.
 
@@ -118,6 +127,8 @@ Deterministic structural checks on the parsed event model, run after parsing and
 **Checks.** Non-monotonic or dropped timestamps; unrecognised timestamp units; task slices that overlap in time on the same core; core identifiers outside the valid 0–31 range; missing task identity (task-table overflow or unnamed tasks); `interval_start` events with no matching `interval_stop`; mutex/semaphore pairing issues; capture truncation and ring-buffer overflow; a long interval with no scheduled task; and metric prerequisites (event types a section needs but the trace does not contain).
 
 **How to use it.** Read the status first. On **Caution** or **Insufficient data**, expand each check for its time range, affected cores or tasks, and the list of metrics it limits — those sections show *Insufficient data* or a limitation notice instead of a number. A warning never suppresses a metric that can still be computed.
+
+**Metric availability.** Below the checks, each metric family is listed as *available*, *limited*, or *unavailable* for the current trace, with the reason — for example *unavailable — no TICK events* or *limited — create→first run only; no named resume events*. The same list appears in the HTML report and in the AI evidence package.
 
 <a id="statistics-task_health" name="statistics-task_health"></a>
 
@@ -253,7 +264,7 @@ For later slices, the calculation can be written as:
 R_k = s_k - e_{k-1} + d_k = e_k - e_{k-1}
 ```
 
-It includes the off-CPU gap before the current slice and the current execution duration. Compare it with **Execution Time** and **Blocking Time** to see which part dominates. Use **Dispatch Latency** when an STI ready point exists, and an instrumented **Interval** for an exact request-to-response boundary.
+It includes the off-CPU gap before the current slice and the current execution duration. Compare it with **Execution Time** and **Off-CPU Gap** to see which part dominates. Use **Dispatch Latency** when an STI ready point exists, and an instrumented **Interval** for an exact request-to-response boundary.
 
 ![Response Time table for example-8cores.btf.gz](../images/stats/stats-response.svg)
 
@@ -299,6 +310,8 @@ The ready point comes from a task create or STI resume event. Synchronization-ob
 
 **Pairing.** A ready event is paired with the next switch-in of the same task. An event without a later switch-in in the Scope does not form a completed sample. Multiple ready events before one switch-in can make attribution ambiguous.
 
+**Ready source.** Each sample is tagged as *create→first run* or *resume→run*, and the caption under the table reports the average and count of each, because the first dispatch after creation and a later `vTaskResume` measure different things. When several ready events (for example two `resume` notes) arrive before the same switch-in, only the earliest is kept and the merged count is shown.
+
 **How to use it.** A high tail means the task was known to be ready but did not run promptly. Check **Preemption Matrix**, task priorities, and **Core Utilization Over Time**. Wakes without a task ID require application instrumentation or direct timeline inspection.
 
 The distribution for `SR0[271]` demonstrates a lifecycle task with create, suspend, and resume samples. Use it to distinguish a consistently slow dispatch path from a few isolated scheduling delays.
@@ -306,11 +319,11 @@ The distribution for `SR0[271]` demonstrates a lifecycle task with create, suspe
 ![Dispatch latency distribution for SR0[271] in example-8cores.btf.gz](../images/stats/stats-dispatch-sr0.svg)
 
 <a id="statistics-block" name="statistics-block"></a>
-### Blocking Time (off-CPU gap)
+### Off-CPU Gap
 
 **What it tells you**
 
-Measures the positive gap from one slice ending to the task's next slice starting:
+Measures the positive gap from one slice ending to the task's next slice starting (earlier releases called this section Blocking Time). The gap covers preemption, sleep, waiting and suspension alike; it is not proof that the task was blocked on a resource:
 
 ```math
 g_k = t_{start,k+1} - t_{end,k}
@@ -324,7 +337,7 @@ The task may be ready, blocked, suspended, preempted, or waiting for its next pe
 
 In this example, large gaps cluster in particular time regions. That pattern is a prompt to inspect concurrent high-priority work or synchronization evidence; it is not, by itself, proof of lock contention.
 
-![Blocking time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-block-cs11.svg)
+![Off-CPU gap distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-block-cs11.svg)
 
 <a id="statistics-crit_path" name="statistics-crit_path"></a>
 ### Critical Path
@@ -391,18 +404,18 @@ For the same pair of slices, inter-arrival time is approximately the previous ex
 
 **Calculation.** Every pair of consecutive slice starts forms a sample, even after a migration. If one logical activation is split by preemption, the additional slice starts also enter the set. It is therefore a scheduling-slice interval unless instrumentation defines a cleaner release point.
 
-**How to use it.** Use the median and distribution to find the dominant cadence. Compare with **Period / Jitter** for classification and **Blocking Time** for long intervals. For exact application arrivals, record an STI Tag or Interval event at the release point.
+**How to use it.** Use the median and distribution to find the dominant cadence. Compare with **Period / Jitter** for classification and **Off-CPU Gap** for long intervals. For exact application arrivals, record an STI Tag or Interval event at the release point.
 
-The example spans very short and much longer activation gaps, so the duration axis is logarithmic. Compare it with **Blocking Time** carefully: inter-arrival includes the previous execution slice as well as the following off-CPU gap.
+The example spans very short and much longer activation gaps, so the duration axis is logarithmic. Compare it with **Off-CPU Gap** carefully: inter-arrival includes the previous execution slice as well as the following off-CPU gap.
 
 ![Inter-arrival time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-inter-cs11.svg)
 
 <a id="statistics-activation" name="statistics-activation"></a>
-### Activation Latency
+### Fitted Periodic Deviation
 
 **What it tells you**
 
-For each periodic task, how far every actual activation lands from a fitted ideal periodic clock. Inter-Arrival and Period / Jitter measure each release against the *previous* release; a task can drift steadily against the schedule while every gap still looks close to `T`. Activation Latency measures each release against a fixed grid, so accumulating phase error shows up.
+For each periodic task, how far every actual activation lands from a fitted ideal periodic clock. Inter-Arrival and Period / Jitter measure each release against the *previous* release; a task can drift steadily against the schedule while every gap still looks close to `T`. Fitted Periodic Deviation measures each release against a fixed grid, so accumulating phase error shows up. It is not a ready-to-run latency (earlier releases called this section Activation Latency).
 
 **Calculation.** The period `T` is the p50 inter-arrival gap (the same value **Period / Jitter** calls "Expected"). The grid is `anchor + k·T`, anchored at the first activation in the current Scope. For activation `t`, the error is `min_k |t − (anchor + k·T)|` — the distance to the nearest grid point. The Min / Avg / Max / Jitter / σ / p50 / p95 / p99 columns summarise that error distribution, worst (largest Max) first. Needs at least three activations per task.
 
@@ -470,6 +483,8 @@ High Count alone is not enough to diagnose a problem. Short Dwell together with 
 
 **Calculation.** Consecutive slices of the same task are compared in time order. A core change creates a migration sample. Count is the number of changes; Primary comes from accumulated on-CPU time. Rate normalizes Count to an available time or TICK base. Dwell and Ping describe how long placement remains stable and how quickly a task returns.
 
+**Same-core baseline.** The caption under the table gives the average and p95 of off-CPU gaps where a task resumed on the core it left. Compare it with the Gap columns: the difference is what a migration adds on top of normal blocking and scheduling delay.
+
 **How to use it.** First confirm that RTOS load balancing permits migration. Rank by Rate and short Dwell rather than Count alone, then inspect **Core-Pair Migration Summary**, **Core Affinity**, and the **Migration & Corridor Inspector**. Compare the migration timestamps with response, execution, and switch-gap tails. The trace cannot directly measure cache refill or coprocessor save cost.
 
 ![Migration & Corridor Inspector](../images/migration.svg)
@@ -482,13 +497,13 @@ The migration plot has three complementary views:
 
 - **Dwell** plots the duration of each on-core run. A concentration of short samples suggests unstable placement.
 - **Rate** plots the time since the previous migration. Clusters of short gaps reveal bursts of rapid movement.
-- **Gap** plots the positive off-CPU gap immediately after a migration. Compare it with **Blocking Time**, which includes all off-CPU gaps rather than only post-migration samples.
+- **Gap** plots the gap between leaving one core and running on the next (a zero gap — immediate resume on the new core — is kept). Compare it with **Off-CPU Gap**, which includes every off-CPU gap of the task, not only migrations.
 
 ![On-core dwell time distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-dwell-cs22.svg)
 
 ![Time between migrations for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-rate-cs22.svg)
 
-![Post-migration gap distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-gap-cs22.svg)
+![Migration gap distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-gap-cs22.svg)
 
 <a id="statistics-core_pairs" name="statistics-core_pairs"></a>
 ### Core-Pair Migration Summary
@@ -518,6 +533,8 @@ Slices before the first recorded affinity setting are treated as unrestricted. A
 
 **Calculation.** Affinity events update the active mask over time. Each later task slice is checked against the most recent known mask. A slice on a core whose bit is not set is counted as a violation.
 
+**Change → run.** For each `affinity_set`, the caption reports how long the task took to run on a core the new mask allows (0 if it was already running on one), and how many changes had no such run before the next change or the end of the trace.
+
 **How to use it.** Inspect violations first because they can indicate configuration, instrumentation, ID mapping, or scheduling problems. When there are no violations, use the allowed-core count with **Task × Core** to determine whether the task actually uses the available placement. No event means “unknown,” not “unrestricted by design.”
 
 <a id="statistics-preempt_matrix" name="statistics-preempt_matrix"></a>
@@ -546,7 +563,7 @@ High total overlap indicates a persistent source of interference; a large maximu
 
 **Calculation.** This section uses the same overlap evidence as the matrix but presents pair statistics: occurrence count, total, average, and maximum overlap. One off-CPU gap can overlap more than one task.
 
-**How to use it.** Use Total to find sustained interference and Max to locate a severe episode. Compare with **Blocking Time**, **Dispatch Latency**, and **Core Time**. Confirm that the possible preemptor actually switched in as the victim left before calling it causal.
+**How to use it.** Use Total to find sustained interference and Max to locate a severe episode. Compare with **Off-CPU Gap**, **Dispatch Latency**, and **Core Time**. Confirm that the possible preemptor actually switched in as the victim left before calling it causal.
 
 ![Preemption chain distribution CS[24] preempted by CS[25] in example-8cores.btf.gz](../images/stats/stats-preempt-cs24-cs25.svg)
 
@@ -557,11 +574,13 @@ High total overlap indicates a persistent source of interference; a large maximu
 
 Shows tasks whose observed priority rises above their create priority. Priority inheritance commonly occurs when a high-priority task waits for a mutex held by a lower-priority task, temporarily boosting the holder.
 
-Orange ranges show boosts. A red L/M/H pattern indicates that a medium-priority task ran at a priority between the holder's base and boosted priority. This is supporting evidence; confirm it with mutex and timeline events.
+Orange ranges show boosts, including mutex inheritance on its own. A range turns red (L/M/H) only when a task with a priority between the holder's base and boosted priority exists. This is supporting evidence; confirm it with mutex and timeline events.
 
 **Calculation.** The create priority is the baseline. Later `set_priority` STI events define changes over time. A value above the baseline is shown as a boost. The L/M/H pattern combines low/base, medium, and high/boosted priority activity observed in the same episode.
 
 **Columns.** `Boosted` is the total time the task spent above its base priority. `Invert (worst)` / `Invert (total)` are the *measured* priority-inversion duration: for each boost episode, the wall-clock time a medium-priority task (base priority strictly between this task's base and peak) actually ran on some core while this task — the resource holder — was off-CPU. Worst is the largest single episode; total is the sum. A dash means no medium task ran during any episode — for an inherited boost that is priority inheritance working (the boost stops medium tasks preempting the holder); a large value means the mechanism was absent or too slow.
+
+**Holder on/off CPU.** The caption splits the boosted time of completed episodes into on-CPU and off-CPU time and gives the median and maximum *boost→run* time (0 when the task was already running when boosted). The HTML export lists the same three values per episode. A large off-CPU share means the boost did not get the task running — look for a higher-priority task or a blocked holder.
 
 **How to use it.** Rank by `Invert (total)` to find where a lock actually caused unbounded inversion, then pair that episode with **Mutex / Semaphore**, **Waiter × Owner**, and **Ready-Gap** for the blocked high-priority task. A priority change can have an application-specific cause; it is not automatically priority inheritance. A boost with a `—` inversion usually shows that mitigation occurred, while a non-zero value shows latency that a working PI mutex would have removed.
 
@@ -651,9 +670,13 @@ Common issues include an unmatched take, an orphan give, deletion while held, or
 
 **Calculation.** Events are grouped by object pointer and processed in timestamp order. A matching take/give pair forms a hold-duration sample. The current owner and held-object state support orphan, unmatched, delete-while-held, and end-of-trace checks. Nested or recursive behavior is only as accurate as the recorded events allow.
 
-**Columns.** Alongside `Avg hold`, the table reports **p95 hold** / **p99 hold** — the tail of the hold-duration distribution, so one pathological hold shows even when the average looks fine. **Waiters** is the number of distinct tasks that acquired the object while it was already held (a fan-in count); **MaxNest** is the deepest set of simultaneously-open takes seen. Both are computed over the whole trace, not the current Scope. They only register when the capture logs a `take` before the previous holder's `give` — which happens with recursive mutexes or a tracer that logs `take` at the blocking attempt; a tracer that logs `take` only at acquire will show `0` even for a heavily contended lock.
+**Span kinds.** The **Kind** column shows what each object's hold-time samples measure, because the same pairing means different things per object type: `mutex · hold` (take→give by the holder), `sem · take→give`, `sem · give→take` (a signal/wait span — the give came first), and `queue · send→recv`. Compare hold times only between rows of the same span kind.
 
-**How to use it.** Resolve pairing problems before trusting hold or blocking estimates. Rank by **p99 hold** to find the objects with the worst hold tail, then a non-zero **Waiters** tells you that tail actually delayed other tasks — follow it into **Mutex Blocking** and **Waiter × Owner**. A **MaxNest** above 1 means lock nesting; check the acquire order against your locking hierarchy for deadlock risk. A long *uncontended* hold (Waiters 0) may be harmless. Click a row to open the hold-duration distribution. Combine with task priorities and the timeline.
+**What is left out.** A mutex give by a task other than the taker, a span that crosses the cursor window, and the kernel's own give right after `create` (within 1 µs) are not counted as hold-time samples; the caption under the table gives the counts. When the same handle is deleted and created again, the earlier lifetime keeps its own row marked `(gen N)` so pairing and hold times never mix two objects.
+
+**Columns.** Alongside `Avg hold`, the table reports **p95 hold** / **p99 hold** — the tail of the hold-duration distribution, so one pathological hold shows even when the average looks fine. **Overlap** (formerly *Waiters*) is the number of distinct tasks that took the object while an earlier take was still open; **MaxNest** is the deepest set of simultaneously-open takes seen. Both are computed over the whole trace, not the current Scope. STI `take` events mark acquisition, not the start of waiting, so an overlap means recursion or a missing `give` — it is not a contention count. Use **Mutex Blocking** for waiting time.
+
+**How to use it.** Resolve pairing problems before trusting hold or blocking estimates. Rank by **p99 hold** to find the objects with the worst hold tail, then check **Mutex Blocking** and **Waiter × Owner** to see whether that tail delayed other tasks. A non-zero **Overlap** or a **MaxNest** above 1 means recursion, nesting or a lost give; check the acquire order against your locking hierarchy for deadlock risk. Click a row to open the hold-duration distribution. Combine with task priorities and the timeline.
 
 <a id="statistics-queue" name="statistics-queue"></a>
 ### Queue
@@ -664,7 +687,7 @@ Pairs send/receive events by queue pointer and summarizes completed holds and pa
 
 The table describes recorded queue activity; it does not reconstruct queue contents or application semantics. Missing or unmatched events may come from a partial Scope or incomplete instrumentation.
 
-**Calculation.** Send and receive events are grouped by queue pointer and paired in recorded order to form completed activity intervals. Without message IDs or queue-content snapshots, the viewer cannot prove which receive consumed which application message in complex producer/consumer patterns.
+**Calculation.** Send and receive events are grouped by queue pointer and paired in recorded order to form completed activity intervals. Each receive pairs with the oldest open send (FIFO). Without message IDs or queue-content snapshots, the viewer cannot prove which receive consumed which application message in complex producer/consumer patterns, and the trace does not record overwrite, send-to-front or reset — queues using those can pair the wrong send. A note under the table repeats this.
 
 **How to use it.** Check pairing quality and event rates, then correlate queue activity with **Inter-Arrival**, **Dispatch Latency**, Tags such as queue depth, and end-to-end Intervals. Click a row to open the hold-duration distribution. A long send-to-receive interval can include normal batching or consumer scheduling delay.
 
@@ -712,7 +735,7 @@ Per core, how the IDLE time is shaped: the total, the single longest idle stretc
 
 **Calculation.** Every IDLE segment in each core's slice list is clipped to the Scope. **Idle total** is their sum, **Longest** the largest single one, **Frags** the count, **p95** the 95th-percentile fragment. The all-cores-idle window is a sweep over all cores' idle intervals for the longest stretch covered on every core simultaneously. Sorted by idle total, most-idle core first.
 
-**How to use it.** Use the total against **Core Utilization** to size spare capacity. A long all-cores-idle window is fine if nothing was pending — cross-check **Ready-Gap** and **Blocking Time** for the same interval to be sure it was not a system-wide stall. A high fragment count with a small longest stretch usually means fine-grained blocking; follow it into **Switch Reason Breakdown**. Click a row to open the idle-fragment distribution and highlight that core on the timeline.
+**How to use it.** Use the total against **Core Utilization** to size spare capacity. A long all-cores-idle window is fine if nothing was pending — cross-check **Ready-Gap** and **Off-CPU Gap** for the same interval to be sure it was not a system-wide stall. A high fragment count with a small longest stretch usually means fine-grained blocking; follow it into **Switch Reason Breakdown**. Click a row to open the idle-fragment distribution and highlight that core on the timeline.
 
 <a id="statistics-switch_overhead" name="statistics-switch_overhead"></a>
 ### Kernel Switch Overhead
@@ -782,6 +805,8 @@ Use intervals for code regions with explicit boundaries, such as one loop iterat
 
 **Columns.** Count, Min, Avg, Max, Jitter (`Max − Min`), σ (population standard deviation), p50, p95, and p99 — the same summary set as the slice-based timing tables, so an interval and an execution distribution can be read the same way.
 
+**Execution overlap.** The caption takes the task running on the start core when each interval started and reports the share of interval time it was on-CPU, with average on-CPU and off-CPU time per instance. The HTML export lists the running task and both values per instance. A low share means most of the interval was preemption, blocking, or work done by other tasks.
+
 **How to use it.** Intervals are preferable to slice-based response estimates when the application can mark the real operation boundaries. Compare interval tails with Execution and Blocking to determine whether the operation spends time on-CPU or waiting. Keep instrumentation overhead and partial-Scope pairing in mind.
 
 ![Interval duration distribution for interval id 1 in example-8cores.btf.gz](../images/stats/stats-interval-1.svg)
@@ -814,6 +839,8 @@ Only recorded STI lifecycle events are shown. An absent event may mean the event
 
 **Calculation.** Lifecycle records are grouped by task ID. Alive span uses available create and delete boundaries; run count comes from scheduling slices. Suspend and resume counts use their STI events.
 
+**Suspended time.** The caption pairs each named `suspend` with the next `resume` of the same task and reports the average and maximum suspended time, plus how many tasks were still suspended at the end of the trace. In a cursor window both endpoints must be inside it.
+
 **How to use it.** Check for unexpected creation, deletion, or repeated suspend/resume behavior. Use lifecycle boundaries to avoid interpreting start-up or shutdown as steady state. Missing create events are common when capture begins after tasks already exist.
 
 <a id="statistics-deadline" name="statistics-deadline"></a>
@@ -845,13 +872,13 @@ The table below identifies the strongest dependencies. “Requires” describes 
 | Response Time | Consecutive task slices | Execution, Blocking, Dispatch, Interval |
 | Execution Time | Slice start/end | Distribution, Interval, Tags |
 | Dispatch Latency | Ready STI/create plus switch-in | Preemption, Core Time, Timeline |
-| Blocking Time | Consecutive task slices | Preemption, Mutex Blocking, Period |
+| Off-CPU Gap | Consecutive task slices | Preemption, Mutex Blocking, Period |
 | Critical Path | Response windows and overlapping evidence | Execution, Blocking, Preemption, Migration |
 | Period / Inter-arrival | Consecutive activation starts | Unified Jitter, Deadline, Core Time |
-| Activation Latency | Activation starts plus fitted period T | Period / Jitter, Dispatch Latency, Ready-Gap |
+| Fitted Periodic Deviation | Activation starts plus fitted period T | Period / Jitter, Dispatch Latency, Ready-Gap |
 | Ready-Gap (Starvation) | Off-CPU gaps, same-core overlap, STI take/suspend | Preemption Chain, Priority, Mutex Blocking |
 | Migration statistics | Consecutive slices and core IDs | Affinity, Task × Core, Switch Overhead |
-| Idle Analysis | Per-core IDLE segments clipped to scope | Core Utilization, Ready-Gap, Blocking Time |
+| Idle Analysis | Per-core IDLE segments clipped to scope | Core Utilization, Ready-Gap, Off-CPU Gap |
 | Queue Backlog / Semaphore Level | STI give/send and take/recv per object | Mutex / Semaphore, Dispatch Latency, Ready-Gap |
 | Preemption statistics | Off-CPU gaps plus same-core overlap | Priority, Core Time, Timeline |
 | Switch Reason Breakdown | Off-CPU gaps, same-core overlap, STI take/suspend | Preemption Matrix, Preemption Chain, Priority |
@@ -890,6 +917,7 @@ Supported tables and charts provide direct navigation:
 - Click Min, Max, p50, p95, or p99 to jump to the corresponding captured sample.
 - Click an anomaly, worst event, or critical-path episode to zoom and place evidence cursors.
 - Click a synchronization issue to jump to the related STI event.
+- Click an outlier in a priority-inheritance or mutex/semaphore hold distribution to zoom to the whole span; both ends are marked with *start* and *end* annotations.
 - Click a core-time bin, migration pair, or matrix cell to inspect the matching time range.
 
 A navigation action does not make the selected event a root cause. It only connects the summary value to the evidence that produced it.
@@ -901,12 +929,16 @@ A navigation action does not make the selected event a root cause. It only conne
 - Analysis Scope, trace metadata, filters, and timestamp origin;
 - diagnostic KPIs and Analysis Findings;
 - the **Trace Health Check** status and any limited metrics;
+- a **Metric availability** list (in the Trace Health card) naming each metric that is limited or unavailable for this trace, with the reason;
+- a **Metric definitions** card stating how each timing value (execution time, off-CPU gap, dispatch latency, priority episodes, mutex/semaphore spans, queue residence, intervals, suspended time, percentiles) is measured;
 - an **Investigation** section when a saved investigation is attached (GUI) or passed with `--investigation` (headless CLI);
 - the same Statistics tables, grouped table of contents, and section notes;
 - search, sorting, Problems only, and Show all for each statistics table; and
 - an SVG load-balance gauge under Core Utilization.
 
 The HTML report can identify where to investigate, but it cannot preserve every interactive timeline action. Keep the source trace when another reviewer may need to verify an event.
+
+The AI evidence package uses the same definitions: when a statistic in the package names a measured metric (for example *Dispatch p95*), the matching definitions are attached under `definitions`, and `trace_health.availability` lists every metric that is limited or unavailable, with its reason.
 
 The machine-readable snapshot (`--format json`) uses schema `btf-viewer-stats/2`: each entry in `findings` gains a `rule_id`, and a new `investigation_findings` array carries the full structured finding (id, rule_id, severity, status, observation, category, comparison_basis, affected_range, entities, measured_values, evidence_refs, limitations, rank_score). When an investigation is attached it is echoed back under `investigation` with resolved `chains` and `broken_references`.
 
@@ -975,7 +1007,7 @@ Use a finding to select the next measurement, not as the conclusion. Confirm the
 
 1. Find the task in **Response Time**, **Worst Events**, or **Timeline Anomalies**.
 2. Compare Avg, p95, p99, and Max. A large gap between p95 and Max suggests a rare episode; a high p95 suggests a recurring tail.
-3. Split the episode into own execution and off-CPU time with **Execution Time**, **Blocking Time**, and **Critical Path**.
+3. Split the episode into own execution and off-CPU time with **Execution Time**, **Off-CPU Gap**, and **Critical Path**.
 4. If own execution grew, inspect **Distribution Explorer**, **Intervals**, and relevant Tags.
 5. If off-CPU time grew, inspect **Dispatch Latency**, **Preemption Matrix**, **Mutex Blocking**, and **Core Migrations**.
 6. Confirm the event order on the timeline. Use an instrumented Interval when an exact end-to-end boundary is required.
@@ -1063,7 +1095,7 @@ The classic **L/M/H** pattern contains:
 - **H:** a high-priority task waiting for that mutex; and
 - **M:** runnable work with priority strictly between L and H.
 
-Without inheritance, M can delay L while H waits. With inheritance, the RTOS raises L toward H so L can release the mutex. In BTFViewer, an orange band means a boost without the L/M/H pattern; a red band means mutex inheritance or an L/M/H-related pattern.
+Without inheritance, M can delay L while H waits. With inheritance, the RTOS raises L toward H so L can release the mutex. In BTFViewer, an orange band means a boost without the L/M/H pattern; a red band means the L/M/H pattern (a medium-priority task exists between base and peak). Mutex inheritance without that pattern stays orange.
 
 ```mermaid
 flowchart TD
@@ -1185,7 +1217,7 @@ The comparison uses two delta conventions:
 
 Read the sign together with the metric meaning and the **Improved / Regressed / Changed** status. A positive value is not automatically good or bad.
 
-**Shape Δ.** The Execution Time, Blocking Time, and Inter-Arrival Time tables add a **Shape Δ** column: the two-sample Kolmogorov–Smirnov (KS) *D* statistic between the task's Baseline A and Candidate B sample distributions.
+**Shape Δ.** The Execution Time, Off-CPU Gap, and Inter-Arrival Time tables add a **Shape Δ** column: the two-sample Kolmogorov–Smirnov (KS) *D* statistic between the task's Baseline A and Candidate B sample distributions.
 
 *What it measures.* Build the empirical CDF of each side — for every duration *x*, the fraction of that side's samples that are ≤ *x*. **Shape Δ** is the largest vertical gap between the two curves: `D = max over x of |F_A(x) − F_B(x)|`, a value in `[0, 1]`. `0` means the two sample sets trace the same curve — same spread *and* same location; `1` means they do not overlap at all. It is distribution-free (assumes no particular shape) and scale-free (a global unit or clock-rate change does not move it), so it reacts to a widened tail, a split mode, or a pure location shift that Avg, Max, and the `Δ` column can each miss.
 

@@ -901,7 +901,7 @@ COMPARE_INVESTIGATE_FALLBACK_SECTION = "response"
 COMPARE_SECTION_LABELS: Dict[str, str] = {
     "response": "Response Time",
     "exec": "Execution Time",
-    "block": "Blocking Time",
+    "block": "Off-CPU Gap",
     "inter": "Inter-Arrival Time",
     "mutex_block": "Mutex Blocking",
     "deadline": "Deadlines / CPU budget",
@@ -1936,6 +1936,13 @@ def _harvest_ux_events_from_segments(
     repr_map = getattr(trace, "task_repr", None)
     if repr_map is None:
         repr_map = getattr(trace, "taskRepr", None) or {}
+    open_at_end = getattr(trace, "open_at_end_tasks", None)
+    if open_at_end is None:
+        open_at_end = getattr(trace, "openAtEndTasks", None)
+    open_at_end = open_at_end or ()
+    t_max = getattr(trace, "time_max", None)
+    if t_max is None:
+        t_max = getattr(trace, "timeMax", None)
     for mk, segs in items:
         raw = _map_get(repr_map, mk, mk)
         _, _, tname = _parse_task_name(str(raw))
@@ -1952,6 +1959,8 @@ def _harvest_ux_events_from_segments(
             if dur <= 0:
                 continue
             if lo is not None and hi is not None and not _seg_fully_in_range(seg, lo, hi):
+                continue
+            if open_at_end and end == t_max and getattr(seg, "task", None) in open_at_end:
                 continue
             events.append(_event(
                 "exec", name, str(mk), start, end, dur, start, getattr(seg, "core", ""),
