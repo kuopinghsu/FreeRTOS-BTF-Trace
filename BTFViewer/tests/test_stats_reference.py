@@ -106,6 +106,22 @@ class DualLanguageBuildTests(unittest.TestCase):
     def test_web_inline_html_is_dual_language_envelope(self) -> None:
         self._check_envelope(WEB_INLINE_HTML)
 
+    def test_artifacts_carry_one_source_digest_stamp(self) -> None:
+        """ci_gate compares this stamp, not commit order, for docs-html freshness."""
+        sys.path.insert(0, str(BTF_ROOT / "scripts"))
+        import ci_gate
+
+        digests = {ci_gate.docs_html_artifact_digest(p) for p in (DESKTOP_HLP, WEB_INLINE_HTML)}
+        self.assertEqual(len(digests), 1)
+        self.assertRegex(digests.pop() or "", r"^[0-9a-f]{64}$")
+        unstamped = json.dumps({"en": "<html></html>", "zh-tw": "<html></html>"})
+        tmp = BTF_ROOT / "builds" / ".digest-probe.json"
+        try:
+            tmp.write_text(unstamped, encoding="utf-8")
+            self.assertIsNone(ci_gate.docs_html_artifact_digest(tmp))
+        finally:
+            tmp.unlink(missing_ok=True)
+
     def test_mermaid_svg_ids_are_unique_across_languages(self) -> None:
         """Regression for the mmdc default-id collision bug: with both
         languages' diagrams on the page (as siblings in one <iframe srcdoc>

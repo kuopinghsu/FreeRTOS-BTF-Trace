@@ -455,11 +455,15 @@ def _build_one(source_md: Path, lang: str, math_cache: dict | None) -> tuple[str
 
 
 def build() -> list[Path]:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from ci_gate import DOCS_HTML_DIGEST_META, docs_html_source_digest
+
+    stamp = f'<meta name="{DOCS_HTML_DIGEST_META}" content="{docs_html_source_digest()}">'
     pages: dict[str, str] = {}
     math_cache: dict | None = None
     for lang, source_md in LANGS.items():
         page, math_cache = _build_one(source_md, lang, math_cache)
-        pages[lang] = page
+        pages[lang] = page.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n' + stamp, 1)
 
     envelope = json.dumps(pages, ensure_ascii=False)
     written: list[Path] = []

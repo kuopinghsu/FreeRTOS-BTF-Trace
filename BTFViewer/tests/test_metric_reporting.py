@@ -1,6 +1,7 @@
 """Per-metric availability, percentile disclosure, two-endpoint jumps, metric definitions."""
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import shutil
@@ -122,12 +123,10 @@ class MetricReportingTests(unittest.TestCase):
         script = """
 import { readFileSync } from 'node:fs'
 import { parseBtf } from './src/parser/btfParser.js'
-import { decompressBtfBytes } from './src/utils/btfLoad.js'
 import { collectDispatchLatencyByMk } from './src/utils/schedulerSmpMetrics.js'
 import { buildTraceHealthResult, metricAvailabilityLines } from './src/utils/traceHealth.js'
 import * as L from './src/utils/latencyMetrics.js'
-const p = process.argv[1]
-const tr = await parseBtf(decompressBtfBytes(new Uint8Array(readFileSync(p)), p))
+const tr = await parseBtf(readFileSync(0, 'utf8'))
 console.log(JSON.stringify({
   dispatch: L.dispatchSourceNote(tr, collectDispatchLatencyByMk(tr, null, null)),
   migration: L.migrationGapBaselineNote(tr),
@@ -138,9 +137,11 @@ console.log(JSON.stringify({
   availability: metricAvailabilityLines(buildTraceHealthResult(tr, null, null)),
 }))
 """
+        with gzip.open(trace_path, "rt", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
         web = json.loads(subprocess.check_output(
-            ["node", "--input-type=module", "-e", script, trace_path],
-            cwd=os.path.join(root, "web"), text=True))
+            ["node", "--input-type=module", "-e", script],
+            input=text, cwd=os.path.join(root, "web"), text=True))
         self.assertEqual(web, desktop)
 
 

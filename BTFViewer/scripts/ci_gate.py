@@ -16,6 +16,8 @@ Exit codes: 0 = pass, 1 = failures printed to stderr.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -171,6 +173,9 @@ DOCS_HTML_SOURCE_PATHS: Sequence[str] = (
     "scripts/package.json",
     "scripts/package-lock.json",
 )
+DOCS_HTML_DIGEST_META = "btf-docs-src-sha256"
+_DOCS_HTML_DIGEST_RE = re.compile(
+    r'<meta name="btf-docs-src-sha256" content="([0-9a-f]{64})">')
 
 _MD_LINK_RE = re.compile(
     r"(?<!!)\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)"
@@ -213,6 +218,31 @@ def git_commit_time(*rel_paths: str) -> int:
         return int(out)
     except ValueError:
         return 0
+
+
+def docs_html_source_digest() -> str:
+    """SHA-256 over DOCS_HTML_SOURCE_PATHS (CRLF-normalised), stamped into each
+    Statistics Reference page by build_docs_html.py."""
+    h = hashlib.sha256()
+    for rel in DOCS_HTML_SOURCE_PATHS:
+        path = ROOT / rel
+        data = path.read_bytes().replace(b"\r\n", b"\n") if path.is_file() else b"<missing>"
+        h.update(rel.encode("utf-8") + b"\0" + data + b"\0")
+    return h.hexdigest()
+
+
+def docs_html_artifact_digest(path: Path) -> Optional[str]:
+    """Source digest stamped in every page of the envelope, or None when absent
+    or inconsistent (older artifacts predate the stamp)."""
+    try:
+        pages = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(pages, dict) or not pages:
+        return None
+    digests = {m.group(1) if m else None
+               for m in (_DOCS_HTML_DIGEST_RE.search(str(v)) for v in pages.values())}
+    return digests.pop() if len(digests) == 1 else None
 
 
 def git_dirty(rel_path: str) -> bool:
@@ -645,10 +675,12 @@ def check_docs_html_freshness() -> List[str]:
     """History/dirty freshness for the pre-rendered Statistics Reference HTML
     (btf_viewer.hlp + statistics-en.inline.html — each a JSON envelope
     {"en": ..., "zh-tw": ...}) vs STATISTICS.md, STATISTICS_zh-TW.md, and the
-    build script. Same git-timestamp/dirty-tree approach as PDF freshness —
-    no pandoc/npm/mathjax rebuild needed in CI to catch a forgotten
-    ``python3 scripts/build_docs_html.py`` after editing either source .md."""
+    build script. Artifacts stamped with a source digest are compared by
+    content, so commit order does not matter; unstamped ones fall back to the
+    git-timestamp/dirty-tree approach used for PDFs. Neither needs a
+    pandoc/npm/mathjax rebuild in CI."""
     errors: List[str] = []
+    src_digest = docs_html_source_digest()
     src_t = git_commit_time(*DOCS_HTML_SOURCE_PATHS)
     src_dirty = any_dirty(DOCS_HTML_SOURCE_PATHS)
     for artifact_rel in DOCS_HTML_ARTIFACTS:
@@ -658,6 +690,15 @@ def check_docs_html_freshness() -> List[str]:
                 f"docs-html: missing {artifact_rel} "
                 f"(run: python3 scripts/build_docs_html.py)"
             )
+            continue
+        art_digest = docs_html_artifact_digest(artifact)
+        if art_digest is not None:
+            if art_digest != src_digest:
+                errors.append(
+                    f"docs-html: {artifact_rel} was built from different "
+                    f"STATISTICS*.md/build-script content; "
+                    f"run: python3 scripts/build_docs_html.py"
+                )
             continue
         art_t = git_commit_time(artifact_rel)
         if src_t and art_t and src_t > art_t:
