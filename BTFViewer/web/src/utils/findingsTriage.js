@@ -47,7 +47,7 @@ function defaultCheckNext(finding) {
   const cat = findingCategory(finding)
   const mapping = {
     migration: 'Open Core Migrations and check load balance first.',
-    blocking: 'Inspect Blocking Time and Mutex Blocking around the cited time.',
+    blocking: 'Inspect Off-CPU Gap and Mutex Blocking around the cited time.',
     deadline: 'Open Deadline / CPU Budget and Response Time.',
     load: 'Open Load Balance and Task × Core.',
     jitter: 'Open Period / Jitter and Recurring Patterns.',

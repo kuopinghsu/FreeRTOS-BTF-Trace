@@ -6,7 +6,7 @@
 import { formatTime } from './timeFormat.js'
 import { parseTaskName, taskDisplayName, isIdleTaskName, taskReprGet } from './colors.js'
 import { segFullyInRange, segOverlapsRange } from './statsRange.js'
-import { blockingTimeSamples } from './statsAnalysis.js'
+import { blockingTimeSamples, segOpenAtEnd } from './statsAnalysis.js'
 import { migrationRows, buildCorePairRows } from './migrationAnalysis.js'
 import { priorityStatsRows } from './priorityAnalysis.js'
 import { syncObjectStatsRows } from './syncObjectAnalysis.js'
@@ -208,7 +208,7 @@ export function buildWorkflowAnalysisFindings({
       `Tasks with the most off-CPU gaps: ${names}. Cross-check Preemption Chain and Mutex/Semaphore. Off-CPU time is not necessarily resource blocking.`,
       {
         id: 'blocking',
-        inspect: 'Off-CPU Time (Blocking Time)',
+        inspect: 'Off-CPU Gap',
         confidence: 'Medium — measured gaps, mixed causes',
         evidence_text: names,
         impact: 'Long or frequent off-CPU gaps delay the next resume.',
@@ -483,15 +483,17 @@ export function collectTraceAnalysisFindings(trace, lo = null, hi = null, analys
     const disp = taskDisplayName(raw)
 
     const execSamples = []
+    let taskTotal = 0
     for (const s of segs) {
       const d = s.end - s.start
       if (d <= 0) continue
       if (lo != null && hi != null && !segFullyInRange(s, lo, hi)) continue
+      taskTotal += d
+      if (segOpenAtEnd(s, trace)) continue
       execSamples.push(d)
     }
     const execSum = _summarizeDurs(execSamples, scale)
     if (execSum) {
-      const taskTotal = execSamples.reduce((a, b) => a + b, 0)
       const avgNs = execSamples.reduce((a, b) => a + b, 0) / execSamples.length
       const maxNs = Math.max(...execSamples)
       execRows.push({

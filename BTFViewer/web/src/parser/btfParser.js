@@ -17,7 +17,7 @@ import { applyBtfVersionWarning } from '../utils/btfMeta.js'
 import { makeLodSummary, segmentStartsF64, LOD_SUMMARY_BINS, LOD_SUMMARY_BINS_ULTRA } from '../utils/lod.js'
 import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors, tryParseBtfInt } from '../utils/colors.js'
 import { buildMigrationIndex, prepareFullTraceStats } from '../utils/migrationAnalysis.js'
-import { analyzeTickHealth } from '../utils/tickHealth.js'
+import { analyzeTickHealth, tickExpectedPeriod } from '../utils/tickHealth.js'
 import {
   buildIntervalData,
   buildIntervalMarkerIndex,
@@ -350,6 +350,10 @@ export async function parseBtf(text, progressCallback) {
   }
 
   // Close any still-open segments at trace end
+  const openAtEndTasks = new Set()
+  for (const [task, open] of openSeg) {
+    if (timeMax > open.start) openAtEndTasks.add(task)
+  }
   for (const [task] of openSeg) {
     closeSeg(task, timeMax)
   }
@@ -431,6 +435,7 @@ export async function parseBtf(text, progressCallback) {
     intervalInstancesById,
     intervalInstancesCulledById,
     unmatchedStarts: intervalUnmatchedStarts,
+    unmatchedStops: intervalUnmatchedStops,
   } = buildIntervalData(stiEvents)
   const intervalMarkerById = buildIntervalMarkerIndex(stiEvents)
 
@@ -633,7 +638,11 @@ export async function parseBtf(text, progressCallback) {
   const stiEventTimes = stiEvents.map(e => e.time).sort((a, b) => a - b)
   progress(98, 'Analysing tick health…')
   await yieldToHost()
-  const tickHealth = analyzeTickHealth(sortedTickStiTimes, sortedTickStiCounts)
+  const tickPeriod = tickExpectedPeriod({ timeScale, meta })
+  const tickHealth = {
+    ...analyzeTickHealth(sortedTickStiTimes, sortedTickStiCounts, tickPeriod.period),
+    expectedPeriodSource: tickPeriod.source,
+  }
 
   applyBtfVersionWarning(meta)
 
@@ -672,7 +681,10 @@ export async function parseBtf(text, progressCallback) {
     intervalInstancesById,
     intervalInstancesCulledById,
     intervalUnmatchedStarts,
+    intervalUnmatchedStops,
     intervalMarkerById,
+    // Raw task names whose last slice was still open at trace end (cut at timeMax).
+    openAtEndTasks,
 
     // ---- Tag STI channels (tag0_event … tag7_event) ----
     tagChannels,

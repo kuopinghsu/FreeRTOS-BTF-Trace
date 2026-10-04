@@ -3,6 +3,30 @@
  */
 
 export const DEFAULT_TICK_PERIOD = 1000
+export const DEFAULT_TICK_HZ = 1000
+const TICK_RATE_META_KEYS = new Set([
+  'tickrate', 'tick_rate', 'tickratehz', 'tick_rate_hz',
+  'configtick_rate_hz', 'tickhz', 'tick_hz',
+])
+const TIME_UNITS_PER_SECOND = { ps: 1e12, ns: 1e9, us: 1e6, ms: 1e3, s: 1 }
+
+/**
+ * Expected RTOS tick period in trace time units, plus its source.
+ * Uses a tick-rate header (e.g. `#tickRate 1000`) when present; otherwise the
+ * FreeRTOS default 1000 Hz. `core_clock` is a counter frequency, never the tick rate.
+ * @returns {{ period: number, source: 'metadata'|'default' }}
+ */
+export function tickExpectedPeriod(trace) {
+  const perS = TIME_UNITS_PER_SECOND[String(trace?.timeScale || 'ns').toLowerCase()] ?? 1e9
+  const meta = trace?.meta || {}
+  for (const [key, value] of Object.entries(meta)) {
+    if (!TICK_RATE_META_KEYS.has(String(key).toLowerCase())) continue
+    const hz = parseInt(String(value).trim().toLowerCase().replace(/hz$/, '').trim(), 10)
+    if (Number.isFinite(hz) && hz > 0) return { period: perS / hz, source: 'metadata' }
+  }
+  return { period: perS / DEFAULT_TICK_HZ, source: 'default' }
+}
+
 export const TICK_GAP_THRESHOLD = 2.0
 /**
  * Coefficient-of-variation threshold for tickless-mode detection.
@@ -121,6 +145,7 @@ export function analyzeTickHealth(tickTimes, tickCounts = null, expectedPeriod =
 /** Scoped tick health (respects cursor range). */
 export function tickHealthReport(trace, lo = null, hi = null) {
   if (!trace) return analyzeTickHealth([])
+  const { period, source } = tickExpectedPeriod(trace)
   let times = trace.tickStiTimes || []
   let counts = trace.tickStiCounts || []
   if (lo != null && hi != null) {
@@ -129,5 +154,5 @@ export function tickHealthReport(trace, lo = null, hi = null) {
     counts = kept.map(i => counts[i])
     times = kept.map(i => times[i])
   }
-  return analyzeTickHealth(times, counts)
+  return { ...analyzeTickHealth(times, counts, period), expectedPeriodSource: source }
 }

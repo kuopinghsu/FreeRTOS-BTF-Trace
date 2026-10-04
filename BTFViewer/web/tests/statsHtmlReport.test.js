@@ -28,7 +28,7 @@ describe('stats HTML helpers', () => {
     assert.match(html, /does not prove zero system load/)
     assert.doesNotMatch(html, /best metric for user experience/)
     assert.doesNotMatch(html, /0 = overload/)
-    assert.match(html, /Off-CPU Time \(Blocking Time\)/)
+    assert.match(html, /Off-CPU Gap/)
     assert.match(html, /not a stacked split/)
     assert.equal(html.includes('<li><li>'), false)
     assert.match(html, /Cursor range/)

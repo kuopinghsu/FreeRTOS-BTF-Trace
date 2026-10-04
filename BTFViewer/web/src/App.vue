@@ -1934,6 +1934,7 @@
 </template>
 
 <script setup>
+import { plotPointEndpointNotes } from './utils/plotPointEndpoints.js'
 import { updateTagPreferences, tagPreferences } from './utils/tagAnalysis.js'
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick, markRaw } from 'vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
@@ -4791,7 +4792,7 @@ function onJumpToTime(ns) {
   syncTimelineViewport()
 }
 
-function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, syncIssue, tagSample, tagChannel }) {
+function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, endpoints, syncIssue, tagSample, tagChannel }) {
   const stayOnTab = rightPanelTab.value
   if (syncIssue) {
     pinnedHighlightKey.value = null
@@ -4853,11 +4854,23 @@ function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, 
       syncTimelineViewport()
       scheduleRender()
     })
+  } else if (endpoints) {
+    timelineOptions.highlightInterval = null
+    const tr = trace.value
+    const margin = Math.max(1, Math.floor((endpoints.stopNs - endpoints.startNs) / 10))
+    timelinePanelRef.value?.zoomToTimeRange(
+      Math.max(tr?.timeMin ?? endpoints.startNs, endpoints.startNs - margin),
+      Math.min(tr?.timeMax ?? endpoints.stopNs, endpoints.stopNs + margin),
+    )
   } else if (ns != null) {
     timelineOptions.highlightInterval = null
     timelinePanelRef.value?.jumpToNs(ns)
   }
-  if (ns != null) {
+  if (endpoints && endpoints.stopNs > endpoints.startNs) {
+    const [startNote, endNote] = plotPointEndpointNotes(note)
+    addAnnotationAtNs(endpoints.startNs, startNote)
+    addAnnotationAtNs(endpoints.stopNs, endNote)
+  } else if (ns != null) {
     addAnnotationAtNs(ns, note)
   }
   if (rightPanelTab.value !== stayOnTab) {

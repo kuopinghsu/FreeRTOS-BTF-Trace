@@ -5,6 +5,7 @@ import { taskMergeKey } from '../src/utils/colors.js'
 import {
   affinityMaskAtTime,
   buildCoreAffinityRows,
+  coresAllowedByMask,
   formatAffinityMaskHistory,
 } from '../src/utils/coreAffinityAnalysis.js'
 
@@ -96,5 +97,19 @@ describe('buildCoreAffinityRows', () => {
       },
     )
     assert.equal(buildCoreAffinityRows(tr)[0].violations, 'Core_1')
+  })
+
+  it('decodes masks above 32 bits without wrapping', () => {
+    const cores = Array.from({ length: 40 }, (_, i) => `Core_${i}`)
+    assert.deepEqual([...coresAllowedByMask(1n << 33n, cores)], ['Core_33'])
+    assert.deepEqual([...coresAllowedByMask(0x1, cores)], ['Core_0'])
+    const tr = makeTrace(
+      [{ time: 10, target: 'task', note: 'affinity_set Wide[1] 0x200000000' }],
+      { 'Wide[1]': [[20, 30, 'Core_33'], [40, 50, 'Core_1']] },
+      cores,
+    )
+    const rows = buildCoreAffinityRows(tr)
+    assert.equal(rows[0].maskHex, '0x200000000')
+    assert.equal(rows[0].violations, 'Core_1')
   })
 })

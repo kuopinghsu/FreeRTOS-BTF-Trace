@@ -454,8 +454,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("<h2>Investigate Anomalies", web_html)
         self.assertIn("html_investigate_anomalies", stats)
         self.assertIn("htmlInvestigateAnomalies", web)
-        self.assertIn("Off-CPU Time (Blocking Time)", stats)
-        self.assertIn("Off-CPU Time (Blocking Time)", web)
+        self.assertIn("Off-CPU Gap", stats)
+        self.assertIn("Off-CPU Gap", web)
         for title in investigate:
             self.assertIn(title, stats_html, title)
             self.assertIn(title, web_html, title)
@@ -992,7 +992,7 @@ class AiWebParityTests(unittest.TestCase):
             "Recurring Patterns", "Preemption Matrix", "Mutex Blocking",
             "Core Utilization Over Time",
             "Switch Reason Breakdown", "Scheduling Load Over Time",
-            "Activation Latency", "Ready-Gap (Starvation)", "Idle Analysis",
+            "Fitted Periodic Deviation", "Ready-Gap (Starvation)", "Idle Analysis",
             "Queue Backlog / Semaphore Level",
         )
         self.assertIn("available_statistics_pages", by_id["diagnostic_report"])
@@ -1019,7 +1019,7 @@ class AiWebParityTests(unittest.TestCase):
 
         # New Statistics sections (review A1–A9 / B10–B12) named in the
         # templates that most benefit from them.
-        self.assertIn("Activation Latency", by_id["latency"])
+        self.assertIn("Fitted Periodic Deviation", by_id["latency"])
         self.assertIn("Ready-Gap (Starvation)", by_id["latency"])
         self.assertIn("Scheduling Load Over Time", by_id["balance"])
         self.assertIn("Idle Analysis", by_id["balance"])

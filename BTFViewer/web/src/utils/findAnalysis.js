@@ -8,6 +8,8 @@ import { taskLabelForMergeKey, taskReprGet } from './colors.js'
 import { parseTaskLifecycleNote } from './lifecycleAnalysis.js'
 import { parseSyncObjectNote } from './syncObjectAnalysis.js'
 
+const LIFECYCLE_FIND_RE = /^(create|delete|suspend|resume)\b/i
+
 export const FIND_MODES = [
   'contains', 'exact', 'regex', 'migrations',
   'sti', 'intervals', 'lifecycle', 'pointers',
@@ -147,9 +149,10 @@ function findLifecycleHits(trace, query, mode, regexObj) {
   const hits = []
   for (const ev of trace.stiEvents || []) {
     if (ev.target !== 'task') continue
-    const parsed = parseTaskLifecycleNote(ev.note)
-    if (!parsed) continue
-    const hay = `${parsed.action} ${parsed.label} ${ev.note || ''}`
+    const note = (ev.note || '').trim()
+    if (!LIFECYCLE_FIND_RE.test(note)) continue
+    const parsed = parseTaskLifecycleNote(note)
+    const hay = parsed ? `${parsed.action} ${parsed.label} ${note}` : note
     if (haystackMatches(query, mode, hay, regexObj)) hits.push(ev.time)
   }
   return hits

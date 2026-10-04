@@ -15,8 +15,10 @@ export function parseTaskLifecycleNote(note) {
   const m = TASK_LIFE_RE.exec(raw)
   if (!m) return null
   const action = m[1].toLowerCase()
-  const label = raw.slice(m[0].length).trim() || raw
-  return { action, label: label || raw }
+  const label = raw.slice(m[0].length).trim()
+  // Bare `resume` / `resume/isr` carries no task name in the BTF row.
+  if (!label || label.startsWith('/')) return null
+  return { action, label }
 }
 
 /**

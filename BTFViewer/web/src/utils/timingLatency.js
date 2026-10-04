@@ -1,6 +1,6 @@
 /**
  * Timing-latency statistics (parity with parser.py):
- *   Activation Latency        — review item A3
+ *   Fitted Periodic Deviation        — review item A3
  *   Ready-Gap (Starvation)    — review item A4
  */
 import { taskDisplayName, taskReprGet } from './colors.js'

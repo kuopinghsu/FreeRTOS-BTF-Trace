@@ -87,12 +87,14 @@ function applyRowLimit(items, limit) {
 }
 
 /** Slice durations fully inside [lo, hi] (or all when unscoped). */
-export function execSliceSamples(segs, lo = null, hi = null) {
+export function execSliceSamples(segs, lo = null, hi = null, trace = null) {
   const samples = []
+  const open = trace?.openAtEndTasks
   for (const s of segs || []) {
     const d = s.end - s.start
     if (d <= 0) continue
     if (lo != null && hi != null && !segFullyInRange(s, lo, hi)) continue
+    if (open?.size && s.end === trace.timeMax && open.has(s.task)) continue
     samples.push(d)
   }
   return samples
@@ -146,7 +148,7 @@ function taskSamplesByName(trace, sampleFn, lo, hi) {
     const repr = taskReprGet(trace, mk) ?? mk
     const { name: tname } = parseTaskName(repr)
     if (isIdleTaskName(tname) || tname === 'TICK') continue
-    map.set(taskDisplayName(repr), sampleFn(segs, lo, hi))
+    map.set(taskDisplayName(repr), sampleFn(segs, lo, hi, trace))
   }
   return map
 }
@@ -193,7 +195,7 @@ function taskMetricCompareByName(trace, sampleFn, lo, hi, {
     const repr = taskReprGet(trace, mk) ?? mk
     const { name: tname } = parseTaskName(repr)
     if (!includeSystem && (isIdleTaskName(tname) || tname === 'TICK')) continue
-    const samples = sampleFn(segs, lo, hi)
+    const samples = sampleFn(segs, lo, hi, trace)
     const summary = summarizeTimeSamples(samples, scale)
     if (!summary) continue
     const name = taskDisplayName(repr)
@@ -1223,7 +1225,7 @@ export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
   }
 
   lines.push('')
-  lines.push('Blocking Time')
+  lines.push('Off-CPU Gap')
   lines.push('Task,Gaps A,Gaps B,Avg A,Avg B,Max A,Max B,Δ avg,Shape Δ')
   for (const row of t.blocking) {
     lines.push([
@@ -1619,7 +1621,7 @@ ${HTML_REPORT_TOC_CSS}
 export const COMPARE_TOC_GROUPS = [
   ['Overview', ['Summary', 'Overview', 'Trace Quality / Comparability', 'New / Missing Tasks', 'Largest Relative Changes']],
   ['CPU & Cores', ['Top Tasks', 'Core Utilization', 'Core Migrations', 'Core Distribution Change', 'Migration Concentration']],
-  ['Timing', ['Execution Time', 'Blocking Time', 'Inter-Arrival Time', 'Response P99', 'Timing Change Candidates']],
+  ['Timing', ['Execution Time', 'Off-CPU Gap', 'Inter-Arrival Time', 'Response P99', 'Timing Change Candidates']],
   ['Contention', ['Preemption Chains', 'Sync Objects', 'Mutex Blocking']],
   ['Cross-trace', ['Shared Patterns', 'Trends']],
 ]
@@ -1826,7 +1828,7 @@ export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
       '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ max</th><th>Shape Δ</th>',
       execHtml, execLead,
       'Per-slice run durations between consecutive context switches. Shape Δ is the two-sample KS statistic (0 = same distribution).'),
-    _cardHtml('Blocking Time',
+    _cardHtml('Off-CPU Gap',
       '<th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th><th>Shape Δ</th>',
       blockHtml, blockLead,
       'Off-CPU gaps between consecutive slices of the same task (preemption, wait, or scheduling delay). Shape Δ is the two-sample KS statistic (0 = same distribution).'),

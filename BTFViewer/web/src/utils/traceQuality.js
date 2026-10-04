@@ -64,7 +64,7 @@ const QUALITY_GROUPS = {
 
 const AFFECTED_BY_GROUP = {
   incomplete_capture: ['Timeline Anomalies', 'Worst Events', 'Response Time', 'AI conclusions'],
-  missing_event_type: ['Blocking Time', 'Mutex Blocking', 'Waiter × Owner', 'Dispatch latency'],
+  missing_event_type: ['Off-CPU Gap', 'Mutex Blocking', 'Waiter × Owner', 'Dispatch latency'],
   invalid_pairing: ['Period / Jitter', 'Recurring Patterns', 'Intervals'],
   timestamp_order: ['All time-ordered statistics', 'Critical Path'],
   unsupported_measurement: ['Response Time', 'Task Health', 'Priority Inheritance'],

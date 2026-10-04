@@ -30,11 +30,12 @@ describe('parser golden vectors', () => {
       .map(r => ({
         kind: r.kind,
         ptr: r.ptr,
+        label: r.label,
         holds: r.holdCount,
         issues: r.issueCount,
         status: r.status,
       }))
-      .sort((a, b) => a.kind.localeCompare(b.kind) || a.ptr.localeCompare(b.ptr))
+      .sort((a, b) => a.kind.localeCompare(b.kind) || a.ptr.localeCompare(b.ptr) || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
 
     assert.deepEqual(actual, expected.objects)
   })

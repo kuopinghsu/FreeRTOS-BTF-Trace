@@ -167,7 +167,7 @@ export const PRIORITY_SORT_ACCESSORS = {
 
 export const SYNC_OBJECT_SORT_ACCESSORS = {
   object: r => r.label.toLowerCase(),
-  kind: r => r.kind,
+  kind: r => (r.span ? `${r.kind} · ${r.span}` : r.kind),
   holds: r => r.holdCount,
   issues: r => r.issueCount,
   bounces: r => r.bounceCount,

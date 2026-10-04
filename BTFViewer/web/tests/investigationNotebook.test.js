@@ -335,7 +335,7 @@ describe('serialisation', () => {
 describe('case bridge', () => {
   it('case findings become supporting bookmarks with stable refs', () => {
     const findings = [
-      { id: 'blocking', rule_id: 'blocking', severity: 'warning', title: 'Off-CPU spikes', observation: 'CS off-CPU 3ms', entities: ['CS'], affected_range: { start: 10, end: 90 }, inspect: 'Off-CPU Time (Blocking Time)' },
+      { id: 'blocking', rule_id: 'blocking', severity: 'warning', title: 'Off-CPU spikes', observation: 'CS off-CPU 3ms', entities: ['CS'], affected_range: { start: 10, end: 90 }, inspect: 'Off-CPU Gap' },
       { id: 'thrashing', rule_id: 'thrashing', severity: 'warning', title: 'Excessive core migration', entities: ['Worker'] },
     ]
     const inv = investigationFromCase({ caseFindingIds: ['blocking'], findings, analysisRange: { start: 0, end: 100 }, title: 'Case A' })

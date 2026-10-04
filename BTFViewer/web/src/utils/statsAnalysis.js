@@ -46,14 +46,26 @@ export function blockingTimeSamples(segs, lo, hi) {
   return samples
 }
 
+/**
+ * True when `s` is a slice still running at trace end, cut at `timeMax`.
+ * Its length is only a lower bound, so slice-duration samples and the
+ * max/min/percentile finders skip it (CPU% still counts it).
+ */
+export function segOpenAtEnd(s, trace) {
+  const open = trace?.openAtEndTasks
+  if (!open || !open.size) return false
+  return s.end === trace.timeMax && open.has(s.task)
+}
+
 /** On-CPU slice durations for one task's segment list, IDLE/TICK not filtered here. */
-export function execSliceSamples(segs, lo, hi) {
+export function execSliceSamples(segs, lo, hi, trace = null) {
   if (!segs) return []
   const out = []
   for (const s of segs) {
     const d = s.end - s.start
     if (d <= 0) continue
     if (lo != null && hi != null && !segFullyInRange(s, lo, hi)) continue
+    if (segOpenAtEnd(s, trace)) continue
     out.push(d)
   }
   return out
@@ -101,7 +113,7 @@ export function allTimingSamples(trace, kind, lo, hi) {
     if (isIdleTaskName(name) || name === 'TICK') continue
     const s = kind === 'block'
       ? blockingTimeSamples([...segs], lo, hi)
-      : execSliceSamples([...segs], lo, hi)
+      : execSliceSamples([...segs], lo, hi, trace)
     for (const v of s) out.push(v)
   }
   return out
@@ -203,13 +215,14 @@ export function schedulingStats(trace, lo, hi) {
 }
 
 /** Longest-duration slice in segs (respecting cursor scope). */
-export function findWcetSegment(segs, lo, hi) {
+export function findWcetSegment(segs, lo, hi, trace = null) {
   let best = null
   let bestD = 0
   for (const s of segs || []) {
     const d = s.end - s.start
     if (d <= 0) continue
     if (lo != null && hi != null && !segFullyInRange(s, lo, hi)) continue
+    if (segOpenAtEnd(s, trace)) continue
     if (d > bestD) {
       bestD = d
       best = s
@@ -219,13 +232,14 @@ export function findWcetSegment(segs, lo, hi) {
 }
 
 /** Shortest-duration slice in segs (respecting cursor scope). */
-export function findBcetSegment(segs, lo, hi) {
+export function findBcetSegment(segs, lo, hi, trace = null) {
   let best = null
   let bestD = null
   for (const s of segs || []) {
     const d = s.end - s.start
     if (d <= 0) continue
     if (lo != null && hi != null && !segFullyInRange(s, lo, hi)) continue
+    if (segOpenAtEnd(s, trace)) continue
     if (bestD == null || d < bestD) {
       bestD = d
       best = s
@@ -283,12 +297,13 @@ export function percentileSampleIndex(n, p) {
 }
 
 /** Slice at percentile p of duration. */
-export function findPercentileExecSegment(segs, p, lo, hi) {
+export function findPercentileExecSegment(segs, p, lo, hi, trace = null) {
   const samples = []
   for (const s of segs || []) {
     const d = s.end - s.start
     if (d <= 0) continue
     if (lo != null && hi != null && !segFullyInRange(s, lo, hi)) continue
+    if (segOpenAtEnd(s, trace)) continue
     samples.push([d, s])
   }
   if (!samples.length) return null
@@ -354,13 +369,13 @@ export function extremeSegmentNote(trace, mk, kind, seg, findMax) {
   const tag = findMax ? 'max' : 'min'
   if (kind === 'exec') {
     const d = seg.end - seg.start
-    return `${name} ${findMax ? 'WCET' : 'BCET'}: ${fmt(d)} at ${fmt(seg.start)}`
+    return `${name} ${tag} observed slice: ${fmt(d)} at ${fmt(seg.start)}`
   }
   const segs = trace.segByMergeKey?.get(mk) || []
   const gap = _gapBeforeSegment(segs, seg, kind)
   const gapStr = gap != null ? fmt(gap) : '?'
   if (kind === 'block') {
-    return `${name} ${tag} blocking: ${gapStr} before ${fmt(seg.start)}`
+    return `${name} ${tag} off-CPU gap: ${gapStr} before ${fmt(seg.start)}`
   }
   if (kind === 'inter') {
     return `${name} ${tag} inter-arrival: ${gapStr} at ${fmt(seg.start)}`

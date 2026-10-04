@@ -110,6 +110,7 @@ export async function registerTraceWithStatsWorker(trace) {
       segIndicesByMk,
       timeMin: trace.timeMin,
       timeMax: trace.timeMax,
+      openAtEndTasks: [...(trace.openAtEndTasks || [])],
     })
     await regPromise
     return true

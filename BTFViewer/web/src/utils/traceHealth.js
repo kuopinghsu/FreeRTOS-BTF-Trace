@@ -216,10 +216,13 @@ function checkTaskIdentity(trace) {
 
 function checkUnmatchedIntervals(trace) {
   const n = Number(trace?.intervalUnmatchedStarts || 0)
-  if (!(n > 0)) return null
+  const nStop = Number(trace?.intervalUnmatchedStops || 0)
+  if (!(n > 0) && !(nStop > 0)) return null
+  const bits = []
+  if (n > 0) bits.push(`${nfmt(n)} interval_start event(s) never received a matching interval_stop`)
+  if (nStop > 0) bits.push(`${nfmt(nStop)} interval_stop event(s) had no open interval_start`)
   return mkCheck(CHECK_UNMATCHED_INTERVALS, 'warning',
-    `${nfmt(n)} interval_start event(s) never received a matching interval_stop. `
-    + 'Those spans are dropped from interval statistics.',
+    `${bits.join('; ')}. Those spans are dropped from interval statistics.`,
     { metricLimitations: ['Interval Analysis', 'Period / Jitter'] })
 }
 
@@ -319,6 +322,76 @@ function checkPrerequisites(trace, segs, lo, hi) {
     { metricLimitations: limits })
 }
 
+const LIFECYCLE_NAMED_RE = /^(suspend|resume)\s+(?!\/)\S/i
+const AFFINITY_SET_RE = /^affinity_set\s/i
+
+export const AVAILABILITY_AVAILABLE = 'available'
+export const AVAILABILITY_LIMITED = 'limited'
+export const AVAILABILITY_UNAVAILABLE = 'unavailable'
+
+/** Per-metric `{ metric, state, reason }` — parity with desktop `_metric_availability`. */
+function metricAvailability(trace, segs, lo, hi, checks) {
+  const ids = new Set(checks.map(c => c.id))
+  const channels = new Set((trace?.stiChannels || []).map(c => String(c).toLowerCase()))
+  const cores = new Set(segs.map(s => s.core))
+  if (!cores.size) for (const c of trace?.coreNames || []) cores.add(c)
+  let hasResume = false
+  let hasSuspend = false
+  let hasAffinity = false
+  for (const ev of trace?.stiEvents || []) {
+    if (ev.target !== 'task') continue
+    const note = String(ev.note ?? '').trim()
+    const m = LIFECYCLE_NAMED_RE.exec(note)
+    if (m) {
+      if (m[1].toLowerCase() === 'resume') hasResume = true
+      else hasSuspend = true
+    } else if (AFFINITY_SET_RE.test(note)) {
+      hasAffinity = true
+    }
+  }
+  const out = []
+  const add = (metric, state, reason = '') => out.push({ metric, state, reason })
+  const createTimes = trace?.taskCreateTimes
+  const hasCreate = createTimes instanceof Map ? createTimes.size > 0 : !!(createTimes && Object.keys(createTimes).length)
+  const openAtEnd = trace?.openAtEndTasks
+  const hasOpenAtEnd = openAtEnd instanceof Set ? openAtEnd.size > 0 : !!(openAtEnd && openAtEnd.length)
+
+  if (!segs.length) add('Execution Time / Off-CPU Gap', AVAILABILITY_UNAVAILABLE, 'no task slices in scope')
+  else if (hasOpenAtEnd || ids.has(CHECK_CAPTURE_TRUNCATION)) {
+    add('Execution Time / Off-CPU Gap', AVAILABILITY_LIMITED, 'slices still open at trace end are left out of slice samples')
+  } else add('Execution Time / Off-CPU Gap', AVAILABILITY_AVAILABLE)
+  if (!(hasCreate || hasResume)) add('Dispatch / Scheduling Latency', AVAILABILITY_UNAVAILABLE, 'no task create or named resume events')
+  else if (!hasResume) add('Dispatch / Scheduling Latency', AVAILABILITY_LIMITED, 'create→first run only; no named resume events')
+  else add('Dispatch / Scheduling Latency', AVAILABILITY_AVAILABLE)
+  if (cores.size < 2) add('Core Migrations', AVAILABILITY_UNAVAILABLE, 'single core in scope')
+  else add('Core Migrations', AVAILABILITY_AVAILABLE)
+  if (!hasAffinity) add('Core Affinity', AVAILABILITY_UNAVAILABLE, 'no affinity_set events')
+  else add('Core Affinity', AVAILABILITY_AVAILABLE)
+  if (!trace?.hasPriorityInstrumentation) add('Priority Inheritance', AVAILABILITY_UNAVAILABLE, 'no create pri:/set_priority events')
+  else add('Priority Inheritance', AVAILABILITY_AVAILABLE)
+  if (!trace?.hasSyncObjectInstrumentation && !['mutex', 'sem', 'queue'].some(c => channels.has(c))) {
+    add('Mutex / Semaphore / Queue', AVAILABILITY_UNAVAILABLE, 'no mutex/semaphore/queue events')
+  } else if (ids.has(CHECK_SYNC_PAIRING)) {
+    add('Mutex / Semaphore / Queue', AVAILABILITY_LIMITED, 'pairing issues leave some spans unpaired')
+  } else add('Mutex / Semaphore / Queue', AVAILABILITY_AVAILABLE)
+  const hasIntervals = (trace?.intervalIds && trace.intervalIds.length) || channels.has('interval_start')
+  if (!hasIntervals) add('Interval Analysis', AVAILABILITY_UNAVAILABLE, 'no interval_start/stop events')
+  else if (ids.has(CHECK_UNMATCHED_INTERVALS)) add('Interval Analysis', AVAILABILITY_LIMITED, 'unmatched interval start/stop events')
+  else add('Interval Analysis', AVAILABILITY_AVAILABLE)
+  if (!hasSuspend) add('Suspended time', AVAILABILITY_UNAVAILABLE, 'no named suspend events')
+  else add('Suspended time', AVAILABILITY_AVAILABLE)
+  if (!scopedTimes(trace?.tickStiTimes, lo, hi).length) add('Trace Health (TICK)', AVAILABILITY_UNAVAILABLE, 'no TICK events')
+  else add('Trace Health (TICK)', AVAILABILITY_AVAILABLE)
+  return out
+}
+
+/** `Metric: state — reason` for every metric that is not fully available. */
+export function metricAvailabilityLines(result) {
+  return (result?.metricAvailability || result?.metric_availability || [])
+    .filter(a => a.state !== AVAILABILITY_AVAILABLE)
+    .map(a => `${a.metric}: ${a.state}${a.reason ? ` — ${a.reason}` : ''}`)
+}
+
 /**
  * Build a TraceHealthResult for `trace` over [lo, hi].
  * @param {object} trace   parsed trace
@@ -334,6 +407,7 @@ export function buildTraceHealthResult(trace, lo = null, hi = null, formatNs = n
         { metricLimitations: ['All statistics'] })],
       issueCount: 1,
       metricLimitations: ['All statistics'],
+      metricAvailability: [],
       scoped: false,
     }
   }
@@ -383,6 +457,7 @@ export function buildTraceHealthResult(trace, lo = null, hi = null, formatNs = n
     checks,
     issueCount: checks.filter(c => c.severity === 'warning' || c.severity === 'error').length,
     metricLimitations: limitations,
+    metricAvailability: metricAvailability(trace, segs, lo, hi, checks),
     scoped: lo != null || hi != null,
   }
 }

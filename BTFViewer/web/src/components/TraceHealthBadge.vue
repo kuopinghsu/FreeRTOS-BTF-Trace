@@ -90,6 +90,20 @@
         >
           No structural issues detected in the analysed range.
         </p>
+        <div
+          v-if="availabilityLines.length"
+          class="th-pop-note"
+          data-testid="trace-health-availability"
+        >
+          Not fully available:
+          <div
+            v-for="line in availabilityLines"
+            :key="line"
+            class="th-check-meta"
+          >
+            {{ line }}
+          </div>
+        </div>
       </div>
     </div>
   </span>
@@ -97,7 +111,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { traceHealthStatusLabel, traceHealthSummary } from '../utils/traceHealth.js'
+import { traceHealthStatusLabel, traceHealthSummary, metricAvailabilityLines } from '../utils/traceHealth.js'
 
 const props = defineProps({
   result: { type: Object, default: null },
@@ -107,6 +121,7 @@ const props = defineProps({
 const open = ref(false)
 
 const label = computed(() => traceHealthStatusLabel(props.result?.status))
+const availabilityLines = computed(() => metricAvailabilityLines(props.result))
 const summary = computed(() => traceHealthSummary(props.result))
 
 function rangeText(range) {

@@ -40,10 +40,10 @@ class TestParserGolden(unittest.TestCase):
         rows = _sync_object_stats_rows(trace, None, None)
         actual = sorted(
             [
-                {"kind": r[1], "ptr": r[2], "holds": r[4], "issues": r[5], "status": r[8]}
+                {"kind": r[1], "ptr": r[2], "label": r[3], "holds": r[4], "issues": r[5], "status": r[8]}
                 for r in rows
             ],
-            key=lambda x: (x["kind"], x["ptr"]),
+            key=lambda x: (x["kind"], x["ptr"], x["label"]),
         )
         self.assertEqual(actual, expected["objects"])
 

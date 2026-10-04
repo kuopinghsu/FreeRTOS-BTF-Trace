@@ -10,6 +10,7 @@ let _taskRepr = null
 let _segIndicesByMk = null
 let _timeMin = 0
 let _timeMax = 0
+let _openAtEndTasks = null
 
 self.onmessage = (e) => {
   const data = e.data
@@ -22,6 +23,7 @@ self.onmessage = (e) => {
     )
     _timeMin = data.timeMin
     _timeMax = data.timeMax
+    _openAtEndTasks = new Set(data.openAtEndTasks || [])
     self.postMessage({ type: 'registered' })
     return
   }
@@ -41,6 +43,8 @@ self.onmessage = (e) => {
       lo,
       hi,
       totalNs,
+      openAtEndTasks: _openAtEndTasks,
+      timeMax: _timeMax,
     })
     self.postMessage({
       type: 'result',

@@ -167,7 +167,7 @@ describe('statsPins', () => {
       ['Starvation', 'ready_gap'],
       ['btfstats:section/ready_gap', 'ready_gap'],
       ['stats-section:activation', 'activation'],
-      ['Activation Latency', 'activation'],
+      ['Fitted Periodic Deviation', 'activation'],
       ['Mutex Blocking', 'mutex_block'],
       ['no such section', ''],
       ['TIMING', ''],

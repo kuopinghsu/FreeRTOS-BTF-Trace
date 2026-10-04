@@ -13,7 +13,7 @@ describe('mutex/queue export parity with desktop', () => {
   })
 
   it('HTML mutex and queue summaries include Bounces + Bounce % + A7 columns', () => {
-    assert.match(stats, /<th>Bounces<\/th><th>Bounce %<\/th><th>Avg hold<\/th><th>p95 hold<\/th><th>p99 hold<\/th><th>Waiters<\/th><th>MaxNest<\/th><th>Status<\/th>/)
+    assert.match(stats, /<th>Bounces<\/th><th>Bounce %<\/th><th>Avg hold<\/th><th>p95 hold<\/th><th>p99 hold<\/th><th>Overlap<\/th><th>MaxNest<\/th><th>Status<\/th>/)
     assert.match(stats, /<th>Issues<\/th><th>Bounces<\/th><th>Bounce %<\/th><th>Avg hold<\/th>/)
     assert.match(stats, /row\.bounceCount/)
     assert.match(stats, /syncBouncePctCell/)

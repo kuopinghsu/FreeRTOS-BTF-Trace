@@ -10,6 +10,8 @@
  * and `formatEvidencePackagePreview` renders exactly what goes out.
  */
 
+import { metricDefinitionsFor } from './latencyMetrics.js'
+
 export const EVIDENCE_PACKAGE_SCHEMA = 'btf-viewer-evidence/1'
 
 export const RESPONSE_CONTRACT = [
@@ -101,6 +103,9 @@ export function buildEvidencePackage({
       status: String(health.status || ''),
       issue_count: Number(health.issue_count ?? health.issueCount ?? 0) || 0,
       limitations: [...(health.metric_limitations || health.metricLimitations || [])],
+      availability: (health.metric_availability || health.metricAvailability || [])
+        .filter(a => a && typeof a === 'object' && a.state !== 'available')
+        .map(a => ({ metric: String(a.metric || ''), state: String(a.state || ''), reason: String(a.reason || '') })),
     }
   }
 
@@ -119,6 +124,7 @@ export function buildEvidencePackage({
     entities: (entities || []).map(red),
     cores: (cores || []).map(String),
     statistics: stats,
+    definitions: metricDefinitionsFor(stats.map(s => s.name)),
     event_context: evc,
     findings: fnd,
     bookmarks: bms,
@@ -164,6 +170,9 @@ export function formatEvidencePackagePreview(pkg) {
     const lim = pkg.trace_health.limitations?.length
       ? `; limited: ${pkg.trace_health.limitations.join(', ')}` : ''
     lines.push(`Trace health: ${pkg.trace_health.status} (${pkg.trace_health.issue_count} issue(s))${lim}`)
+    for (const a of pkg.trace_health.availability || []) {
+      lines.push(`  ${a.metric}: ${a.state}${a.reason ? ` — ${a.reason}` : ''}`)
+    }
   }
   if (pkg.entities?.length) lines.push(`Entities: ${pkg.entities.slice(0, 20).join(', ')}`)
   if (pkg.statistics?.length) {
@@ -173,6 +182,10 @@ export function formatEvidencePackagePreview(pkg) {
       const ent = s.entity ? ` [${s.entity}]` : ''
       lines.push(`  - ${s.name}${ent} = ${s.value} ${s.unit}${sc}`.trimEnd())
     }
+  }
+  if (pkg.definitions?.length) {
+    lines.push(`Definitions (${pkg.definitions.length}):`)
+    for (const d of pkg.definitions) lines.push(`  - ${d.term}: ${d.definition}`)
   }
   if (pkg.findings?.length) {
     lines.push(`Findings (${pkg.findings.length}):`)

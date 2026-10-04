@@ -499,13 +499,13 @@ export function migrationRatePlotPoints(trace, mk, lo, hi) {
   return points
 }
 
-/** Plot points: one per migration event with a positive post-migration blocking gap. */
+/** Plot points: one per migration event, y = gap until the next run (zero gaps kept). */
 export function migrationGapPlotPoints(trace, mk, lo, hi) {
   const migs = trace.migrationsByMk?.get(mk) || []
   const points = []
   for (const m of migs) {
     if (lo != null && hi != null && (m.ns < lo || m.ns > hi)) continue
-    if (m.gapNs > 0) points.push({ xNs: m.ns, yValue: m.gapNs, payload: m })
+    if (m.gapNs >= 0) points.push({ xNs: m.ns, yValue: m.gapNs, payload: m })
   }
   return points
 }

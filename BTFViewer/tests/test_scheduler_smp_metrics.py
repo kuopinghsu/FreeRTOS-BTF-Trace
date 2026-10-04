@@ -83,6 +83,20 @@ class SchedulerSmpMetricsTest(unittest.TestCase):
         self.assertIn("\x001\x00A", by_mk)
         self.assertEqual(by_mk["\x001\x00A"]["samples"][0], 0)
 
+    def test_unnamed_isr_resume_is_not_a_task(self) -> None:
+        from btf_viewer_pkg.parser import StiEvent, _task_lifecycle_rows
+        tr = _FakeTrace()
+        tr.sti_events = [
+            StiEvent(60, "Core_0", "task", "trigger", "resume/isr"),
+            StiEvent(70, "Core_0", "task", "trigger", "resume"),
+            StiEvent(80, "Core_0", "task", "trigger", "resume B[2]"),
+        ]
+        by_mk = _dispatch_latency_by_mk(tr)
+        self.assertFalse(any(k.endswith("isr") or k == "resume" for k in by_mk))
+        labels = [r[1] for r in _task_lifecycle_rows(tr)]
+        self.assertNotIn("resume", labels)
+        self.assertNotIn("/isr", labels)
+
     def test_dispatch_plot_points(self) -> None:
         pts = _dispatch_latency_plot_points(_FakeTrace(), "\x001\x00A")
         self.assertEqual(len(pts), 1)

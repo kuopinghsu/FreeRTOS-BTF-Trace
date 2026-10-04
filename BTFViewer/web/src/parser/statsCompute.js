@@ -58,9 +58,15 @@ function interArrivalSamples(store, indices, lo, hi) {
   return samples
 }
 
-function execSamples(store, indices, lo, hi) {
+/**
+ * Slice durations plus their sum. Slices still open at trace end (cut at
+ * timeMax) count toward `totalNs` for CPU% but not toward `samples`.
+ */
+function execSamples(store, indices, lo, hi, openAtEndTasks = null, timeMax = null) {
   const samples = []
-  const { starts, ends } = store
+  let totalNs = 0
+  const { starts, ends, taskIds, taskStrings } = store
+  const checkOpen = !!openAtEndTasks?.size
   for (let i = 0; i < indices.length; i++) {
     const si = indices[i]
     const d = ends[si] - starts[si]
@@ -69,9 +75,11 @@ function execSamples(store, indices, lo, hi) {
       const s = store.getSeg(si)
       if (!segFullyInRange(s, lo, hi)) continue
     }
+    totalNs += d
+    if (checkOpen && ends[si] === timeMax && openAtEndTasks.has(taskStrings[taskIds[si]])) continue
     samples.push(d)
   }
-  return samples
+  return { samples, totalNs }
 }
 
 function countRuns(store, indices, lo, hi) {
@@ -97,6 +105,8 @@ export function computeStatsTables(store, {
   lo,
   hi,
   totalNs,
+  openAtEndTasks = null,
+  timeMax = null,
 }) {
   const exec = []
   const block = []
@@ -125,14 +135,15 @@ export function computeStatsTables(store, {
 
     const disp = taskDisplayName(repr)
 
-    const execS = execSamples(store, indices, lo, hi)
+    const { samples: execS, totalNs: execNs } = execSamples(
+      store, indices, lo, hi, openAtEndTasks, timeMax)
     const execSum = summarizeNumeric(execS)
     if (execSum) {
       exec.push({
         mk,
         name: disp,
         runs: execS.length,
-        cpuPct: totalNs > 0 ? (100 * execS.reduce((a, b) => a + b, 0) / totalNs) : 0,
+        cpuPct: totalNs > 0 ? (100 * execNs / totalNs) : 0,
         ...execSum,
       })
     }

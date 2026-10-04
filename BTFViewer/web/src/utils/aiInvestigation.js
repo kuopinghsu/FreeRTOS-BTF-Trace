@@ -381,7 +381,7 @@ function hypothesesForFinding(title, text) {
     add('Priority inversion on shared mutex', 'L/M/H geometry in findings')
   }
   if (/wcet|cpu|execution|spike/.test(blob)) {
-    add('Long execution slices / WCET spike', 'Max vs typical execution diverge')
+    add('Long execution slices / max-slice spike', 'Max vs typical execution diverge')
     add('Interrupt or critical-section stretch', 'Unexplained Max growth')
   }
   if (/load|imbalance|balance/.test(blob)) {
@@ -408,7 +408,7 @@ function suggestedToolsForFinding(title, text, depth) {
   }
   if (task) {
     if (/block|inversion|latency/.test(blob)) {
-      add('query_raw_metric', { task, metric: 'blocking' }, 'Inspect blocking gaps')
+      add('query_raw_metric', { task, metric: 'blocking' }, 'Inspect off-CPU gaps')
       add('query_raw_metric', { task, metric: 'priority_inheritance' }, 'Check inherit episodes')
     }
     if (/wcet|cpu|execution|spike/.test(blob)) {
@@ -2598,7 +2598,7 @@ export function appendWcetAnomalyFinding(findings, spikeRows, { ratioThreshold =
     findings.push({
       id: 'wcet_anomaly',
       severity: 'warning',
-      title: 'Anomaly: WCET spike vs typical execution',
+      title: 'Anomaly: max observed slice far above typical execution',
       text: `Execution Max is much larger than Avg — multimodal or bursty slices: ${spikes.slice(0, 5).join('; ')}. Open Execution Time and jump to Max.`,
       evidence: [],
     })
@@ -3122,7 +3122,7 @@ export function buildRootCauseChain(finding) {
   add(`Finding: ${title || finding.id || 'unknown'}`, text.slice(0, 240), 'finding')
   if (task) add(`Focus task ${task}`, 'Extracted from finding text', 'task')
   if (/block|latency|dispatch/.test(blob)) {
-    add('Off-CPU / blocking gap', 'Inspect Blocking Time + STI wait')
+    add('Off-CPU gap', 'Inspect Off-CPU Gap + STI wait')
     add('Synchronization hold', 'Check mutex/semaphore owner')
   }
   if (/inversion|l\/m\/h|inherit/.test(blob)) {
@@ -3134,7 +3134,7 @@ export function buildRootCauseChain(finding) {
     add('Likely affinity / lock bounce', '', 'cause')
   }
   if (/wcet|spike|execution|cpu/.test(blob)) {
-    add('Execution / WCET spike', 'Jump to Max slice')
+    add('Execution / max-slice spike', 'Jump to Max slice')
     add('Likely long critical section or preemption stretch', '', 'cause')
   }
   if (/deadline|budget/.test(blob)) {

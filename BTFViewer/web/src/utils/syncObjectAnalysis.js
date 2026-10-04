@@ -22,6 +22,24 @@ export function parseSyncObjectNote(note) {
   return { action, ptr }
 }
 
+/** What a paired sync span measures — parity with `_SYNC_SPAN_LABELS`. */
+export const SYNC_SPAN_LABELS = {
+  mutex_hold: 'hold',
+  sem_take_give: 'take→give',
+  sem_give_take: 'give→take',
+  queue_send_recv: 'send→recv',
+}
+
+export function syncSpanKind(objKind, takeFirst) {
+  if (objKind === 'queue') return 'queue_send_recv'
+  if (objKind === 'sem') return takeFirst ? 'sem_take_give' : 'sem_give_take'
+  return 'mutex_hold'
+}
+
+export const QUEUE_PAIRING_NOTE = 'Send→recv spans pair each recv with the oldest open send (FIFO). The trace '
+  + 'does not record overwrite, send-to-front or reset, so queues using those '
+  + 'can pair the wrong send.'
+
 export function syncObjectKey(kind, ptr) {
   return `${kind}:${ptr}`
 }
@@ -37,10 +55,13 @@ function emptyObject(kind, ptr) {
     issues: [],
     openTakes: [],
     openGives: [],
-    // Review item A7: distinct tasks that acquired while already held, and the
+    // Distinct tasks that took while an earlier take was still open, and the
     // deepest simultaneously-open take count.
     waiters: new Set(),
     maxNest: 0,
+    generation: 1,
+    // Gives within POST_CREATE_GIVE_MAX_NS of create (kernel init), not paired.
+    postCreateGives: 0,
   }
 }
 
@@ -48,7 +69,7 @@ function isPostCreateKernelGive(obj, timeNs) {
   return obj.createNs != null && timeNs - obj.createNs <= POST_CREATE_GIVE_MAX_NS
 }
 
-function recordHold(obj, take, give, takeFirst) {
+function recordHold(obj, take, give, takeFirst, crossTask = false) {
   const start = takeFirst ? take : give
   const stop = takeFirst ? give : take
   obj.holds.push({
@@ -62,6 +83,9 @@ function recordHold(obj, take, give, takeFirst) {
     giveTaskMk: give.taskMk,
     giveTaskLabel: give.taskLabel,
     signal: !takeFirst,
+    spanKind: syncSpanKind(obj.kind, takeFirst),
+    // Mutex released by a task other than the taker: not a hold-time sample.
+    crossTask,
   })
 }
 
@@ -135,6 +159,15 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax, core
     if (action === 'create') {
       const obj = emptyObject(ev.target, parsed.ptr)
       obj.createNs = ev.time
+      const prev = objects.get(key)
+      if (prev && (prev.holds.length || prev.issues.length
+          || prev.createNs != null || prev.deleteNs != null)) {
+        // Same handle re-created: keep the earlier lifetime as its own row.
+        const gen = prev.generation
+        prev.key = `${key}#${gen}`
+        objects.set(prev.key, prev)
+        obj.generation = gen + 1
+      }
       objects.set(key, obj)
     } else {
       if (!objects.has(key)) objects.set(key, emptyObject(ev.target, parsed.ptr))
@@ -148,7 +181,8 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax, core
           const send = obj.openGives.shift()
           recordHold(obj, { ...send, timeNs: send.timeNs }, rec, true)
         } else {
-          // Contended acquire: already held by a different task → the taker waited.
+          // Take by another task while one is still open: recursion or a missing
+          // give. STI takes mark acquisition, not waiting.
           if (obj.openTakes.length && taskMk
               && taskMk !== obj.openTakes[obj.openTakes.length - 1].taskMk) {
             obj.waiters.add(taskMk)
@@ -158,6 +192,7 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax, core
         }
       } else if (action === 'give' || action === 'send') {
         if (action === 'give' && isPostCreateKernelGive(obj, ev.time)) {
+          obj.postCreateGives++
           continue
         }
         const giveRec = { timeNs: ev.time, taskMk, taskLabel, core: ev.core || '' }
@@ -174,7 +209,8 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax, core
             })
           } else {
             const take = obj.openTakes.pop()
-            if (take.taskMk && taskMk && take.taskMk !== taskMk) {
+            const crossTask = !!(take.taskMk && taskMk && take.taskMk !== taskMk)
+            if (crossTask) {
               pushIssue(obj, {
                 kind: 'cross_task_give',
                 severity: 'warning',
@@ -185,7 +221,7 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax, core
                 detail: `give by ${taskLabel}, held by ${take.taskLabel}`,
               })
             }
-            recordHold(obj, take, giveRec, true)
+            recordHold(obj, take, giveRec, true, crossTask)
             if (take.core && giveRec.core && take.core !== giveRec.core) {
               pushIssue(obj, {
                 kind: 'CORE_MIGRATION_WHILE_HELD',
@@ -316,6 +352,63 @@ function nearestRankHold(sorted, p) {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))]
 }
 
+/**
+ * Split window-touching holds into hold-time samples and exclusions — parity
+ * with `_sync_stat_holds`. Cross-task mutex gives are not hold samples, and
+ * with a cursor window both endpoints must lie inside it.
+ */
+export function syncStatHolds(holds, lo, hi) {
+  const samples = []
+  let crossTask = 0
+  let boundary = 0
+  const scoped = lo != null && hi != null
+  for (const h of holds || []) {
+    if (h.crossTask) crossTask++
+    else if (scoped && (h.startNs < lo || h.stopNs > hi)) boundary++
+    else samples.push(h)
+  }
+  return { samples, crossTask, boundary }
+}
+
+function syncObjectLabel(obj) {
+  let label = `${obj.kind} ${obj.ptr}`
+  const gen = Math.trunc(obj.generation || 1)
+  if (gen > 1 || String(obj.key || '').includes('#')) label += ` (gen ${gen})`
+  return label
+}
+
+/** Span kinds behind an object's hold-time samples — parity with `_sync_span_summary`. */
+export function syncSpanSummary(holds, objKind) {
+  const kinds = new Set((holds || []).map(h => h.spanKind || syncSpanKind(objKind, !h.signal)))
+  if (!kinds.size) return ''
+  const order = Object.keys(SYNC_SPAN_LABELS)
+  return [...kinds].sort((a, b) => order.indexOf(a) - order.indexOf(b))
+    .map(k => SYNC_SPAN_LABELS[k]).join(', ')
+}
+
+/** Kind column text: object kind plus what its spans measure. */
+export function syncKindDisplay(row) {
+  return row?.span ? `${row.kind} · ${row.span}` : String(row?.kind ?? '')
+}
+
+/** Caption for spans left out of the Holds / hold-time columns, or ''. */
+export function syncExclusionNote(rows) {
+  let cross = 0
+  let boundary = 0
+  let postCreate = 0
+  for (const r of rows || []) {
+    cross += r.crossTaskExcluded || 0
+    boundary += r.boundaryExcluded || 0
+    postCreate += r.postCreateGives || 0
+  }
+  const bits = []
+  if (cross) bits.push(`${cross.toLocaleString('en-US')} cross-task mutex give(s)`)
+  if (boundary) bits.push(`${boundary.toLocaleString('en-US')} span(s) crossing the cursor window`)
+  if (postCreate) bits.push(`${postCreate.toLocaleString('en-US')} kernel give(s) right after create`)
+  if (!bits.length) return ''
+  return `Not counted as hold-time samples: ${bits.join('; ')}.`
+}
+
 /** Stats rows: one per mutex/sem/queue object in scope. */
 export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
   if (!trace?.hasSyncObjectInstrumentation) return []
@@ -323,11 +416,13 @@ export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
   const rows = []
   for (const obj of trace.syncObjects?.values() || []) {
     if (kindFilter && obj.kind !== kindFilter) continue
-    const holds = (obj.holds || []).filter(h =>
+    const touching = (obj.holds || []).filter(h =>
       (lo == null || hi == null) ? true : (h.stopNs > lo && h.startNs < hi),
     )
+    const { samples: holds, crossTask: crossTaskExcluded, boundary: boundaryExcluded } =
+      syncStatHolds(touching, lo, hi)
     const issues = (obj.issues || []).filter(i => inScope(i.timeNs, lo, hi))
-    if (lo != null && hi != null && !holds.length && !issues.length
+    if (lo != null && hi != null && !touching.length && !issues.length
         && !(obj.createNs != null && inScope(obj.createNs, lo, hi))) {
       continue
     }
@@ -346,7 +441,7 @@ export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
       key: obj.key,
       kind: obj.kind,
       ptr: obj.ptr,
-      label: `${obj.kind} ${obj.ptr}`,
+      label: syncObjectLabel(obj),
       holdCount: holds.length,
       issueCount: issues.length,
       bounceCount,
@@ -374,6 +469,10 @@ export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
       })(),
       waiters: (obj.waiters && obj.waiters.size) || 0,
       maxNest: Math.trunc(obj.maxNest || 0),
+      crossTaskExcluded,
+      boundaryExcluded,
+      span: syncSpanSummary(holds, obj.kind),
+      postCreateGives: obj.postCreateGives || 0,
     })
   }
   rows.sort((a, b) => {
@@ -399,7 +498,8 @@ export function syncObjectHoldDetailRows(trace, lo, hi, limit = 150) {
     for (const h of obj.holds || []) {
       if (lo != null && hi != null && !(h.stopNs > lo && h.startNs < hi)) continue
       rows.push({
-        object: `${obj.kind} ${obj.ptr}`,
+        object: syncObjectLabel(obj),
+        span: SYNC_SPAN_LABELS[h.spanKind || syncSpanKind(obj.kind, !h.signal)] || 'hold',
         holder: h.holderLabel || '—',
         startNs: h.startNs,
         stopNs: h.stopNs,
@@ -409,6 +509,7 @@ export function syncObjectHoldDetailRows(trace, lo, hi, limit = 150) {
         durationNs: h.durationNs,
         takeCore: h.takeCore || '',
         giveCore: h.giveCore || '',
+        crossTask: !!h.crossTask,
       })
     }
   }
@@ -425,8 +526,8 @@ export function syncHoldPlotPoints(trace, objKey, lo = null, hi = null) {
   for (const h of obj.holds || []) {
     const start = Math.trunc(h.startNs || 0)
     const stop = Math.trunc(h.stopNs || 0)
-    if (stop <= start) continue
-    if (lo != null && hi != null && !(stop > lo && start < hi)) continue
+    if (stop < start) continue
+    if (lo != null && hi != null && !(stop >= lo && start <= hi)) continue
     pts.push({ xNs: start, yValue: stop - start, payload: h })
   }
   return pts

@@ -3,6 +3,7 @@
  */
 import { formatTime } from './timeFormat.js'
 import { taskMergeKey, taskLabelForMergeKey, tryParseBtfInt } from './colors.js'
+import { priorityEpisodeCpuFields } from './latencyMetrics.js'
 
 export const BOOST_BAND_COLOR = '#F39C12'
 export const INVERSION_BAND_COLOR = '#E74C3C'
@@ -123,7 +124,7 @@ export function buildPriorityData(stiEvents, createPriByRaw, timeMax, rawToMk = 
     let effective = basePri
     let open = null
 
-    const closeEpisode = (stopNs) => {
+    const closeEpisode = (stopNs, truncated = false) => {
       if (!open || stopNs <= open.startNs) {
         open = null
         return
@@ -138,9 +139,12 @@ export function buildPriorityData(stiEvents, createPriByRaw, timeMax, rawToMk = 
         stopNs,
         durationNs: stopNs - open.startNs,
         inherited: open.inherited,
-        inversionSuspect: open.inherited || mediumTasks.length > 0,
+        // Inheritance alone is the fix, not an inversion: needs a medium-priority task.
+        inversionSuspect: mediumTasks.length > 0,
         mediumTasks,
         pattern: '',
+        // Still open at trace end: stopNs is timeMax, not an observed return to base.
+        truncated,
       }
       episode.pattern = patternLabel(episode)
       priorityEpisodes.push(episode)
@@ -163,7 +167,7 @@ export function buildPriorityData(stiEvents, createPriByRaw, timeMax, rawToMk = 
         if (effective <= basePri || isDisinherit) closeEpisode(ch.timeNs)
       }
     }
-    if (open) closeEpisode(timeMax)
+    if (open) closeEpisode(timeMax, true)
   }
 
   priorityEpisodes.sort((a, b) => a.startNs - b.startNs || a.stopNs - b.stopNs)
@@ -351,6 +355,7 @@ export function priorityEpisodeDetailRows(trace, lo, hi, limit = 200) {
   const rows = []
   for (const ep of trace.priorityEpisodes || []) {
     if (lo != null && hi != null && !(ep.stopNs > lo && ep.startNs < hi)) continue
+    const dur = formatTime(ep.durationNs, scale)
     rows.push({
       task: ep.taskLabel,
       basePri: ep.basePri,
@@ -358,11 +363,13 @@ export function priorityEpisodeDetailRows(trace, lo, hi, limit = 200) {
       startNs: ep.startNs,
       stopNs: ep.stopNs,
       start: formatTime(ep.startNs, scale),
-      stop: formatTime(ep.stopNs, scale),
-      duration: formatTime(ep.durationNs, scale),
+      stop: ep.truncated ? 'open at trace end' : formatTime(ep.stopNs, scale),
+      duration: ep.truncated ? `≥ ${dur}` : dur,
       durationNs: ep.durationNs,
       pattern: ep.pattern || '—',
       inherited: !!ep.inherited,
+      truncated: !!ep.truncated,
+      ...priorityEpisodeCpuFields(trace, ep),
     })
   }
   rows.sort((a, b) => a.startNs - b.startNs || a.stopNs - b.stopNs)
@@ -380,7 +387,8 @@ export function priorityEpisodePlotPoints(trace, mk, lo, hi) {
   const episodes = trace?.priorityEpisodesByMk?.get(mk) || []
   const scale = trace?.timeScale
   return episodes
-    .filter(ep => (lo == null || hi == null) ? true : (ep.stopNs > lo && ep.startNs < hi))
+    .filter(ep => !ep.truncated
+      && ((lo == null || hi == null) ? true : (ep.stopNs > lo && ep.startNs < hi)))
     .map((ep, index) => ({
       index,
       xNs: ep.stopNs,

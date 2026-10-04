@@ -4,6 +4,7 @@ import { describe, it } from 'node:test'
 import {
   TICKLESS_CV_THRESHOLD,
   analyzeTickHealth,
+  tickExpectedPeriod,
   tickHealthReport,
 } from '../src/utils/tickHealth.js'
 import {
@@ -121,6 +122,24 @@ describe('analyzeTickHealth — tick vs tickless', () => {
     assert.equal(busy.isTickless, false)
     assert.equal(busy.tickCount, 5)
     assert.equal(busy.missedTicksEstimate, 0)
+  })
+
+  it('derives the expected tick period from time scale and tick-rate metadata', () => {
+    assert.deepEqual(tickExpectedPeriod({ timeScale: 'us' }), { period: 1000, source: 'default' })
+    assert.deepEqual(tickExpectedPeriod({ timeScale: 'ns' }), { period: 1e6, source: 'default' })
+    assert.deepEqual(
+      tickExpectedPeriod({ timeScale: 'us', meta: { tickRate: '100' } }),
+      { period: 10000, source: 'metadata' },
+    )
+    // 10 ms ticks at 100 Hz are healthy, not 9 missed ticks per gap.
+    const times = Array.from({ length: 10 }, (_, i) => i * 10000)
+    const r = tickHealthReport({ timeScale: 'us', meta: { tickRate: '100' }, tickStiTimes: times })
+    assert.equal(r.health, 'good')
+    assert.equal(r.missedTicksEstimate, 0)
+    assert.equal(r.expectedPeriodSource, 'metadata')
+    // ns-scale trace with 1 ms ticks is no longer flagged critical.
+    const ns = tickHealthReport({ timeScale: 'ns', tickStiTimes: times.map(t => t * 100) })
+    assert.equal(ns.health, 'good')
   })
 })
 

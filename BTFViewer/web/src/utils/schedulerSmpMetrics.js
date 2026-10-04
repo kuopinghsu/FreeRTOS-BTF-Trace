@@ -44,16 +44,21 @@ function summarizeNs(samples, scale) {
 
 /**
  * Dispatch latency samples: STI resume Name[id] (or create) → next switch-in.
- * @returns {Map<string, { samples: number[], points: {xNs:number,yValue:number,payload:any}[], extrema: { minSeg, maxSeg, minNs, maxNs } }>}
+ * Several ready events before the same switch-in keep only the earliest;
+ * `sources` parallels `samples` with 'create' / 'resume'.
+ * @returns {Map<string, { samples: number[], sources: string[], duplicates: number, points: {xNs:number,yValue:number,payload:any}[], extrema: { minSeg, maxSeg, minNs, maxNs } }>}
  */
 export function collectDispatchLatencyByMk(trace, lo, hi) {
   const byMk = new Map()
+  const segsByMk = trace.segByMergeKey || trace.segMapByMergeKey
 
   function ensure(mk) {
     let e = byMk.get(mk)
     if (!e) {
       e = {
         samples: [],
+        sources: [],
+        duplicates: 0,
         points: [],
         extrema: { minSeg: null, maxSeg: null, minNs: null, maxNs: null },
       }
@@ -62,52 +67,64 @@ export function collectDispatchLatencyByMk(trace, lo, hi) {
     return e
   }
 
-  function addSample(mk, readyNs, segs) {
-    if (!segs?.length) return
-    if (lo != null && hi != null && !(readyNs >= lo && readyNs <= hi)) return
-    let best = null
-    for (const s of segs) {
-      if (s.start < readyNs) continue
-      if (lo != null && hi != null && !(s.start >= lo && s.start <= hi)) continue
-      if (!best || s.start < best.start) best = s
-    }
-    if (!best) return
-    const lat = best.start - readyNs
-    if (lat < 0) return
-    const e = ensure(mk)
-    e.samples.push(lat)
-    e.points.push({ xNs: best.start, yValue: lat, payload: best })
-    const ex = e.extrema
-    if (ex.minNs == null || lat < ex.minNs) {
-      ex.minNs = lat
-      ex.minSeg = best
-    }
-    if (ex.maxNs == null || lat > ex.maxNs) {
-      ex.maxNs = lat
-      ex.maxSeg = best
-    }
+  /** @type {Map<string, [number, number, string][]>} */
+  const ready = new Map()
+  const pushReady = (mk, t, ord, source) => {
+    if (!ready.has(mk)) ready.set(mk, [])
+    ready.get(mk).push([t, ord, source])
   }
-
   const createTimes = trace.taskCreateTimes
   if (createTimes instanceof Map) {
-    for (const [mk, createNs] of createTimes) {
-      addSample(mk, createNs, (trace.segByMergeKey || trace.segMapByMergeKey)?.get(mk) || [])
-    }
+    for (const [mk, createNs] of createTimes) pushReady(mk, createNs, 0, 'create')
   } else if (createTimes && typeof createTimes === 'object') {
-    for (const [mk, createNs] of Object.entries(createTimes)) {
-      addSample(mk, createNs, (trace.segByMergeKey || trace.segMapByMergeKey)?.get(mk) || [])
-    }
+    for (const [mk, createNs] of Object.entries(createTimes)) pushReady(mk, createNs, 0, 'create')
   }
-
   for (const ev of trace.stiEvents || []) {
     if (ev.target !== 'task') continue
     const note = String(ev.note || '').trim()
     const m = LIFECYCLE_NOTE_RE.exec(note)
     if (!m || m[1].toLowerCase() !== 'resume') continue
     const taskLabel = note.slice(m[0].length).trim()
-    if (!taskLabel) continue // resume/isr without name
-    const mk = taskMergeKey(taskLabel)
-    addSample(mk, ev.time, (trace.segByMergeKey || trace.segMapByMergeKey)?.get(mk) || [])
+    if (!taskLabel || taskLabel.startsWith('/')) continue // resume/isr without name
+    pushReady(taskMergeKey(taskLabel), ev.time, 1, 'resume')
+  }
+
+  for (const [mk, events] of ready) {
+    const segs = segsByMk?.get(mk) || []
+    if (!segs.length) continue
+    events.sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    const used = new Set()
+    for (const [readyNs, , source] of events) {
+      if (lo != null && hi != null && !(readyNs >= lo && readyNs <= hi)) continue
+      let best = null
+      for (const s of segs) {
+        if (s.start < readyNs) continue
+        if (lo != null && hi != null && !(s.start >= lo && s.start <= hi)) continue
+        if (!best || s.start < best.start) best = s
+      }
+      if (!best) continue
+      const lat = best.start - readyNs
+      if (lat < 0) continue
+      const e = ensure(mk)
+      const key = `${best.start}|${best.core}`
+      if (used.has(key)) {
+        e.duplicates++
+        continue
+      }
+      used.add(key)
+      e.samples.push(lat)
+      e.sources.push(source)
+      e.points.push({ xNs: best.start, yValue: lat, payload: best })
+      const ex = e.extrema
+      if (ex.minNs == null || lat < ex.minNs) {
+        ex.minNs = lat
+        ex.minSeg = best
+      }
+      if (ex.maxNs == null || lat > ex.maxNs) {
+        ex.maxNs = lat
+        ex.maxSeg = best
+      }
+    }
   }
 
   return byMk

@@ -71,7 +71,7 @@ export const RULE_CATALOG = Object.freeze(Object.fromEntries([
   specOf('exec_max', 'info', 'execution', 'execution_time_high', 'observed slice maxima (not proven WCET)', 'Execution Time Per Slice'),
   specOf('wcet_anomaly', 'warning', 'execution', 'execution_time_high', "slice Max vs the entity's own average", 'Execution Time Per Slice'),
   specOf('exec_p95_exceeded', 'warning', 'execution', 'execution_time_high', "slice duration vs the entity's p95", 'Execution Time Per Slice'),
-  specOf('blocking', 'info', 'blocking', 'latency_outlier', 'off-CPU gap count and Max vs peers', 'Off-CPU Time (Blocking Time)'),
+  specOf('blocking', 'info', 'blocking', 'latency_outlier', 'off-CPU gap count and Max vs peers', 'Off-CPU Gap'),
   specOf('wakeup_latency_outlier', 'warning', 'dispatch', 'latency_outlier', "ready-to-run delay vs the entity's p95", 'Dispatch / Scheduling Latency'),
   specOf('priority_inversion', 'warning', 'blocking', 'latency_outlier', 'L/M/H priority pattern around a held mutex', 'Priority Inheritance'),
   specOf('thrashing', 'warning', 'migration', 'migration_frequent', 'migration rate / dwell / ping-pong vs heuristic thresholds', 'Core Migrations'),

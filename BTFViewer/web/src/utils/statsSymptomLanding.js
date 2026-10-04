@@ -8,7 +8,7 @@ export const SYMPTOM_CARDS = [
   { id: 'late', title: 'Task is sometimes late', first_section: 'response_time', path: ['Response Time', 'Execution', 'Dispatch', 'Blocking', 'Preemption'] },
   { id: 'spike', title: 'Execution spike / long slice', first_section: 'execution', path: ['Execution', 'Worst Events', 'Preemption Matrix'] },
   { id: 'dispatch', title: 'Dispatch delay', first_section: 'dispatch', path: ['Dispatch latency', 'Execution', 'Core Utilization'] },
-  { id: 'blocking', title: 'Blocking / off-CPU wait', first_section: 'blocking', path: ['Blocking Time', 'Mutex Blocking', 'Waiter × Owner'] },
+  { id: 'blocking', title: 'Blocking / off-CPU wait', first_section: 'blocking', path: ['Off-CPU Gap', 'Mutex Blocking', 'Waiter × Owner'] },
   { id: 'jitter', title: 'Period / jitter', first_section: 'period_jitter', path: ['Period / Jitter', 'Unified Jitter', 'Recurring Patterns'] },
   { id: 'load', title: 'Load imbalance', first_section: 'load_balance', path: ['Load Balance', 'Task × Core', 'Core Utilization'] },
   { id: 'migration', title: 'Migration / thrash', first_section: 'migrations', path: ['Core Migrations', 'Load Balance', 'Task × Core'] },

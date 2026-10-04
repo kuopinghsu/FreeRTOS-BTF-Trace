@@ -31,9 +31,15 @@ export function affinityMaskAtTime(history, t) {
  */
 export function coresAllowedByMask(mask, coreNames) {
   const allowed = new Set()
+  let big
+  try {
+    big = typeof mask === 'bigint' ? mask : BigInt(Math.trunc(Number(mask)))
+  } catch {
+    return allowed
+  }
   for (const core of coreNames || []) {
     const idx = parseInt(String(core).split('_').at(-1), 10)
-    if (!Number.isNaN(idx) && idx >= 0 && idx < 4096 && (mask & (1 << idx))) {
+    if (!Number.isNaN(idx) && idx >= 0 && idx < 4096 && ((big >> BigInt(idx)) & 1n)) {
       allowed.add(core)
     }
   }
@@ -70,7 +76,12 @@ export function buildCoreAffinityRows(trace, lo = null, hi = null) {
     if (!m) continue
     const taskLabel = m[1].trim()
     const raw = m[2]
-    const mask = tryParseBtfInt(raw)
+    let mask
+    try {
+      mask = BigInt(raw)
+    } catch {
+      mask = tryParseBtfInt(raw)
+    }
     if (mask == null) continue
     const mk = taskMergeKey(taskLabel)
     if (!histories.has(mk)) histories.set(mk, [])

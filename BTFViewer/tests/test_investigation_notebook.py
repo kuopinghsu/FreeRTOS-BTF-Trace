@@ -356,7 +356,7 @@ class CaseBridgeTests(unittest.TestCase):
             {"id": "blocking", "rule_id": "blocking", "severity": "warning",
              "title": "Off-CPU spikes", "observation": "CS off-CPU 3ms",
              "entities": ["CS"], "affected_range": {"start": 10, "end": 90},
-             "inspect": "Off-CPU Time (Blocking Time)"},
+             "inspect": "Off-CPU Gap"},
             {"id": "thrashing", "rule_id": "thrashing", "severity": "warning",
              "title": "Excessive core migration", "entities": ["Worker"]},
         ]

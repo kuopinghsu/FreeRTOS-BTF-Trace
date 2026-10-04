@@ -1063,7 +1063,7 @@ export function aiViewerTools() {
         name: AI_TOOL_WHAT_IF,
         description:
           'Heuristic what-if simulation from measured execution slices, '
-          + 'migrations, blocking gaps, and core util (not an RTOS kernel).',
+          + 'migrations, off-CPU gaps, and core util (not an RTOS kernel).',
         parameters: {
           type: 'object',
           properties: {
@@ -4182,11 +4182,11 @@ export function queryRawMetric(trace, task, metric, {
     data.total = gaps.reduce((s, g) => s + g.gap, 0)
     data.gaps = gaps.slice(0, MAX_RAW_METRIC_ROWS)
     data.truncated = gaps.length > MAX_RAW_METRIC_ROWS
-    return { ok: true, message: `${gaps.length} blocking gap(s) for ${label}`, data }
+    return { ok: true, message: `${gaps.length} off-CPU gap(s) for ${label}`, data }
   }
 
   if (metricId === AI_RAW_METRIC_ACTIVATION) {
-    // Release latency vs a fitted ideal periodic grid (Activation Latency, A3).
+    // Release latency vs a fitted ideal periodic grid (Fitted Periodic Deviation, A3).
     const evs = harvestUxEvents(trace, lo, hi)
     const row = activationLatencyRows(trace, evs, lo, hi).find(r => r.mk === mk)
     if (!row) {
@@ -4428,6 +4428,8 @@ export function dependencyTraceContext(trace, lo = null, hi = null) {
         stop_ns: stop,
         duration_ns: h.duration_ns ?? h.durationNs ?? 0,
         signal: Boolean(h.signal),
+        span_kind: String(h.span_kind || h.spanKind || ''),
+        cross_task: Boolean(h.cross_task || h.crossTask),
       })
     }
   }

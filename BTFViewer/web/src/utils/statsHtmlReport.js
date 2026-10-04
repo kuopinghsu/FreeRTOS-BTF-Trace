@@ -4,6 +4,7 @@ import { tagAxisBounds, tagTransform, tagInverse, formatTagValue } from './tagAn
  * Keep in sync with btf_viewer_pkg/stats_html.py.
  */
 import { htmlSectionSlug } from './htmlReport.js'
+import { METRIC_DEFINITIONS } from './latencyMetrics.js'
 import { investigationSections, loadInvestigation } from './investigationNotebook.js'
 
 export const STATS_TOC_GROUPS = [
@@ -24,8 +25,8 @@ export const STATS_TOC_GROUPS = [
   ]],
   ['Timing, Latency and Jitter', [
     'Investigate Anomalies', 'Execution Time Per Slice',
-    'Off-CPU Time', 'Dispatch / Scheduling Latency', 'Inter-Arrival Time',
-    'Activation Latency', 'Ready-Gap (Starvation)',
+    'Off-CPU Gap', 'Dispatch / Scheduling Latency', 'Inter-Arrival Time',
+    'Fitted Periodic Deviation', 'Ready-Gap (Starvation)',
     'Period / Jitter', 'Response Time', 'Unified Jitter',
   ]],
   ['Synchronization and Custom Events', [
@@ -763,6 +764,17 @@ const TRACE_HEALTH_STATUS_META = {
  * Distinct from *Trace Health (TICK)*. Keep in sync with
  * ``btf_viewer_pkg/stats_html.py:html_trace_health_card``.
  */
+/** Report card listing how each latency metric is measured. */
+export function htmlMetricDefinitionsCard() {
+  const items = METRIC_DEFINITIONS
+    .map(([, term, text]) => `<dt>${esc(term)}</dt><dd>${esc(text)}</dd>`).join('')
+  return '<section class="report-card notes metric-definitions">'
+    + '<h2 id="metric-definitions">Metric definitions</h2>'
+    + '<p class="detail-note">How the timing values in this report are measured.</p>'
+    + `<dl class="metric-defs">${items}</dl>`
+    + '</section>'
+}
+
 export function htmlTraceHealthCard(result, { formatNs = null, scopeTitle = '' } = {}) {
   if (!result) return ''
   const status = String(result.status || 'pass')
@@ -803,6 +815,15 @@ export function htmlTraceHealthCard(result, { formatNs = null, scopeTitle = '' }
     const lis = limitations.map(m => `<li>${esc(m)}</li>`).join('')
     limHtml = '<h3 class="sub">Limited metrics</h3>'
       + '<p class="detail-note">These sections may show <em>Insufficient data</em> or a limitation notice instead of a value.</p>'
+      + `<ul>${lis}</ul>`
+  }
+  const avail = (result.metricAvailability || result.metric_availability || [])
+    .filter(a => a.state !== 'available')
+  if (avail.length) {
+    const lis = avail.map(a =>
+      `<li><strong>${esc(a.metric)}</strong>: ${esc(a.state)}${a.reason ? ` — ${esc(a.reason)}` : ''}</li>`).join('')
+    limHtml += '<h3 class="sub">Metric availability</h3>'
+      + '<p class="detail-note">Metrics this trace cannot measure fully, and why.</p>'
       + `<ul>${lis}</ul>`
   }
   return '<section class="report-card notes trace-health">'
@@ -1210,7 +1231,7 @@ export function htmlGlossary({ rangeNote = '' } = {}) {
     '<strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches.',
     '<strong>Highest CPU consumers</strong> are tasks with the largest share of active CPU time. They are not automatically WCET candidates. Largest execution-time maxima live in Execution Time Per Slice.',
     '<strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start).',
-    '<strong>Off-CPU Time (Blocking Time):</strong> Gap between the end of one slice and the start of the next for the same task. It may include preemption, suspension, periodic waiting, or scheduling delay — not necessarily resource blocking. It is not end-to-end response time.',
+    '<strong>Off-CPU Gap:</strong> Gap between the end of one slice and the start of the next for the same task. It may include preemption, suspension, periodic waiting, or scheduling delay — not necessarily resource blocking. It is not end-to-end response time.',
     '<strong>CPU% (task):</strong> Share of total non-IDLE/TICK <em>active CPU time</em> in scope, not wall-clock span and not total multicore capacity.',
     '<strong>Core Utilization:</strong> Non-IDLE/TICK active time on that core divided by the scoped wall-clock span (one-core capacity = 100%).',
     '<strong>Load Balance Score:</strong> 100% × (1 − Gini of core utilization). 100 = evenly distributed utilization; 0 = highly uneven. Even overload or even idle can still score high.',

@@ -1,15 +1,24 @@
 {
   "trace": "example-4cores.btf.gz",
   "hasSyncObjectInstrumentation": true,
-  "syncObjectCount": 26,
-  "syncIssueCount": 3,
+  "syncObjectCount": 44,
+  "syncIssueCount": 15,
   "queueCount": 2,
-  "mutexCount": 2,
-  "semCount": 22,
+  "mutexCount": 5,
+  "semCount": 37,
   "objects": [
     {
       "kind": "mutex",
       "ptr": "0x8001c930",
+      "label": "mutex 0x8001c930 (gen 1)",
+      "holds": 480,
+      "issues": 3,
+      "status": "warning"
+    },
+    {
+      "kind": "mutex",
+      "ptr": "0x8001c930",
+      "label": "mutex 0x8001c930 (gen 2)",
       "holds": 6,
       "issues": 0,
       "status": "ok"
@@ -17,6 +26,23 @@
     {
       "kind": "mutex",
       "ptr": "0x8001c9e0",
+      "label": "mutex 0x8001c9e0 (gen 1)",
+      "holds": 480,
+      "issues": 3,
+      "status": "warning"
+    },
+    {
+      "kind": "mutex",
+      "ptr": "0x8001c9e0",
+      "label": "mutex 0x8001c9e0 (gen 2)",
+      "holds": 240,
+      "issues": 5,
+      "status": "warning"
+    },
+    {
+      "kind": "mutex",
+      "ptr": "0x8001c9e0",
+      "label": "mutex 0x8001c9e0 (gen 3)",
       "holds": 6,
       "issues": 0,
       "status": "ok"
@@ -24,6 +50,7 @@
     {
       "kind": "queue",
       "ptr": "0x80016de8",
+      "label": "queue 0x80016de8",
       "holds": 0,
       "issues": 0,
       "status": "ok"
@@ -31,6 +58,7 @@
     {
       "kind": "queue",
       "ptr": "0x8001e610",
+      "label": "queue 0x8001e610",
       "holds": 240,
       "issues": 0,
       "status": "warning"
@@ -38,6 +66,55 @@
     {
       "kind": "sem",
       "ptr": "0x8001c930",
+      "label": "sem 0x8001c930 (gen 1)",
+      "holds": 480,
+      "issues": 0,
+      "status": "warning"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001c930",
+      "label": "sem 0x8001c930 (gen 2)",
+      "holds": 240,
+      "issues": 0,
+      "status": "warning"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001c930",
+      "label": "sem 0x8001c930 (gen 3)",
+      "holds": 10,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001c930",
+      "label": "sem 0x8001c930 (gen 4)",
+      "holds": 1,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001c930",
+      "label": "sem 0x8001c930 (gen 5)",
+      "holds": 4,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001c930",
+      "label": "sem 0x8001c930 (gen 6)",
+      "holds": 4,
+      "issues": 1,
+      "status": "warning"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001c930",
+      "label": "sem 0x8001c930 (gen 7)",
       "holds": 1,
       "issues": 0,
       "status": "ok"
@@ -45,6 +122,31 @@
     {
       "kind": "sem",
       "ptr": "0x8001c9e0",
+      "label": "sem 0x8001c9e0 (gen 1)",
+      "holds": 10,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001c9e0",
+      "label": "sem 0x8001c9e0 (gen 2)",
+      "holds": 1,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001c9e0",
+      "label": "sem 0x8001c9e0 (gen 3)",
+      "holds": 1,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001c9e0",
+      "label": "sem 0x8001c9e0 (gen 4)",
       "holds": 2,
       "issues": 0,
       "status": "ok"
@@ -52,6 +154,23 @@
     {
       "kind": "sem",
       "ptr": "0x8001ca90",
+      "label": "sem 0x8001ca90 (gen 1)",
+      "holds": 10,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001ca90",
+      "label": "sem 0x8001ca90 (gen 2)",
+      "holds": 10,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001ca90",
+      "label": "sem 0x8001ca90 (gen 3)",
       "holds": 4,
       "issues": 0,
       "status": "ok"
@@ -59,6 +178,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001cb40",
+      "label": "sem 0x8001cb40",
       "holds": 3,
       "issues": 0,
       "status": "ok"
@@ -66,6 +186,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001d170",
+      "label": "sem 0x8001d170",
       "holds": 3,
       "issues": 0,
       "status": "ok"
@@ -73,6 +194,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001d220",
+      "label": "sem 0x8001d220",
       "holds": 3,
       "issues": 0,
       "status": "ok"
@@ -80,6 +202,15 @@
     {
       "kind": "sem",
       "ptr": "0x8001d2d0",
+      "label": "sem 0x8001d2d0 (gen 1)",
+      "holds": 3,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001d2d0",
+      "label": "sem 0x8001d2d0 (gen 2)",
       "holds": 3,
       "issues": 1,
       "status": "warning"
@@ -87,6 +218,15 @@
     {
       "kind": "sem",
       "ptr": "0x8001d380",
+      "label": "sem 0x8001d380 (gen 1)",
+      "holds": 3,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001d380",
+      "label": "sem 0x8001d380 (gen 2)",
       "holds": 2,
       "issues": 0,
       "status": "ok"
@@ -94,6 +234,15 @@
     {
       "kind": "sem",
       "ptr": "0x8001d430",
+      "label": "sem 0x8001d430 (gen 1)",
+      "holds": 3,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001d430",
+      "label": "sem 0x8001d430 (gen 2)",
       "holds": 4,
       "issues": 0,
       "status": "ok"
@@ -101,6 +250,15 @@
     {
       "kind": "sem",
       "ptr": "0x8001d4e0",
+      "label": "sem 0x8001d4e0 (gen 1)",
+      "holds": 3,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001d4e0",
+      "label": "sem 0x8001d4e0 (gen 2)",
       "holds": 3,
       "issues": 0,
       "status": "ok"
@@ -108,6 +266,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001d590",
+      "label": "sem 0x8001d590",
       "holds": 2,
       "issues": 0,
       "status": "ok"
@@ -115,6 +274,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001d640",
+      "label": "sem 0x8001d640",
       "holds": 3,
       "issues": 0,
       "status": "ok"
@@ -122,6 +282,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001d660",
+      "label": "sem 0x8001d660",
       "holds": 3,
       "issues": 1,
       "status": "warning"
@@ -129,6 +290,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001d6f0",
+      "label": "sem 0x8001d6f0",
       "holds": 3,
       "issues": 0,
       "status": "ok"
@@ -136,6 +298,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001e560",
+      "label": "sem 0x8001e560",
       "holds": 3,
       "issues": 0,
       "status": "ok"
@@ -143,6 +306,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001e6e0",
+      "label": "sem 0x8001e6e0",
       "holds": 10,
       "issues": 0,
       "status": "ok"
@@ -150,6 +314,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001f250",
+      "label": "sem 0x8001f250",
       "holds": 2,
       "issues": 0,
       "status": "ok"
@@ -157,6 +322,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001f300",
+      "label": "sem 0x8001f300",
       "holds": 4,
       "issues": 0,
       "status": "ok"
@@ -164,6 +330,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001f480",
+      "label": "sem 0x8001f480",
       "holds": 3,
       "issues": 1,
       "status": "warning"
@@ -171,6 +338,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001f530",
+      "label": "sem 0x8001f530",
       "holds": 2,
       "issues": 0,
       "status": "ok"
@@ -178,6 +346,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001f5e0",
+      "label": "sem 0x8001f5e0",
       "holds": 4,
       "issues": 0,
       "status": "ok"
@@ -185,6 +354,7 @@
     {
       "kind": "sem",
       "ptr": "0x8001f690",
+      "label": "sem 0x8001f690",
       "holds": 3,
       "issues": 0,
       "status": "ok"

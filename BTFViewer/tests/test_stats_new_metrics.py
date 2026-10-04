@@ -221,7 +221,7 @@ class TestSchedulingLoadSections(unittest.TestCase):
 
 
 class TestTimingLatencySections(unittest.TestCase):
-    """Phase 4 — Activation Latency (A3) + Ready-Gap / Starvation (A4)."""
+    """Phase 4 — Fitted Periodic Deviation (A3) + Ready-Gap / Starvation (A4)."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -400,7 +400,11 @@ class TestSyncObjectContentionColumns(unittest.TestCase):
         rows = P._sync_object_stats_rows(trace)
         self.assertTrue(rows)
         for row in rows:
-            self.assertEqual(len(row), 18)
+            self.assertEqual(len(row), 22)
+            self.assertIsInstance(row[18], int)          # cross-task gives excluded
+            self.assertIsInstance(row[19], int)          # window-boundary spans excluded
+            self.assertIsInstance(row[20], str)          # span summary
+            self.assertIsInstance(row[21], int)          # post-create gives
             self.assertIsInstance(row[12], str)          # p95 hold
             self.assertIsInstance(row[13], str)          # p99 hold
             self.assertIsInstance(row[14], int)          # waiters

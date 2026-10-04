@@ -739,7 +739,7 @@ export const COMPARE_INVESTIGATE_FALLBACK_SECTION = 'response'
 export const COMPARE_SECTION_LABELS = Object.freeze({
   response: 'Response Time',
   exec: 'Execution Time',
-  block: 'Blocking Time',
+  block: 'Off-CPU Gap',
   inter: 'Inter-Arrival Time',
   mutex_block: 'Mutex Blocking',
   deadline: 'Deadlines / CPU budget',

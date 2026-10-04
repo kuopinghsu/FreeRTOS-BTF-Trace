@@ -55,6 +55,7 @@ class StiDerivedParityTests(unittest.TestCase):
 
         (
             channels, by_tgt, inst, ids, by_id, unmatched, markers, tags_ch, tags_by,
+            _unmatched_stops,
         ) = _build_sti_derived(sti)
 
         self.assertEqual(channels, channels_sep)

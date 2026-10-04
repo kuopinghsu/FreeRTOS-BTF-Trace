@@ -19,6 +19,7 @@ from btf_viewer_pkg.parser import (  # noqa: E402
     StiEvent,
     TaskSegment,
     _TICK_HEALTH_TICKLESS_CV,
+    _tick_expected_period,
     _tick_health_report,
     _trace_summary_snapshot,
     _build_trace_compare_rows,
@@ -111,6 +112,23 @@ class TickHealthTests(unittest.TestCase):
         self.assertFalse(busy["is_tickless"])
         self.assertEqual(busy["tick_count"], 5)
         self.assertEqual(busy["missed_estimate"], 0)
+
+    def test_expected_period_from_scale_and_metadata(self):
+        tr = _trace_with_ticks([])
+        self.assertEqual(_tick_expected_period(tr), (1000.0, "default"))
+        tr.time_scale = "ns"
+        self.assertEqual(_tick_expected_period(tr), (1e6, "default"))
+        times = list(range(0, 100_000, 10_000))
+        tr = _trace_with_ticks(times)
+        tr.meta = {"tickRate": "100"}
+        self.assertEqual(_tick_expected_period(tr), (10_000.0, "metadata"))
+        report = _tick_health_report(tr)
+        self.assertEqual(report["health"], "good")
+        self.assertEqual(report["missed_estimate"], 0)
+        self.assertEqual(report["expected_period_source"], "metadata")
+        ns = _trace_with_ticks([t * 100 for t in times])
+        ns.time_scale = "ns"
+        self.assertEqual(_tick_health_report(ns)["health"], "good")
 
     def test_summary_snapshot_tick_mode_labels(self):
         tickful = _trace_summary_snapshot(

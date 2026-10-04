@@ -4,6 +4,7 @@
 import { formatTime } from './timeFormat.js'
 import { lighterColor, parseTaskName, tryParseBtfInt, parseIntToken } from './colors.js'
 import { bisectLeft } from './bisect.js'
+import { intervalExecFields } from './latencyMetrics.js'
 
 export const INTERVAL_START_CHANNELS = new Set(['interval_start'])
 export const INTERVAL_STOP_CHANNELS = new Set(['interval_stop'])
@@ -102,11 +103,12 @@ function intervalDisplayId(ev) {
   return parsed.taskId != null ? parsed.intervalId : parsed.pairingKey
 }
 
-/** @returns {{ intervalInstances, intervalIds, intervalInstancesById, intervalInstancesCulledById, unmatchedStarts }} */
+/** @returns {{ intervalInstances, intervalIds, intervalInstancesById, intervalInstancesCulledById, unmatchedStarts, unmatchedStops }} */
 export function buildIntervalData(stiEvents) {
   const open = new Map()
   const intervalInstances = []
   let unmatchedStarts = 0
+  let unmatchedStops = 0
 
   const sorted = (stiEvents || [])
     .filter(ev => isStart(ev) || isStop(ev))
@@ -121,9 +123,12 @@ export function buildIntervalData(stiEvents) {
       open.get(pairKey).push(ev)
     } else {
       const stack = open.get(pairKey)
-      if (!stack?.length) continue
+      if (!stack?.length) {
+        unmatchedStops++
+        continue
+      }
       const startEv = stack.pop()
-      if (ev.time > startEv.time) {
+      if (ev.time >= startEv.time) {
         intervalInstances.push({
           id: displayId,
           taskId: parsed.taskId,
@@ -160,7 +165,7 @@ export function buildIntervalData(stiEvents) {
     return a.localeCompare(b)
   })
 
-  return { intervalInstances, intervalIds, intervalInstancesById, intervalInstancesCulledById, unmatchedStarts }
+  return { intervalInstances, intervalIds, intervalInstancesById, intervalInstancesCulledById, unmatchedStarts, unmatchedStops }
 }
 
 /** Per-id sorted marker events for O(log n) viewport clipping. */
@@ -180,7 +185,32 @@ export function buildIntervalMarkerIndex(stiEvents) {
 
 export function intervalOverlapsRange(inst, lo, hi) {
   if (lo == null || hi == null) return true
-  return inst.stopNs > lo && inst.startNs < hi
+  return inst.stopNs >= lo && inst.startNs <= hi
+}
+
+/** Both endpoints inside the window — the rule for interval statistics. */
+export function intervalFullyInRange(inst, lo, hi) {
+  if (lo == null || hi == null) return true
+  return inst.startNs >= lo && inst.stopNs <= hi
+}
+
+/** Caption for interval spans left out of statistics at the window edge, or ''. */
+export function intervalBoundaryNote(n) {
+  if (!(n > 0)) return ''
+  return `${Number(n).toLocaleString('en-US')} interval span(s) cross the cursor window and are left out of `
+    + 'these statistics (both endpoints must be inside).'
+}
+
+/** Interval spans that cross the window edge (shown, but not in statistics). */
+export function intervalBoundaryCount(trace, lo, hi) {
+  if (lo == null || hi == null) return 0
+  let n = 0
+  for (const insts of trace?.intervalInstancesById?.values?.() || []) {
+    for (const inst of insts) {
+      if (intervalOverlapsRange(inst, lo, hi) && !intervalFullyInRange(inst, lo, hi)) n++
+    }
+  }
+  return n
 }
 
 function percentile(sorted, p) {
@@ -228,7 +258,7 @@ export function intervalStatsRows(trace, lo, hi) {
 
   const rows = []
   for (const id of trace.intervalIds || []) {
-    const insts = (byId.get(id) || []).filter(inst => intervalOverlapsRange(inst, lo, hi))
+    const insts = (byId.get(id) || []).filter(inst => intervalFullyInRange(inst, lo, hi))
     const samples = insts.map(inst => inst.durationNs)
     if (!samples.length) continue
     const tids = new Set(insts.map(inst => inst.taskId).filter(t => t != null && t !== ''))
@@ -286,6 +316,7 @@ export function intervalInstanceDetailRows(trace, lo, hi, limit = 200) {
   const byId = trace?.intervalInstancesById
   if (!byId?.size) return []
   const rows = []
+  const execCache = new Map()
   for (const id of trace.intervalIds || []) {
     for (const inst of byId.get(id) || []) {
       if (!intervalOverlapsRange(inst, lo, hi)) continue
@@ -301,6 +332,7 @@ export function intervalInstanceDetailRows(trace, lo, hi, limit = 200) {
         durationNs: inst.durationNs,
         startCore: inst.startCore || '',
         stopCore: inst.stopCore || '',
+        ...intervalExecFields(trace, inst, execCache),
       })
     }
   }

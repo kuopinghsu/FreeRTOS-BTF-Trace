@@ -694,7 +694,7 @@
             :order="sectionOrderIndex('activation')"
             @reorder="onSectionReorder"
           >
-            <!-- Activation Latency (A3) -->
+            <!-- Fitted Periodic Deviation (A3) -->
             <StatsSectionHeader
               :section-id="'activation'"
               :collapsed="activationCollapsed"
@@ -703,7 +703,7 @@
               @toggle-pin="toggleSectionPin('activation')"
               @open-reference="onOpenReference"
             >
-              Activation Latency{{ scopeSuffixStr }}
+              Fitted Periodic Deviation{{ scopeSuffixStr }}
             </StatsSectionHeader>
             <template v-if="!activationCollapsed">
               <div
@@ -771,18 +771,21 @@
                         </th>
                         <th
                           :class="thSortClass('activation', 'p50')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('activation', 'p50')"
                         >
                           P50
                         </th>
                         <th
                           :class="thSortClass('activation', 'p95')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('activation', 'p95')"
                         >
                           P95
                         </th>
                         <th
                           :class="thSortClass('activation', 'p99')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('activation', 'p99')"
                         >
                           P99
@@ -823,6 +826,13 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('activation', $event)"
                 />
+                <div
+                  v-if="percentileNotes.activation"
+                  class="range-hint"
+                  data-testid="percentile-note-activation"
+                >
+                  {{ percentileNotes.activation }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -1577,15 +1587,17 @@
                         </th>
                         <th
                           :class="thSortClass('migrations', 'gapAfter')"
+                          title="Average gap between leaving one core and running on the next (zero gaps excluded)"
                           @click="toggleTableSort('migrations', 'gapAfter')"
                         >
                           Gap after
                         </th>
                         <th
                           :class="thSortClass('migrations', 'gapOther')"
+                          title="Average off-CPU gap across all of this task's slices, migrations included"
                           @click="toggleTableSort('migrations', 'gapOther')"
                         >
-                          Gap other
+                          Gap (all)
                         </th>
                       </tr>
                     </thead>
@@ -1623,6 +1635,13 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('migrations', $event)"
                 />
+                <div
+                  v-if="migrationBaselineNoteText"
+                  class="range-hint"
+                  data-testid="migration-baseline-note"
+                >
+                  {{ migrationBaselineNoteText }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -2304,18 +2323,21 @@
                         </th>
                         <th
                           :class="thSortClass('exec', 'p50')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('exec', 'p50')"
                         >
                           p50
                         </th>
                         <th
                           :class="thSortClass('exec', 'p95')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('exec', 'p95')"
                         >
                           p95
                         </th>
                         <th
                           :class="thSortClass('exec', 'p99')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('exec', 'p99')"
                         >
                           p99
@@ -2393,6 +2415,13 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('exec', $event)"
                 />
+                <div
+                  v-if="percentileNotes.exec"
+                  class="range-hint"
+                  data-testid="percentile-note-exec"
+                >
+                  {{ percentileNotes.exec }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -2410,7 +2439,7 @@
               @toggle-pin="toggleSectionPin('block')"
               @open-reference="onOpenReference"
             >
-              Blocking Time (off-CPU gap){{ scopeSuffixStr }}
+              Off-CPU Gap{{ scopeSuffixStr }}
             </StatsSectionHeader>
             <template v-if="!blockingCollapsed">
               <div
@@ -2476,18 +2505,21 @@
                         </th>
                         <th
                           :class="thSortClass('block', 'p50')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('block', 'p50')"
                         >
                           p50
                         </th>
                         <th
                           :class="thSortClass('block', 'p95')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('block', 'p95')"
                         >
                           p95
                         </th>
                         <th
                           :class="thSortClass('block', 'p99')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('block', 'p99')"
                         >
                           p99
@@ -2511,7 +2543,7 @@
                         <td>{{ row.gaps }}</td>
                         <td
                           class="extreme-col"
-                          :title="`Jump to shortest blocking gap for ${row.name}`"
+                          :title="`Jump to shortest off-CPU gap for ${row.name}`"
                           @click.stop="jumpToSegment(row.mk, 'block', false)"
                         >
                           {{ row.min }}
@@ -2564,6 +2596,13 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('block', $event)"
                 />
+                <div
+                  v-if="percentileNotes.block"
+                  class="range-hint"
+                  data-testid="percentile-note-block"
+                >
+                  {{ percentileNotes.block }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -2647,18 +2686,21 @@
                         </th>
                         <th
                           :class="thSortClass('dispatch', 'p50')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('dispatch', 'p50')"
                         >
                           p50
                         </th>
                         <th
                           :class="thSortClass('dispatch', 'p95')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('dispatch', 'p95')"
                         >
                           p95
                         </th>
                         <th
                           :class="thSortClass('dispatch', 'p99')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('dispatch', 'p99')"
                         >
                           p99
@@ -2729,6 +2771,20 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('dispatch', $event)"
                 />
+                <div
+                  v-if="percentileNotes.dispatch"
+                  class="range-hint"
+                  data-testid="percentile-note-dispatch"
+                >
+                  {{ percentileNotes.dispatch }}
+                </div>
+                <div
+                  v-if="dispatchSourceNoteText"
+                  class="range-hint"
+                  data-testid="dispatch-source-note"
+                >
+                  {{ dispatchSourceNoteText }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -2812,18 +2868,21 @@
                         </th>
                         <th
                           :class="thSortClass('inter', 'p50')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('inter', 'p50')"
                         >
                           p50
                         </th>
                         <th
                           :class="thSortClass('inter', 'p95')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('inter', 'p95')"
                         >
                           p95
                         </th>
                         <th
                           :class="thSortClass('inter', 'p99')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('inter', 'p99')"
                         >
                           p99
@@ -2894,6 +2953,13 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('inter', $event)"
                 />
+                <div
+                  v-if="percentileNotes.inter"
+                  class="range-hint"
+                  data-testid="percentile-note-inter"
+                >
+                  {{ percentileNotes.inter }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -4079,6 +4145,13 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('priority', $event)"
                 />
+                <div
+                  v-if="priorityHolderNoteText"
+                  class="range-hint"
+                  data-testid="priority-holder-note"
+                >
+                  {{ priorityHolderNoteText }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -4175,10 +4248,10 @@
                         </th>
                         <th
                           :class="thSortClass('sync', 'waiters')"
-                          title="Distinct tasks that acquired while the object was already held (whole trace)"
+                          title="Distinct tasks that took the object while an earlier take was still open — recursion or a missing give (whole trace). STI takes mark acquisition, not waiting."
                           @click="toggleTableSort('sync', 'waiters')"
                         >
-                          Waiters
+                          Overlap
                         </th>
                         <th
                           :class="thSortClass('sync', 'maxNest')"
@@ -4210,7 +4283,7 @@
                         <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
-                        <td>{{ row.kind }}</td>
+                        <td>{{ syncKindDisplay(row) }}</td>
                         <td>{{ row.holdCount }}</td>
                         <td>{{ row.issueCount }}</td>
                         <td :class="row.bounceCount > 0 ? 'sev-warning' : ''">
@@ -4222,9 +4295,7 @@
                         <td>{{ row.avgHold }}</td>
                         <td>{{ row.p95Hold }}</td>
                         <td>{{ row.p99Hold }}</td>
-                        <td :class="row.waiters >= 3 ? 'sev-warning' : ''">
-                          {{ row.waiters }}
-                        </td>
+                        <td>{{ row.waiters }}</td>
                         <td>{{ row.maxNest }}</td>
                         <td :class="syncStatusClass(row.status)">
                           {{ row.statusLabel }}
@@ -4240,6 +4311,13 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('sync', $event)"
                 />
+                <div
+                  v-if="syncExclusionNoteText"
+                  class="range-hint"
+                  data-testid="sync-exclusion-note"
+                >
+                  {{ syncExclusionNoteText }}
+                </div>
                 <div
                   v-if="syncIssueDisplay.note"
                   class="range-hint"
@@ -4684,10 +4762,10 @@
                         </th>
                         <th
                           :class="thSortClass('queue', 'waiters')"
-                          title="Distinct tasks that acquired while already held (whole trace)"
+                          title="Distinct tasks that took the object while an earlier take was still open — recursion or a missing give (whole trace). STI takes mark acquisition, not waiting."
                           @click="toggleTableSort('queue', 'waiters')"
                         >
-                          Waiters
+                          Overlap
                         </th>
                         <th
                           :class="thSortClass('queue', 'maxNest')"
@@ -4718,7 +4796,7 @@
                         <td class="task-col" :title="String(row.label ?? '')">
                           {{ row.label }}
                         </td>
-                        <td>{{ row.kind }}</td>
+                        <td>{{ syncKindDisplay(row) }}</td>
                         <td>{{ row.holdCount }}</td>
                         <td>{{ row.issueCount }}</td>
                         <td :class="row.bounceCount > 0 ? 'sev-warning' : ''">
@@ -4730,9 +4808,7 @@
                         <td>{{ row.avgHold }}</td>
                         <td>{{ row.p95Hold }}</td>
                         <td>{{ row.p99Hold }}</td>
-                        <td :class="row.waiters >= 3 ? 'sev-warning' : ''">
-                          {{ row.waiters }}
-                        </td>
+                        <td>{{ row.waiters }}</td>
                         <td>{{ row.maxNest }}</td>
                         <td :class="syncStatusClass(row.status)">
                           {{ row.statusLabel }}
@@ -4748,6 +4824,9 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('queue', $event)"
                 />
+                <div class="range-hint" data-testid="queue-pairing-note">
+                  {{ QUEUE_PAIRING_NOTE }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -4862,6 +4941,13 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('lifecycle', $event)"
                 />
+                <div
+                  v-if="suspendedNoteText"
+                  class="range-hint"
+                  data-testid="suspended-duration-note"
+                >
+                  {{ suspendedNoteText }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -4955,6 +5041,13 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('affinity', $event)"
                 />
+                <div
+                  v-if="affinityChangeNoteText"
+                  class="range-hint"
+                  data-testid="affinity-change-note"
+                >
+                  {{ affinityChangeNoteText }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -5519,18 +5612,21 @@
                         </th>
                         <th
                           :class="thSortClass('intervals', 'p50')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('intervals', 'p50')"
                         >
                           P50
                         </th>
                         <th
                           :class="thSortClass('intervals', 'p95')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('intervals', 'p95')"
                         >
                           P95
                         </th>
                         <th
                           :class="thSortClass('intervals', 'p99')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('intervals', 'p99')"
                         >
                           P99
@@ -5571,6 +5667,27 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('intervals', $event)"
                 />
+                <div
+                  v-if="percentileNotes.intervals"
+                  class="range-hint"
+                  data-testid="percentile-note-intervals"
+                >
+                  {{ percentileNotes.intervals }}
+                </div>
+                <div
+                  v-if="intervalBoundaryNoteText"
+                  class="range-hint"
+                  data-testid="interval-boundary-note"
+                >
+                  {{ intervalBoundaryNoteText }}
+                </div>
+                <div
+                  v-if="intervalExecNoteText"
+                  class="range-hint"
+                  data-testid="interval-exec-note"
+                >
+                  {{ intervalExecNoteText }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -5654,18 +5771,21 @@
                         </th>
                         <th
                           :class="thSortClass('tags', 'p50')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('tags', 'p50')"
                         >
                           P50
                         </th>
                         <th
                           :class="thSortClass('tags', 'p95')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('tags', 'p95')"
                         >
                           P95
                         </th>
                         <th
                           :class="thSortClass('tags', 'p99')"
+                          :title="PERCENTILE_METHOD_NOTE"
                           @click="toggleTableSort('tags', 'p99')"
                         >
                           P99
@@ -5720,6 +5840,13 @@
                   aria-orientation="horizontal"
                   @mousedown.prevent="onTableResizeStart('tags', $event)"
                 />
+                <div
+                  v-if="percentileNotes.tags"
+                  class="range-hint"
+                  data-testid="percentile-note-tags"
+                >
+                  {{ percentileNotes.tags }}
+                </div>
               </div>
             </template>
           </StatsSectionBlock>
@@ -6368,6 +6495,7 @@ import {
   maxNs,
   minNs,
   findWcetSegment,
+  segOpenAtEnd,
   findBcetSegment,
   findExtremeBlockingSegment,
   findExtremeInterArrivalSegment,
@@ -6388,6 +6516,8 @@ import {
   intervalStatsRows,
   intervalPlotPoints,
   intervalColor,
+  intervalBoundaryCount,
+  intervalBoundaryNote,
 } from '../utils/intervalAnalysis.js'
 import {
   tagStatsRows,
@@ -6408,9 +6538,23 @@ import {
   syncIssueAnnotationNote,
   syncHoldPlotPoints,
   mutexWaitPlotPoints,
+  syncExclusionNote,
+  syncKindDisplay,
+  QUEUE_PAIRING_NOTE,
 } from '../utils/syncObjectAnalysis.js'
 import { buildTaskLifecycleRows, formatLifecycleSpan } from '../utils/lifecycleAnalysis.js'
 import { buildCoreAffinityRows } from '../utils/coreAffinityAnalysis.js'
+import { plotPointEndpoints } from '../utils/plotPointEndpoints.js'
+import {
+  PERCENTILE_METHOD_NOTE,
+  percentileSampleNote,
+  dispatchSourceNote,
+  migrationGapBaselineNote,
+  priorityHolderNote,
+  affinityChangeNote,
+  suspendedDurationNote,
+  intervalExecNote,
+} from '../utils/latencyMetrics.js'
 import { formatMigrationGapTime } from '../utils/timeFormat.js'
 import { computeDeadlineViolations, deadlineSliceAnnotationNote } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
@@ -6508,6 +6652,7 @@ import {
   htmlScopeIdentityCard,
   htmlTagOverview,
   htmlTraceHealthCard,
+  htmlMetricDefinitionsCard,
   htmlTraceMetadataCard,
   htmlUtilBarRow,
   htmlUtilSection,
@@ -7084,6 +7229,8 @@ async function refreshStatsTables() {
       lo,
       hi,
       totalNs,
+      openAtEndTasks: tr.openAtEndTasks,
+      timeMax: tr.timeMax,
     })
     data = {
       exec: wantExec ? result.exec : null,
@@ -8141,6 +8288,34 @@ const intervalStats = computed(() => {
   return intervalStatsRows(tr, lo, hi)
 })
 
+function _scopedNote(collapsed, fn) {
+  if (collapsed.value || !props.trace) return ''
+  const r = statsRange.value
+  return fn(props.trace, r?.lo ?? null, r?.hi ?? null)
+}
+const percentileNotes = computed(() => ({
+  activation: percentileSampleNote((sortedActivationStats.value || []).map(r => r.count)),
+  exec: percentileSampleNote((sortedExecSliceStats.value || []).map(r => r.runs)),
+  block: percentileSampleNote((sortedBlockingStats.value || []).map(r => r.gaps)),
+  dispatch: percentileSampleNote((sortedDispatchLatencyStats.value || []).map(r => r.activations)),
+  inter: percentileSampleNote((sortedInterArrivalStats.value || []).map(r => r.runs)),
+  intervals: percentileSampleNote((sortedIntervalStats.value || []).map(r => r.count)),
+  tags: percentileSampleNote((sortedTagStats.value || []).map(r => r.count)),
+}))
+const migrationBaselineNoteText = computed(() => _scopedNote(migrationCollapsed, migrationGapBaselineNote))
+const dispatchSourceNoteText = computed(() => _scopedNote(dispatchCollapsed,
+  (tr, lo, hi) => dispatchSourceNote(tr, collectDispatchLatencyByMk(tr, lo, hi))))
+const priorityHolderNoteText = computed(() => _scopedNote(priorityCollapsed, priorityHolderNote))
+const suspendedNoteText = computed(() => _scopedNote(lifecycleCollapsed, suspendedDurationNote))
+const affinityChangeNoteText = computed(() => _scopedNote(affinityCollapsed, affinityChangeNote))
+const intervalExecNoteText = computed(() => _scopedNote(intervalsCollapsed, intervalExecNote))
+
+const intervalBoundaryNoteText = computed(() => {
+  if (intervalsCollapsed.value) return ''
+  const r = statsRange.value
+  return intervalBoundaryNote(intervalBoundaryCount(props.trace, r?.lo ?? null, r?.hi ?? null))
+})
+
 const sortedIntervalStats = computed(() =>
   sortStatsRows(intervalStats.value, tableSort.value.intervals, INTERVAL_SORT_ACCESSORS))
 
@@ -8176,6 +8351,8 @@ const syncStats = computed(() => {
   const r = statsRange.value
   return syncObjectStatsRows(tr, r?.lo ?? null, r?.hi ?? null)
 })
+
+const syncExclusionNoteText = computed(() => syncExclusionNote(syncStats.value))
 
 const syncIssueList = computed(() => {
   const tr = props.trace
@@ -8323,7 +8500,7 @@ const schedLoadStats = computed(() => {
 const sortedSchedLoadStats = computed(() =>
   sortStatsRows(schedLoadStats.value, tableSort.value.sched_load, SCHED_LOAD_SORT_ACCESSORS))
 
-// Review item A3 — Activation Latency (vs. a fitted periodic grid).
+// Review item A3 — Fitted Periodic Deviation (vs. a fitted periodic grid).
 const activationStats = computed(() => {
   if (activationCollapsed.value) return []
   const tr = props.trace
@@ -8579,7 +8756,7 @@ function jumpToPercentile(mk, kind, p) {
   const hi = r?.hi ?? null
   const segs = tr.segByMergeKey?.get(mk) || []
   let seg = null
-  if (kind === 'exec') seg = findPercentileExecSegment(segs, p, lo, hi)
+  if (kind === 'exec') seg = findPercentileExecSegment(segs, p, lo, hi, props.trace)
   else if (kind === 'block') seg = findPercentileBlockingSegment(segs, p, lo, hi)
   else if (kind === 'inter') seg = findPercentileInterArrivalSegment(segs, p, lo, hi)
   if (!seg) return
@@ -8598,7 +8775,7 @@ function jumpToSegment(mk, kind, findMax) {
   const segs = tr.segByMergeKey?.get(mk) || []
   let seg = null
   if (kind === 'exec') {
-    seg = findMax ? findWcetSegment(segs, lo, hi) : findBcetSegment(segs, lo, hi)
+    seg = findMax ? findWcetSegment(segs, lo, hi, props.trace) : findBcetSegment(segs, lo, hi, props.trace)
   } else if (kind === 'block') {
     seg = findExtremeBlockingSegment(segs, lo, hi, findMax)
   } else if (kind === 'inter') {
@@ -8726,7 +8903,7 @@ function _buildBlockPlot(trace, mk, range) {
   return {
     kind: 'block',
     mk,
-    title: `${taskDisplayName(repr)} - Blocking Time${suffix}`,
+    title: `${taskDisplayName(repr)} - Off-CPU Gap${suffix}`,
     color: taskColor(mk, repr),
     points,
   }
@@ -8819,7 +8996,7 @@ function _buildMigGapPlot(trace, mk, range) {
   return {
     kind: 'mig_gap',
     mk,
-    title: `${name} — Post-Migration Gap${suffix}`,
+    title: `${name} — Migration Gap${suffix}`,
     color: taskColor(mk, repr),
     points,
   }
@@ -8865,7 +9042,7 @@ function _buildPairGapPlot(trace, fromCore, toCore, range) {
     fromCore,
     toCore,
     pairKey: pairPlotKey(fromCore, toCore),
-    title: `${hdr} — Post-Migration Gap${suffix}`,
+    title: `${hdr} — Migration Gap${suffix}`,
     color: coreColor(fromCore),
     points,
   }
@@ -9225,7 +9402,7 @@ function _buildActivationPlot(trace, mk, range) {
   return {
     kind: 'activation',
     mk,
-    title: `${taskDisplayName(repr)} — Activation Latency vs Ideal${suffix}`,
+    title: `${taskDisplayName(repr)} — Fitted Periodic Deviation${suffix}`,
     color: taskColor(mk, repr),
     points,
   }
@@ -9470,6 +9647,7 @@ function onPlotPointClick(point) {
     segment,
     interval,
     priorityRange,
+    endpoints: plotPointEndpoints(kind, point.payload),
     tagSample,
     tagChannel: openPlotRef.value?.tagChannel ?? tagSample?.channel ?? null,
   })
@@ -9801,7 +9979,11 @@ function _performanceOverviewHtml(coreRows, ccRows, taskRows, suffix) {
  * interpretation note. `rows` is already sorted by count desc (see
  * migrationRows) and reused as the one data source for every visual form.
  */
-function _migrationCountHtml(rows, total, suffix) {
+function _noteP(text) {
+  return text ? `<p class="detail-note">${_htmlCell(text)}</p>` : ''
+}
+
+function _migrationCountHtml(rows, total, suffix, baselineNote = '') {
   const n = rows.length
   const counts = rows.map(r => Number(r.migrations) || 0)
   let kpis = []
@@ -9833,10 +10015,11 @@ function _migrationCountHtml(rows, total, suffix) {
     + htmlDiagnosticKpiGrid(kpis)
     + htmlRankBars(top12, { fillKind: 'accent' })
     + '<table><thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th>'
-    + '<th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead>'
+    + '<th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap (all)</th></tr></thead>'
     + `<tbody>${rowsHtml}</tbody>`
     + '</table>'
     + note
+    + _noteP(baselineNote)
     + '</section>'
 }
 
@@ -10028,15 +10211,17 @@ function _execSliceRowsForReport(tr, range) {
     if (isIdleTaskName(name) || name === 'TICK') continue
 
     const samples = []
+    let taskTotal = 0
     for (const s of segs) {
       const d = s.end - s.start
       if (d <= 0) continue
       if (range && !segFullyInRange(s, range.lo, range.hi)) continue
+      taskTotal += d
+      if (segOpenAtEnd(s, tr)) continue
       samples.push(d)
     }
     const summary = _summarizeSamplesReport(samples, scale)
     if (!summary) continue
-    const taskTotal = samples.reduce((a, b) => a + b, 0)
 
     rows.push({
       mk,
@@ -10196,7 +10381,7 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
   const holds = syncObjectHoldDetailRows(tr, lo, hi, 150)
   const summaryBody = syncHtmlRows.length
     ? syncHtmlRows.map(row =>
-        `<tr><td>${_htmlCell(row.label)}</td><td>${_htmlCell(row.kind)}</td><td>${row.holdCount}</td><td>${row.issueCount}</td>`
+        `<tr><td>${_htmlCell(row.label)}</td><td>${_htmlCell(syncKindDisplay(row))}</td><td>${row.holdCount}</td><td>${row.issueCount}</td>`
         + `<td class="${row.bounceCount > 0 ? 'sev-warning' : ''}">${row.bounceCount ?? 0}</td>`
         + syncBouncePctCell(row)
         + `<td>${_htmlCell(row.avgHold)}</td>`
@@ -10212,22 +10397,24 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
     : '<tr><td colspan="6" class="empty">No pairing issues in scope</td></tr>'
   const holdBody = holds.length
     ? holds.map(h =>
-        `<tr><td>${_htmlCell(h.object)}</td><td>${_htmlCell(h.holder)}</td><td>${_htmlCell(h.start)}</td><td>${_htmlCell(h.stop)}</td><td>${_htmlCell(h.duration)}</td><td>${_htmlCell(h.takeCore)}</td><td>${_htmlCell(h.giveCore)}</td></tr>`,
+        `<tr><td>${_htmlCell(h.object)}</td><td>${_htmlCell(h.span)}</td><td>${_htmlCell(h.holder)}</td><td>${_htmlCell(h.start)}</td><td>${_htmlCell(h.stop)}</td><td>${_htmlCell(h.duration)}</td><td>${_htmlCell(h.takeCore)}</td><td>${_htmlCell(h.giveCore)}</td></tr>`,
       ).join('')
-    : '<tr><td colspan="7" class="empty">No paired holds in scope</td></tr>'
+    : '<tr><td colspan="8" class="empty">No paired holds in scope</td></tr>'
   const holdNote = holds.length >= 150
     ? '<p class="detail-note">Showing longest 150 hold episodes in scope.</p>'
     : ''
+  const syncNote = syncExclusionNote(syncHtmlRows)
+  const syncNoteHtml = syncNote ? `<p class="detail-note">${_htmlCell(syncNote)}</p>` : ''
   return `<section class="report-card"><h2>Mutex / Semaphore${_htmlCell(suffix)}</h2>
-    <p class="detail-note">Waiters = distinct tasks that acquired while already held; MaxNest = deepest simultaneously-open takes (both over the whole trace).</p>
-    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>p95 hold</th><th>p99 hold</th><th>Waiters</th><th>MaxNest</th><th>Status</th></tr></thead>
+    <p class="detail-note">Kind shows what each span measures (mutex hold, sem give→take or take→give, queue send→recv). Overlap = distinct tasks that took the object while an earlier take was still open (recursion or a missing give; STI takes do not show waiting). MaxNest = deepest simultaneously-open takes (both over the whole trace).</p>
+    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th><th>p95 hold</th><th>p99 hold</th><th>Overlap</th><th>MaxNest</th><th>Status</th></tr></thead>
     <tbody>${summaryBody}</tbody></table>
     <h3 class="sub">Pairing issues</h3>
     <table><thead><tr><th>Object</th><th>Time</th><th>Detail</th><th>Issue</th><th>Task</th><th>Core</th></tr></thead>
     <tbody>${issueBody}</tbody></table>
     <h3 class="sub">Hold episodes (longest first)</h3>
-    ${holdNote}
-    <table><thead><tr><th>Object</th><th>Holder</th><th>Take</th><th>Give</th><th>Duration</th><th>Take core</th><th>Give core</th></tr></thead>
+    ${holdNote}${syncNoteHtml}
+    <table><thead><tr><th>Object</th><th>Span</th><th>Holder</th><th>Start</th><th>Stop</th><th>Duration</th><th>Take core</th><th>Give core</th></tr></thead>
     <tbody>${holdBody}</tbody></table></section>`
 }
 
@@ -10241,19 +10428,20 @@ function _renderPriorityReportHtml(tr, lo, hi, suffix) {
     : '<tr><td colspan="8" class="empty">No priority boosts in scope</td></tr>'
   const epBody = episodes.length
     ? episodes.map(ep =>
-        `<tr><td>${_htmlCell(ep.task)}</td><td>${ep.basePri}→${ep.peakPri}</td><td>${_htmlCell(ep.start)}</td><td>${_htmlCell(ep.stop)}</td><td>${_htmlCell(ep.duration)}</td><td>${_htmlCell(ep.pattern)}</td></tr>`,
+        `<tr><td>${_htmlCell(ep.task)}</td><td>${ep.basePri}→${ep.peakPri}</td><td>${_htmlCell(ep.start)}</td><td>${_htmlCell(ep.stop)}</td><td>${_htmlCell(ep.duration)}</td><td>${_htmlCell(ep.boostToRun)}</td><td>${_htmlCell(ep.onCpu)}</td><td>${_htmlCell(ep.offCpu)}</td><td>${_htmlCell(ep.pattern)}</td></tr>`,
       ).join('')
-    : '<tr><td colspan="6" class="empty">No boost episodes in scope</td></tr>'
+    : '<tr><td colspan="9" class="empty">No boost episodes in scope</td></tr>'
   const epNote = episodes.length >= 200
     ? '<p class="detail-note">Showing first 200 boost episodes in scope (by start time).</p>'
     : ''
   return `<section class="report-card"><h2>Priority Inheritance${_htmlCell(suffix)}</h2>
     <p class="detail-note">Invert = time a medium-priority task ran while the boosted holder did not.</p>
     <table><thead><tr><th>Task</th><th>Base</th><th>Peak</th><th>Boosts</th><th>Boosted</th><th>Invert (worst)</th><th>Invert (total)</th><th>Pattern</th></tr></thead>
-    <tbody>${summaryBody}</tbody></table>
+    <tbody>${summaryBody}</tbody></table>${_noteP(priorityHolderNote(tr, lo, hi))}
     <h3 class="sub">Boost episodes</h3>
     ${epNote}
-    <table><thead><tr><th>Task</th><th>pri</th><th>Start</th><th>End</th><th>Duration</th><th>Pattern</th></tr></thead>
+    <p class="detail-note">Boost→run = time from the boost until the task ran (0 if it was already running). On-CPU / Off-CPU split the boosted time.</p>
+    <table><thead><tr><th>Task</th><th>pri</th><th>Start</th><th>End</th><th>Duration</th><th>Boost→run</th><th>On-CPU</th><th>Off-CPU</th><th>Pattern</th></tr></thead>
     <tbody>${epBody}</tbody></table></section>`
 }
 
@@ -10267,18 +10455,19 @@ function _renderIntervalReportHtml(tr, lo, hi, suffix) {
     : '<tr><td colspan="11" class="empty">No interval data</td></tr>'
   const instBody = instances.length
     ? instances.map(inst =>
-        `<tr><td>${_htmlCell(inst.id)}</td><td>${_htmlCell(inst.taskId || '—')}</td><td>${_htmlCell(inst.start)}</td><td>${_htmlCell(inst.stop)}</td><td>${_htmlCell(inst.duration)}</td><td>${_htmlCell(inst.startCore)}</td><td>${_htmlCell(inst.stopCore)}</td></tr>`,
+        `<tr><td>${_htmlCell(inst.id)}</td><td>${_htmlCell(inst.taskId || '—')}</td><td>${_htmlCell(inst.start)}</td><td>${_htmlCell(inst.stop)}</td><td>${_htmlCell(inst.duration)}</td><td>${_htmlCell(inst.startCore)}</td><td>${_htmlCell(inst.stopCore)}</td><td>${_htmlCell(inst.execTask)}</td><td>${_htmlCell(inst.onCpu)}</td><td>${_htmlCell(inst.offCpu)}</td></tr>`,
       ).join('')
-    : '<tr><td colspan="7" class="empty">No interval instances in scope</td></tr>'
+    : '<tr><td colspan="10" class="empty">No interval instances in scope</td></tr>'
   const instNote = instances.length >= 200
     ? '<p class="detail-note">Showing longest 200 interval instances in scope.</p>'
     : ''
   return `<section class="report-card"><h2>Interval Analysis${_htmlCell(suffix)}</h2>
     <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>&#963;</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>
-    <tbody>${summaryBody}</tbody></table>
+    <tbody>${summaryBody}</tbody></table>${_noteP(intervalExecNote(tr, lo, hi))}
     <h3 class="sub">Interval instances (longest first)</h3>
     ${instNote}
-    <table><thead><tr><th>ID</th><th>Task id</th><th>Start</th><th>Stop</th><th>Duration</th><th>Start core</th><th>Stop core</th></tr></thead>
+    <p class="detail-note">Running task = the task on the start core when the interval started; On-CPU / Off-CPU split the interval for that task.</p>
+    <table><thead><tr><th>ID</th><th>Task id</th><th>Start</th><th>Stop</th><th>Duration</th><th>Start core</th><th>Stop core</th><th>Running task</th><th>On-CPU</th><th>Off-CPU</th></tr></thead>
     <tbody>${instBody}</tbody></table></section>`
 }
 
@@ -10368,7 +10557,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
       <table><thead><tr><th>Start</th><th>End</th><th>Gap</th><th>Missed</th></tr></thead><tbody>${tickGapBody}</tbody></table></section>`
     : `<section class="report-card"><h2>Trace Health (TICK)${_htmlCell(suffix)}</h2><p class="empty">No STI TICK events</p></section>`
   const migTotal = migReportRows.reduce((s, row) => s + (Number(row.migrations) || 0), 0)
-  const migHtml = _migrationCountHtml(migReportRows, migTotal, suffix)
+  const migHtml = _migrationCountHtml(migReportRows, migTotal, suffix, migrationGapBaselineNote(tr, lo, hi))
 
   const findings = (analysisFindings.value || []).map(f => (
     exportAnon.value
@@ -10524,6 +10713,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
     ${evidenceRefsHtml}
     ${analysisHtml}
     ${traceHealthHtml}
+    ${htmlMetricDefinitionsCard()}
     ${investigationHtml}
     ${metaHtml}
     ${coreHtml}
@@ -10652,7 +10842,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
       return `<section class="report-card"><h2>Core Affinity${_htmlCell(suffix)}</h2>` +
         '<table><thead><tr><th>Task</th><th>Mask</th><th>Observed Cores</th>' +
         '<th>Violations</th></tr></thead>' +
-        `<tbody>${affBody}</tbody></table></section>`
+        `<tbody>${affBody}</tbody></table>${_noteP(affinityChangeNote(tr, lo, hi))}</section>`
     })()}
     ${(() => {
       const matrix = taskCoreModel.value
@@ -10710,7 +10900,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
       return `<section class="report-card"><h2>Task Lifecycle${_htmlCell(suffix)}</h2>` +
         '<table><thead><tr><th>Task</th><th>Created</th><th>Deleted</th>' +
         '<th>Susp/Res</th><th>Alive span</th><th>Events</th><th>Runs</th></tr></thead>' +
-        `<tbody>${lcBody}</tbody></table></section>`
+        `<tbody>${lcBody}</tbody></table>${_noteP(suspendedDurationNote(tr, lo, hi))}</section>`
     })()}
     ${_renderDeadlineReportHtml(suffix)}
     ${(() => {
@@ -10787,7 +10977,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
     })()}
     ${_renderHtmlTableReport(`Execution Time Per Slice${suffix}`, execReportRows, true,
       resolutionNote(tr, allTimingSamples(tr, 'exec', lo, hi), lo, hi))}
-    ${_renderHtmlTableReport(`Off-CPU Time (Blocking Time)${suffix}`, blockReportRows, false,
+    ${_renderHtmlTableReport(`Off-CPU Gap${suffix}`, blockReportRows, false,
       resolutionNote(tr, allTimingSamples(tr, 'block', lo, hi), lo, hi))}
     ${(() => {
       const dispRows = dispatchLatencyRows(tr, lo, hi)
@@ -10803,7 +10993,8 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
         '<p class="detail-note">Ready from STI resume / create; sync wakes not attributed.</p>' +
         '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th><th>Avg</th>' +
         '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th><th>p99</th></tr></thead>' +
-        `<tbody>${body}</tbody></table></section>`
+        `<tbody>${body}</tbody></table>` +
+        `${_noteP(dispatchSourceNote(tr, collectDispatchLatencyByMk(tr, lo, hi)))}</section>`
     })()}
     ${_renderHtmlTableReport(`Inter-Arrival Time${suffix}`, interReportRows)}
     ${(() => {
@@ -10821,7 +11012,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
             `<td>${_htmlCell(formatTime(r.p99Ns, tr.timeScale))}</td></tr>`
           ).join('')
         : '<tr><td colspan="10" class="empty">Need at least 3 activations per periodic task</td></tr>'
-      return `<section class="report-card"><h2>Activation Latency${_htmlCell(suffix)}</h2>` +
+      return `<section class="report-card"><h2>Fitted Periodic Deviation${_htmlCell(suffix)}</h2>` +
         '<p class="detail-note">Error = distance from a fitted periodic grid ' +
         '(&#966; + k&#183;T, T = p50 inter-arrival), anchored at the first activation in scope.</p>' +
         '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th><th>Avg</th>' +
@@ -10985,7 +11176,7 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
       const qRows = syncObjectStatsRows(tr, lo, hi, { kindFilter: 'queue' })
       if (!qRows.length) return ''
       const qBody = qRows.map(r =>
-        `<tr><td>${_htmlCell(r.label)}</td><td>${_htmlCell(r.kind)}</td>` +
+        `<tr><td>${_htmlCell(r.label)}</td><td>${_htmlCell(syncKindDisplay(r))}</td>` +
         `<td>${r.holdCount}</td><td>${r.issueCount}</td>` +
         `<td class="${r.bounceCount > 0 ? 'sev-warning' : ''}">${r.bounceCount ?? 0}</td>` +
         syncBouncePctCell(r) +
@@ -10995,9 +11186,10 @@ function exportHtml({ returnHtml = false, anonymize = false } = {}) {
         `<td class="${r.status !== 'ok' ? (r.status === 'error' ? 'sev-error' : 'sev-warning') : ''}">${_htmlCell(r.statusLabel)}</td></tr>`
       ).join('')
       return `<section class="report-card"><h2>Queue${_htmlCell(suffix)}</h2>` +
+        `<p class="detail-note">${_htmlCell(QUEUE_PAIRING_NOTE)}</p>` +
         '<table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th>' +
         '<th>Issues</th><th>Bounces</th><th>Bounce %</th><th>Avg hold</th>' +
-        '<th>p95 hold</th><th>p99 hold</th><th>Waiters</th><th>MaxNest</th>' +
+        '<th>p95 hold</th><th>p99 hold</th><th>Overlap</th><th>MaxNest</th>' +
         '<th>Status</th></tr></thead>' +
         `<tbody>${qBody}</tbody></table></section>`
     })() : ''}

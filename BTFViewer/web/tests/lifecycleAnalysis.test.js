@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { buildTaskLifecycleRows } from '../src/utils/lifecycleAnalysis.js'
+import { buildTaskLifecycleRows, parseTaskLifecycleNote } from '../src/utils/lifecycleAnalysis.js'
+
+describe('parseTaskLifecycleNote', () => {
+  it('ignores unnamed resume / resume-from-ISR rows', () => {
+    assert.equal(parseTaskLifecycleNote('resume'), null)
+    assert.equal(parseTaskLifecycleNote('resume/isr'), null)
+    assert.deepEqual(parseTaskLifecycleNote('resume B[2]'), { action: 'resume', label: 'B[2]' })
+  })
+})
 
 function fakeSegList(items) {
   return {

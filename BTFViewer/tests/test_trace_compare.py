@@ -141,7 +141,7 @@ class TraceCompareTests(unittest.TestCase):
         self.assertIn("Candidate B", html)
         self.assertIn("Δ = Baseline A", html)
         for section in (
-            "Core Utilization", "Execution Time", "Blocking Time",
+            "Core Utilization", "Execution Time", "Off-CPU Gap",
             "Inter-Arrival Time", "Sync Objects", "Response P99", "Mutex Blocking",
             "Shared Patterns", "Trends",
         ):
