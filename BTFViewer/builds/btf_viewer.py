@@ -3503,6 +3503,9 @@ REPORT_THEME_CSS = """
   /* Theme-independent bar geometry, shared by every quantitative visual. */
   --std-bar-h: 10px;
   --std-bar-r: 5px;
+  /* Overshoot spring accents (Motion Prompt #010 coral / yellow), both themes. */
+  --overshoot: #FF6B5C;
+  --overshoot-target: #FFC83D;
 }
 html[data-theme="dark"] {
   --bg: #0B0F19;
@@ -4247,17 +4250,140 @@ HTML_REPORT_INTERACTIVE_SCRIPT = """
     function animateKpis(root) {
       animateKpiTiles(root.querySelectorAll('.kpi'));
     }
+    // Motion Prompt #010 · MIT License (c) 2026 Shohei Ohtaki · https://showheyohtaki.github.io/motion-prompt/#010
+    // Overshoot: value = target × (1 − e^(−4.6t)·cos(10.5t)) from 0.25 s, held at
+    // the target once the spring has settled (play once and stay, no return).
+    var OVERSHOOT_START_S = 0.25, OVERSHOOT_END_S = 3.7;
+    function overshootValue(u) {
+      if (u < OVERSHOOT_START_S) return 0;
+      var t = u - OVERSHOOT_START_S;
+      return 1 - Math.exp(-4.6 * t) * Math.cos(10.5 * t);
+    }
+    function runOvershoot(el, delayMs, draw) {
+      var run = (el.overshootRun || 0) + 1;
+      el.overshootRun = run;
+      draw(0, false);
+      var start = null;
+      function frame(ts) {
+        if (el.overshootRun !== run) return;
+        if (start === null) start = ts + delayMs;
+        var u = Math.max(0, (ts - start) / 1000);
+        if (u >= OVERSHOOT_END_S) { draw(1, true); return; }
+        draw(overshootValue(u), false);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    }
+    function overshootCoreBars(root) {
+      root.querySelectorAll('.util-list-core .util-bar-fill').forEach(function (el, i) {
+        el.classList.remove('metric-animate', 'metric-in');
+        if (el.dataset.overshootTarget === undefined) {
+          el.dataset.overshootTarget = String(parseFloat(el.style.width) || 0);
+        }
+        var target = parseFloat(el.dataset.overshootTarget);
+        if (reduceMotion || !(target > 0)) return;
+        runOvershoot(el, Math.min(i * 24, 240), function (s, done) {
+          var w = done ? target : Math.min(100, target * s);
+          el.style.width = w.toFixed(2) + '%';
+          if (!done && target * s > target + 0.4) {
+            var cut = (100 * target / w).toFixed(2);
+            el.style.backgroundImage = 'linear-gradient(90deg, transparent ' + cut + '%, var(--overshoot) ' + cut + '%)';
+          } else {
+            el.style.backgroundImage = '';
+          }
+        });
+      });
+    }
+    function gaugePoint(cx, cy, r, f) {
+      var a = Math.PI * (1 - f);
+      return [cx + Math.cos(a) * r, cy - Math.sin(a) * r];
+    }
+    function gaugeArc(cx, cy, r, f0, f1) {
+      var p = gaugePoint(cx, cy, r, f0), q = gaugePoint(cx, cy, r, f1);
+      return 'M ' + p[0].toFixed(2) + ' ' + p[1].toFixed(2) + ' A ' + r + ' ' + r
+        + ' 0 0 1 ' + q[0].toFixed(2) + ' ' + q[1].toFixed(2);
+    }
+    function svgPart(tag, cls, before) {
+      var el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      el.setAttribute('class', cls);
+      before.parentNode.insertBefore(el, before);
+      return el;
+    }
+    function overshootGauges(root) {
+      root.querySelectorAll('.lb-gauge-svg').forEach(function (svg) {
+        var tracks = svg.querySelectorAll('.lb-track');
+        var arcs = svg.querySelectorAll('.lb-value-arc');
+        Array.prototype.forEach.call(svg.querySelectorAll('.lb-needle'), function (needle, i) {
+          var track = tracks[i], arc = arcs[i];
+          if (!track || !arc) return;
+          if (!needle.overshootGeom) {
+            var nums = (track.getAttribute('d') || '').match(/[-0-9.]+/g) || [];
+            var cx = +needle.getAttribute('x1'), cy = +needle.getAttribute('y1');
+            var x2 = needle.getAttribute('x2'), y2 = needle.getAttribute('y2');
+            var dx = +x2 - cx, dy = cy - +y2;
+            var deg = Math.atan2(dy, dx) * 180 / Math.PI;
+            var r = +nums[2] || 0;
+            var k = r / 128;
+            var over = svgPart('path', 'lb-overshoot-arc', needle);
+            over.setAttribute('fill', 'none');
+            over.setAttribute('stroke-width', arc.getAttribute('stroke-width') || '8');
+            over.setAttribute('stroke-linecap', 'butt');
+            var f = Math.max(0, Math.min(1, (180 - deg) / 180));
+            var t0 = gaugePoint(cx, cy, r - 22 * k, f), t1 = gaugePoint(cx, cy, r + 30 * k, f);
+            var dot = gaugePoint(cx, cy, r + 38 * k, f);
+            var tick = svgPart('line', 'lb-target-tick lb-target-done', needle);
+            tick.setAttribute('x1', t0[0].toFixed(2)); tick.setAttribute('y1', t0[1].toFixed(2));
+            tick.setAttribute('x2', t1[0].toFixed(2)); tick.setAttribute('y2', t1[1].toFixed(2));
+            tick.setAttribute('stroke-width', (7 * k).toFixed(2));
+            tick.setAttribute('stroke-linecap', 'round');
+            var tickDot = svgPart('circle', 'lb-target-dot lb-target-done', needle);
+            tickDot.setAttribute('cx', dot[0].toFixed(2)); tickDot.setAttribute('cy', dot[1].toFixed(2));
+            tickDot.setAttribute('r', (8 * k).toFixed(2));
+            needle.overshootGeom = {
+              cx: cx, cy: cy, r: r, f: f, len: Math.sqrt(dx * dx + dy * dy),
+              x2: x2, y2: y2, arcD: arc.getAttribute('d'), over: over, marks: [tick, tickDot],
+            };
+          }
+          var g = needle.overshootGeom;
+          g.over.style.display = 'none';
+          if (reduceMotion || !(g.f > 0) || !(g.r > 0)) return;
+          runOvershoot(needle, 0, function (s, done) {
+            g.marks.forEach(function (m) { m.classList.toggle('lb-target-done', done); });
+            if (done) {
+              needle.setAttribute('x2', g.x2); needle.setAttribute('y2', g.y2);
+              arc.setAttribute('d', g.arcD);
+              g.over.style.display = 'none';
+              return;
+            }
+            var v = Math.min(1, g.f * s);
+            var tip = gaugePoint(g.cx, g.cy, g.len, v);
+            needle.setAttribute('x2', tip[0].toFixed(2)); needle.setAttribute('y2', tip[1].toFixed(2));
+            var start = gaugePoint(g.cx, g.cy, g.r, 0);
+            arc.setAttribute('d', v > 0.005 ? gaugeArc(g.cx, g.cy, g.r, 0, v)
+              : 'M ' + start[0].toFixed(2) + ' ' + start[1].toFixed(2));
+            if (v > g.f + 0.004) {
+              g.over.setAttribute('d', gaugeArc(g.cx, g.cy, g.r, g.f, v));
+              g.over.style.display = '';
+            } else {
+              g.over.style.display = 'none';
+            }
+          });
+        });
+      });
+    }
     function animateMetrics(root) {
       root.classList.remove('compare-chart-active');
       root.getBoundingClientRect();
       requestAnimationFrame(function () { root.classList.add('compare-chart-active'); });
-      root.querySelectorAll(
+      Array.prototype.filter.call(root.querySelectorAll(
         '.util-bar-fill, .rank-bar-fill, .pct-bar .fill, .chart-line, .chart-point, .pctile-bar'
-      ).forEach(function (el, i) {
+      ), function (el) { return !el.closest('.util-list-core'); }).forEach(function (el, i) {
         el.classList.remove('metric-in'); el.classList.add('metric-animate');
         el.style.animationDelay = Math.min(i * 24, 240) + 'ms';
         requestAnimationFrame(function () { el.classList.add('metric-in'); });
       });
+      overshootCoreBars(root);
+      overshootGauges(root);
       root.querySelectorAll('.lb-gauge-svg').forEach(function (gauge) {
         gauge.classList.remove('lb-gauge-active');
         gauge.getBoundingClientRect();
@@ -4855,31 +4981,26 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 60
 .lb-gauge-svg .lb-chip-red { fill: var(--danger-soft); stroke: var(--danger); }
 .lb-gauge-svg .lb-chip-text-amber { fill: var(--warning); }
 .lb-gauge-svg .lb-chip-text-red { fill: var(--danger); }
-.lb-gauge-svg .lb-value-arc { stroke-dasharray: 100; stroke-dashoffset: 100; }
-.lb-gauge-svg .lb-needle { transform: scale(0); }
+/* Needle, value arc and core bars are driven by the report script's
+   Overshoot spring (Motion Prompt #010); CSS only styles the extra parts. */
+.lb-gauge-svg .lb-overshoot-arc { stroke: var(--overshoot); }
+.lb-gauge-svg .lb-target-tick { stroke: var(--overshoot-target); }
+.lb-gauge-svg .lb-target-dot { fill: var(--overshoot-target); }
+.lb-gauge-svg .lb-target-tick, .lb-gauge-svg .lb-target-dot { transition: opacity 0.3s ease-out; }
+.lb-gauge-svg .lb-target-done { opacity: 0; }
 .lb-gauge-svg .lb-value-ok, .lb-gauge-svg .lb-value-amber, .lb-gauge-svg .lb-value-red {
   opacity: 0; transform-box: fill-box; transform-origin: center;
-}
-.lb-gauge-svg.lb-gauge-active .lb-value-arc {
-  animation: lb-arc-in 0.85s cubic-bezier(.2,.8,.2,1) forwards;
-}
-.lb-gauge-svg.lb-gauge-active .lb-needle {
-  animation: lb-needle-in 0.58s cubic-bezier(.2,1.35,.35,1) 0.34s forwards;
 }
 .lb-gauge-svg.lb-gauge-active .lb-value-ok,
 .lb-gauge-svg.lb-gauge-active .lb-value-amber,
 .lb-gauge-svg.lb-gauge-active .lb-value-red {
   animation: lb-value-in 0.35s ease-out 0.62s forwards;
 }
-@keyframes lb-arc-in { to { stroke-dashoffset: 0; } }
-@keyframes lb-needle-in { from { transform: scale(0); } to { transform: scale(1); } }
 @keyframes lb-value-in {
   from { opacity: 0; transform: translateY(3px) scale(.92); }
   to { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .lb-gauge-svg .lb-value-arc { stroke-dashoffset: 0; }
-  .lb-gauge-svg .lb-needle { transform: none; }
   .lb-gauge-svg .lb-value-ok, .lb-gauge-svg .lb-value-amber,
   .lb-gauge-svg .lb-value-red { opacity: 1; transform: none; }
 }
@@ -5272,7 +5393,8 @@ def html_util_section(
         body = '<p class="empty">No data</p>'
     else:
         items = "".join(html_util_bar_row(label, pct, kind) for label, pct in rows)
-        body = f'<div class="util-list">{items}</div>'
+        list_cls = "util-list util-list-core" if kind == "core" else "util-list"
+        body = f'<div class="{list_cls}">{items}</div>'
     return (
         f'<section class="report-card"><h2>{_esc(title)}</h2>'
         f"{lead_html}{body}</section>"

@@ -225,6 +225,8 @@ describe('stats HTML helpers', () => {
     assert.ok(html.indexOf('lb-gauge-svg') < html.indexOf('util-list'))
     assert.match(html, /title="Core_0: 72\.3%"/)
     assert.match(html, /class="util-bar-fill" style="width:72\.3%"/)
+    assert.match(html, /class="util-list util-list-core"/)
+    assert.match(htmlUtilSection('T', [['W', 5]], 'task'), /class="util-list"/)
     const empty = htmlUtilSection('Top Tasks by CPU', [], 'task', { leadHtml: '<i>x</i>' })
     assert.match(empty, /<i>x<\/i>/)
     assert.match(empty, /class="empty"/)

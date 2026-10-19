@@ -264,31 +264,26 @@ h3.sub { margin: 14px 0 8px; font-size: 14px; color: var(--ink); font-weight: 60
 .lb-gauge-svg .lb-chip-red { fill: var(--danger-soft); stroke: var(--danger); }
 .lb-gauge-svg .lb-chip-text-amber { fill: var(--warning); }
 .lb-gauge-svg .lb-chip-text-red { fill: var(--danger); }
-.lb-gauge-svg .lb-value-arc { stroke-dasharray: 100; stroke-dashoffset: 100; }
-.lb-gauge-svg .lb-needle { transform: scale(0); }
+/* Needle, value arc and core bars are driven by the report script's
+   Overshoot spring (Motion Prompt #010); CSS only styles the extra parts. */
+.lb-gauge-svg .lb-overshoot-arc { stroke: var(--overshoot); }
+.lb-gauge-svg .lb-target-tick { stroke: var(--overshoot-target); }
+.lb-gauge-svg .lb-target-dot { fill: var(--overshoot-target); }
+.lb-gauge-svg .lb-target-tick, .lb-gauge-svg .lb-target-dot { transition: opacity 0.3s ease-out; }
+.lb-gauge-svg .lb-target-done { opacity: 0; }
 .lb-gauge-svg .lb-value-ok, .lb-gauge-svg .lb-value-amber, .lb-gauge-svg .lb-value-red {
   opacity: 0; transform-box: fill-box; transform-origin: center;
-}
-.lb-gauge-svg.lb-gauge-active .lb-value-arc {
-  animation: lb-arc-in 0.85s cubic-bezier(.2,.8,.2,1) forwards;
-}
-.lb-gauge-svg.lb-gauge-active .lb-needle {
-  animation: lb-needle-in 0.58s cubic-bezier(.2,1.35,.35,1) 0.34s forwards;
 }
 .lb-gauge-svg.lb-gauge-active .lb-value-ok,
 .lb-gauge-svg.lb-gauge-active .lb-value-amber,
 .lb-gauge-svg.lb-gauge-active .lb-value-red {
   animation: lb-value-in 0.35s ease-out 0.62s forwards;
 }
-@keyframes lb-arc-in { to { stroke-dashoffset: 0; } }
-@keyframes lb-needle-in { from { transform: scale(0); } to { transform: scale(1); } }
 @keyframes lb-value-in {
   from { opacity: 0; transform: translateY(3px) scale(.92); }
   to { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .lb-gauge-svg .lb-value-arc { stroke-dashoffset: 0; }
-  .lb-gauge-svg .lb-needle { transform: none; }
   .lb-gauge-svg .lb-value-ok, .lb-gauge-svg .lb-value-amber,
   .lb-gauge-svg .lb-value-red { opacity: 1; transform: none; }
 }
@@ -613,7 +608,8 @@ export function htmlUtilBarRow(label, pct, kind) {
  */
 export function htmlUtilSection(title, rows, kind, { leadHtml = '' } = {}) {
   const items = (rows || []).map(([label, pct]) => htmlUtilBarRow(label, pct, kind)).join('')
-  const body = items ? `<div class="util-list">${items}</div>` : '<p class="empty">No data</p>'
+  const listCls = kind === 'core' ? 'util-list util-list-core' : 'util-list'
+  const body = items ? `<div class="${listCls}">${items}</div>` : '<p class="empty">No data</p>'
   return `<section class="report-card"><h2>${esc(title)}</h2>${leadHtml}${body}</section>`
 }
 

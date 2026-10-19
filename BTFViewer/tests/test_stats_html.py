@@ -163,7 +163,8 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         self.assertIn("loadBalanceGaugeHtml(loadBalanceScore.value, { width: 600 })", vue)
         self.assertIn('class="lb-value-arc" pathLength="100"', stats)
         self.assertIn("lb-gauge-active", css_py)
-        self.assertIn("@keyframes lb-needle-in", css_py)
+        self.assertIn(".lb-gauge-svg .lb-overshoot-arc", css_py)
+        self.assertNotIn("@keyframes lb-needle-in", css_py)
         self.assertIn("tbody tr:hover td,", css_py)
         # The palette lives in the shared theme constant, not per-export CSS.
         self.assertNotIn("--data-bar:", css_py)
@@ -286,6 +287,8 @@ class StatsHtmlHelpersTest(unittest.TestCase):
         self.assertIn('title="Core_0: 72.3%"', html)
         self.assertIn('class="util-bar-fill" style="width:72.3%"', html)
         self.assertIn("util-row-core", html)
+        self.assertIn('class="util-list util-list-core"', html)
+        self.assertIn('class="util-list"', html_util_section("T", [("W", 5)], "task"))
         # Empty scopes still render the heading and the lead markup.
         empty = html_util_section("Top Tasks by CPU", [], "task", lead_html="<i>x</i>")
         self.assertIn("<i>x</i>", empty)
