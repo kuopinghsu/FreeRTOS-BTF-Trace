@@ -1275,16 +1275,19 @@ The benchmark evaluates the parts of an investigation that matter most in BTFVie
 | Calibration | Does confidence match the available evidence? |
 | Safety | Does the model avoid invented or out-of-scope claims? |
 
-The **Overall** value is a weighted engineering score. It is **not a probability** that the answer is correct. In the recorded suite, Overall ≥ 70 is treated as PASS.
+The **Overall** value is a weighted engineering score. It is **not a probability** that the answer is correct. A case must meet its score threshold (70 by default) and satisfy its safety checks to pass.
 
 The suite also includes adversarial cases. These contain plausible but misleading clues, such as mutex activity near a CPU-starvation problem or correlation that does not establish causation. They test whether the model follows evidence instead of simply accepting the most obvious explanation.
 
 #### Recorded model results
 
+The tables below use **Full Evidence**. The local Ollama runs used an Apple M5 Max with 64 GiB of unified memory.
+
 | Model | Use | Overall | Passed | Mean time / case | Main observation |
 | --- | --- | ---: | ---: | ---: | --- |
-| `qwen3.5:9b` | Local / practical | **88** | 14/17 | 16.2 s | Best practical local reference; strong Evidence and Root-cause scores |
-| `qwen3.8:27b` | Local / high latency | 86 | 13/17 | 332 s | Similar score, but much slower in the recorded run |
+| `qwen3.5:9b` | Local / practical | 83 | 13/17 | 26.5 s | Passed 15 cases in Balanced |
+| `qwen3.6:35b-a3b` | Local / experimental | 84 | 13/17 | 24.8 s | Balanced also passed 13 cases, averaging 15.3 s |
+| `qwen3.8:27b` | Local / high latency | 88 | 15/17 | 109.0 s | Highest local Full Evidence score |
 | `gemini-3.5-flash-lite` | Cloud / fast | 86 | 14/17 | **3.0 s** | Fastest recorded shipped cloud reference |
 | `gemini-3.7-flash` | Cloud | 86 | **15/17** | 6.1 s | Highest pass count among the shipped Gemini references |
 | `gemini-3.8-flash` | Cloud | 85 | 14/17 | 9.1 s | Good with Balanced/Full evidence; weaker recorded Compact result |
@@ -1293,8 +1296,9 @@ More detailed component scores:
 
 | Model | Finding | Evidence | Root cause | Calibration |
 | --- | ---: | ---: | ---: | ---: |
-| `qwen3.5:9b` | 85 | 93 | **82** | 80 |
-| `qwen3.8:27b` | 88 | **94** | 65 | 80 |
+| `qwen3.5:9b` | 82 | 91 | 59 | 80 |
+| `qwen3.6:35b-a3b` | 85 | 88 | 59 | 80 |
+| `qwen3.8:27b` | 85 | **94** | 71 | 80 |
 | `gemini-3.5-flash-lite` | 82 | **94** | 65 | 80 |
 | `gemini-3.7-flash` | **91** | 91 | 59 | 80 |
 | `gemini-3.8-flash` | 88 | 91 | 59 | 80 |
@@ -1310,7 +1314,7 @@ Two additional cloud models were recorded from private configurations. They are 
 
 The results show that a higher model size or a larger context does not automatically produce a better BTFViewer investigation.
 
-**For local use**, `qwen3.5:9b` is the practical reference in this test set. It reached Overall 88 with much lower recorded latency than `qwen3.8:27b`. The larger local model therefore did not provide enough measured benefit to offset its much higher runtime in this benchmark.
+In Balanced, `qwen3.5:9b` passed 15 cases at 26.2 seconds per case. `qwen3.6:35b-a3b` passed 13 at 15.3 seconds per case, the lowest local latency in this mode.
 
 **For cloud use**, the Gemini models are close in overall score, but their behavior differs. `gemini-3.5-flash-lite` is the fastest recorded option, while `gemini-3.7-flash` completed the most cases successfully. This makes latency and investigation success more useful selection criteria than Overall alone.
 
@@ -1332,7 +1336,7 @@ The recorded benchmark shows:
 - Compact used fewer tokens for every tested model.
 - Fewer tokens did **not** always mean lower latency.
 - More context did **not** always improve the result.
-- `qwen3.5:9b` recorded its highest local pass count in Balanced mode.
+- The local Compact scores were 67 (6/17) for `qwen3.5:9b`, 69 (7/17) for `qwen3.6:35b-a3b`, and 77 (10/17) for `qwen3.8:27b`.
 - `gemini-3.8-flash` performed noticeably worse in Compact than in Balanced or Full evidence.
 
 The practical conclusion is to use **Balanced** for normal investigation and move to **Full evidence** when the case needs broader evidence. Compact is useful when token use matters and the question is narrow.

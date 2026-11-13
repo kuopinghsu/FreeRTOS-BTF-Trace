@@ -440,6 +440,8 @@ Select text in a reply and right-click **Ask AI (preview…)** to send that snip
 
 Available context levels are **Compact**, **Balanced**, and **Full Evidence**. Compact is fast triage; Balanced is the default investigation depth; Full Evidence adds relevant findings and investigation history. Confidence comes from evidence, not from the mode. Configure the model, service endpoint, authentication, context, privacy, and reply language in **Settings → AI**.
 
+On an Apple M5 Max with 64 GiB of unified memory, Ollama's `qwen3.6:35b-a3b` passed 13 of 17 BTFViewer cases in **Balanced** mode, scoring **82/100** with a mean latency of **15.3 seconds per case**. [Benchmark results for all models and context modes](AI_BENCHMARK.md#comparison)
+
 Import `examples/ai/presets.json` for example Ollama, OpenAI, Gemini, DeepSeek, and Grok configurations. Local Ollama does not require an API key. Cloud services may send trace evidence to an external provider; use the anonymization and sensitive-trace settings when appropriate.
 
 <a id="ai-api-keys" name="ai-api-keys">&#x200B;</a>

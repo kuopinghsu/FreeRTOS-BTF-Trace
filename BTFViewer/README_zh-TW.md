@@ -440,6 +440,8 @@ p95 很重要，因為只看平均值無法完整判斷即時效能。即使平�
 
 可用的內容層級包括 **Compact**、**Balanced** 及 **Full Evidence**。**Compact** 用於快速分類；**Balanced** 是預設調查深度；**Full Evidence** 會加入相關分析結果與調查歷程。信心程度來自證據，而不是來自模型本身。可在 **Settings → AI** 中設定模型、服務端點、驗證方式、內容層級、隱私選項及回覆語言。
 
+在搭載 64 GiB 統一記憶體的 Apple M5 Max 上，透過 Ollama 執行 `qwen3.6:35b-a3b`，在 **Balanced** 模式下通過 17 個 BTFViewer 測試案例中的 13 個，總分為 **82/100**，平均每個案例耗時 **15.3 秒**。[各模型與內容層級的基準測試結果](AI_BENCHMARK.md#comparison)
+
 匯入 `examples/ai/presets.json`，可取得 Ollama、OpenAI、Gemini、DeepSeek 及 Grok 的範例設定。使用本機 Ollama 不需要 API 金鑰。若使用雲端模型，BTFViewer 會將分析所需的統計摘要與證據傳送給對應的服務供應商；處理敏感資料時，請視需要啟用匿名化及敏感資料選項。
 
 <a id="ai-api-keys" name="ai-api-keys">&#x200B;</a>
