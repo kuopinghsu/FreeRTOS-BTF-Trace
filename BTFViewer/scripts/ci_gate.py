@@ -615,14 +615,16 @@ def check_pdf_freshness() -> List[str]:
             continue
         md_t = git_commit_time(md_rel)
         pdf_t = git_commit_time(pdf_rel)
-        if md_t and pdf_t and md_t > pdf_t:
+        pdf_dirty = git_dirty(pdf_rel)
+        rebuilt_locally = pdf_dirty and pdf.stat().st_mtime_ns >= md.stat().st_mtime_ns
+        if md_t and pdf_t and md_t > pdf_t and not rebuilt_locally:
             errors.append(
                 f"pdf: {pdf_rel} is older than {md_rel} "
                 f"(md commit {md_t} > pdf commit {pdf_t}); run: make -C BTFViewer doc"
             )
-        if git_dirty(md_rel) and not git_dirty(pdf_rel):
+        if git_dirty(md_rel) and not rebuilt_locally:
             errors.append(
-                f"pdf: {md_rel} has local edits but {pdf_rel} does not; "
+                f"pdf: {md_rel} has local edits without a newer local {pdf_rel}; "
                 f"run: make -C BTFViewer doc"
             )
     return errors

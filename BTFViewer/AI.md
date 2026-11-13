@@ -1283,8 +1283,8 @@ The suite also includes adversarial cases. These contain plausible but misleadin
 
 The tables below use **Full Evidence**. The local Ollama runs used an Apple M5 Max with 64 GiB of unified memory.
 
-| Model | Use | Overall | Passed | Mean time / case | Main observation |
-| --- | --- | ---: | ---: | ---: | --- |
+| Model | Use | Score | Pass | Mean time / case | Main observation |
+| --- | --- | :--- | :---: | ---: | --- |
 | `qwen3.5:9b` | Local / practical | 83 | 13/17 | 26.5 s | Passed 15 cases in Balanced |
 | `qwen3.6:35b-a3b` | Local / experimental | 84 | 13/17 | 24.8 s | Balanced also passed 13 cases, averaging 15.3 s |
 | `qwen3.8:27b` | Local / high latency | 88 | 15/17 | 109.0 s | Highest local Full Evidence score |

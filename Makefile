@@ -3,7 +3,7 @@ RISCV_PREFIX ?= /opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
 
 .DEFAULT_GOAL := all
 
-.PHONY: all help run check clean distclean update
+.PHONY: all help run check clean distclean update ci-gate
 
 help:
 	@echo "FreeRTOS-BTF-Trace — make targets"
@@ -21,6 +21,10 @@ help:
 	@echo ""
 	@echo "BTF Viewer (separate tree):"
 	@echo "  make -C BTFViewer help"
+	@echo "  make ci-gate      Run the BTFViewer CI gate"
+
+ci-gate:
+	$(MAKE) -C BTFViewer ci-gate
 
 all: check
 	$(MAKE) -C Demo RISCV_PREFIX=$(RISCV_PREFIX)
