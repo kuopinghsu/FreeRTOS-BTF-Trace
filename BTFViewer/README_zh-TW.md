@@ -254,7 +254,7 @@ BTFViewer 使用一致的檢視介面、控制項目與分析流程。判讀結�
 |---|---|
 | 放置游標 | 點選時間軸，或按 `C` 將游標放在目前畫面中央 |
 | 移動游標 | 拖曳游標線 |
-| 移除游標 | 點選游標線附近，或使用快顯功能表 |
+| 移除游標 | 點選游標線附近，或按滑鼠右鍵選擇 **Remove nearest cursor** |
 | 清除所有游標 | 按 `Shift+C`，或按住 Shift 再按滑鼠右鍵 |
 | 對齊事件邊界 | 按住 Shift 再點選 |
 
@@ -617,6 +617,8 @@ python builds/btf_viewer.py slice trace.btf -o window.btf --lo 100000 --hi 50000
 | 輕量 CI 檢查（測試 + 建置產物 + 文件） | `make -C BTFViewer ci-gate` |
 | 建置 PDF 文件 | `make -C BTFViewer doc` |
 | 從原始碼執行 | 在 `BTFViewer/` 中執行 `python -m btf_viewer_pkg trace.btf` |
+
+在 Windows 上，`make` 會使用 Git for Windows 的 `sh.exe`（`C:/Program Files/Git/bin/sh.exe`）執行建置指令，因此可直接在 PowerShell 或 cmd 中執行。若 Git 安裝在其他位置，請加上 `GIT_SH=D:/path/to/Git/bin/sh.exe`。
 
 BTF 欄位定義請參閱上層目錄中的 `TRACE_FORMAT.md`。
 

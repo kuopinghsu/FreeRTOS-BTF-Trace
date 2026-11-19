@@ -24938,12 +24938,12 @@ class TimelineView(QGraphicsView):
                         self._scene.add_cursor(ns)
                         self.cursors_changed.emit(self._scene.cursor_times())
                         self._dbl_click_undo_ns = ns
-            elif event.button() == Qt.MouseButton.RightButton:
+            elif (event.button() == Qt.MouseButton.RightButton
+                  and event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                # Plain right-click only opens the context menu (matches web
+                # viewer); "Remove nearest cursor" lives in that menu.
                 self.pre_change.emit()
-                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                    self._scene.clear_cursors()
-                else:
-                    self._scene.remove_nearest_cursor(ns)
+                self._scene.clear_cursors()
                 self.cursors_changed.emit(self._scene.cursor_times())
         self._press_pos = None
 
@@ -102337,7 +102337,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                      lambda: self._view.clear_cursors(), "Shift+C")
         cm.addSeparator()
         cm.addAction("Tip: Left-click on timeline to place cursor").setEnabled(False)
-        cm.addAction("Right-click on timeline to remove nearest cursor").setEnabled(False)
+        cm.addAction("Right-click on timeline for context menu (Remove nearest cursor)").setEnabled(False)
 
         # --- Navigate menu ---
         nm = mb.addMenu("&Navigate")
@@ -110349,7 +110349,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ("Cursors", [
                 ("Left-click (near cursor)", "Remove that cursor"),
                 ("Left-click (elsewhere)",   "Place cursor (Shift = snap to segment boundary)"),
-                ("Right-click",            "Remove nearest cursor"),
+                ("Right-click",            "Context menu (Remove nearest cursor)"),
                 ("Right-click on segment", "Context menu"),
                 ("Shift+Right-click",      "Clear all cursors"),
                 ("C",                      "Place cursor at pointer (falls back to centre)"),
@@ -110379,7 +110379,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+Left-drag",                "Measure time between two points (double-arrow ruler + Δtime)"),
                 ("Left-click  (timeline)",        "Place cursor at click position"),
                 ("Shift+Left-click",              "Snap cursor to nearest segment boundary"),
-                ("Right-click  (timeline)",       "Remove nearest cursor / context menu"),
+                ("Right-click  (timeline)",       "Context menu (Remove nearest cursor)"),
                 ("Shift+Right-click",             "Clear all cursors"),
                 ("Double-click  (ruler)",         "Fit entire trace"),
                 ("Double-click  (segment)",       "Zoom to that segment; repeat to restore previous zoom"),
@@ -113176,7 +113176,24 @@ def _cli_gui_trace_paths(argv: List[str],
         out.append(path)
     return out
 
+def _make_std_streams_unicode_safe() -> None:
+    """Avoid UnicodeEncodeError (e.g. 'µs') on Windows legacy code pages
+    such as cp950 when output is piped/redirected (make, CI, `> file`)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if reconf is None:
+            continue
+        try:
+            if stream.isatty():
+                reconf(errors="replace")
+            else:
+                reconf(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def main() -> None:
+    _make_std_streams_unicode_safe()
     argv = sys.argv[1:]
     launch_cwd = os.getcwd()
     parser, _subs = _make_arg_parser()

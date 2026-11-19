@@ -1,3 +1,11 @@
+# Windows: recipes are POSIX sh (mkdir -p, rm -f, VAR=x cmd). Without sh.exe on
+# PATH (e.g. make run from PowerShell) GNU make falls back to cmd.exe, so pin
+# Git for Windows' sh. Override with GIT_SH=... if Git lives elsewhere.
+ifeq ($(OS),Windows_NT)
+GIT_SH ?= C:/Program Files/Git/bin/sh.exe
+SHELL := $(GIT_SH)
+endif
+
 PLUGIN := com.btfviewer.eclipse
 VIEWER := ../builds/btf_viewer.html
 EMBEDDED := $(PLUGIN)/web/btf_viewer.html

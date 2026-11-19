@@ -176,13 +176,11 @@ export class InteractionHandler {
   }
 
   removeNearestCursor(ns) {
-    this._opts.onBeforeCursorChange?.()
-    const vp = this._opts.getViewport()
-    if (!vp) return
-    const snapNs = 5 * this._nsPerPx()
+    // Remove the closest cursor regardless of distance (matches desktop
+    // viewer's scene.remove_nearest_cursor).
     const cursors = [...this._cursors]
     let bestIdx = -1
-    let bestDist = snapNs
+    let bestDist = Infinity
     for (let i = 0; i < cursors.length; i++) {
       if (cursors[i] == null) continue
       const d = Math.abs(cursors[i] - ns)
@@ -192,6 +190,7 @@ export class InteractionHandler {
       }
     }
     if (bestIdx >= 0) {
+      this._opts.onBeforeCursorChange?.()
       cursors[bestIdx] = null
       this._cursors = cursors
       this._opts.onCursorsChange?.(cursors)

@@ -2551,7 +2551,24 @@ def _cli_gui_trace_paths(argv: List[str],
         out.append(path)
     return out
 
+def _make_std_streams_unicode_safe() -> None:
+    """Avoid UnicodeEncodeError (e.g. 'µs') on Windows legacy code pages
+    such as cp950 when output is piped/redirected (make, CI, `> file`)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if reconf is None:
+            continue
+        try:
+            if stream.isatty():
+                reconf(errors="replace")
+            else:
+                reconf(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def main() -> None:
+    _make_std_streams_unicode_safe()
     argv = sys.argv[1:]
     launch_cwd = os.getcwd()
     parser, _subs = _make_arg_parser()

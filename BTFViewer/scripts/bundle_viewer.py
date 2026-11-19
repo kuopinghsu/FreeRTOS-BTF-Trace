@@ -381,6 +381,7 @@ def _git_show_ref(ref: str) -> str | None:
         ["git", "show", ref],
         cwd=ROOT.parent,
         text=True,
+        encoding="utf-8",  # Windows default codepage (e.g. cp950) can't decode source
     )
 
 def _docstring_source(monolith: Path) -> Path:

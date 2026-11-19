@@ -2,6 +2,12 @@
 
 Since v1.0.0 (2026-09-13)
 
+## 2026-11-19
+- Fixed: plain right-click on the timeline removed the nearest cursor before opening the context menu; it now only opens the menu (Shift+right-click still clears all cursors) (desktop)
+- Fixed: context menu "Remove nearest cursor" did nothing unless a cursor was within 5 px of the click; it now removes the closest cursor (web)
+- Fixed: `btf_viewer.py` CLI crashed with UnicodeEncodeError (e.g. `µs`) when output was piped on Windows legacy code pages such as cp950 (desktop)
+- Build: `make -C BTFViewer` works on Windows from PowerShell/cmd — Makefiles use Git for Windows' `sh.exe` (override with `GIT_SH=...`), and the bundler reads `git show` output as UTF-8
+
 ## 2026-10-02
 - Fixed: Trace Health tick period now follows the trace time scale (and a tick-rate metadata key when present) instead of assuming 1 ms in ns (desktop/web)
 - Fixed: core-affinity masks above 32 bits; bare `resume`/`resume/isr` notes no longer create a phantom task (web/desktop)

@@ -3346,12 +3346,12 @@ class TimelineView(QGraphicsView):
                         self._scene.add_cursor(ns)
                         self.cursors_changed.emit(self._scene.cursor_times())
                         self._dbl_click_undo_ns = ns
-            elif event.button() == Qt.MouseButton.RightButton:
+            elif (event.button() == Qt.MouseButton.RightButton
+                  and event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                # Plain right-click only opens the context menu (matches web
+                # viewer); "Remove nearest cursor" lives in that menu.
                 self.pre_change.emit()
-                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                    self._scene.clear_cursors()
-                else:
-                    self._scene.remove_nearest_cursor(ns)
+                self._scene.clear_cursors()
                 self.cursors_changed.emit(self._scene.cursor_times())
         self._press_pos = None
 

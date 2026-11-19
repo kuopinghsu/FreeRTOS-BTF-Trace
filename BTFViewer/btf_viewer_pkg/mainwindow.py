@@ -9448,7 +9448,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                      lambda: self._view.clear_cursors(), "Shift+C")
         cm.addSeparator()
         cm.addAction("Tip: Left-click on timeline to place cursor").setEnabled(False)
-        cm.addAction("Right-click on timeline to remove nearest cursor").setEnabled(False)
+        cm.addAction("Right-click on timeline for context menu (Remove nearest cursor)").setEnabled(False)
 
         # --- Navigate menu ---
         nm = mb.addMenu("&Navigate")
@@ -17459,7 +17459,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ("Cursors", [
                 ("Left-click (near cursor)", "Remove that cursor"),
                 ("Left-click (elsewhere)",   "Place cursor (Shift = snap to segment boundary)"),
-                ("Right-click",            "Remove nearest cursor"),
+                ("Right-click",            "Context menu (Remove nearest cursor)"),
                 ("Right-click on segment", "Context menu"),
                 ("Shift+Right-click",      "Clear all cursors"),
                 ("C",                      "Place cursor at pointer (falls back to centre)"),
@@ -17489,7 +17489,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+Left-drag",                "Measure time between two points (double-arrow ruler + Δtime)"),
                 ("Left-click  (timeline)",        "Place cursor at click position"),
                 ("Shift+Left-click",              "Snap cursor to nearest segment boundary"),
-                ("Right-click  (timeline)",       "Remove nearest cursor / context menu"),
+                ("Right-click  (timeline)",       "Context menu (Remove nearest cursor)"),
                 ("Shift+Right-click",             "Clear all cursors"),
                 ("Double-click  (ruler)",         "Fit entire trace"),
                 ("Double-click  (segment)",       "Zoom to that segment; repeat to restore previous zoom"),

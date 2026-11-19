@@ -12,6 +12,14 @@
 #   make -C BTFViewer ai-test-live # live suite XML → AI_BENCHMARK.md (AI_CONFIG)
 #   make -C BTFViewer ai-prompts   # on-demand AI prompt dump → builds/ai_prompts_review.txt
 
+# Windows: recipes are POSIX sh (mkdir -p, rm -f, VAR=x cmd). Without sh.exe on
+# PATH (e.g. make run from PowerShell) GNU make falls back to cmd.exe, so pin
+# Git for Windows' sh. Override with GIT_SH=... if Git lives elsewhere.
+ifeq ($(OS),Windows_NT)
+GIT_SH ?= C:/Program Files/Git/bin/sh.exe
+SHELL := $(GIT_SH)
+endif
+
 PYTHON ?= python3
 TRACE ?= ../tracedata/example-2cores.btf.gz
 BUILDS := builds

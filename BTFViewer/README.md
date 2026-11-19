@@ -254,7 +254,7 @@ Cursors mark timestamps and can define a measurement Scope. BTFViewer supports f
 |---|---|
 | Place a cursor | Click the timeline, or press `C` to place one at the viewport center |
 | Move a cursor | Drag its line |
-| Remove a cursor | Click near the line or use the context menu |
+| Remove a cursor | Click near the line, or right-click and choose **Remove nearest cursor** |
 | Clear all cursors | Press `Shift+C` or Shift-right-click |
 | Snap to an event boundary | Shift-click |
 
@@ -617,6 +617,8 @@ Most users can ignore this section.
 | Lightweight CI gate (tests + builds + docs) | `make -C BTFViewer ci-gate` |
 | Build documentation PDFs | `make -C BTFViewer doc` |
 | Run from source | `python -m btf_viewer_pkg trace.btf` from `BTFViewer/` |
+
+On Windows, `make` runs its recipes with Git for Windows' `sh.exe` (`C:/Program Files/Git/bin/sh.exe`), so it works from PowerShell or cmd. If Git is installed elsewhere, pass `GIT_SH=D:/path/to/Git/bin/sh.exe`.
 
 See `TRACE_FORMAT.md` in the parent directory for the BTF field reference.
 
