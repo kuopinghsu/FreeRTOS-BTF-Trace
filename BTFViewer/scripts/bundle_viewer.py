@@ -486,7 +486,7 @@ def bundle(pkg_dir: Path, out_path: Path, monolith: Path) -> None:
 
     parts.append("\nif __name__ == \"__main__\":\n    main()\n")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("".join(parts), encoding="utf-8")
+    out_path.write_text("".join(parts), encoding="utf-8", newline="\n")
     mode = out_path.stat().st_mode
     out_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     print(f"Bundled {len(BUNDLE_MODULES)} module sections -> {out_path}")
