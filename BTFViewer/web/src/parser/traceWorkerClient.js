@@ -1,3 +1,10 @@
+export class TraceWorkerTransportError extends Error {
+  constructor(message, options) {
+    super(message, options)
+    this.name = 'TraceWorkerTransportError'
+  }
+}
+
 /** Run one operation and release its worker on completion, failure, or abort. */
 export function runTraceWorker(worker, request, { signal, transfer = [], onProgress } = {}) {
   return new Promise((resolve, reject) => {
@@ -11,7 +18,9 @@ export function runTraceWorker(worker, request, { signal, transfer = [], onProgr
       finish(reject, signal.reason)
     }
     function fail(event) {
-      finish(reject, new Error(event.message || 'Trace worker could not complete the operation'))
+      finish(reject, new TraceWorkerTransportError(
+        event.message || 'Trace worker could not complete the operation',
+      ))
     }
     if (signal?.aborted) {
       abort()
@@ -33,7 +42,7 @@ export function runTraceWorker(worker, request, { signal, transfer = [], onProgr
     try {
       worker.postMessage(request, transfer)
     } catch (error) {
-      finish(reject, error)
+      finish(reject, new TraceWorkerTransportError(error?.message, { cause: error }))
     }
   })
 }

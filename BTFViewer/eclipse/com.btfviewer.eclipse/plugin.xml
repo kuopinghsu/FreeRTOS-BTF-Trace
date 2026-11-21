@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?eclipse version="3.4"?>
 <plugin>
+  <extension point="org.eclipse.core.contenttype.contentTypes">
+    <content-type
+        id="com.btfviewer.eclipse.compressedTrace"
+        name="Compressed BTF trace"
+        file-patterns="*.btf.zip,*.btf.bz2,*.btf.gz"
+        priority="high"/>
+  </extension>
   <extension point="org.eclipse.ui.editors">
     <editor
         id="com.btfviewer.eclipse.editor"
@@ -9,6 +16,7 @@
         class="com.btfviewer.eclipse.editor.BTFEditor"
         default="true"
         extensions="btf">
+      <contentTypeBinding contentTypeId="com.btfviewer.eclipse.compressedTrace"/>
     </editor>
   </extension>
 </plugin>

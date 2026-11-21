@@ -32,7 +32,7 @@ function aliasRegex(names) {
     .map(escapeRe)
   if (!ordered.length) return null
   // No word char / hyphen / dot on either side → whole-identifier match only.
-  return new RegExp(`(?<![\\w.\\-])(?:${ordered.join('|')})(?![\\w.\\-])`, 'g')
+  return new RegExp(`[^\\w.\\-](${ordered.join('|')})(?![\\w.\\-])`, 'g')
 }
 
 /** Replace every whole-token task name in `text` with its `Task-N` alias. */
@@ -41,7 +41,17 @@ export function anonymizeWithMap(text, aliasMap) {
   if (!aliasMap || !aliasMap.size) return text
   const rx = aliasRegex(aliasMap.keys())
   if (!rx) return text
-  return String(text).replace(rx, (m) => aliasMap.get(m) ?? m)
+  const input = ' ' + text
+  let result = ''
+  let end = 1
+  for (let match; (match = rx.exec(input));) {
+    const name = match[1]
+    result += input.slice(end, match.index + 1) + (aliasMap.get(name) ?? name)
+    end = rx.lastIndex
+    // The last character of a name can be the next name's left boundary.
+    rx.lastIndex = end - 1
+  }
+  return result + input.slice(end)
 }
 
 // Raw BTF text and Perfetto/JSON strings use the same whole-token substitution.

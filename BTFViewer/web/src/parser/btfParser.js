@@ -292,6 +292,7 @@ export async function parseBtf(text, progressCallback) {
   for (let ti = 0; ti < tsCount; ti++) {
     const ts = sortedTimestamps[ti]
     const events = tEventsByTime.get(ts)
+    tEventsByTime.delete(ts)
 
     // Build core-preempt map: preempted-task → core (for Core_N src events)
     const corePreempts = new Map()

@@ -4,14 +4,49 @@
 ifeq ($(OS),Windows_NT)
 GIT_SH ?= C:/Program Files/Git/bin/sh.exe
 SHELL := $(GIT_SH)
+GIT_USR_BIN ?= $(subst /bin/sh.exe,/usr/bin,$(GIT_SH))
+export PATH := $(GIT_USR_BIN);$(PATH)
+# Run even simple recipes through sh so they use the exported tool path.
+.SHELLFLAGS := -e -c
+JAVA_EXE_SUFFIX := .exe
+# A 32-bit make process sees the x86 Program Files directory in ProgramFiles.
+JDK_PROGRAM_FILES := $(subst \,/,$(or $(ProgramW6432),$(ProgramFiles)))
+WINDOWS_JDK_CANDIDATES = "$(JDK_PROGRAM_FILES)/Java/latest" \
+	"$(JDK_PROGRAM_FILES)/Java"/jdk-* \
+	"$(JDK_PROGRAM_FILES)/Microsoft"/jdk-* \
+	"$(JDK_PROGRAM_FILES)/Eclipse Adoptium"/jdk-*
 endif
+JDK_BIN := $(shell \
+	for home in "$(subst \,/,$(subst ",,$(JAVA_HOME)))" PATH $(WINDOWS_JDK_CANDIDATES); do \
+		if [ "$$home" = PATH ]; then \
+			if command -v javac >/dev/null && command -v jar >/dev/null; then break; fi; \
+		elif [ -n "$$home" ] && [ -x "$$home/bin/javac$(JAVA_EXE_SUFFIX)" ] && [ -x "$$home/bin/jar$(JAVA_EXE_SUFFIX)" ]; then \
+			printf '%s/bin/' "$$home"; break; \
+		fi; \
+	done)
+JAVAC := $(if $(JDK_BIN),$(JDK_BIN)javac$(JAVA_EXE_SUFFIX),javac)
+JAR := $(if $(JDK_BIN),$(JDK_BIN)jar$(JAVA_EXE_SUFFIX),jar)
+CHECK_JDK = command -v "$(JAVAC)" >/dev/null && command -v "$(JAR)" >/dev/null || { \
+	printf '%s\n' 'error: JDK tools javac and jar are required. Set JAVA_HOME to a JDK 17 or newer, or add its bin directory to PATH.' >&2; \
+	exit 1; \
+}
 
 PLUGIN := com.btfviewer.eclipse
 VIEWER := ../builds/btf_viewer.html
 EMBEDDED := $(PLUGIN)/web/btf_viewer.html
 PLUGIN_VERSION ?= 0.1.0
+ifneq ($(OS),Windows_NT)
+ifeq ($(shell uname -s),Darwin)
 ECLIPSE_HOME ?= /Applications/Eclipse.app/Contents/Eclipse
-ECLIPSE_PLUGINS ?= $(ECLIPSE_HOME)/plugins
+endif
+endif
+ECLIPSE_PLUGINS ?= $(if $(strip $(ECLIPSE_HOME)),$(ECLIPSE_HOME)/plugins)
+ECLIPSE_SDK_REASON = $(if $(strip $(ECLIPSE_PLUGINS)),Eclipse plug-ins not found at $(ECLIPSE_PLUGINS),Eclipse installation directory not configured)
+ifeq ($(OS),Windows_NT)
+ECLIPSE_SDK_HINT = Set ECLIPSE_HOME to the Eclipse folder that contains plugins (for example "ECLIPSE_HOME=C:/path/to/eclipse").
+else
+ECLIPSE_SDK_HINT = Set ECLIPSE_HOME to the Eclipse folder that contains plugins.
+endif
 BUILDS := ../builds
 PACKAGE_STAGE := $(BUILDS)/.eclipse-plugin-stage
 PACKAGE_MANIFEST := $(BUILDS)/.eclipse-plugin-manifest.mf
@@ -33,12 +68,13 @@ sync-viewer: $(VIEWER)
 check-viewer:
 	cmp $(VIEWER) $(EMBEDDED)
 
-package: sync-viewer check-viewer
+package: sync-viewer
+	$(MAKE) check-viewer
 	@test -d "$(ECLIPSE_PLUGINS)" || { \
-		echo "error: Eclipse plug-ins not found at $(ECLIPSE_PLUGINS)" >&2; \
-		echo "Set ECLIPSE_HOME=/path/to/eclipse and retry." >&2; \
+		printf '%s\n' 'error: $(ECLIPSE_SDK_REASON).' '$(ECLIPSE_SDK_HINT)' >&2; \
 		exit 1; \
 	}
+	@$(CHECK_JDK)
 	rm -f $(LEGACY_DROPINS_ZIP)
 	rm -rf $(PACKAGE_STAGE)
 	mkdir -p $(PACKAGE_STAGE)
@@ -46,9 +82,11 @@ package: sync-viewer check-viewer
 	cp -R $(PLUGIN)/icons $(PLUGIN)/web $(PACKAGE_STAGE)/
 	sed 's/^Bundle-Version:.*/Bundle-Version: $(PLUGIN_VERSION)/' \
 		$(PLUGIN)/META-INF/MANIFEST.MF > $(PACKAGE_MANIFEST)
-	javac --release 17 -cp '$(ECLIPSE_PLUGINS)/*' \
+	@version=$$("$(JAVAC)" -version 2>&1 | tr -d '\r' | sed -n 's/^javac //p'); \
+	test -n "$$version" && printf 'BTF-Javac-Version: %s\n' "$$version" >> $(PACKAGE_MANIFEST)
+	"$(JAVAC)" --release 17 -cp '$(ECLIPSE_PLUGINS)/*' \
 		-d $(PACKAGE_STAGE) $(PLUGIN_SOURCES)
-	jar --create --file $(PLUGIN_JAR) --manifest $(PACKAGE_MANIFEST) -C $(PACKAGE_STAGE) .
+	"$(JAR)" --create --file $(PLUGIN_JAR) --manifest $(PACKAGE_MANIFEST) -C $(PACKAGE_STAGE) .
 	rm -rf $(PACKAGE_STAGE)
 	rm -f $(PACKAGE_MANIFEST)
 	$(MAKE) check-package
@@ -64,8 +102,7 @@ package: sync-viewer check-viewer
 $(PLUGIN_JAR): $(VIEWER) $(PLUGIN)/plugin.xml $(PLUGIN_ICONS) $(PLUGIN_SOURCES) \
 		$(PLUGIN)/META-INF/MANIFEST.MF
 	@if [ ! -d "$(ECLIPSE_PLUGINS)" ]; then \
-		echo "SKIP: Eclipse plug-in rebuild — no Eclipse SDK at $(ECLIPSE_PLUGINS)."; \
-		echo "      Set ECLIPSE_HOME=/path/to/eclipse, then run: make -C BTFViewer eclipse-package"; \
+		printf '%s\n' 'SKIP: Eclipse plug-in rebuild. $(ECLIPSE_SDK_REASON).' '      $(ECLIPSE_SDK_HINT)' '      Then run: make -C BTFViewer eclipse-package'; \
 		exit 0; \
 	fi; \
 	$(MAKE) package
@@ -78,8 +115,8 @@ check-package:
 		grep -q '^Bundle-SymbolicName: $(PLUGIN);singleton:=true'
 	@unzip -p $(PLUGIN_JAR) META-INF/MANIFEST.MF | \
 		grep -q '^Bundle-Version: $(PLUGIN_VERSION)'
-	@jar tf $(PLUGIN_JAR) | grep -q '^com/btfviewer/eclipse/editor/BTFEditor.class$$'
-	@jar tf $(PLUGIN_JAR) | grep -q '^web/btf_viewer.html$$'
+	@"$(JAR)" tf $(PLUGIN_JAR) | grep -q '^com/btfviewer/eclipse/editor/BTFEditor.class$$'
+	@"$(JAR)" tf $(PLUGIN_JAR) | grep -q '^web/btf_viewer.html$$'
 	@echo "OK: Eclipse bundle manifest and plug-in JAR verified"
 
 clean-package:
@@ -131,30 +168,37 @@ check-eclipse-resources:
 		echo "Run: make -C BTFViewer eclipse-package" >&2; exit 1; \
 	fi
 
-# Full freshness gate: recompile every .java source against the same Eclipse
-# SDK classpath used by `package`, then diff each class file's bytecode
-# against the one embedded in the committed JAR. Needs a real Eclipse
-# SDK/PDE install (see eclipse-package's ECLIPSE_HOME) - skips with a clear
-# message when unavailable (e.g. on CI runners), matching check-web's
-# CI-vs-local split. On a machine with Eclipse installed, a non-zero exit
-# here is a real freshness failure, not a flake.
+# Recompile against the configured Eclipse SDK and verify the class list.
+# Compare bytecode when the compiler version matches the packaged version.
 check-eclipse: check-eclipse-resources
-	@if [ ! -d "$(ECLIPSE_PLUGINS)" ]; then \
-		echo "SKIP: check-eclipse — no Eclipse SDK at $(ECLIPSE_PLUGINS)."; \
-		echo "      Set ECLIPSE_HOME=/path/to/eclipse to run the full rebuild-and-diff gate."; \
+	@set -e; \
+	if [ ! -d "$(ECLIPSE_PLUGINS)" ]; then \
+		printf '%s\n' 'SKIP: check-eclipse. $(ECLIPSE_SDK_REASON).' '      $(ECLIPSE_SDK_HINT)'; \
 		exit 0; \
 	fi; \
+	$(CHECK_JDK); \
 	rm -rf $(FULL_CHECK_STAGE); \
 	mkdir -p $(FULL_CHECK_STAGE); \
-	javac --release 17 -cp '$(ECLIPSE_PLUGINS)/*' \
+	trap 'rm -rf $(FULL_CHECK_STAGE)' 0; \
+	"$(JAVAC)" --release 17 -cp '$(ECLIPSE_PLUGINS)/*' \
 		-d $(FULL_CHECK_STAGE) $(PLUGIN_SOURCES); \
+	(cd $(FULL_CHECK_STAGE) && find com -name '*.class' | LC_ALL=C sort) > $(FULL_CHECK_STAGE)/compiled.txt; \
+	"$(JAR)" tf $(PLUGIN_JAR) | tr -d '\r' | sed -n '/^com\/.*\.class$$/p' | LC_ALL=C sort > $(FULL_CHECK_STAGE)/packaged.txt; \
+	if ! cmp -s $(FULL_CHECK_STAGE)/compiled.txt $(FULL_CHECK_STAGE)/packaged.txt; then \
+		echo "error: packaged class list differs from the fresh rebuild" >&2; exit 1; \
+	fi; \
+	version=$$("$(JAVAC)" -version 2>&1 | tr -d '\r' | sed -n 's/^javac //p'); \
+	packaged=$$(unzip -p $(PLUGIN_JAR) META-INF/MANIFEST.MF | tr -d '\r' | sed -n 's/^BTF-Javac-Version: //p'); \
+	if [ -z "$$packaged" ] || [ "$$version" != "$$packaged" ]; then \
+		echo "OK: recompiled and verified class list. Bytecode comparison skipped because compiler versions differ or are unknown."; \
+		exit 0; \
+	fi; \
 	ok=1; \
-	for cls in $$(cd $(FULL_CHECK_STAGE) && find com -name '*.class'); do \
+	while IFS= read -r cls; do \
 		if ! unzip -p $(PLUGIN_JAR) $$cls 2>/dev/null | cmp -s - $(FULL_CHECK_STAGE)/$$cls; then \
 			echo "error: compiled $$cls differs from the committed JAR" >&2; ok=0; \
 		fi; \
-	done; \
-	rm -rf $(FULL_CHECK_STAGE); \
+	done < $(FULL_CHECK_STAGE)/compiled.txt; \
 	if [ "$$ok" = "1" ]; then \
 		echo "OK: $(PLUGIN_JAR) classes match a fresh rebuild"; \
 	else \

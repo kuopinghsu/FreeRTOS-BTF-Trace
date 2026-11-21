@@ -6497,6 +6497,7 @@ class SyncIssueRef:
     ptr: str = ""
 
 _MAX_TRACE_FILE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB guard vs. memory exhaustion on a huge/adversarial file
+_MAX_TRACE_LINE_CHARS = 4 * 1024 * 1024
 
 # Open dialog / drag-drop accept list (plain + compressed BTF + packages).
 # A ``.btfw`` package is both the portable workspace and the shareable demo
@@ -6675,33 +6676,53 @@ def _expand_open_paths(filepath: str) -> List[str]:
 
 
 @contextmanager
-def _open_btf_text(filepath: str):
-    """Yield a text stream for a plain or compressed BTF file."""
+def _open_btf_binary(filepath: str):
+    """Yield the expanded bytes of a plain or compressed trace."""
     zip_path, member = _split_zip_member_path(filepath)
-    if member:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            with zf.open(member, "r") as raw:
-                with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as fh:
-                    yield fh
-        return
-    kind = _sniff_compression(zip_path)
-    if kind == "gzip":
-        with gzip.open(zip_path, "rt", encoding="utf-8", errors="replace") as fh:
-            yield fh
-        return
-    if kind == "bz2":
-        with bz2.open(zip_path, "rt", encoding="utf-8", errors="replace") as fh:
-            yield fh
-        return
+    kind = "zip" if member else _sniff_compression(zip_path)
     if kind == "zip":
         with zipfile.ZipFile(zip_path, "r") as zf:
-            picked = _pick_zip_btf_member(zf.namelist())
-            with zf.open(picked, "r") as raw:
-                with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as fh:
-                    yield fh
+            with zf.open(member or _pick_zip_btf_member(zf.namelist()), "r") as raw:
+                yield raw
         return
-    with open(zip_path, encoding="utf-8", errors="replace") as fh:
-        yield fh
+    opener = gzip.open if kind == "gzip" else bz2.open if kind == "bz2" else open
+    with opener(zip_path, "rb") as raw:
+        yield raw
+
+
+class _BoundedTraceBytes(io.RawIOBase):
+    """Count expanded bytes before the text decoder buffers them."""
+
+    def __init__(self, source, limit, cancel_check):
+        super().__init__()
+        self._source = source
+        self._remaining = limit
+        self._limit = limit
+        self._cancel_check = cancel_check
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        if self._cancel_check and self._cancel_check():
+            raise _ParseCancelledError()
+        chunk = memoryview(buffer)[:self._remaining + 1]
+        count = self._source.readinto(chunk)
+        self._remaining -= count
+        if self._remaining < 0:
+            raise ValueError(
+                f"Expanded trace exceeds the {self._limit:,}-byte limit")
+        return count
+
+
+@contextmanager
+def _open_btf_text(filepath: str, *, max_expanded=None, cancel_check=None):
+    """Yield a UTF-8 text stream, optionally limiting expanded bytes."""
+    with _open_btf_binary(filepath) as raw:
+        if max_expanded is not None:
+            raw = io.BufferedReader(_BoundedTraceBytes(raw, max_expanded, cancel_check))
+        with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as text:
+            yield text
 
 
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
@@ -15040,6 +15061,8 @@ def _parse_btf(filepath: str,
 
     # T-events grouped by timestamp for O(1) same-tick access
     t_events_by_time: Dict[int, List[Tuple]] = defaultdict(list)
+    event_labels: Dict[str, str] = {}
+    intern_label = event_labels.setdefault
     sti_events: List[StiEvent] = []
     tick_sti_times: List[int] = []  # timestamps from STI TICK events -> rendered on ruler
     tick_sti_notes: List[Tuple[int, Optional[int]]] = []  # (time, tick count) pairs, same order
@@ -15061,8 +15084,14 @@ def _parse_btf(filepath: str,
     if progress_callback:
         progress_callback(2, "Reading file…")
     _meta_re_match = _META_KEY_RE.match
-    with _open_btf_text(filepath) as fh:
-        for line_index, line in enumerate(fh, start=1):
+    with _open_btf_text(filepath, max_expanded=_MAX_TRACE_FILE_BYTES,
+                        cancel_check=cancel_check) as fh:
+        lines = iter(lambda: fh.readline(_MAX_TRACE_LINE_CHARS + 2), "")
+        for line_index, line in enumerate(lines, start=1):
+            if len(line) - line.endswith("\n") > _MAX_TRACE_LINE_CHARS:
+                raise ValueError(
+                    f"Trace line {line_index:,} exceeds the "
+                    f"{_MAX_TRACE_LINE_CHARS:,}-character limit")
             if cancel_check and line_index % 2048 == 0 and cancel_check():
                 raise _ParseCancelledError()
             line = line.strip()
@@ -15109,20 +15138,22 @@ def _parse_btf(filepath: str,
                         time_max = t
             if ev_type == "T":
                 _note = parts[7].strip() if len(parts) > 7 else ""
+                source = parts[1].strip()
+                event = parts[6].strip()
                 _tgt_raw = parts[4].strip()
+                _tgt_raw = intern_label(_tgt_raw, _tgt_raw)
                 if _note == "task_create":
                     if _tgt_raw not in _task_create_raw:
                         _task_create_raw[_tgt_raw] = t
-                _create_pri = _parse_create_priority(_note)
-                if _create_pri is not None:
-                    if _tgt_raw not in _task_create_raw:
-                        _task_create_raw[_tgt_raw] = t
-                    if _tgt_raw not in _task_create_pri_raw:
-                        _task_create_pri_raw[_tgt_raw] = _create_pri
+                if _note.startswith("create"):
+                    _create_pri = _parse_create_priority(_note)
+                    if _create_pri is not None:
+                        _task_create_raw.setdefault(_tgt_raw, t)
+                        _task_create_pri_raw.setdefault(_tgt_raw, _create_pri)
                 t_events_by_time[t].append((
                     t,
-                    parts[1].strip(),   # source
-                    parts[6].strip(),   # event
+                    intern_label(source, source),
+                    intern_label(event, event),
                     _tgt_raw,           # target
                     _note,              # note
                 ))
@@ -15187,10 +15218,12 @@ def _parse_btf(filepath: str,
     for timestamp_index, ts in enumerate(sorted(t_events_by_time), start=1):
         if cancel_check and timestamp_index % 512 == 0 and cancel_check():
             raise _ParseCancelledError()
-        events = t_events_by_time[ts]
+        events = t_events_by_time.pop(ts)
         # (time, source, event, target, note)
 
         core_preempts: Dict[str, str] = {}
+        # A same-tick resume suppresses a matching preempt.
+        resumed_srcs: set = set()
         for (_, src, ev, tgt, _note) in events:
             if ev == "preempt":
                 if _is_core_entity(src):
@@ -15199,9 +15232,8 @@ def _parse_btf(filepath: str,
                     src_core = _core_from_task_entity(src)
                     if src_core is not None:
                         core_preempts[tgt] = src_core
-
-        # Build set of sources that issued a resume (used to detect naked preempts).
-        resumed_srcs = {src for (_, src, ev, tgt, _n) in events if ev == "resume"}
+            elif ev == "resume":
+                resumed_srcs.add(src)
 
         for (_, src, ev, tgt, _note) in events:
             if ev != "resume":
@@ -15224,10 +15256,6 @@ def _parse_btf(filepath: str,
         for (_, src, ev, tgt, _note) in events:
             if ev == "preempt":
                 if tgt not in resumed_srcs:
-                    core = (core_preempts.get(tgt)
-                            or last_core.get(tgt)
-                            or _core_from_task_entity(tgt)
-                            or "Core_0")
                     _close_seg(tgt, ts)
                     if _is_core_entity(src):
                         last_core[tgt] = src
@@ -15240,8 +15268,8 @@ def _parse_btf(filepath: str,
     for task in list(open_seg.keys()):
         _close_seg(task, time_max)
 
-    # Free the raw event dict - no longer needed after segment reconstruction.
-    t_events_by_time.clear()
+    # Release the canonical labels that were only needed by raw events.
+    event_labels.clear()
 
     if _skipped_lines:
         meta["_skipped_lines"] = str(_skipped_lines)
@@ -97993,6 +98021,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._progress_dialog: Optional["_LoadProgressBridge"] = None
         self._pending_demo: Optional[dict] = None
         self._pending_workspace: Optional[dict] = None
+        self._pending_workspace_path: Optional[str] = None
         self._demo_runner: Optional[InAppDemoRunner] = None
         self._demo_overlay: Optional[DemoPointerOverlay] = None
         self._demo_message_overlay: Optional[DemoMessageOverlay] = None
@@ -103318,9 +103347,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _finish_load_pipeline(self) -> None:
         """Clear the load guard and resume queued opens / session restore."""
         self._load_in_progress = False
+        self._start_pending_workspace()
         self._continue_session_restore()
         self._drain_pending_open_paths()
-        self._start_pending_workspace()
         self._start_pending_demo()
 
     def _preferred_demo_voice_lang(self) -> str:
@@ -107330,44 +107359,62 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Open a ``.btfw`` package. A ``kind == "workspace"`` package restores
         the investigation onto its tab; a ``kind == "demo"`` package stages the
         guided tour and (optionally) pre-loads its AI investigation case."""
+        if self._load_in_progress:
+            if path not in self._pending_open_paths:
+                self._pending_open_paths.append(path)
+            return
         try:
             ws = open_workspace(path)
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
             QMessageBox.warning(self, "Open Error", f"Not a readable .btfw package:\n{exc}")
             return
         trace_bytes = ws.get("trace_bytes")
+        demo = ws.get("demo")
+        is_demo = ws.get("kind") == "demo" or bool(demo)
+        tmp = None
         if not trace_bytes:
-            if ws.get("trace_embedded"):
+            if ws.get("trace_embedded") or is_demo:
                 QMessageBox.warning(
                     self, "Open Error", "Package trace is missing or corrupt.")
-            else:
+                return
+            ref = ws.get("trace_ref") or ""
+            archive, member = _split_zip_member_path(ref)
+            if archive:
+                archive = os.path.join(os.path.dirname(os.path.abspath(path)), archive)
+            if not os.path.isfile(archive) or archive.lower().endswith((WORKSPACE_EXT, ".xml")):
                 QMessageBox.warning(
                     self, "Open Error",
-                    "Package references an external trace "
-                    f"({ws.get('trace_ref') or 'unknown'}). Open that .btf directly.")
-            return
-        if not hasattr(self, "_workspace_extract_dirs"):
-            self._workspace_extract_dirs = []
-        tmp = tempfile.mkdtemp(prefix="btfw_")
-        self._workspace_extract_dirs.append(tmp)
-        raw_name = os.path.basename(
-            (ws.get("manifest") or {}).get("trace", {}).get("name")
-            or os.path.basename(path).replace(WORKSPACE_EXT, ".btf"))
-        stem = os.path.basename(_export_base_name(raw_name, "trace"))
-        # Name the staged file after the *actual* bytes, not the manifest's
-        # possibly-stale compression suffix (fixes "Not a gzipped file (b'#v')").
-        btf_path = os.path.join(tmp, stem + _staged_trace_ext(trace_bytes))
-        try:
-            with open(btf_path, "wb") as fh:
-                fh.write(trace_bytes)
-        except OSError as exc:
-            QMessageBox.warning(self, "Open Error", f"Cannot stage package trace:\n{exc}")
-            return
+                    f"Package references an unavailable trace:\n{ref or 'unknown'}")
+                return
+            btf_path = f"{archive}{_ZIP_MEMBER_SEP}{member}" if member else archive
+            try:
+                expanded = _expand_open_paths(btf_path)
+                if len(expanded) != 1:
+                    raise ValueError("The workspace must reference one trace in the ZIP archive.")
+                btf_path = expanded[0]
+            except (OSError, ValueError, zipfile.BadZipFile) as exc:
+                QMessageBox.warning(self, "Open Error", f"Cannot open package trace:\n{exc}")
+                return
+        else:
+            if not hasattr(self, "_workspace_extract_dirs"):
+                self._workspace_extract_dirs = []
+            tmp = tempfile.mkdtemp(prefix="btfw_")
+            self._workspace_extract_dirs.append(tmp)
+            raw_name = os.path.basename(
+                (ws.get("manifest") or {}).get("trace", {}).get("name")
+                or os.path.basename(path).replace(WORKSPACE_EXT, ".btf"))
+            stem = os.path.basename(_export_base_name(raw_name, "trace"))
+            btf_path = os.path.join(tmp, stem + _staged_trace_ext(trace_bytes))
+            try:
+                with open(btf_path, "wb") as fh:
+                    fh.write(trace_bytes)
+            except OSError as exc:
+                QMessageBox.warning(self, "Open Error", f"Cannot stage package trace:\n{exc}")
+                return
         for w in ws.get("warnings") or []:
             self.statusBar().showMessage(f"Package: {w}", 6000)
 
-        demo = ws.get("demo")
-        if ws.get("kind") == "demo" or demo:
+        if is_demo:
             script_path = self._stage_demo_tree(demo or {}, tmp) if demo else None
             if not script_path or not os.path.isfile(script_path):
                 QMessageBox.warning(
@@ -107382,16 +107429,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
 
         self._pending_workspace = ws
+        self._pending_workspace_path = _normalize_open_path(btf_path)
         self._open_file(btf_path)
 
     def _start_pending_workspace(self) -> None:
         ws = self._pending_workspace
-        self._pending_workspace = None
         if not ws:
             return
         tab = self._active_tab
         if tab is None:
             return
+        if self._pending_workspace_path is not None and tab.path != self._pending_workspace_path:
+            return
+        self._pending_workspace = None
+        self._pending_workspace_path = None
         notes = []
         inv = ws.get("investigation")
         if isinstance(inv, dict):
@@ -108385,6 +108436,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         existing = self._find_tab_index(path)
         if existing >= 0:
             self._tab_widget.setCurrentIndex(existing)
+            self._start_pending_workspace()
             self._focus_statistics_panel(force=True)
             QTimer.singleShot(0, lambda: self._focus_statistics_panel(force=True))
             if self._session_restore_queue or self._session_restore_active_idx >= 0:
@@ -108410,6 +108462,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not self._stop_parse_thread(wait_ms=2000):
             self._status_file.setText("  Previous load is still stopping…")
             self._load_in_progress = False
+            if self._pending_workspace_path == path:
+                self._pending_workspace = None
+                self._pending_workspace_path = None
             return
 
         # Show a wait cursor and status message while parsing
@@ -108445,6 +108500,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._end_inline_load()
             if clear_load_flag:
                 self._load_in_progress = False
+                if self._pending_workspace_path == path:
+                    self._pending_workspace = None
+                    self._pending_workspace_path = None
+                QTimer.singleShot(0, self._drain_pending_open_paths)
             if QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
 
@@ -108706,18 +108765,28 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         try:
             trace_raw = b""
-            if self._current_file and os.path.isfile(self._current_file):
+            archive, member = _split_zip_member_path(self._current_file)
+            trace_name = os.path.basename(member or archive or "trace.btf")
+            trace_size = 0
+            if embed:
                 if amap:
-                    try:
-                        with _open_btf_text(self._current_file) as fh:
-                            trace_raw = anonymize_btf_text(
-                                fh.read(), amap).encode("utf-8")
-                    except Exception:
-                        trace_raw = b""
+                    with _open_btf_text(self._current_file) as fh:
+                        trace_raw = anonymize_btf_text(fh.read(), amap).encode("utf-8")
+                    trace_name = "trace.btf"
+                elif member:
+                    with zipfile.ZipFile(archive) as zf:
+                        trace_raw = zf.read(member)
                 else:
-                    with open(self._current_file, "rb") as fh:
+                    with open(archive, "rb") as fh:
                         trace_raw = fh.read()
-            embed = embed and bool(trace_raw)
+                if not trace_raw:
+                    raise ValueError("The trace is empty and cannot be embedded.")
+                trace_size = len(trace_raw)
+            elif member:
+                with zipfile.ZipFile(archive) as zf:
+                    trace_size = zf.getinfo(member).file_size
+            elif archive and os.path.isfile(archive):
+                trace_size = os.path.getsize(archive)
 
             def _hf(ns):
                 return _format_time(int(ns), self._trace.time_scale,
@@ -108758,14 +108827,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     ai_case = _anon(panel.workspace_ai_case())
             except Exception:
                 ai_case = None
+            view_state = _anon(self._workspace_view_state(tab))
+            if amap and embed:
+                view_state["traceName"] = trace_name
             save_workspace(
                 path,
                 trace_bytes=trace_raw if embed else None,
                 trace_ref="" if embed else (self._current_file or ""),
-                trace_name=os.path.basename(self._current_file or "trace.btf"),
-                trace_size=len(trace_raw),
+                trace_name=trace_name,
+                trace_size=trace_size,
                 embed_trace=embed,
-                view_state=self._workspace_view_state(tab),
+                view_state=view_state,
                 health=health,
                 findings=findings,
                 investigation=investigation,
@@ -108778,7 +108850,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.statusBar().showMessage(
                 f"Workspace saved ({'embedded' if embed else 'referenced'} trace"
                 f"{', anonymized' if amap else ''}) → {os.path.basename(path)}", 4000)
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError, KeyError, EOFError, zipfile.BadZipFile) as exc:
             _critical_with_detail(
                 self, "Export Error",
                 "Could not write the workspace file.", str(exc))

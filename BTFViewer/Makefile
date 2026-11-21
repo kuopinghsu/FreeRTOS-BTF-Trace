@@ -73,7 +73,7 @@ help:
 	@echo "  make check-web    Rebuild web HTML (local: fail if artifact drifts; CI: build only)"
 	@echo "  make check-eclipse-resources  Fail if the Eclipse plug-in JAR's packaged"
 	@echo "                    resources/classes drift from sources (no Eclipse SDK needed; CI-safe)"
-	@echo "  make check-eclipse  Full rebuild-and-diff of the Eclipse plug-in JAR"
+	@echo "  make check-eclipse  Rebuild the Eclipse plug-in and verify its classes"
 	@echo "                    (needs ECLIPSE_HOME; skips cleanly when no Eclipse SDK is found)"
 	@echo "  make check-docs   Links, EN/zh-TW heading parity + section IDs, PDF freshness"
 	@echo "  make check-builds check-bundle + check-web + check-eclipse-resources"
@@ -109,7 +109,8 @@ web:
 	$(MAKE) -C web
 
 eclipse-poc: web
-	$(MAKE) -C eclipse sync-viewer check-viewer
+	$(MAKE) -C eclipse sync-viewer
+	$(MAKE) -C eclipse check-viewer
 
 eclipse-package: web
 	$(MAKE) -C eclipse package
@@ -223,11 +224,8 @@ check-docs:
 check-eclipse-resources:
 	$(MAKE) -C eclipse check-eclipse-resources
 
-# Full freshness gate: recompiles the plug-in against a real Eclipse SDK and
-# diffs bytecode against the committed JAR. Needs ECLIPSE_HOME (see
-# eclipse-package); skips cleanly with a message when no SDK is found, so it
-# is safe to run anywhere but only a real gate on a machine with Eclipse
-# installed.
+# Recompile against the configured Eclipse SDK. Compare class files byte for
+# byte when the current compiler version matches the one recorded in the JAR.
 check-eclipse:
 	$(MAKE) -C eclipse check-eclipse
 

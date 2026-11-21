@@ -12,24 +12,20 @@ function packPlainMap(map) {
   return [...map.entries()]
 }
 
-function copyBuffer(buf) {
-  return buf instanceof ArrayBuffer ? buf.slice(0) : buf
-}
-
-function packIndicesMap(map) {
+function packIndicesMap(map, packBuffer) {
   const out = []
   for (const [k, list] of map) {
-    out.push([k, copyBuffer(list._indices.buffer)])
+    out.push([k, packBuffer(list._indices)])
   }
   return out
 }
 
-function packNestedIndicesMap(map) {
+function packNestedIndicesMap(map, packBuffer) {
   const out = []
   for (const [core, inner] of map) {
     const tasks = []
     for (const [task, list] of inner) {
-      tasks.push([task, copyBuffer(list._indices.buffer)])
+      tasks.push([task, packBuffer(list._indices)])
     }
     out.push([core, tasks])
   }
@@ -59,7 +55,7 @@ function nestedStartsMapFromSegMap(store, nestedMap) {
 /**
  * Finalize flat storage, precompute bins, pack for postMessage transfer.
  */
-export function packTrace(trace, progress) {
+export function packTrace(trace, progress, { transfer = false } = {}) {
   finalizeTraceStorage(trace, progress)
   trace.cpuLoadBins = buildCpuLoadBins(trace.segStore, trace)
   const segIndicesByMk = segIndicesMapFromTrace(trace)
@@ -71,94 +67,100 @@ export function packTrace(trace, progress) {
 
   const store = trace.segStore
   const allIdx = store.allIndices()
-
-  const segByMk = packIndicesMap(trace.segByMergeKey)
-  const segLod = packIndicesMap(trace.segLodByMergeKey)
-  const segUltra = packIndicesMap(trace.segLodUltraByMergeKey)
-
-  const coreSegs = packIndicesMap(trace.coreSegs)
-  const coreLod = packIndicesMap(trace.coreSegLod)
-  const coreUltra = packIndicesMap(trace.coreSegLodUltra)
-
-  const coreTaskSegs = packNestedIndicesMap(trace.coreTaskSegs)
-  const coreTaskLod = packNestedIndicesMap(trace.coreTaskSegLod)
-  const coreTaskUltra = packNestedIndicesMap(trace.coreTaskSegLodUltra)
-
-  // Structured-clone only (no transfer list). Transferring store buffers while also
-  // referencing them in the payload can yield detached/empty arrays in some browsers.
-  return {
-    transferables: [],
-    payload: {
-      timeScale: trace.timeScale,
-      meta: trace.meta,
-      timeMin: trace.timeMin,
-      timeMax: trace.timeMax,
-      skippedLines: trace.skippedLines,
-      tasks: trace.tasks,
-      taskRepr: packPlainMap(trace.taskRepr),
-      store: {
-        starts: copyBuffer(store.starts.buffer),
-        ends: copyBuffer(store.ends.buffer),
-        taskIds: copyBuffer(store.taskIds.buffer),
-        coreIds: copyBuffer(store.coreIds.buffer),
-        taskStrings: store.taskStrings,
-        coreStrings: store.coreStrings,
-      },
-      allIndices: copyBuffer(allIdx.buffer),
-      segByMergeKey: segByMk,
-      segLodByMergeKey: segLod,
-      segLodUltraByMergeKey: segUltra,
-      coreNames: trace.coreNames,
-      coreSegs,
-      coreSegLod: coreLod,
-      coreSegLodUltra: coreUltra,
-      coreTaskOrder: packPlainMap(trace.coreTaskOrder),
-      coreTaskSegs,
-      coreTaskSegLod: coreTaskLod,
-      coreTaskSegLodUltra: coreTaskUltra,
-      lodTimescalePerPx: trace.lodTimescalePerPx,
-      lodUltraTimescalePerPx: trace.lodUltraTimescalePerPx,
-      taskCreateTimes: packPlainMap(trace.taskCreateTimes),
-      migrations: trace.migrations,
-      migrationsByMk: packPlainMap(trace.migrationsByMk),
-      intervalInstances: trace.intervalInstances,
-      intervalIds: trace.intervalIds,
-      intervalInstancesById: packPlainMap(trace.intervalInstancesById),
-      intervalInstancesCulledById: packPlainMap(trace.intervalInstancesCulledById),
-      intervalMarkerById: packPlainMap(trace.intervalMarkerById),
-      intervalUnmatchedStarts: trace.intervalUnmatchedStarts ?? 0,
-      intervalUnmatchedStops: trace.intervalUnmatchedStops ?? 0,
-      openAtEndTasks: [...(trace.openAtEndTasks || [])],
-      tagChannels: trace.tagChannels,
-      tagSamplesByChannel: packPlainMap(trace.tagSamplesByChannel),
-      taskBasePriority: packPlainMap(trace.taskBasePriority),
-      priorityEpisodes: trace.priorityEpisodes,
-      priorityEpisodesByMk: packPlainMap(trace.priorityEpisodesByMk),
-      prioritySummaryByMk: packPlainMap(trace.prioritySummaryByMk),
-      hasPriorityInstrumentation: !!trace.hasPriorityInstrumentation,
-      syncObjects: packPlainMap(trace.syncObjects),
-      syncIssues: trace.syncIssues || [],
-      hasSyncObjectInstrumentation: !!trace.hasSyncObjectInstrumentation,
-      stiEvents: trace.stiEvents,
-      stiChannels: trace.stiChannels,
-      stiEventsByTarget: packPlainMap(trace.stiEventsByTarget),
-      stiStartsByTarget: packPlainMap(trace.stiStartsByTarget),
-      stiValRange: packPlainMap(trace.stiValRange),
-      tickStiTimes: trace.tickStiTimes,
-      tickStiCounts: trace.tickStiCounts,
-      stiEventTimes: trace.stiEventTimes,
-      tickHealth: trace.tickHealth,
-      cpuLoadBins: trace.cpuLoadBins,
-      taskCpuNs: trace.taskCpuNs,
-      migrationTimes: trace.migrationTimes,
-      migratedMks: [...(trace.migratedMks || [])],
-      coreUtilPct: trace.coreUtilPct,
-      schedCtxSwitches: trace.schedCtxSwitches,
-      schedCoreGaps: trace.schedCoreGaps,
-      schedGapMax: trace.schedGapMax,
-      migrationRowsFull: trace.migrationRowsFull,
-    },
+  const transferables = new Set()
+  const packBuffer = (view) => {
+    const { buffer, byteOffset, byteLength } = view
+    const fullBuffer = byteOffset === 0 && byteLength === buffer.byteLength
+    const result = transfer && fullBuffer
+      ? buffer
+      : buffer.slice(byteOffset, byteOffset + byteLength)
+    if (transfer && result instanceof ArrayBuffer) transferables.add(result)
+    return result
   }
+
+  const segByMk = packIndicesMap(trace.segByMergeKey, packBuffer)
+  const segLod = packIndicesMap(trace.segLodByMergeKey, packBuffer)
+  const segUltra = packIndicesMap(trace.segLodUltraByMergeKey, packBuffer)
+
+  const coreSegs = packIndicesMap(trace.coreSegs, packBuffer)
+  const coreLod = packIndicesMap(trace.coreSegLod, packBuffer)
+  const coreUltra = packIndicesMap(trace.coreSegLodUltra, packBuffer)
+
+  const coreTaskSegs = packNestedIndicesMap(trace.coreTaskSegs, packBuffer)
+  const coreTaskLod = packNestedIndicesMap(trace.coreTaskSegLod, packBuffer)
+  const coreTaskUltra = packNestedIndicesMap(trace.coreTaskSegLodUltra, packBuffer)
+
+  const payload = {
+    timeScale: trace.timeScale,
+    meta: trace.meta,
+    timeMin: trace.timeMin,
+    timeMax: trace.timeMax,
+    skippedLines: trace.skippedLines,
+    tasks: trace.tasks,
+    taskRepr: packPlainMap(trace.taskRepr),
+    store: {
+      starts: packBuffer(store.starts),
+      ends: packBuffer(store.ends),
+      taskIds: packBuffer(store.taskIds),
+      coreIds: packBuffer(store.coreIds),
+      taskStrings: store.taskStrings,
+      coreStrings: store.coreStrings,
+    },
+    allIndices: packBuffer(allIdx),
+    segByMergeKey: segByMk,
+    segLodByMergeKey: segLod,
+    segLodUltraByMergeKey: segUltra,
+    coreNames: trace.coreNames,
+    coreSegs,
+    coreSegLod: coreLod,
+    coreSegLodUltra: coreUltra,
+    coreTaskOrder: packPlainMap(trace.coreTaskOrder),
+    coreTaskSegs,
+    coreTaskSegLod: coreTaskLod,
+    coreTaskSegLodUltra: coreTaskUltra,
+    lodTimescalePerPx: trace.lodTimescalePerPx,
+    lodUltraTimescalePerPx: trace.lodUltraTimescalePerPx,
+    taskCreateTimes: packPlainMap(trace.taskCreateTimes),
+    migrations: trace.migrations,
+    migrationsByMk: packPlainMap(trace.migrationsByMk),
+    intervalInstances: trace.intervalInstances,
+    intervalIds: trace.intervalIds,
+    intervalInstancesById: packPlainMap(trace.intervalInstancesById),
+    intervalInstancesCulledById: packPlainMap(trace.intervalInstancesCulledById),
+    intervalMarkerById: packPlainMap(trace.intervalMarkerById),
+    intervalUnmatchedStarts: trace.intervalUnmatchedStarts ?? 0,
+    intervalUnmatchedStops: trace.intervalUnmatchedStops ?? 0,
+    openAtEndTasks: [...(trace.openAtEndTasks || [])],
+    tagChannels: trace.tagChannels,
+    tagSamplesByChannel: packPlainMap(trace.tagSamplesByChannel),
+    taskBasePriority: packPlainMap(trace.taskBasePriority),
+    priorityEpisodes: trace.priorityEpisodes,
+    priorityEpisodesByMk: packPlainMap(trace.priorityEpisodesByMk),
+    prioritySummaryByMk: packPlainMap(trace.prioritySummaryByMk),
+    hasPriorityInstrumentation: !!trace.hasPriorityInstrumentation,
+    syncObjects: packPlainMap(trace.syncObjects),
+    syncIssues: trace.syncIssues || [],
+    hasSyncObjectInstrumentation: !!trace.hasSyncObjectInstrumentation,
+    stiEvents: trace.stiEvents,
+    stiChannels: trace.stiChannels,
+    stiEventsByTarget: packPlainMap(trace.stiEventsByTarget),
+    stiStartsByTarget: packPlainMap(trace.stiStartsByTarget),
+    stiValRange: packPlainMap(trace.stiValRange),
+    tickStiTimes: trace.tickStiTimes,
+    tickStiCounts: trace.tickStiCounts,
+    stiEventTimes: trace.stiEventTimes,
+    tickHealth: trace.tickHealth,
+    cpuLoadBins: trace.cpuLoadBins,
+    taskCpuNs: trace.taskCpuNs,
+    migrationTimes: trace.migrationTimes,
+    migratedMks: [...(trace.migratedMks || [])],
+    coreUtilPct: trace.coreUtilPct,
+    schedCtxSwitches: trace.schedCtxSwitches,
+    schedCoreGaps: trace.schedCoreGaps,
+    schedGapMax: trace.schedGapMax,
+    migrationRowsFull: trace.migrationRowsFull,
+  }
+  return { payload, transferables: [...transferables] }
 }
 
 function unpackIndicesMap(store, entries) {

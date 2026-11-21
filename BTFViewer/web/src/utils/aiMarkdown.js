@@ -70,8 +70,21 @@ const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
 const RANGE_RE = /range:([0-9]+(?:\.[0-9]+)?)\/([0-9]+(?:\.[0-9]+)?)/g
 const INLINE_CODE_RE = /`([^`\n]+)`/g
 const BOLD_RE = /(\*\*|__)(.+?)\1/g
-const ITALIC_RE = /(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g
 const LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/g
+
+function renderInlineEmphasis(text) {
+  const pattern = /[^*]\*(?!\*)(.*?(?!\*).)\*(?!\*)|[^_]_(?!_)(.*?(?!_).)_(?!_)/g
+  const input = ' ' + text
+  let result = ''
+  let end = 1
+  for (let match; (match = pattern.exec(input));) {
+    result += input.slice(end, match.index + 1) + '<em>' + (match[1] ?? match[2]) + '</em>'
+    end = pattern.lastIndex
+    // The closing marker can also be the prefix for the next match.
+    pattern.lastIndex = end - 1
+  }
+  return result + input.slice(end)
+}
 
 function escapeHtml(s) {
   return String(s)
@@ -166,7 +179,7 @@ function inlineToHtml(text) {
     buf.push(escapeHtml(seg.slice(seglast)))
     let chunk = buf.join('')
     chunk = chunk.replace(BOLD_RE, '<strong>$2</strong>')
-    chunk = chunk.replace(ITALIC_RE, (_, a, b) => `<em>${a != null ? a : b}</em>`)
+    chunk = renderInlineEmphasis(chunk)
     chunk = chunk.replace(RANGE_RE, (_, lo, hi) => stash(
       `<a href="${btfRangeHref(lo, hi)}" class="ai-jump">range:${lo}/${hi}</a>`,
     ))
@@ -225,7 +238,18 @@ function splitMdTableRow(line) {
   let s = String(line || '').trim()
   if (s.startsWith('|')) s = s.slice(1)
   if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1)
-  return s.split(/(?<!\\)\|/).map(p => p.trim().replace(/\\\|/g, '|'))
+  const parts = []
+  let cur = ''
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '|' && (i === 0 || s[i - 1] !== '\\')) {
+      parts.push(cur)
+      cur = ''
+    } else {
+      cur += s[i]
+    }
+  }
+  parts.push(cur)
+  return parts.map(p => p.trim().replace(/\\\|/g, '|'))
 }
 
 function isMdTableSeparator(line) {

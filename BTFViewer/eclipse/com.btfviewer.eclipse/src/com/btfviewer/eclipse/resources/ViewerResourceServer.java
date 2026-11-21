@@ -2,6 +2,7 @@ package com.btfviewer.eclipse.resources;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -12,7 +13,9 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -32,6 +35,7 @@ public final class ViewerResourceServer implements AutoCloseable {
     private final String token = UUID.randomUUID().toString();
     private final ServerSocket server;
     private final ExecutorService executor;
+    private final Set<Socket> activeSockets = ConcurrentHashMap.newKeySet();
     private volatile boolean closed;
 
     public ViewerResourceServer(Bundle bundle, IFile trace) throws IOException {
@@ -71,7 +75,14 @@ public final class ViewerResourceServer implements AutoCloseable {
         while (!closed) {
             try {
                 Socket socket = server.accept();
-                executor.execute(() -> serve(socket));
+                synchronized (this) {
+                    if (closed) {
+                        socket.close();
+                        return;
+                    }
+                    activeSockets.add(socket);
+                    executor.execute(() -> serve(socket));
+                }
             } catch (IOException error) {
                 if (!closed) BTFViewerPlugin.log("The embedded viewer resource server stopped unexpectedly.", error);
             }
@@ -82,6 +93,7 @@ public final class ViewerResourceServer implements AutoCloseable {
         try (socket;
              InputStream rawIn = new BufferedInputStream(socket.getInputStream());
              OutputStream out = new BufferedOutputStream(socket.getOutputStream())) {
+            socket.setSoTimeout(10_000);
             String requestLine = readLine(rawIn);
             String line;
             do { line = readLine(rawIn); } while (line != null && !line.isEmpty());
@@ -109,35 +121,40 @@ public final class ViewerResourceServer implements AutoCloseable {
                 }
                 try (InputStream content = trace.opener().open()) {
                     sendStream(out, content, "application/octet-stream", head,
-                            trace.size(), MAX_TRACE_BYTES);
+                            MAX_TRACE_BYTES);
                 }
             } else {
                 sendStatus(out, 404, "Not Found");
             }
         } catch (Exception ignored) {
             // Browser cancellation and editor disposal commonly close the socket mid-response.
+        } finally {
+            activeSockets.remove(socket);
         }
     }
 
     private static void sendStream(OutputStream out, InputStream content, String contentType,
             boolean head) throws IOException {
-        sendStream(out, content, contentType, head, -1, Long.MAX_VALUE);
+        sendStream(out, content, contentType, head, Long.MAX_VALUE);
     }
 
     private static void sendStream(OutputStream out, InputStream content, String contentType,
-            boolean head, long contentLength, long maxBytes) throws IOException {
-        writeHeaders(out, 200, "OK", contentType, contentLength);
+            boolean head, long maxBytes) throws IOException {
+        writeHeaders(out, 200, "OK", contentType, -1);
         if (!head) {
             byte[] buffer = new byte[64 * 1024];
             long total = 0;
             int count;
-            while ((count = content.read(buffer)) >= 0) {
+            while ((count = content.read(buffer)) != -1) {
                 total += count;
                 if (total > maxBytes) {
                     throw new IOException("Trace exceeded the configured byte limit while streaming");
                 }
+                out.write((Integer.toHexString(count) + "\r\n").getBytes(StandardCharsets.US_ASCII));
                 out.write(buffer, 0, count);
+                out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
             }
+            out.write("0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
         }
         out.flush();
     }
@@ -154,7 +171,8 @@ public final class ViewerResourceServer implements AutoCloseable {
             throws IOException {
         String headers = "HTTP/1.1 " + code + " " + reason + "\r\n"
                 + "Content-Type: " + type + "\r\n"
-                + (contentLength >= 0 ? "Content-Length: " + contentLength + "\r\n" : "")
+                + (contentLength >= 0 ? "Content-Length: " + contentLength + "\r\n"
+                        : "Transfer-Encoding: chunked\r\n")
                 + "Cache-Control: no-store\r\n"
                 + "X-Content-Type-Options: nosniff\r\n"
                 + "Connection: close\r\n\r\n";
@@ -173,9 +191,9 @@ public final class ViewerResourceServer implements AutoCloseable {
     }
 
     private static TraceSource workspaceTrace(IFile trace) {
-        java.io.File local = trace.getLocation() == null ? null : trace.getLocation().toFile();
-        long size = local != null && local.isFile() ? local.length() : -1;
-        return new TraceSource(trace.getName(), size, trace::getContents);
+        var location = trace.getLocation();
+        File local = location == null ? null : location.toFile();
+        return new TraceSource(trace.getName(), local, trace::getContents);
     }
 
     private static TraceSource localTrace(java.nio.file.Path trace) throws IOException {
@@ -185,7 +203,7 @@ public final class ViewerResourceServer implements AutoCloseable {
         }
         java.nio.file.Path fileName = local.getFileName();
         String name = fileName == null ? local.toString() : fileName.toString();
-        return new TraceSource(name, Files.size(local), () -> Files.newInputStream(local));
+        return new TraceSource(name, local.toFile(), () -> Files.newInputStream(local));
     }
 
     @FunctionalInterface
@@ -193,12 +211,20 @@ public final class ViewerResourceServer implements AutoCloseable {
         InputStream open() throws Exception;
     }
 
-    private record TraceSource(String name, long size, TraceOpener opener) {}
+    private record TraceSource(String name, File local, TraceOpener opener) {
+        long size() {
+            return local == null ? -1 : local.length();
+        }
+    }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         closed = true;
         try { server.close(); } catch (IOException ignored) {}
+        for (Socket socket : activeSockets) {
+            try { socket.close(); } catch (IOException ignored) {}
+        }
+        activeSockets.clear();
         executor.shutdownNow();
     }
 }

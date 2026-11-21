@@ -151,7 +151,7 @@ class RoundTripTests(unittest.TestCase):
         written = extract_workspace(self.path, str(dest))
         self.assertTrue((dest / "manifest.json").is_file())
         self.assertTrue((dest / "trace" / "source.btf").is_file())
-        self.assertTrue(all(str(dest) in p for p in written))
+        self.assertTrue(all(Path(p).is_relative_to(dest.resolve()) for p in written))
 
 
 class SafetyTests(unittest.TestCase):

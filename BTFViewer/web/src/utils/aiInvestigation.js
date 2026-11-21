@@ -1302,7 +1302,8 @@ export function linkifyNextCheckLines(text, nextSteps = null, findings = null, p
     if (fid) byId[fid] = f
   }
   const tagged = Array.isArray(proseOut) ? proseOut : []
-  const lines = src.split(/(?<=\n)/)
+  const rawLines = src.split('\n')
+  const lines = rawLines.map((l, idx) => (idx < rawLines.length - 1 ? l + '\n' : l))
   const out = []
   let pendingId = ''
   for (const line of lines) {

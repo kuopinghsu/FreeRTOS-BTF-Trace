@@ -1,6 +1,7 @@
 """Compressed BTF open helpers (gzip / bz2 / zip)."""
 from __future__ import annotations
 
+import bz2
 import gzip
 import os
 import sys
@@ -8,6 +9,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
 if str(BTF_ROOT) not in sys.path:
@@ -24,6 +26,7 @@ from btf_viewer_pkg.parser import (  # noqa: E402
     _normalize_open_path,
     _open_btf_text,
     _open_path_exists,
+    _parse_btf,
     _pick_zip_btf_member,
     _sniff_compression,
     _split_zip_member_path,
@@ -58,6 +61,38 @@ class BtfOpenPathTests(unittest.TestCase):
 
 
 class CompressionHelpersTests(unittest.TestCase):
+    def test_parser_caps_unterminated_lines(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "trace.btf.gz"
+            with patch("btf_viewer_pkg.parser._MAX_TRACE_LINE_CHARS", 64):
+                path.write_bytes(gzip.compress(b"#timeScale us\n#" + b"x" * 63))
+                _parse_btf(str(path))
+                path.write_bytes(gzip.compress(b"#timeScale us\n#" + b"x" * 64))
+                with self.assertRaisesRegex(ValueError, "Trace line 2 exceeds the 64-character limit"):
+                    _parse_btf(str(path))
+
+    def test_expanded_byte_limit_for_all_formats(self):
+        raw = _MINI_BTF.replace("\n", "\r\n").encode("utf-8")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gz = root / "trace.btf.gz"
+            bz = root / "trace.btf.bz2"
+            plain = root / "trace.btf"
+            archive = root / "trace.btf.zip"
+            plain.write_bytes(raw)
+            gz.write_bytes(gzip.compress(raw))
+            bz.write_bytes(bz2.compress(raw))
+            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("nested/trace.btf", raw)
+
+            for path in (plain, gz, bz, archive, f"{archive}::nested/trace.btf"):
+                with self.subTest(path=path):
+                    with _open_btf_text(str(path), max_expanded=len(raw)) as trace:
+                        self.assertEqual(trace.read(), _MINI_BTF)
+                    with self.assertRaisesRegex(ValueError, "Expanded trace exceeds"):
+                        with _open_btf_text(str(path), max_expanded=len(raw) - 1) as trace:
+                            trace.read()
+
     def test_sniff_and_read_gzip(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "t.btf.gz"

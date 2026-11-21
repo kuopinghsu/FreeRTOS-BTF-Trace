@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import { parseBtf } from '../src/parser/btfParser.js'
 import { packTrace, unpackTrace, finalizeAndEnrich } from '../src/parser/tracePack.js'
+import { runTraceWorker, TraceWorkerTransportError } from '../src/parser/traceWorkerClient.js'
 
 /**
  * A single task with many short, tightly-packed resume/preempt segments on
@@ -35,7 +36,9 @@ describe('worker (pack/unpack) vs main-thread trace reconstruction parity', () =
     const text = syntheticBtfText(6000)
 
     const mainTrace = finalizeAndEnrich(await parseBtf(text))
-    const workerTrace = unpackTrace(packTrace(await parseBtf(text)).payload)
+    const { payload, transferables } = packTrace(await parseBtf(text), undefined, { transfer: true })
+    assert.ok(transferables.length > 0)
+    const workerTrace = unpackTrace(structuredClone(payload, { transfer: transferables }))
 
     // Sanity: this synthetic trace must actually exercise LOD reduction,
     // otherwise the regression this test guards against would never trigger.
@@ -93,4 +96,33 @@ describe('worker (pack/unpack) vs main-thread trace reconstruction parity', () =
       }
     }
   })
+})
+
+it('settles cancellation and lets the next trace worker finish', async () => {
+  const worker = {
+    postMessage() {},
+    terminate() { this.terminated = true },
+  }
+  const controller = new AbortController()
+  const cancelled = runTraceWorker(worker, { text: 'first trace' }, { signal: controller.signal })
+  controller.abort()
+  await assert.rejects(cancelled, { name: 'AbortError' })
+  assert.equal(worker.terminated, true)
+  assert.equal(worker.onmessage, null)
+
+  const next = { ...worker }
+  const loaded = runTraceWorker(next, { text: 'second trace' })
+  next.onmessage({ data: { type: 'done', packed: 'trace data' } })
+  assert.equal((await loaded).packed, 'trace data')
+})
+
+it('distinguishes worker transport failures from trace errors', async () => {
+  const worker = { postMessage() {}, terminate() {} }
+  const transport = runTraceWorker(worker, { text: '' })
+  worker.onerror({ message: 'worker failed to start' })
+  await assert.rejects(transport, TraceWorkerTransportError)
+
+  const parse = runTraceWorker(worker, { text: '' })
+  worker.onmessage({ data: { type: 'error', name: 'SyntaxError', message: 'bad trace' } })
+  await assert.rejects(parse, { name: 'SyntaxError', message: 'bad trace' })
 })

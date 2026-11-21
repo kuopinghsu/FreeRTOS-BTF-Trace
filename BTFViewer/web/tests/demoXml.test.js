@@ -176,10 +176,9 @@ describe('demoPack', () => {
     assert.ok(pack.traceFile)
     assert.equal(pack.aiCase.messages[0].content, 'why?')
 
-    const picked = await classifyPickedOpen(new Map([['demo_8cores.btfw', btfw]]))
-    assert.equal(picked.kind, 'demo')
-    assert.ok(picked.pack.traceFile)
-    assert.equal(picked.pack.aiCase.v, 1)
+    const unopened = { name: btfw.name, arrayBuffer() { throw new Error('Opened during classification') } }
+    const picked = await classifyPickedOpen(new Map([['demo_8cores.btfw', unopened]]))
+    assert.deepEqual(picked, { kind: 'workspace', file: unopened })
   })
 
   it('asks for the pack folder when only the xml is opened', async () => {

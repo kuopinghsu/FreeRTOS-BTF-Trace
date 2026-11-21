@@ -5104,6 +5104,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._progress_dialog: Optional["_LoadProgressBridge"] = None
         self._pending_demo: Optional[dict] = None
         self._pending_workspace: Optional[dict] = None
+        self._pending_workspace_path: Optional[str] = None
         self._demo_runner: Optional[InAppDemoRunner] = None
         self._demo_overlay: Optional[DemoPointerOverlay] = None
         self._demo_message_overlay: Optional[DemoMessageOverlay] = None
@@ -10431,9 +10432,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _finish_load_pipeline(self) -> None:
         """Clear the load guard and resume queued opens / session restore."""
         self._load_in_progress = False
+        self._start_pending_workspace()
         self._continue_session_restore()
         self._drain_pending_open_paths()
-        self._start_pending_workspace()
         self._start_pending_demo()
 
     def _preferred_demo_voice_lang(self) -> str:
@@ -14440,44 +14441,62 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Open a ``.btfw`` package. A ``kind == "workspace"`` package restores
         the investigation onto its tab; a ``kind == "demo"`` package stages the
         guided tour and (optionally) pre-loads its AI investigation case."""
+        if self._load_in_progress:
+            if path not in self._pending_open_paths:
+                self._pending_open_paths.append(path)
+            return
         try:
             ws = open_workspace(path)
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
             QMessageBox.warning(self, "Open Error", f"Not a readable .btfw package:\n{exc}")
             return
         trace_bytes = ws.get("trace_bytes")
+        demo = ws.get("demo")
+        is_demo = ws.get("kind") == "demo" or bool(demo)
+        tmp = None
         if not trace_bytes:
-            if ws.get("trace_embedded"):
+            if ws.get("trace_embedded") or is_demo:
                 QMessageBox.warning(
                     self, "Open Error", "Package trace is missing or corrupt.")
-            else:
+                return
+            ref = ws.get("trace_ref") or ""
+            archive, member = _split_zip_member_path(ref)
+            if archive:
+                archive = os.path.join(os.path.dirname(os.path.abspath(path)), archive)
+            if not os.path.isfile(archive) or archive.lower().endswith((WORKSPACE_EXT, ".xml")):
                 QMessageBox.warning(
                     self, "Open Error",
-                    "Package references an external trace "
-                    f"({ws.get('trace_ref') or 'unknown'}). Open that .btf directly.")
-            return
-        if not hasattr(self, "_workspace_extract_dirs"):
-            self._workspace_extract_dirs = []
-        tmp = tempfile.mkdtemp(prefix="btfw_")
-        self._workspace_extract_dirs.append(tmp)
-        raw_name = os.path.basename(
-            (ws.get("manifest") or {}).get("trace", {}).get("name")
-            or os.path.basename(path).replace(WORKSPACE_EXT, ".btf"))
-        stem = os.path.basename(_export_base_name(raw_name, "trace"))
-        # Name the staged file after the *actual* bytes, not the manifest's
-        # possibly-stale compression suffix (fixes "Not a gzipped file (b'#v')").
-        btf_path = os.path.join(tmp, stem + _staged_trace_ext(trace_bytes))
-        try:
-            with open(btf_path, "wb") as fh:
-                fh.write(trace_bytes)
-        except OSError as exc:
-            QMessageBox.warning(self, "Open Error", f"Cannot stage package trace:\n{exc}")
-            return
+                    f"Package references an unavailable trace:\n{ref or 'unknown'}")
+                return
+            btf_path = f"{archive}{_ZIP_MEMBER_SEP}{member}" if member else archive
+            try:
+                expanded = _expand_open_paths(btf_path)
+                if len(expanded) != 1:
+                    raise ValueError("The workspace must reference one trace in the ZIP archive.")
+                btf_path = expanded[0]
+            except (OSError, ValueError, zipfile.BadZipFile) as exc:
+                QMessageBox.warning(self, "Open Error", f"Cannot open package trace:\n{exc}")
+                return
+        else:
+            if not hasattr(self, "_workspace_extract_dirs"):
+                self._workspace_extract_dirs = []
+            tmp = tempfile.mkdtemp(prefix="btfw_")
+            self._workspace_extract_dirs.append(tmp)
+            raw_name = os.path.basename(
+                (ws.get("manifest") or {}).get("trace", {}).get("name")
+                or os.path.basename(path).replace(WORKSPACE_EXT, ".btf"))
+            stem = os.path.basename(_export_base_name(raw_name, "trace"))
+            btf_path = os.path.join(tmp, stem + _staged_trace_ext(trace_bytes))
+            try:
+                with open(btf_path, "wb") as fh:
+                    fh.write(trace_bytes)
+            except OSError as exc:
+                QMessageBox.warning(self, "Open Error", f"Cannot stage package trace:\n{exc}")
+                return
         for w in ws.get("warnings") or []:
             self.statusBar().showMessage(f"Package: {w}", 6000)
 
-        demo = ws.get("demo")
-        if ws.get("kind") == "demo" or demo:
+        if is_demo:
             script_path = self._stage_demo_tree(demo or {}, tmp) if demo else None
             if not script_path or not os.path.isfile(script_path):
                 QMessageBox.warning(
@@ -14492,16 +14511,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
 
         self._pending_workspace = ws
+        self._pending_workspace_path = _normalize_open_path(btf_path)
         self._open_file(btf_path)
 
     def _start_pending_workspace(self) -> None:
         ws = self._pending_workspace
-        self._pending_workspace = None
         if not ws:
             return
         tab = self._active_tab
         if tab is None:
             return
+        if self._pending_workspace_path is not None and tab.path != self._pending_workspace_path:
+            return
+        self._pending_workspace = None
+        self._pending_workspace_path = None
         notes = []
         inv = ws.get("investigation")
         if isinstance(inv, dict):
@@ -15495,6 +15518,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         existing = self._find_tab_index(path)
         if existing >= 0:
             self._tab_widget.setCurrentIndex(existing)
+            self._start_pending_workspace()
             self._focus_statistics_panel(force=True)
             QTimer.singleShot(0, lambda: self._focus_statistics_panel(force=True))
             if self._session_restore_queue or self._session_restore_active_idx >= 0:
@@ -15520,6 +15544,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not self._stop_parse_thread(wait_ms=2000):
             self._status_file.setText("  Previous load is still stopping…")
             self._load_in_progress = False
+            if self._pending_workspace_path == path:
+                self._pending_workspace = None
+                self._pending_workspace_path = None
             return
 
         # Show a wait cursor and status message while parsing
@@ -15555,6 +15582,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._end_inline_load()
             if clear_load_flag:
                 self._load_in_progress = False
+                if self._pending_workspace_path == path:
+                    self._pending_workspace = None
+                    self._pending_workspace_path = None
+                QTimer.singleShot(0, self._drain_pending_open_paths)
             if QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
 
@@ -15816,18 +15847,28 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         try:
             trace_raw = b""
-            if self._current_file and os.path.isfile(self._current_file):
+            archive, member = _split_zip_member_path(self._current_file)
+            trace_name = os.path.basename(member or archive or "trace.btf")
+            trace_size = 0
+            if embed:
                 if amap:
-                    try:
-                        with _open_btf_text(self._current_file) as fh:
-                            trace_raw = anonymize_btf_text(
-                                fh.read(), amap).encode("utf-8")
-                    except Exception:
-                        trace_raw = b""
+                    with _open_btf_text(self._current_file) as fh:
+                        trace_raw = anonymize_btf_text(fh.read(), amap).encode("utf-8")
+                    trace_name = "trace.btf"
+                elif member:
+                    with zipfile.ZipFile(archive) as zf:
+                        trace_raw = zf.read(member)
                 else:
-                    with open(self._current_file, "rb") as fh:
+                    with open(archive, "rb") as fh:
                         trace_raw = fh.read()
-            embed = embed and bool(trace_raw)
+                if not trace_raw:
+                    raise ValueError("The trace is empty and cannot be embedded.")
+                trace_size = len(trace_raw)
+            elif member:
+                with zipfile.ZipFile(archive) as zf:
+                    trace_size = zf.getinfo(member).file_size
+            elif archive and os.path.isfile(archive):
+                trace_size = os.path.getsize(archive)
 
             def _hf(ns):
                 return _format_time(int(ns), self._trace.time_scale,
@@ -15868,14 +15909,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     ai_case = _anon(panel.workspace_ai_case())
             except Exception:
                 ai_case = None
+            view_state = _anon(self._workspace_view_state(tab))
+            if amap and embed:
+                view_state["traceName"] = trace_name
             save_workspace(
                 path,
                 trace_bytes=trace_raw if embed else None,
                 trace_ref="" if embed else (self._current_file or ""),
-                trace_name=os.path.basename(self._current_file or "trace.btf"),
-                trace_size=len(trace_raw),
+                trace_name=trace_name,
+                trace_size=trace_size,
                 embed_trace=embed,
-                view_state=self._workspace_view_state(tab),
+                view_state=view_state,
                 health=health,
                 findings=findings,
                 investigation=investigation,
@@ -15888,7 +15932,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.statusBar().showMessage(
                 f"Workspace saved ({'embedded' if embed else 'referenced'} trace"
                 f"{', anonymized' if amap else ''}) → {os.path.basename(path)}", 4000)
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError, KeyError, EOFError, zipfile.BadZipFile) as exc:
             _critical_with_detail(
                 self, "Export Error",
                 "Could not write the workspace file.", str(exc))

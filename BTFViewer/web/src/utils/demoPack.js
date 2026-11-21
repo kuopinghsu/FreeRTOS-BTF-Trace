@@ -229,6 +229,13 @@ export function filesFromWorkspaceDemo(ws) {
   return files
 }
 
+export async function packFromOpenedWorkspace(ws) {
+  const pack = await packFromFileMap(filesFromWorkspaceDemo(ws))
+  pack.aiCase = ws.ai_case ?? pack.aiCase ?? null
+  if (!pack.traceFile) throw new Error('Demo .btfw package has no embedded .btf trace')
+  return pack
+}
+
 /**
  * Read a ``.btfw`` demo package File into a demo pack (for startDemoPack).
  * @param {File} file
@@ -242,9 +249,7 @@ export async function packFromWorkspaceFile(file) {
   } catch (err) {
     throw new Error(`Invalid .btfw package: ${err?.message || err}`, { cause: err })
   }
-  const pack = await packFromFileMap(filesFromWorkspaceDemo(ws))
-  pack.aiCase = ws.ai_case ?? pack.aiCase ?? null
-  return pack
+  return packFromOpenedWorkspace(ws)
 }
 
 function supportsDirectoryPicker() {
@@ -355,6 +360,7 @@ async function tryParentDirectoryPack(handle) {
  * @returns {Promise<
  *   { kind: 'demo', pack: object } |
  *   { kind: 'demo-folder', xmlName: string, startIn: object|null } |
+ *   { kind: 'workspace', file: File } |
  *   { kind: 'btf', file: File } |
  *   null
  * >}
@@ -363,23 +369,7 @@ export async function classifyPickedOpen(files, xmlHandle = null) {
   const map = files
   const btfw = [...(files?.values?.() || [])].find(f => isBtfwOpenName(f.name))
     || [...(files?.entries?.() || [])].find(([k]) => isBtfwOpenName(k))?.[1]
-  if (btfw) {
-    let ws
-    try {
-      ws = openWorkspaceBlob(new Uint8Array(await btfw.arrayBuffer()))
-    } catch {
-      ws = null // let onOpenWorkspaceFile surface the real error
-    }
-    if (ws && (ws.kind === 'demo' || ws.demo)) {
-      const pack = await packFromFileMap(filesFromWorkspaceDemo(ws))
-      pack.aiCase = ws.ai_case ?? null
-      if (!pack.traceFile) {
-        throw new Error('Demo .btfw package has no embedded .btf trace')
-      }
-      return { kind: 'demo', pack }
-    }
-    return { kind: 'workspace', file: btfw }
-  }
+  if (btfw) return { kind: 'workspace', file: btfw }
   const kind = classifyOpenFiles(map)
   if (kind === 'demo') {
     let pack = await packFromFileMap(map)

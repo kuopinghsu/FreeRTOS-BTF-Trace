@@ -29,9 +29,7 @@
       @toggle-limit="onToggleLimit"
       @clear-filters="clearAllActiveFilters"
       @file-error="onFileError"
-      @trace-reading="onTraceReading"
-      @trace-loaded="onTraceLoaded"
-      @traces-loaded="onUserTracesLoaded"
+      @trace-file="onUserTraceFile"
       @workspace-file="onOpenWorkspaceFile"
       @load-demo="onLoadDemo"
       @demo-pack="startDemoPack"
@@ -2216,16 +2214,17 @@ import {
 } from './utils/analysisContext.js'
 import {
   BTF_MAX_EXPANDED_BYTES,
+  BTF_MAX_INPUT_BYTES,
   isBtfOpenName,
-  loadBtfEntriesFromFile,
   decompressBtfEntries,
   readResponseBytes,
 } from './utils/btfLoad.js'
+import { runTraceWorker, TraceWorkerTransportError } from './parser/traceWorkerClient.js'
 import {
   classifyOpenFiles,
   classifyPickedOpen,
   collectDroppedFiles,
-  packFromWorkspaceFile,
+  packFromOpenedWorkspace,
   pickDemoPack,
 } from './utils/demoPack.js'
 import { createDemoRunner, parseCursorTimes } from './utils/demoRunner.js'
@@ -2931,8 +2930,7 @@ function demoHost() {
       dispatchClickAt(x, y)
     },
     loadTraceFile: async (file) => {
-      const entries = await loadBtfEntriesFromFile(file)
-      await onTracesLoaded({ entries, sourceName: file.name })
+      if (!await loadTraceFile(file)) return
       await demoWaitLoading()
       await nextTick()
       onFit()
@@ -4335,25 +4333,89 @@ const zoomStatus = computed(() => zoomStatusFromViewport(
 ))
 
 // ---- File loading (via Web Worker; fallback to main-thread for file:// origins) --
-let _parseWorker = null
+let _traceRead = null
+let _traceParse = null
 /** @type {{ text: string, name: string }[]} */
 const _pendingTraceLoads = []
 /** @type {Promise<boolean>|null} */
 let _drainPromise = null
 
-function onTraceReading({ name }) {
-  // Show the loading overlay immediately while FileReader is still reading the file
-  if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
+function abortTraceLoad() {
+  _pendingTraceLoads.length = 0
+  _traceRead?.abort()
+  _traceParse?.abort()
+}
+
+function beginTraceRead(name) {
+  abortTraceLoad()
+  const controller = new AbortController()
+  _traceRead = controller
   loading.value         = true
   loadingPhase.value    = 'read'
   loadingPct.value      = 1
   loadingMsg.value      = LOADING_STAGES.reading
   loadingFileName.value = name || 'trace.btf'
+  return controller
+}
+
+async function createTraceWorker(signal) {
+  signal.throwIfAborted()
+  try {
+    const Worker = (await import('./parser/btfWorker.js?worker&inline')).default
+    signal.throwIfAborted()
+    return new Worker()
+  } catch {
+    signal.throwIfAborted()
+    return null
+  }
+}
+
+async function readTraceData(name, read, { workspace = false, retryRead = false } = {}) {
+  const controller = beginTraceRead(name)
+  const { signal } = controller
+  try {
+    let input = await read(signal)
+    signal.throwIfAborted()
+    const worker = await createTraceWorker(signal)
+    if (worker) {
+      const request = { name, workspace }
+      const transfer = []
+      let bytes
+      if (input instanceof Blob) {
+        request.file = input
+      } else {
+        bytes = input instanceof Uint8Array ? input : new Uint8Array(input)
+        if (bytes.byteOffset !== 0 || bytes.byteLength !== bytes.buffer.byteLength) bytes = bytes.slice()
+        request.bytes = bytes
+        transfer.push(bytes.buffer)
+      }
+      const originalLength = bytes?.byteLength
+      try {
+        const result = await runTraceWorker(worker, request, { signal, transfer })
+        signal.throwIfAborted()
+        return workspace ? result.workspace : result.entries
+      } catch (error) {
+        signal.throwIfAborted()
+        if (!(error instanceof TraceWorkerTransportError)) throw error
+        if (originalLength && bytes.byteLength === 0) {
+          if (!retryRead) throw error
+          input = await read(signal)
+        }
+      }
+    }
+    await new Promise(r => requestAnimationFrame(r))
+    signal.throwIfAborted()
+    const data = input instanceof Blob ? await input.arrayBuffer() : input
+    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
+    signal.throwIfAborted()
+    return workspace ? openWorkspaceBlob(bytes) : decompressBtfEntries(bytes, name)
+  } finally {
+    if (_traceRead === controller) _traceRead = null
+  }
 }
 
 /** Clear the load overlay after a read/decompress failure (empty ZIP, etc.). */
 function dismissLoadingOverlay() {
-  if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
   loading.value    = false
   loadingPhase.value = 'parse'
   loadingPct.value = 0
@@ -4361,11 +4423,7 @@ function dismissLoadingOverlay() {
 }
 
 function cancelLoading() {
-  if (_parseWorker) {
-    _parseWorker.terminate()
-    _parseWorker = null
-  }
-  _pendingTraceLoads.length = 0
+  abortTraceLoad()
   dismissLoadingOverlay()
   showToast('Load cancelled', 'info')
 }
@@ -4393,12 +4451,13 @@ function paintLoadingProgress(pct, msg) {
 }
 
 async function attachParsedTrace(name, packedOrTrace, {
-  savedState = null, fromSession = false, sourceText = null,
+  savedState = null, fromSession = false, sourceText = null, signal,
 } = {}) {
   paintLoadingProgress(100, LOADING_STAGES.opening)
   loadingPhase.value = 'open'
   try {
     const { unpackTrace } = await import('./parser/tracePack.js')
+    signal?.throwIfAborted()
     const trace = packedOrTrace?.segStore ? packedOrTrace : unpackTrace(packedOrTrace)
     const tab = openTab(name || 'trace.btf')
     resizeTabCursors(tabs.value, appSettings.maxCursors)
@@ -4433,11 +4492,13 @@ async function attachParsedTrace(name, packedOrTrace, {
       showToast(trace.meta._versionWarning, 'info')
     }
     await nextTick()
+    signal?.throwIfAborted()
 
     _cpuLoadUserSized = false
     finishTraceLoadTab(tab)
     focusStatisticsPanel(!fromSession)
     await nextTick()
+    signal?.throwIfAborted()
     applyTimelineViewport()
     scheduleRender()
     autofitCpuLoadPaneHeight()
@@ -4451,27 +4512,43 @@ async function attachParsedTrace(name, packedOrTrace, {
         .catch(() => {})
     }, 0)
   } catch (err) {
-    loading.value = false
-    loadingPct.value = 0
-    loadingMsg.value = ''
+    if (!signal?.aborted) dismissLoadingOverlay()
     throw err
   }
 }
 
-async function parseTraceOnMainThread(text, name) {
+async function parseTraceOnMainThread(text, name, signal) {
   const { initWasmAccel } = await import('./renderer/wasmAccel.js')
   await initWasmAccel()
   const { parseBtf } = await import('./parser/btfParser.js')
   const { finalizeAndEnrich } = await import('./parser/tracePack.js')
-  const result = finalizeAndEnrich(await parseBtf(text, (pct, msg) => {
+  signal.throwIfAborted()
+  const trace = await parseBtf(text, (pct, msg) => {
+    signal.throwIfAborted()
     paintLoadingProgress(pct, msg)
-  }))
-  await attachParsedTrace(name, result, { sourceText: text })
+  })
+  signal.throwIfAborted()
+  await attachParsedTrace(name, finalizeAndEnrich(trace), { sourceText: text, signal })
 }
 
-async function onUserTracesLoaded(payload) {
+async function loadTraceFile(file) {
+  try {
+    const entries = await readTraceData(file.name, () => {
+      if (file.size > BTF_MAX_INPUT_BYTES) {
+        throw new Error(`Trace input exceeds the ${BTF_MAX_INPUT_BYTES / (1024 * 1024)} MB limit`)
+      }
+      return file
+    })
+    return onTracesLoaded({ entries, sourceName: file.name })
+  } catch (err) {
+    if (err?.name !== 'AbortError') onFileError(`Failed to read "${file.name}": ${err?.message || err}`)
+    return false
+  }
+}
+
+async function onUserTraceFile(file) {
   stopDemo()
-  return onTracesLoaded(payload)
+  return loadTraceFile(file)
 }
 
 async function onTracesLoaded({ entries, sourceName }) {
@@ -4492,20 +4569,21 @@ async function onTracesLoaded({ entries, sourceName }) {
 
 async function onTraceLoaded({ text, name }) {
   _pendingTraceLoads.push({ text, name })
-  await drainPendingTraceLoads()
+  return drainPendingTraceLoads()
 }
 
 async function openHostTraceUrl(traceRef, requestedName = '') {
   const url = String(traceRef || '')
   const name = String(requestedName || '').trim() || 'trace.btf'
   if (!url) throw new Error('Trace URL is required')
-  onTraceReading({ name })
+  stopDemo()
   try {
-    const response = await fetch(url, { cache: 'no-store', credentials: 'same-origin' })
-    if (!response.ok) throw new Error(`Trace request failed: HTTP ${response.status}`)
-    const bytes = await readResponseBytes(response)
-    const entries = decompressBtfEntries(bytes, name)
-    const loadedSuccessfully = await onUserTracesLoaded({ entries, sourceName: name })
+    const entries = await readTraceData(name, async (signal) => {
+      const response = await fetch(url, { cache: 'no-store', credentials: 'same-origin', signal })
+      if (!response.ok) throw new Error(`Trace request failed: HTTP ${response.status}`)
+      return readResponseBytes(response)
+    }, { retryRead: true })
+    const loadedSuccessfully = await onTracesLoaded({ entries, sourceName: name })
     if (!loadedSuccessfully) {
       const error = new Error(`Failed to load "${name}"`)
       error.viewerReported = true
@@ -4521,7 +4599,7 @@ async function openHostTraceUrl(traceRef, requestedName = '') {
     })
   } catch (err) {
     const message = err?.message || `Failed to load ${name}`
-    if (!err?.viewerReported) onFileError(message)
+    if (!err?.viewerReported && err?.name !== 'AbortError') onFileError(message)
     notifyViewerHost('traceLoadFailed', { name, message })
     throw err
   }
@@ -4557,90 +4635,46 @@ async function loadOneTrace({ text, name }) {
     )
     return false
   }
-  // Terminate any in-progress parse
-  if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
-
-  loading.value         = true
-  loadingPhase.value    = 'parse'
-  loadingPct.value      = 1
-  loadingMsg.value      = LOADING_STAGES.parsing
+  const controller = new AbortController()
+  const { signal } = controller
+  _traceParse = controller
+  paintLoadingProgress(1, LOADING_STAGES.parsing)
+  loading.value = true
   loadingFileName.value = name || 'trace.btf'
 
-  // Yield one animation frame so the browser can paint the loading overlay
-  // before any heavy synchronous work (or worker creation) begins.
-  await new Promise(r => requestAnimationFrame(r))
-
-  // Chrome on file:// blocks Blob-URL workers (null-origin restriction).
-  // Detect this by attempting a test createObjectURL worker; if it throws,
-  // fall back to parsing synchronously on the main thread.
-  let workerOk = true
   try {
-    const testBlob = new Blob([''], { type: 'text/javascript' })
-    const testUrl  = URL.createObjectURL(testBlob)
-    const testW    = new Worker(testUrl)
-    testW.terminate()
-    URL.revokeObjectURL(testUrl)
-  } catch {
-    workerOk = false
-  }
-
-  if (!workerOk) {
     await new Promise(r => requestAnimationFrame(r))
-    try {
-      await parseTraceOnMainThread(text, name)
-    } catch (err) {
-      showParseError(err, name)
-      loading.value = false
-      return false
-    }
-    return true
-  }
-
-  const Worker = (await import('./parser/btfWorker.js?worker&inline')).default
-  const worker = new Worker()
-  _parseWorker = worker
-
-  return new Promise((resolve) => {
-    worker.onmessage = ({ data }) => {
-      if (data.type === 'progress') {
-        loadingPhase.value = 'parse'
-        loadingPct.value = data.pct
-        loadingMsg.value = formatLoadingMessage(data.msg || '')
-      } else if (data.type === 'done') {
-        _parseWorker = null
-        worker.terminate()
-        attachParsedTrace(name, data.packed, { sourceText: text }).then(() => resolve(true)).catch((err) => {
-          showParseError(err, name)
-          loading.value = false
-          resolve(false)
+    signal.throwIfAborted()
+    const worker = await createTraceWorker(signal)
+    let packed
+    if (worker) {
+      try {
+        const result = await runTraceWorker(worker, { text }, {
+          signal,
+          onProgress: paintLoadingProgress,
         })
-      } else if (data.type === 'error') {
-        _parseWorker = null
-        worker.terminate()
-        loadingPct.value = 1
-        loadingMsg.value = LOADING_STAGES.parsing
-        parseTraceOnMainThread(text, name).then(() => resolve(true)).catch((err) => {
-          showParseError(err, name)
-          loading.value = false
-          resolve(false)
-        })
+        packed = result.packed
+      } catch (error) {
+        signal.throwIfAborted()
+        if (!(error instanceof TraceWorkerTransportError)) throw error
       }
     }
-
-    worker.onerror = () => {
-      _parseWorker = null
-      worker.terminate()
-      loadingPct.value = 1
-      loadingMsg.value = LOADING_STAGES.parsing
-      parseTraceOnMainThread(text, name).then(() => resolve(true)).catch((err) => {
-        showParseError(err, name)
-        loading.value = false
-        resolve(false)
-      })
+    signal.throwIfAborted()
+    if (packed) {
+      await attachParsedTrace(name, packed, { sourceText: text, signal })
+    } else {
+      await parseTraceOnMainThread(text, name, signal)
     }
-
-    worker.postMessage({ text })
-  })
+    return true
+  } catch (error) {
+    if (!signal.aborted) {
+      showParseError(error, name)
+      dismissLoadingOverlay()
+    }
+    return false
+  } finally {
+    if (_traceParse === controller) _traceParse = null
+  }
 }
 
 // ---- Zoom ----------------------------------------------------------------
@@ -6331,25 +6365,8 @@ async function onFileDrop(e) {
       .filter(([k, f]) => isBtfOpenName(f.name) || isBtfOpenName(k))
       .map(([, f]) => f)
     if (!btfs.length) return
-    if (btfs.length === 1) {
-      onTraceReading({ name: btfs[0].name })
-      try {
-        const entries = await loadBtfEntriesFromFile(btfs[0])
-        await onTracesLoaded({ entries, sourceName: btfs[0].name })
-      } catch (err) {
-        onFileError(`Failed to read "${btfs[0].name}"${err?.message ? `: ${err.message}` : ''}`)
-      }
-      return
-    }
-    try {
-      const all = []
-      for (const file of btfs) {
-        const entries = await loadBtfEntriesFromFile(file)
-        all.push(...entries)
-      }
-      await onTracesLoaded({ entries: all, sourceName: btfs[0].name })
-    } catch (err) {
-      onFileError(err?.message || 'Failed to read dropped traces')
+    for (const file of btfs) {
+      if (!await loadTraceFile(file)) break
     }
     return
   }
@@ -6635,17 +6652,17 @@ function onExportWorkspace({ embedTrace = true, anonymize = false } = {}) {
 async function onOpenWorkspaceFile(file) {
   let ws
   try {
-    const bytes = new Uint8Array(await file.arrayBuffer())
-    ws = openWorkspaceBlob(bytes)
+    ws = await readTraceData(file.name, () => file, { workspace: true })
   } catch (err) {
-    showToast(err?.message || 'Not a readable .btfw package', 'error')
+    if (err?.name !== 'AbortError') onFileError(err?.message || 'Not a readable .btfw package')
     return
   }
   // A .btfw demo package: play the guided tour (and pre-seed its AI case)
   // instead of the workspace-restore path.
   if (ws.kind === 'demo' || ws.demo) {
+    dismissLoadingOverlay()
     try {
-      const pack = await packFromWorkspaceFile(file)
+      const pack = await packFromOpenedWorkspace(ws)
       stopDemo()
       await startDemoPack(pack)
     } catch (err) {
@@ -6654,12 +6671,11 @@ async function onOpenWorkspaceFile(file) {
     return
   }
   if (!ws.trace_bytes) {
-    showToast(
+    onFileError(
       ws.trace_embedded
         ? 'Workspace trace is missing or corrupt.'
         : `Workspace references an external trace (${ws.trace_ref || 'unknown'}). `
           + 'Open that .btf, then Import Session from the workspace.',
-      'error',
     )
     return
   }
@@ -6673,18 +6689,19 @@ async function onOpenWorkspaceFile(file) {
   const decodeName = traceName.replace(/\.(gz|bz2|zip)$/i, '')
   let entries
   try {
-    entries = decompressBtfEntries(ws.trace_bytes, decodeName)
+    entries = await readTraceData(decodeName, async (signal) => {
+      if (ws.trace_bytes.byteLength) return ws.trace_bytes
+      // A transport failure can leave the original buffer detached.
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      signal.throwIfAborted()
+      return openWorkspaceBlob(bytes).trace_bytes
+    }, { retryRead: true })
   } catch (err) {
-    showToast(err?.message || 'Workspace trace could not be decoded', 'error')
+    if (err?.name !== 'AbortError') onFileError(err?.message || 'Workspace trace could not be decoded')
     return
   }
   try {
-    if (entries.length > 1) {
-      await onTracesLoaded({ entries, sourceName: traceName })
-    } else {
-      await onTraceLoaded({ text: entries[0].text, name: entries[0].name || traceName })
-    }
-    applyWorkspaceRestore(ws)
+    if (await onTracesLoaded({ entries, sourceName: traceName })) applyWorkspaceRestore(ws)
   } catch (err) {
     showToast(err?.message || 'Failed to open workspace trace', 'error')
   }
@@ -7619,32 +7636,21 @@ function onGlobalKeydown(e) {
 
 // ---- Auto-load embedded example on startup --------------------------------
 async function loadExampleBtf() {
-  if (typeof DecompressionStream === 'undefined') {
-    showToast('Demo trace loading requires gzip decompression support. Open a .btf file directly instead.', 'error')
-    return
-  }
-
-  loading.value = true
-  loadingPhase.value = 'read'
-  loadingPct.value = 1
-  loadingMsg.value = LOADING_STAGES.demo
-  loadingFileName.value = 'example-2cores.btf.gz'
-  await new Promise(r => requestAnimationFrame(r))
-
-  // Decode base64 → gzip bytes → UTF-8 text.
-  const binStr  = atob(exampleBtfB64)
-  const bytes   = new Uint8Array(binStr.length)
-  for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i)
-
-  const compressed = new Blob([bytes], { type: 'application/gzip' })
-  const decompressedStream = compressed.stream().pipeThrough(new DecompressionStream('gzip'))
-  const text = await new Response(decompressedStream).text()
-  await onTraceLoaded({ text, name: 'example-2cores.btf.gz' })
+  const name = 'example-2cores.btf.gz'
+  const [{ text }] = await readTraceData(name, () => {
+    loadingMsg.value = LOADING_STAGES.demo
+    const binStr = atob(exampleBtfB64)
+    const bytes = new Uint8Array(binStr.length)
+    for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i)
+    return bytes
+  }, { retryRead: true })
+  await onTraceLoaded({ text, name })
 }
 
 function onLoadDemo() {
   stopDemo()
   loadExampleBtf().catch((err) => {
+    if (err?.name === 'AbortError') return
     console.error('Demo load failed:', err)
     showToast('Failed to load demo trace: ' + (err?.message || String(err)), 'error')
     loading.value = false
@@ -7747,10 +7753,7 @@ onBeforeUnmount(() => {
     clearTimeout(_statusBarFlashTimer)
     _statusBarFlashTimer = 0
   }
-  if (_parseWorker) {
-    _parseWorker.terminate()
-    _parseWorker = null
-  }
+  abortTraceLoad()
   import('./utils/statsWorkerClient.js').then(m => m.terminateStatsWorker()).catch(() => {})
   onRightPanelResizeEnd()
   onCpuLoadResizeEnd()

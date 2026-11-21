@@ -112,6 +112,7 @@ class SyncIssueRef:
     ptr: str = ""
 
 _MAX_TRACE_FILE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB guard vs. memory exhaustion on a huge/adversarial file
+_MAX_TRACE_LINE_CHARS = 4 * 1024 * 1024
 
 # Open dialog / drag-drop accept list (plain + compressed BTF + packages).
 # A ``.btfw`` package is both the portable workspace and the shareable demo
@@ -290,33 +291,53 @@ def _expand_open_paths(filepath: str) -> List[str]:
 
 
 @contextmanager
-def _open_btf_text(filepath: str):
-    """Yield a text stream for a plain or compressed BTF file."""
+def _open_btf_binary(filepath: str):
+    """Yield the expanded bytes of a plain or compressed trace."""
     zip_path, member = _split_zip_member_path(filepath)
-    if member:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            with zf.open(member, "r") as raw:
-                with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as fh:
-                    yield fh
-        return
-    kind = _sniff_compression(zip_path)
-    if kind == "gzip":
-        with gzip.open(zip_path, "rt", encoding="utf-8", errors="replace") as fh:
-            yield fh
-        return
-    if kind == "bz2":
-        with bz2.open(zip_path, "rt", encoding="utf-8", errors="replace") as fh:
-            yield fh
-        return
+    kind = "zip" if member else _sniff_compression(zip_path)
     if kind == "zip":
         with zipfile.ZipFile(zip_path, "r") as zf:
-            picked = _pick_zip_btf_member(zf.namelist())
-            with zf.open(picked, "r") as raw:
-                with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as fh:
-                    yield fh
+            with zf.open(member or _pick_zip_btf_member(zf.namelist()), "r") as raw:
+                yield raw
         return
-    with open(zip_path, encoding="utf-8", errors="replace") as fh:
-        yield fh
+    opener = gzip.open if kind == "gzip" else bz2.open if kind == "bz2" else open
+    with opener(zip_path, "rb") as raw:
+        yield raw
+
+
+class _BoundedTraceBytes(io.RawIOBase):
+    """Count expanded bytes before the text decoder buffers them."""
+
+    def __init__(self, source, limit, cancel_check):
+        super().__init__()
+        self._source = source
+        self._remaining = limit
+        self._limit = limit
+        self._cancel_check = cancel_check
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        if self._cancel_check and self._cancel_check():
+            raise _ParseCancelledError()
+        chunk = memoryview(buffer)[:self._remaining + 1]
+        count = self._source.readinto(chunk)
+        self._remaining -= count
+        if self._remaining < 0:
+            raise ValueError(
+                f"Expanded trace exceeds the {self._limit:,}-byte limit")
+        return count
+
+
+@contextmanager
+def _open_btf_text(filepath: str, *, max_expanded=None, cancel_check=None):
+    """Yield a UTF-8 text stream, optionally limiting expanded bytes."""
+    with _open_btf_binary(filepath) as raw:
+        if max_expanded is not None:
+            raw = io.BufferedReader(_BoundedTraceBytes(raw, max_expanded, cancel_check))
+        with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as text:
+            yield text
 
 
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
@@ -8658,6 +8679,8 @@ def _parse_btf(filepath: str,
 
     # T-events grouped by timestamp for O(1) same-tick access
     t_events_by_time: Dict[int, List[Tuple]] = defaultdict(list)
+    event_labels: Dict[str, str] = {}
+    intern_label = event_labels.setdefault
     sti_events: List[StiEvent] = []
     tick_sti_times: List[int] = []  # timestamps from STI TICK events -> rendered on ruler
     tick_sti_notes: List[Tuple[int, Optional[int]]] = []  # (time, tick count) pairs, same order
@@ -8679,8 +8702,14 @@ def _parse_btf(filepath: str,
     if progress_callback:
         progress_callback(2, "Reading file…")
     _meta_re_match = _META_KEY_RE.match
-    with _open_btf_text(filepath) as fh:
-        for line_index, line in enumerate(fh, start=1):
+    with _open_btf_text(filepath, max_expanded=_MAX_TRACE_FILE_BYTES,
+                        cancel_check=cancel_check) as fh:
+        lines = iter(lambda: fh.readline(_MAX_TRACE_LINE_CHARS + 2), "")
+        for line_index, line in enumerate(lines, start=1):
+            if len(line) - line.endswith("\n") > _MAX_TRACE_LINE_CHARS:
+                raise ValueError(
+                    f"Trace line {line_index:,} exceeds the "
+                    f"{_MAX_TRACE_LINE_CHARS:,}-character limit")
             if cancel_check and line_index % 2048 == 0 and cancel_check():
                 raise _ParseCancelledError()
             line = line.strip()
@@ -8727,20 +8756,22 @@ def _parse_btf(filepath: str,
                         time_max = t
             if ev_type == "T":
                 _note = parts[7].strip() if len(parts) > 7 else ""
+                source = parts[1].strip()
+                event = parts[6].strip()
                 _tgt_raw = parts[4].strip()
+                _tgt_raw = intern_label(_tgt_raw, _tgt_raw)
                 if _note == "task_create":
                     if _tgt_raw not in _task_create_raw:
                         _task_create_raw[_tgt_raw] = t
-                _create_pri = _parse_create_priority(_note)
-                if _create_pri is not None:
-                    if _tgt_raw not in _task_create_raw:
-                        _task_create_raw[_tgt_raw] = t
-                    if _tgt_raw not in _task_create_pri_raw:
-                        _task_create_pri_raw[_tgt_raw] = _create_pri
+                if _note.startswith("create"):
+                    _create_pri = _parse_create_priority(_note)
+                    if _create_pri is not None:
+                        _task_create_raw.setdefault(_tgt_raw, t)
+                        _task_create_pri_raw.setdefault(_tgt_raw, _create_pri)
                 t_events_by_time[t].append((
                     t,
-                    parts[1].strip(),   # source
-                    parts[6].strip(),   # event
+                    intern_label(source, source),
+                    intern_label(event, event),
                     _tgt_raw,           # target
                     _note,              # note
                 ))
@@ -8805,10 +8836,12 @@ def _parse_btf(filepath: str,
     for timestamp_index, ts in enumerate(sorted(t_events_by_time), start=1):
         if cancel_check and timestamp_index % 512 == 0 and cancel_check():
             raise _ParseCancelledError()
-        events = t_events_by_time[ts]
+        events = t_events_by_time.pop(ts)
         # (time, source, event, target, note)
 
         core_preempts: Dict[str, str] = {}
+        # A same-tick resume suppresses a matching preempt.
+        resumed_srcs: set = set()
         for (_, src, ev, tgt, _note) in events:
             if ev == "preempt":
                 if _is_core_entity(src):
@@ -8817,9 +8850,8 @@ def _parse_btf(filepath: str,
                     src_core = _core_from_task_entity(src)
                     if src_core is not None:
                         core_preempts[tgt] = src_core
-
-        # Build set of sources that issued a resume (used to detect naked preempts).
-        resumed_srcs = {src for (_, src, ev, tgt, _n) in events if ev == "resume"}
+            elif ev == "resume":
+                resumed_srcs.add(src)
 
         for (_, src, ev, tgt, _note) in events:
             if ev != "resume":
@@ -8842,10 +8874,6 @@ def _parse_btf(filepath: str,
         for (_, src, ev, tgt, _note) in events:
             if ev == "preempt":
                 if tgt not in resumed_srcs:
-                    core = (core_preempts.get(tgt)
-                            or last_core.get(tgt)
-                            or _core_from_task_entity(tgt)
-                            or "Core_0")
                     _close_seg(tgt, ts)
                     if _is_core_entity(src):
                         last_core[tgt] = src
@@ -8858,8 +8886,8 @@ def _parse_btf(filepath: str,
     for task in list(open_seg.keys()):
         _close_seg(task, time_max)
 
-    # Free the raw event dict - no longer needed after segment reconstruction.
-    t_events_by_time.clear()
+    # Release the canonical labels that were only needed by raw events.
+    event_labels.clear()
 
     if _skipped_lines:
         meta["_skipped_lines"] = str(_skipped_lines)

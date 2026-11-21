@@ -8,9 +8,12 @@ same as the web ``exportTaskAliasMap`` / ``buildExportAnonymizer``.
 from __future__ import annotations
 
 import sys
+import tempfile
 import types
 import unittest
+import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
 if str(BTF_ROOT) not in sys.path:
@@ -22,6 +25,7 @@ install()
 
 from btf_viewer_pkg.mainwindow import MainWindow  # noqa: E402
 from btf_viewer_pkg.anonymize_export import anonymize_btf_text  # noqa: E402
+from btf_viewer_pkg.workspace import open_workspace  # noqa: E402
 
 APP = (BTF_ROOT / "web" / "src" / "App.vue").read_text("utf-8")
 SP = (BTF_ROOT / "web" / "src" / "components" / "StatisticsPanel.vue").read_text("utf-8")
@@ -61,6 +65,56 @@ class AliasMapKeysBareNamesTests(unittest.TestCase):
         self.assertIn("IDLE0", out)             # idle untouched
         self.assertNotIn("Runner", out)
         self.assertNotIn("Worker", out)
+
+
+class WorkspaceExportTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.trace = self.root / "trace.btf"
+        self.raw = b"0,Core_0,0,T,Runner,0,resume,\n"
+        self.trace.write_bytes(self.raw)
+        self.window = types.SimpleNamespace(
+            _trace=types.SimpleNamespace(),
+            _current_file=str(self.trace),
+            _active_tab=None,
+            _load_in_progress=False,
+            _export_task_alias_map=lambda: {"Runner": "Task-1"},
+            _workspace_view_state=lambda tab: {"findQuery": "Runner"},
+            statusBar=lambda: types.SimpleNamespace(showMessage=lambda *args: None),
+        )
+
+    def export(self, embed=True, anonymize=False):
+        path = self.root / "export.btfw"
+        with patch("btf_viewer_pkg.mainwindow.QFileDialog.getSaveFileName",
+                   return_value=(str(path), "")):
+            MainWindow._run_workspace_export(self.window, embed, anonymize=anonymize)
+        return path
+
+    def test_anonymized_view_state_uses_trace_aliases(self):
+        workspace = open_workspace(self.export(anonymize=True))
+        self.assertIn(b"Task-1", workspace["trace_bytes"])
+        self.assertEqual(workspace["view_state"]["findQuery"], "Task-1")
+
+    def test_export_embeds_only_the_selected_zip_member(self):
+        archive = self.root / "traces.btf.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("other.btf", self.raw.replace(b"Runner", b"Other"))
+            zf.writestr("nested/selected.btf", self.raw)
+        self.window._current_file = f"{archive}::nested/selected.btf"
+        workspace = open_workspace(self.export())
+        self.assertTrue(workspace["trace_embedded"])
+        self.assertEqual(workspace["trace_bytes"], self.raw)
+
+    def test_referenced_workspace_stages_state_for_its_trace(self):
+        path = self.export(embed=False)
+        opened = []
+        self.window._open_file = opened.append
+        MainWindow._open_workspace_file(self.window, str(path))
+        self.assertEqual([Path(p) for p in opened], [self.trace.resolve()])
+        self.assertEqual(self.window._pending_workspace["view_state"]["findQuery"], "Runner")
+        self.assertEqual(Path(self.window._pending_workspace_path), self.trace.resolve())
 
 
 class WebParityTests(unittest.TestCase):

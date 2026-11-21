@@ -12,6 +12,10 @@ import {
 } from '../src/utils/aiMarkdown.js'
 
 describe('aiMarkdown', () => {
+  it('renders adjacent emphasis with different markers', () => {
+    assert.equal(markdownToSafeHtml('*a*_b_*c*'), '<p><em>a</em><em>b</em><em>c</em></p>')
+  })
+
   it('renders headings, lists, bold, code, and jump links', () => {
     const html = markdownToSafeHtml(
       '## Title\n\n'

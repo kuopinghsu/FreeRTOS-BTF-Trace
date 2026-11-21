@@ -83,7 +83,8 @@ function resultOk(result) {
 function firstSentence(text, max = 120) {
   const s = String(text || '').replace(/\s+/g, ' ').trim()
   if (!s) return ''
-  const cut = s.split(/(?<=[.!?])\s/)[0] || s
+  const m = s.match(/^.*?[.!?](?=\s|$)/)
+  const cut = m ? m[0] : s
   return cut.length > max ? `${cut.slice(0, max - 1).trimEnd()}…` : cut
 }
 

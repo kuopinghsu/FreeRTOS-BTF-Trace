@@ -12,6 +12,7 @@ import org.eclipse.swt.SWTError;
 import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorSite;
@@ -39,6 +40,8 @@ public final class BTFEditor extends EditorPart {
     private BTFBrowserBridge bridge;
     private ViewerResourceServer resources;
     private boolean viewerReady;
+    private Display display;
+    private final Runnable startupTimeout = this::reportStartupTimeout;
     private IPropertyChangeListener themeListener;
 
     @Override
@@ -71,16 +74,25 @@ public final class BTFEditor extends EditorPart {
     @Override
     public void createPartControl(Composite parent) {
         parent.setLayout(new FillLayout());
+        display = parent.getDisplay();
+        boolean windows = "win32".equals(SWT.getPlatform());
+        boolean startingBrowser = false;
         try {
             resources = traceFile != null
                     ? new ViewerResourceServer(BTFViewerPlugin.getDefault().getBundle(), traceFile)
                     : new ViewerResourceServer(BTFViewerPlugin.getDefault().getBundle(), localTrace);
-            browser = new Browser(parent, SWT.NONE);
+            startingBrowser = true;
+            browser = new Browser(parent, windows ? SWT.EDGE : SWT.NONE);
+            if (windows && !"edge".equals(browser.getBrowserType())) {
+                throw new IOException("SWT could not start the Microsoft Edge WebView2 renderer");
+            }
+            startingBrowser = false;
             bridge = new BTFBrowserBridge(browser, this::onBrowserMessage);
             setStatus("Loading viewer...");
             if (!browser.setUrl(resources.viewerUri().toASCIIString())) {
                 throw new IOException("SWT Browser rejected the local viewer URL");
             }
+            if (!viewerReady) display.timerExec(30_000, startupTimeout);
             themeListener = event -> applyTheme();
             PlatformUI.getWorkbench().getThemeManager().addPropertyChangeListener(themeListener);
         } catch (IOException | SWTError error) {
@@ -92,16 +104,36 @@ public final class BTFEditor extends EditorPart {
             browser = null;
             resources = null;
             Label message = new Label(parent, SWT.WRAP);
-            message.setText("BTFViewer could not initialize the SWT Browser. See the Eclipse Error Log.");
+            message.setText(windows && startingBrowser
+                    ? "BTFViewer requires the Microsoft Edge WebView2 Runtime on Windows. See the Eclipse Error Log."
+                    : "BTFViewer could not initialize the SWT Browser. See the Eclipse Error Log.");
             setStatus("Error");
         }
     }
 
+    private void reportStartupTimeout() {
+        if (viewerReady || browser == null || browser.isDisposed()) return;
+        String message = "BTFViewer did not start. See the Eclipse Error Log.";
+        Composite parent = browser.getParent();
+        browser.dispose();
+        new Label(parent, SWT.WRAP).setText(message);
+        parent.layout();
+        resources.close();
+        setStatus(message);
+        BTFViewerPlugin.log(message, null);
+    }
+
     private void onBrowserMessage(BTFBrowserMessage message) {
+        if (browser == null || browser.isDisposed()) return;
+        browser.getDisplay().asyncExec(() -> handleBrowserMessage(message));
+    }
+
+    private void handleBrowserMessage(BTFBrowserMessage message) {
         if (browser == null || browser.isDisposed()) return;
         switch (message.type()) {
             case "viewerReady" -> {
                 viewerReady = true;
+                display.timerExec(-1, startupTimeout);
                 applyTheme();
                 call("openTraceUrl", resources.traceUri().toASCIIString(), traceName);
                 setStatus("Loading trace...");
@@ -157,6 +189,7 @@ public final class BTFEditor extends EditorPart {
 
     @Override
     public void dispose() {
+        if (display != null && !display.isDisposed()) display.timerExec(-1, startupTimeout);
         if (themeListener != null) {
             PlatformUI.getWorkbench().getThemeManager().removePropertyChangeListener(themeListener);
             themeListener = null;

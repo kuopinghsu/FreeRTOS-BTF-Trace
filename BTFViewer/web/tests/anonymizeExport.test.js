@@ -32,6 +32,11 @@ describe('buildTaskAliasMap', () => {
 describe('anonymizeWithMap', () => {
   const m = buildTaskAliasMap(NAMES)
 
+  it('anonymizes adjacent names with punctuation boundaries', () => {
+    const aliases = buildTaskAliasMap(['[T]'])
+    assert.equal(anonymizeWithMap('[T][T] [T]Extra', aliases), 'Task-1Task-1 [T]Extra')
+  })
+
   it('replaces whole tokens only', () => {
     assert.equal(
       anonymizeWithMap('ControlTaskHelper ran after ControlTask', m),

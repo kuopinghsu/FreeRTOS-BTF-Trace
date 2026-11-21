@@ -1,6 +1,18 @@
 FREERTOS_VER ?= V11.3.1
 RISCV_PREFIX ?= /opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
 
+# The root build and its sub-makes use POSIX shell syntax and utilities.
+ifeq ($(OS),Windows_NT)
+GIT_SH ?= C:/Program Files/Git/bin/sh.exe
+GIT_USR_BIN ?= $(subst /bin/sh.exe,/usr/bin,$(GIT_SH))
+SHELL := $(GIT_SH)
+.SHELLFLAGS := -e -c
+export PATH := $(GIT_USR_BIN);$(PATH)
+# Preserve the configured compiler prefix when sh invokes native make.
+export MSYS2_ARG_CONV_EXCL := RISCV_PREFIX=;$(MSYS2_ARG_CONV_EXCL)
+NATIVE_BUILD_SHELL := "SHELL=$(SHELL)" ".SHELLFLAGS=$(.SHELLFLAGS)"
+endif
+
 .DEFAULT_GOAL := all
 
 .PHONY: all help run check clean distclean update ci-gate
@@ -27,12 +39,12 @@ ci-gate:
 	$(MAKE) -C BTFViewer ci-gate
 
 all: check
-	$(MAKE) -C Demo RISCV_PREFIX=$(RISCV_PREFIX)
-	$(MAKE) -C tools BUILD_DIR=$(abspath build/tools)
-	$(MAKE) -C sim
+	$(MAKE) -C Demo $(NATIVE_BUILD_SHELL) RISCV_PREFIX=$(RISCV_PREFIX)
+	$(MAKE) -C tools $(NATIVE_BUILD_SHELL) BUILD_DIR=$(abspath build/tools)
+	$(MAKE) -C sim $(NATIVE_BUILD_SHELL)
 
 run: all
-	$(MAKE) -C Demo run RISCV_PREFIX=$(RISCV_PREFIX)
+	$(MAKE) -C Demo $(NATIVE_BUILD_SHELL) run RISCV_PREFIX=$(RISCV_PREFIX)
 
 update:
 	$(MAKE) -f Makefile CORES=1 clean run

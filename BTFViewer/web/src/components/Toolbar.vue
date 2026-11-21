@@ -644,7 +644,6 @@ import DomSelect from './DomSelect.vue'
 import { IC } from '../utils/toolbarIcons.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { supportsFileHandles, pickAndReadOpen, OPEN_FILE_ACCEPT } from '../utils/fileOpen.js'
-import { loadBtfEntriesFromFile } from '../utils/btfLoad.js'
 import { classifyPickedOpen } from '../utils/demoPack.js'
 import { appIconSvgMarkup } from '../utils/htmlReport.js'
 
@@ -669,7 +668,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'update:modelValue', 'trace-reading', 'trace-loaded', 'traces-loaded', 'loadDemo', 'demoPack',
+  'update:modelValue', 'trace-file', 'loadDemo', 'demoPack',
   'demoFolder',
   'toggleRecord', 'zoom', 'fit', 'zoomPreset',
   'zoom1to1', 'zoomRange', 'showFind',
@@ -704,16 +703,6 @@ const zoom1to1Title = computed(() => {
 })
 
 
-async function emitLoadedEntries(file) {
-  emit('trace-reading', { name: file.name })
-  try {
-    const entries = await loadBtfEntriesFromFile(file)
-    emit('traces-loaded', { entries, sourceName: file.name })
-  } catch (err) {
-    emit('file-error', `Failed to read "${file.name}"${err?.message ? `: ${err.message}` : ''}`)
-  }
-}
-
 async function emitPickedOpen(picked) {
   if (!picked) return
   if (picked.kind === 'demo') {
@@ -733,7 +722,7 @@ async function emitPickedOpen(picked) {
     emit('workspace-file', picked.file)
     return
   }
-  if (picked.kind === 'btf' && picked.file) await emitLoadedEntries(picked.file)
+  if (picked.kind === 'btf' && picked.file) emit('trace-file', picked.file)
 }
 
 async function onOpenClick() {
