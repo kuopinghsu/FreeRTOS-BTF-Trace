@@ -10613,7 +10613,7 @@ class _StatsPanel(QWidget):
             "Section order is already the default")
 
     def _ux_events(self, trace, lo=None, hi=None):
-        """Reuse the load-time harvest (and one scoped filter) across sections."""
+        """Reuse the same harvest or scoped filter across sections."""
         key = (id(trace), lo, hi)
         if self._ux_events_key == key and self._ux_events_cached is not None:
             return self._ux_events_cached

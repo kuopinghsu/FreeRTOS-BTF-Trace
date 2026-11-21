@@ -127,13 +127,13 @@ function parseIntToken(s, defaultValue = 0) {
 export function tryParseBtfInt(s) {
   const t = String(s ?? '').trim()
   if (!t) return null
+  if (/^[-+]?\d+$/.test(t)) {
+    const n = Number(t)
+    return Number.isSafeInteger(n) ? n : null
+  }
   if (/^[-+]?0[xX][0-9a-fA-F]+$/.test(t)) {
     const n = Number.parseInt(t, 16)
     return Number.isFinite(n) ? n : null
-  }
-  if (/^[-+]?\d+$/.test(t)) {
-    const n = Number.parseInt(t, 10)
-    return Number.isSafeInteger(n) ? n : null
   }
   return null
 }

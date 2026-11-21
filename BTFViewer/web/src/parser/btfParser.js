@@ -38,6 +38,7 @@ const STI_YIELD_EVERY  = IN_WORKER ? 32 : 4
 
 function yieldToHost() {
   if (IN_WORKER) return Promise.resolve()
+  if (globalThis.scheduler?.yield) return globalThis.scheduler.yield()
   return new Promise(resolve => setTimeout(resolve, 0))
 }
 
@@ -125,7 +126,7 @@ export function drawableTimeRange(segments, stiEvents = [], tickStiTimes = []) {
  * @param {Function} [progressCallback] Called as (pct:number, msg:string).
  * @returns {Promise<object>} BtfTrace
  */
-export async function parseBtf(text, progressCallback) {
+export async function parseBtf(text, progressCallback, { includeUxEvents = true } = {}) {
   const progress = progressCallback || (() => {})
 
   // Reset STI colour state so colours are consistent across multiple file loads.
@@ -135,7 +136,7 @@ export async function parseBtf(text, progressCallback) {
   let timeScale = 'ns'
 
   // T-events grouped by timestamp.
-  // Map<number, Array<{time, source, event, target, note}>>
+  // Allocate an array only when multiple task events share a timestamp.
   const tEventsByTime = new Map()
   const stiEvents = []
   const tickStiTimes = []  // timestamps from STI TICK events → drawn on ruler
@@ -214,21 +215,24 @@ export async function parseBtf(text, progressCallback) {
               if (note === 'task_create' && !taskCreateRaw.has(tgt)) {
                 taskCreateRaw.set(tgt, t)
               }
-              const createPri = parseCreatePriority(note)
+              const createPri = note[0] === 'c' || note[0] === 'C'
+                ? parseCreatePriority(note)
+                : null
               if (createPri != null) {
                 if (!taskCreateRaw.has(tgt)) taskCreateRaw.set(tgt, t)
                 if (!taskCreatePriRaw.has(tgt)) {
                   taskCreatePriRaw.set(tgt, { time: t, priority: createPri })
                 }
               }
-              if (!tEventsByTime.has(t)) tEventsByTime.set(t, [])
-              tEventsByTime.get(t).push({
-                time:   t,
+              const event = {
                 source: parts[1].trim(),
                 event:  parts[6].trim(),
                 target: tgt,
-                note,
-              })
+              }
+              const group = tEventsByTime.get(t)
+              if (!group) tEventsByTime.set(t, event)
+              else if (Array.isArray(group)) group.push(event)
+              else tEventsByTime.set(t, [group, event])
             } else if (evType === 'STI') {
               const stiTarget = parts[4].trim()
               if (stiTarget === 'TICK') {
@@ -289,35 +293,38 @@ export async function parseBtf(text, progressCallback) {
   // Process events in chronological order
   const sortedTimestamps = Array.from(tEventsByTime.keys()).sort((a, b) => a - b)
   const tsCount = sortedTimestamps.length
+  const singleEvent = [null]
   for (let ti = 0; ti < tsCount; ti++) {
     const ts = sortedTimestamps[ti]
-    const events = tEventsByTime.get(ts)
+    const group = tEventsByTime.get(ts)
     tEventsByTime.delete(ts)
-
-    // Build core-preempt map: preempted-task → core (for Core_N src events)
-    const corePreempts = new Map()
-    for (const ev of events) {
-      if (ev.event === 'preempt') {
-        if (isCoreName(ev.source)) {
-          corePreempts.set(ev.target, ev.source)
-        } else {
-          const srcCore = coreFromTaskEntity(ev.source)
-          if (srcCore !== null) corePreempts.set(ev.target, srcCore)
-        }
-      }
+    let events = group
+    if (!Array.isArray(group)) {
+      singleEvent[0] = group
+      events = singleEvent
     }
 
-    // Build set of sources that issued a resume (detects naked preempts)
-    const resumeSources = new Set()
-    for (const ev of events) {
-      if (ev.event === 'resume') resumeSources.add(ev.source)
+    // Build core-preempt map: preempted-task → core (for Core_N src events)
+    let corePreempts
+    let resumeSources
+    if (events.length > 1) {
+      corePreempts = new Map()
+      resumeSources = new Set()
+      for (const ev of events) {
+        if (ev.event === 'preempt') {
+          const srcCore = isCoreName(ev.source) ? ev.source : coreFromTaskEntity(ev.source)
+          if (srcCore !== null) corePreempts.set(ev.target, srcCore)
+        } else if (ev.event === 'resume') {
+          resumeSources.add(ev.source)
+        }
+      }
     }
 
     // Pass A – resume events
     for (const ev of events) {
       if (ev.event !== 'resume') continue
       let core
-      if (corePreempts.has(ev.source)) {
+      if (corePreempts?.has(ev.source)) {
         core = corePreempts.get(ev.source)
       } else if (isCoreName(ev.source)) {
         core = ev.source
@@ -333,7 +340,7 @@ export async function parseBtf(text, progressCallback) {
     // Pass B – preempt events without matching resume
     for (const ev of events) {
       if (ev.event !== 'preempt') continue
-      if (!resumeSources.has(ev.target)) {
+      if (!resumeSources?.has(ev.target)) {
         closeSeg(ev.target, ts)
         if (isCoreName(ev.source)) {
           lastCore.set(ev.target, ev.source)
@@ -739,7 +746,7 @@ export async function parseBtf(text, progressCallback) {
     migrationTimes,
     migratedMks,
   }
-  prepareFullTraceStats(trace)
+  prepareFullTraceStats(trace, { includeUxEvents })
   return trace
 }
 

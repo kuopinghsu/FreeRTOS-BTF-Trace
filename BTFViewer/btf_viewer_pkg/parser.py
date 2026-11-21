@@ -1172,7 +1172,15 @@ def _build_sti_derived(
     markers: list = []
     by_ch: Dict[str, List[TagSample]] = defaultdict(list)
     _is_tag = _is_tag_sti_channel
-    _parse_note = _parse_interval_note
+    interval_notes = {}
+
+    def _parse_note(note):
+        parsed = interval_notes.get(note)
+        if parsed is None:
+            parsed = _parse_interval_note(note)
+            if isinstance(note, str) and len(note) <= 128 and len(interval_notes) < 512:
+                interval_notes[note] = parsed
+        return parsed
     _parse_tag = _parse_tag_value
     _start_ch = _INTERVAL_START_CHANNELS
     _stop_ch = _INTERVAL_STOP_CHANNELS
@@ -3066,6 +3074,8 @@ def _try_parse_btf_int(s: str) -> Optional[int]:
     if not raw or len(raw) > _MAX_SAFE_INT_DIGITS:
         return None
     try:
+        if raw.isdecimal():
+            return int(raw, 10)
         if _BTF_HEX_INT_RE.match(raw):
             return int(raw, 16)
         if _BTF_DEC_INT_RE.match(raw):
@@ -4163,17 +4173,15 @@ def _tick_count_for_task(
     clipped = _clip_segments_for_scope(segs, lo, hi)
     if not clipped or not tick_times:
         return 0
-    count = 0
-    i = 0
-    n = len(clipped)
-    for t in tick_times:
-        if lo is not None and hi is not None and not (lo <= t <= hi):
-            continue
-        while i + 1 < n and clipped[i + 1][0] <= t:
-            i += 1
-        seg_lo, seg_hi = clipped[i]
-        if seg_lo <= t <= seg_hi:
-            count += 1
+    count = tick_index = 0
+    for i, (seg_lo, seg_hi) in enumerate(clipped):
+        first = bisect_left(tick_times, seg_lo, tick_index)
+        if i + 1 < len(clipped) and clipped[i + 1][0] <= seg_hi:
+            # At a shared boundary or overlap, the latest-starting slice wins.
+            tick_index = bisect_left(tick_times, clipped[i + 1][0], first)
+        else:
+            tick_index = bisect_right(tick_times, seg_hi, first)
+        count += tick_index - first
     return count
 
 def _core_dwell_samples(
@@ -8678,7 +8686,7 @@ def _parse_btf(filepath: str,
     time_scale = "ns"
 
     # T-events grouped by timestamp for O(1) same-tick access
-    t_events_by_time: Dict[int, List[Tuple]] = defaultdict(list)
+    t_events_by_time: Dict[int, Union[Tuple, List[Tuple]]] = {}
     event_labels: Dict[str, str] = {}
     intern_label = event_labels.setdefault
     sti_events: List[StiEvent] = []
@@ -8706,7 +8714,8 @@ def _parse_btf(filepath: str,
                         cancel_check=cancel_check) as fh:
         lines = iter(lambda: fh.readline(_MAX_TRACE_LINE_CHARS + 2), "")
         for line_index, line in enumerate(lines, start=1):
-            if len(line) - line.endswith("\n") > _MAX_TRACE_LINE_CHARS:
+            if (len(line) > _MAX_TRACE_LINE_CHARS
+                    and len(line) - line.endswith("\n") > _MAX_TRACE_LINE_CHARS):
                 raise ValueError(
                     f"Trace line {line_index:,} exceeds the "
                     f"{_MAX_TRACE_LINE_CHARS:,}-character limit")
@@ -8734,7 +8743,7 @@ def _parse_btf(filepath: str,
             if len(parts) < 7:
                 continue
 
-            t = _try_parse_btf_int(parts[0].strip())
+            t = _try_parse_btf_int(parts[0])
             if t is None:
                 _skipped_lines += 1
                 continue
@@ -8768,13 +8777,18 @@ def _parse_btf(filepath: str,
                     if _create_pri is not None:
                         _task_create_raw.setdefault(_tgt_raw, t)
                         _task_create_pri_raw.setdefault(_tgt_raw, _create_pri)
-                t_events_by_time[t].append((
-                    t,
+                entry = (
                     intern_label(source, source),
                     intern_label(event, event),
-                    _tgt_raw,           # target
-                    _note,              # note
-                ))
+                    _tgt_raw,
+                )
+                group = t_events_by_time.get(t)
+                if group is None:
+                    t_events_by_time[t] = entry
+                elif isinstance(group, list):
+                    group.append(entry)
+                else:
+                    t_events_by_time[t] = [group, entry]
             elif ev_type == "STI":
                 _sti_target = parts[4].strip()
                 if _sti_target == "TICK":
@@ -8833,31 +8847,35 @@ def _parse_btf(filepath: str,
             return None
         return f"Core_{core_id}"
 
+    single_event = [None]
     for timestamp_index, ts in enumerate(sorted(t_events_by_time), start=1):
         if cancel_check and timestamp_index % 512 == 0 and cancel_check():
             raise _ParseCancelledError()
-        events = t_events_by_time.pop(ts)
-        # (time, source, event, target, note)
+        group = t_events_by_time.pop(ts)
+        if isinstance(group, list):
+            events = group
+        else:
+            single_event[0] = group
+            events = single_event
+        # (source, event, target)
 
-        core_preempts: Dict[str, str] = {}
-        # A same-tick resume suppresses a matching preempt.
-        resumed_srcs: set = set()
-        for (_, src, ev, tgt, _note) in events:
-            if ev == "preempt":
-                if _is_core_entity(src):
-                    core_preempts[tgt] = src
-                else:
-                    src_core = _core_from_task_entity(src)
+        core_preempts = resumed_srcs = None
+        if len(events) > 1:
+            core_preempts = {}
+            resumed_srcs = set()
+            for src, ev, tgt in events:
+                if ev == "preempt":
+                    src_core = src if _is_core_entity(src) else _core_from_task_entity(src)
                     if src_core is not None:
                         core_preempts[tgt] = src_core
-            elif ev == "resume":
-                resumed_srcs.add(src)
+                elif ev == "resume":
+                    resumed_srcs.add(src)
 
-        for (_, src, ev, tgt, _note) in events:
+        for src, ev, tgt in events:
             if ev != "resume":
                 continue
 
-            if src in core_preempts:
+            if core_preempts and src in core_preempts:
                 core = core_preempts[src]
             elif _is_core_entity(src):
                 core = src
@@ -8871,9 +8889,9 @@ def _parse_btf(filepath: str,
             _close_seg(src, ts)
             _open_seg(tgt, ts, core)
 
-        for (_, src, ev, tgt, _note) in events:
+        for src, ev, tgt in events:
             if ev == "preempt":
-                if tgt not in resumed_srcs:
+                if not resumed_srcs or tgt not in resumed_srcs:
                     _close_seg(tgt, ts)
                     if _is_core_entity(src):
                         last_core[tgt] = src
@@ -9215,9 +9233,4 @@ def _parse_btf(filepath: str,
     trace.sched_ctx_switches = _ctx
     trace.sched_core_gaps = _gaps
     trace.migration_rows_full = _migration_rows(trace)
-    # Bundle concatenates modules into one file, so a relative import fails there.
-    prepare = globals().get("prepare_ux_events")
-    if prepare is None:
-        from .ux_explore import prepare_ux_events as prepare
-    prepare(trace)
     return trace

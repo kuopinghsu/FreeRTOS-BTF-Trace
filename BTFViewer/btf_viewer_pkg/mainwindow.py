@@ -5352,6 +5352,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _dismiss_auxiliary_windows(self) -> None:
         """Close modeless dialogs so they do not prolong QWidget teardown."""
+        viewer = getattr(self, "_stats_reference_viewer", None)
+        if viewer is not None:
+            viewer.close()
         if hasattr(self, "_stats_panel"):
             self._stats_panel.clear_plot_session()
         self._close_heatmap_dialog()

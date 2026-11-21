@@ -4335,7 +4335,7 @@ const zoomStatus = computed(() => zoomStatusFromViewport(
 // ---- File loading (via Web Worker; fallback to main-thread for file:// origins) --
 let _traceRead = null
 let _traceParse = null
-/** @type {{ text: string, name: string }[]} */
+/** @type {{ text: string, name: string, packed?: object }[]} */
 const _pendingTraceLoads = []
 /** @type {Promise<boolean>|null} */
 let _drainPromise = null
@@ -4391,7 +4391,9 @@ async function readTraceData(name, read, { workspace = false, retryRead = false 
       }
       const originalLength = bytes?.byteLength
       try {
-        const result = await runTraceWorker(worker, request, { signal, transfer })
+        const result = await runTraceWorker(worker, request, {
+          signal, transfer, onProgress: paintLoadingProgress,
+        })
         signal.throwIfAborted()
         return workspace ? result.workspace : result.entries
       } catch (error) {
@@ -4562,13 +4564,13 @@ async function onTracesLoaded({ entries, sourceName }) {
     showToast(`Opening ${entries.length} traces from ZIP…`, 'info')
   }
   for (const entry of entries) {
-    _pendingTraceLoads.push({ text: entry.text, name: entry.name })
+    _pendingTraceLoads.push(entry)
   }
   return drainPendingTraceLoads()
 }
 
-async function onTraceLoaded({ text, name }) {
-  _pendingTraceLoads.push({ text, name })
+async function onTraceLoaded(entry) {
+  _pendingTraceLoads.push(entry)
   return drainPendingTraceLoads()
 }
 
@@ -4624,7 +4626,7 @@ async function drainPendingTraceLoads() {
   return _drainPromise
 }
 
-async function loadOneTrace({ text, name }) {
+async function loadOneTrace({ text, name, packed }) {
   // Guard against exhausting tab memory on a huge/adversarial file; real
   // traces are typically tens of MB, this leaves generous headroom.
   const MAX_TRACE_FILE_BYTES = BTF_MAX_EXPANDED_BYTES
@@ -4645,8 +4647,7 @@ async function loadOneTrace({ text, name }) {
   try {
     await new Promise(r => requestAnimationFrame(r))
     signal.throwIfAborted()
-    const worker = await createTraceWorker(signal)
-    let packed
+    const worker = packed ? null : await createTraceWorker(signal)
     if (worker) {
       try {
         const result = await runTraceWorker(worker, { text }, {
@@ -7637,14 +7638,14 @@ function onGlobalKeydown(e) {
 // ---- Auto-load embedded example on startup --------------------------------
 async function loadExampleBtf() {
   const name = 'example-2cores.btf.gz'
-  const [{ text }] = await readTraceData(name, () => {
+  const [entry] = await readTraceData(name, () => {
     loadingMsg.value = LOADING_STAGES.demo
     const binStr = atob(exampleBtfB64)
     const bytes = new Uint8Array(binStr.length)
     for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i)
     return bytes
   }, { retryRead: true })
-  await onTraceLoaded({ text, name })
+  await onTraceLoaded({ ...entry, name })
 }
 
 function onLoadDemo() {

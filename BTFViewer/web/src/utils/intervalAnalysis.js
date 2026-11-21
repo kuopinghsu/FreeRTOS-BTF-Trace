@@ -92,20 +92,21 @@ export function parseIntervalNote(note) {
   return { intervalId: raw, taskId: null, pairingKey: raw }
 }
 
-/** Stack key for start/stop pairing. */
-function intervalPairingKey(ev) {
-  return parseIntervalNote(ev.note).pairingKey
-}
-
-/** Row / stats bucket id (interval id when tid present, else full legacy note). */
-function intervalDisplayId(ev) {
-  const parsed = parseIntervalNote(ev.note)
-  return parsed.taskId != null ? parsed.intervalId : parsed.pairingKey
+function intervalNoteReader() {
+  const notes = new Map()
+  return (note) => {
+    const cached = notes.get(note)
+    if (cached) return cached
+    const parsed = parseIntervalNote(note)
+    if (typeof note === 'string' && note.length <= 128 && notes.size < 512) notes.set(note, parsed)
+    return parsed
+  }
 }
 
 /** @returns {{ intervalInstances, intervalIds, intervalInstancesById, intervalInstancesCulledById, unmatchedStarts, unmatchedStops }} */
 export function buildIntervalData(stiEvents) {
   const open = new Map()
+  const readNote = intervalNoteReader()
   const intervalInstances = []
   let unmatchedStarts = 0
   let unmatchedStops = 0
@@ -115,9 +116,7 @@ export function buildIntervalData(stiEvents) {
     .sort((a, b) => a.time - b.time || (isStart(a) ? 0 : 1))
 
   for (const ev of sorted) {
-    const pairKey = intervalPairingKey(ev)
-    const displayId = intervalDisplayId(ev)
-    const parsed = parseIntervalNote(ev.note)
+    const { intervalId: displayId, taskId, pairingKey: pairKey } = readNote(ev.note)
     if (isStart(ev)) {
       if (!open.has(pairKey)) open.set(pairKey, [])
       open.get(pairKey).push(ev)
@@ -131,7 +130,7 @@ export function buildIntervalData(stiEvents) {
       if (ev.time >= startEv.time) {
         intervalInstances.push({
           id: displayId,
-          taskId: parsed.taskId,
+          taskId,
           startNs: startEv.time,
           stopNs: ev.time,
           durationNs: ev.time - startEv.time,
@@ -171,9 +170,10 @@ export function buildIntervalData(stiEvents) {
 /** Per-id sorted marker events for O(log n) viewport clipping. */
 export function buildIntervalMarkerIndex(stiEvents) {
   const byId = new Map()
+  const readNote = intervalNoteReader()
   for (const ev of stiEvents || []) {
     if (!isStart(ev) && !isStop(ev)) continue
-    const id = intervalDisplayId(ev)
+    const id = readNote(ev.note).intervalId
     if (!byId.has(id)) byId.set(id, [])
     byId.get(id).push({ timeNs: ev.time, isStart: isStart(ev) })
   }

@@ -30,6 +30,7 @@ import json
 import re
 import sys
 import tempfile
+import weakref
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -103,7 +104,13 @@ class StatsReferenceViewer(QDialog):
     """Docs viewer: chrome bar, category-grouped TOC, embedded browser."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
+        # Keep WebEngine's Qt Quick surface outside the main widget hierarchy.
+        # Its first show can otherwise recreate the main window's native handle.
+        super().__init__()
+        self._owner = weakref.ref(parent) if parent is not None else lambda: None
+        if parent is not None:
+            parent.destroyed.connect(self.deleteLater)
+            self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self.setWindowTitle("Statistics Reference")
         self.setObjectName("stats_reference_viewer")
         self.setSizeGripEnabled(True)
@@ -334,7 +341,7 @@ class StatsReferenceViewer(QDialog):
         self._lang_btn.setText(_LANG_LABELS[lang])
         self._lang_btn.setToolTip(_LANG_SWITCH_TOOLTIPS[lang])
 
-        settings = getattr(self.parent(), "_settings", None)
+        settings = getattr(self._owner(), "_settings", None)
         if settings is not None:
             settings.set("help", "stats_ref_lang", lang)
 
@@ -377,7 +384,7 @@ class StatsReferenceViewer(QDialog):
         self._doc_loaded = bool(ok)
         if not ok:
             return
-        main_window = self.parent()
+        main_window = self._owner()
         self.sync_theme(bool(getattr(main_window, "_is_dark", True)))
         if self._current_section:
             self._scroll_to(self._current_section)
@@ -448,14 +455,23 @@ class StatsReferenceViewer(QDialog):
     # open — harmless, since a demo isn't driven while reading docs.
     def show(self) -> None:
         app = QApplication.instance()
-        main_window = self.parent()
+        main_window = self._owner()
         if app is not None and main_window is not None:
             app.removeEventFilter(main_window)
+            owner_handle = main_window.windowHandle()
+            if owner_handle is not None:
+                # Native transient ownership preserves dialog stacking without
+                # parenting the WebEngine widgets into the main window.
+                self.winId()
+                handle = self.windowHandle()
+                if handle.transientParent() is not owner_handle:
+                    handle.setTransientParent(owner_handle)
         super().show()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         app = QApplication.instance()
-        main_window = self.parent()
-        if app is not None and main_window is not None:
+        main_window = self._owner()
+        if (app is not None and main_window is not None
+                and not getattr(main_window, "_shutting_down", False)):
             app.installEventFilter(main_window)
         super().closeEvent(event)

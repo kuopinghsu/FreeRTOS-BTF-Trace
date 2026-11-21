@@ -7,6 +7,14 @@ import { initWasmAccel } from '../renderer/wasmAccel.js'
 import { decompressBtfEntries } from '../utils/btfLoad.js'
 import { openWorkspaceBlob } from '../utils/workspace.js'
 
+async function parseAndPack(text) {
+  await initWasmAccel()
+  const progress = (pct, msg) => self.postMessage({ type: 'progress', pct, msg })
+  const trace = await parseBtf(text, progress, { includeUxEvents: false })
+  progress(99, 'Packing trace…')
+  return packTrace(trace, progress, { transfer: true })
+}
+
 self.onmessage = async function (e) {
   const { text, bytes, file, name, workspace } = e.data
   try {
@@ -18,18 +26,17 @@ self.onmessage = async function (e) {
         self.postMessage({ type: 'done', workspace: opened }, buffer ? [buffer] : [])
         return
       }
-      self.postMessage({ type: 'done', entries: decompressBtfEntries(input, name) })
+      const entries = decompressBtfEntries(input, name)
+      if (entries.length === 1) {
+        const entry = entries[0]
+        const { payload, transferables } = await parseAndPack(entry.text)
+        self.postMessage({ type: 'done', entries: [{ ...entry, packed: payload }] }, transferables)
+      } else {
+        self.postMessage({ type: 'done', entries })
+      }
       return
     }
-    await initWasmAccel()
-    const trace = await parseBtf(text, (pct, msg) => {
-      self.postMessage({ type: 'progress', pct, msg })
-    })
-    self.postMessage({ type: 'progress', pct: 99, msg: 'Packing trace…' })
-    await new Promise(resolve => setTimeout(resolve, 0))
-    const { payload, transferables } = packTrace(trace, (pct, msg) => {
-      self.postMessage({ type: 'progress', pct, msg })
-    }, { transfer: true })
+    const { payload, transferables } = await parseAndPack(text)
     self.postMessage({ type: 'done', packed: payload }, transferables)
   } catch (err) {
     self.postMessage({

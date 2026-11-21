@@ -423,24 +423,6 @@ export function renderWorkflowAnalysisHtml(findings, scopeSuffix = '') {
   return htmlFindingCards(findings, scopeSuffix)
 }
 
-function _fmtDur(ns, scale) {
-  if (ns == null || ns < 0) return '—'
-  return formatTime(ns, scale)
-}
-
-function _summarizeDurs(samples, scale) {
-  if (!samples.length) return null
-  const sorted = [...samples].sort((a, b) => a - b)
-  const n = sorted.length
-  const avg = sorted.reduce((a, b) => a + b, 0) / n
-  return {
-    runs: n,
-    min: _fmtDur(sorted[0], scale),
-    avg: _fmtDur(avg, scale),
-    max: _fmtDur(sorted[n - 1], scale),
-  }
-}
-
 /**
  * Build findings for a loaded trace (toolbar Analysis dialog + HTML export).
  * @param {object} trace
@@ -452,18 +434,24 @@ export function collectTraceAnalysisFindings(trace, lo = null, hi = null, analys
   if (!trace) return []
 
   const scale = trace.timeScale || 'ns'
-  const total = (lo != null && hi != null)
+  const scoped = lo != null && hi != null
+  const total = scoped
     ? (hi - lo)
     : (trace.timeMax - trace.timeMin)
 
   const coreRows = []
   for (const core of (trace.coreNames || [])) {
+    const cached = trace.coreUtilPct?.[core]
+    if (!scoped && total > 0 && Number.isFinite(cached)) {
+      coreRows.push({ core, pct: cached })
+      continue
+    }
     const segs = trace.coreSegs?.get?.(core) || []
     let active = 0
     for (const s of segs) {
       const { name } = parseTaskName(s.task)
       if (name === 'TICK' || isIdleTaskName(name)) continue
-      if (lo != null && hi != null) {
+      if (scoped) {
         if (!segOverlapsRange(s, lo, hi)) continue
         active += Math.min(s.end, hi) - Math.max(s.start, lo)
       } else {
@@ -482,35 +470,37 @@ export function collectTraceAnalysisFindings(trace, lo = null, hi = null, analys
     if (isIdleTaskName(name) || name === 'TICK') continue
     const disp = taskDisplayName(raw)
 
-    const execSamples = []
+    let runs = 0
+    let sumNs = 0
+    let maxNs = 0
     let taskTotal = 0
     for (const s of segs) {
       const d = s.end - s.start
       if (d <= 0) continue
-      if (lo != null && hi != null && !segFullyInRange(s, lo, hi)) continue
+      if (scoped && !segFullyInRange(s, lo, hi)) continue
       taskTotal += d
       if (segOpenAtEnd(s, trace)) continue
-      execSamples.push(d)
+      runs++
+      sumNs += d
+      if (d > maxNs) maxNs = d
     }
-    const execSum = _summarizeDurs(execSamples, scale)
-    if (execSum) {
-      const avgNs = execSamples.reduce((a, b) => a + b, 0) / execSamples.length
-      const maxNs = Math.max(...execSamples)
+    if (runs) {
       execRows.push({
         name: disp,
-        runs: execSum.runs,
+        runs,
         cpuPct: total > 0 ? 100 * taskTotal / total : 0,
-        max: execSum.max,
-        avgNs,
+        max: formatTime(maxNs, scale),
+        avgNs: sumNs / runs,
         maxNs,
       })
     }
 
     if (segs.length >= 2) {
       const gaps = blockingTimeSamples(segs, lo, hi)
-      const blockSum = _summarizeDurs(gaps, scale)
-      if (blockSum) {
-        blockRows.push({ name: disp, runs: blockSum.runs, max: blockSum.max })
+      if (gaps.length) {
+        let maxGap = 0
+        for (const gap of gaps) if (gap > maxGap) maxGap = gap
+        blockRows.push({ name: disp, runs: gaps.length, max: formatTime(maxGap, scale) })
       }
     }
   }

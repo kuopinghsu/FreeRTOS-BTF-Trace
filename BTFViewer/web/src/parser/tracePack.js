@@ -63,7 +63,8 @@ export function packTrace(trace, progress, { transfer = false } = {}) {
     trace.segStore, trace.tasks, trace.taskRepr, segIndicesByMk,
   )
   if (typeof progress === 'function') progress(96, 'Preparing statistics…')
-  prepareFullTraceStats(trace)
+  // The worker payload does not include the derived UX event objects.
+  prepareFullTraceStats(trace, { includeUxEvents: !transfer })
 
   const store = trace.segStore
   const allIdx = store.allIndices()

@@ -27,6 +27,7 @@ from btf_viewer_pkg.parser import (  # noqa: E402
     _seg_overlap_ns,
     _task_segs_in_range,
 )
+from btf_viewer_pkg.ux_explore import harvest_ux_events  # noqa: E402
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "tracedata" / "example-2cores.btf.gz"
 
@@ -99,6 +100,16 @@ class TestLoadStatsSnapshots(unittest.TestCase):
         self.assertIsNotNone(tr.migration_rows_full)
         self.assertTrue(tr.core_util_pct)
         self.assertTrue(tr.migrated_mks or not tr.migrations)
+
+    def test_ux_cache_is_built_on_first_use(self) -> None:
+        trace = _parse_btf(str(EXAMPLE))
+        self.assertIsNone(trace.ux_events_full)
+        lo = trace.time_min
+        hi = lo + (trace.time_max - lo) // 2
+        scoped = harvest_ux_events(trace, lo, hi)
+        self.assertTrue(trace.ux_events_full)
+        self.assertIs(harvest_ux_events(trace), trace.ux_events_full)
+        self.assertEqual(scoped, harvest_ux_events(trace, lo, hi))
 
     def test_unscoped_core_util_matches_scan(self) -> None:
         tr = self.trace

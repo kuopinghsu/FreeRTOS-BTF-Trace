@@ -307,7 +307,7 @@ export function buildMigrationIndex(segByMergeKey) {
 }
 
 /** Full-trace snapshots for Statistics / heatmap (call once at parse/finalize). */
-export function prepareFullTraceStats(trace) {
+export function prepareFullTraceStats(trace, { includeUxEvents = true } = {}) {
   if (!trace) return trace
   const migs = trace.migrations || []
   if (!trace.migrationTimes || trace.migrationTimes.length !== migs.length) {
@@ -356,7 +356,7 @@ export function prepareFullTraceStats(trace) {
   if (!Array.isArray(trace.migrationRowsFull)) {
     trace.migrationRowsFull = migrationRows(trace)
   }
-  if (!Array.isArray(trace.uxEventsFull)) {
+  if (includeUxEvents && !Array.isArray(trace.uxEventsFull)) {
     prepareUxEvents(trace)
   }
   return trace

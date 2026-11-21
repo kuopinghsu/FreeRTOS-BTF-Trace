@@ -86,6 +86,13 @@ class StatsReferenceLangToggleTests(unittest.TestCase):
         self.assertEqual(viewer._lang, "en")
         self.assertEqual(viewer._lang_btn.text(), "EN")
 
+    def test_reference_has_native_owner_without_widget_parent(self) -> None:
+        win = self._make_win()
+        viewer = self._make_viewer(win)
+        viewer.open_section("cores")
+        self.assertIsNone(viewer.parentWidget())
+        self.assertEqual(viewer.windowHandle().transientParent(), win.windowHandle())
+
     def test_toggle_switches_doc_html_and_button_label(self) -> None:
         win = self._make_win()
         viewer = self._make_viewer(win)

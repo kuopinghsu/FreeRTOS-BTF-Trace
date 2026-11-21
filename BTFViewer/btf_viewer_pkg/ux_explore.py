@@ -1913,6 +1913,8 @@ def _filter_cached_ux_events(events: Sequence[dict], lo: int, hi: int) -> List[d
 def harvest_ux_events(trace: Any, lo: Optional[int] = None, hi: Optional[int] = None) -> List[dict]:
     """Collect exec / block / inter / migration episodes from a loaded trace."""
     cached = _ux_events_cache(trace)
+    if cached is None and hasattr(trace, "ux_events_full"):
+        cached = prepare_ux_events(trace)
     if cached is not None:
         if lo is None or hi is None:
             return cached
