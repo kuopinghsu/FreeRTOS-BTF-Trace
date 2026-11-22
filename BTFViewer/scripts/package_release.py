@@ -3,7 +3,8 @@
 import argparse
 import json
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
+from shutil import copyfileobj
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,15 +36,29 @@ def package_release(tag: str, output: Path) -> None:
             raise FileNotFoundError(f"Missing release file: {source.relative_to(ROOT)}")
 
     output.mkdir(parents=True, exist_ok=True)
-    with ZipFile(output / f"btf_viewer_{tag}.zip", mode="w", compression=ZIP_DEFLATED) as archive:
+    with ZipFile(output / f"btf_viewer_{tag}.zip", mode="w") as archive:
         for source, entry in viewer_files:
-            archive.write(source, entry)
-        archive.mkdir("docs")
+            write_release_file(archive, source, entry)
+        directory = ZipInfo("docs/")
+        directory.create_system = 3
+        directory.external_attr = (0o40775 << 16) | 0x10
+        archive.writestr(directory, b"")
         for source, entry in pdf_files:
-            archive.write(source, entry)
+            write_release_file(archive, source, entry)
     (output / "release-notes.md").write_text(
         f"# BTFViewer {tag}\n\n{notes}\n", encoding="utf-8", newline="\n",
     )
+
+
+def write_release_file(archive: ZipFile, source: Path, entry: str) -> None:
+    # Fixed ZIP metadata makes the archive independent of checkout timestamps.
+    info = ZipInfo(entry)
+    info.create_system = 3  # Unix file attributes on every build host.
+    info.external_attr = 0o100644 << 16
+    info.compress_type = ZIP_DEFLATED
+    info.file_size = source.stat().st_size
+    with source.open("rb") as contents, archive.open(info, "w") as target:
+        copyfileobj(contents, target)
 
 
 def main() -> None:

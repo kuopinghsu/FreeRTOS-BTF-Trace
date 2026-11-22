@@ -90,6 +90,13 @@ jobs:
       - name: Documentation links, EN/zh-TW parity, PDF freshness
         run: make -C BTFViewer check-docs
 
+      - name: Validate release package and ChangeLog
+        if: github.event_name != 'release'
+        working-directory: BTFViewer
+        run: |
+          version=$(python -c 'import json; from pathlib import Path; print(json.loads(Path("web/package.json").read_text(encoding="utf-8"))["version"])')
+          python scripts/package_release.py "v$version" "$RUNNER_TEMP/btf-release-check"
+
   release:
     name: Package published BTFViewer release
     if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
@@ -105,10 +112,24 @@ jobs:
           python-version: '3.12'
 
       - name: Package viewer and publish release notes
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ github.event.release.id }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           python BTFViewer/scripts/package_release.py "$RELEASE_TAG" "$RUNNER_TEMP/btf-release"
-          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/btf-release/btf_viewer_$RELEASE_TAG.zip" --clobber
+          asset_name="btf_viewer_$RELEASE_TAG.zip"
+          asset_path="$RUNNER_TEMP/btf-release/$asset_name"
+          checksum=$(sha256sum "$asset_path")
+          digest="sha256:${checksum%% *}"
+          existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+            | jq -r --arg name "$asset_name" --arg digest "$digest" '
+                .[] | select(.name == $name)
+                | if .state == "uploaded" and .digest == $digest then "match" else "conflict" end')
+          case "$existing" in
+            '') gh release upload "$RELEASE_TAG" "$asset_path" ;;
+            match) echo "Release already contains $asset_name with the expected SHA-256." ;;
+            *) echo "::error::Existing release asset $asset_name could not be verified. It was left in place."; exit 1 ;;
+          esac
           gh release edit "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/btf-release/release-notes.md"
