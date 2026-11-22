@@ -34,7 +34,7 @@ CHECK_JDK = command -v "$(JAVAC)" >/dev/null && command -v "$(JAR)" >/dev/null |
 PLUGIN := com.btfviewer.eclipse
 VIEWER := ../builds/btf_viewer.html
 EMBEDDED := $(PLUGIN)/web/btf_viewer.html
-PLUGIN_VERSION ?= 0.1.0
+PLUGIN_VERSION ?= 0.1.1
 ifneq ($(OS),Windows_NT)
 ifeq ($(shell uname -s),Darwin)
 ECLIPSE_HOME ?= /Applications/Eclipse.app/Contents/Eclipse

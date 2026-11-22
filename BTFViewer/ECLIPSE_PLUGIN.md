@@ -1,6 +1,6 @@
 # Eclipse plug-in
 
-Bundle version `0.1.0`.
+Bundle version `0.1.1`.
 
 The optional Eclipse integration embeds the existing BTFViewer HTML/JavaScript
 application in an SWT `Browser`. Eclipse supplies workspace and local-file access,
@@ -20,10 +20,10 @@ Investigation, and report behavior stays in the shared viewer.
 
 ## Install
 
-Extract `com.btfviewer.eclipse_0.1.0-p2.zip` from the
+Extract `com.btfviewer.eclipse_0.1.1-p2.zip` from the
 [BTFViewer release package](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/releases),
 download the standalone installer asset, or use the
-[installer ZIP in the repository](builds/com.btfviewer.eclipse_0.1.0-p2.zip).
+[installer ZIP in the repository](builds/com.btfviewer.eclipse_0.1.1-p2.zip).
 Keep the p2 ZIP intact.
 
 1. If you previously installed BTFViewer in `dropins/`, close Eclipse,
@@ -33,11 +33,25 @@ Keep the p2 ZIP intact.
 3. Expand the **BTFViewer** category, select **BTFViewer**, and complete
    the wizard. Restart Eclipse when prompted.
 
-To remove the plug-in, select **BTFViewer** under **Help > About Eclipse IDE >
-Installation Details > Installed Software**, then choose **Uninstall…**.
 For Eclipse distributions without the installation wizard, build the bundle JAR
 with `make -C BTFViewer eclipse-package` and copy it to `dropins/` with Eclipse
 closed. Restart Eclipse with `-clean` after changing that folder.
+
+## Uninstall
+
+- **Installed through the wizard.** In the same Eclipse installation, go to
+  **Help > About Eclipse IDE > Installation Details > Installed Software**.
+  Select **BTFViewer**, choose **Uninstall…**, and restart when prompted.
+- **Installed by copying a JAR.** Close Eclipse, remove the
+  `com.btfviewer.eclipse_*.jar` that you copied into that installation's
+  `dropins/` folder, and restart once with `-clean`.
+
+If **BTFViewer** is missing from **Installed Software**, look for
+`com.btfviewer.eclipse` on the **Plug-ins** tab. A manually copied bundle
+can appear there without an uninstallable feature entry. If it is missing
+from both tabs, verify that you opened the Eclipse installation where you
+installed BTFViewer. Adding the p2 ZIP to **Available Software Sites**
+only makes it available to install.
 
 ## Open a trace
 
@@ -99,7 +113,7 @@ To build just the Eclipse installer and its web viewer, run
 make -C BTFViewer eclipse-update-site "ECLIPSE_HOME=/path/to/eclipse"
 ```
 
-Both builds write `com.btfviewer.eclipse_0.1.0-p2.zip` to `BTFViewer/builds`.
+Both builds write `com.btfviewer.eclipse_0.1.1-p2.zip` to `BTFViewer/builds`.
 Bump the Eclipse bundle version and rebuild the JAR before distributing
 changed plug-in contents through p2. Eclipse uses the feature and bundle
 versions to identify updates.

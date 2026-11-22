@@ -19,7 +19,7 @@ section.
 - Fixed: desktop compressed traces enforce the expanded-size limit, and oversized lines report which line exceeded the limit.
 - Fixed: desktop workspaces reopen referenced traces, embed the selected member of a multi-trace ZIP, and apply task aliases to anonymized view state.
 - Fixed: the first Statistics help click could recreate the main window on Windows.
-- The Eclipse plug-in opens `.btf`, `.btf.zip`, `.btf.bz2`, and `.btf.gz` files. It uses WebView2 on Windows, and the bundled demo works without browser-native gzip decompression. The release package includes the Eclipse p2 ZIP for **Help > Install New Software…**. See the [Eclipse installation guide](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/blob/main/BTFViewer/ECLIPSE_PLUGIN.md).
+- The Eclipse plug-in opens `.btf`, `.btf.zip`, `.btf.bz2`, and `.btf.gz` files. Compressed BTF traces open in BTFViewer even when Eclipse recognizes them as generic archives. It uses WebView2 on Windows, and the bundled demo works without browser-native gzip decompression. The release package includes the Eclipse p2 ZIP for **Help > Install New Software…**. See the [Eclipse installation guide](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/blob/main/BTFViewer/ECLIPSE_PLUGIN.md).
 - Build: improved Windows Eclipse and JDK discovery and made desktop bundles use consistent LF line endings.
 
 ### 2026-11-19

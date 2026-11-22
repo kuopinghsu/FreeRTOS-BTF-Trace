@@ -19,5 +19,10 @@
       <contentTypeBinding contentTypeId="com.btfviewer.eclipse.compressedTrace"/>
     </editor>
   </extension>
+  <extension point="org.eclipse.ui.ide.editorAssociationOverride">
+    <editorAssociationOverride
+        id="com.btfviewer.eclipse.compressedTraceEditor"
+        class="com.btfviewer.eclipse.editor.CompressedTraceEditorAssociation"/>
+  </extension>
 </plugin>
 
