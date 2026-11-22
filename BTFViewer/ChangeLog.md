@@ -1,14 +1,34 @@
 # BTFViewer Change Log
 
-Since v1.0.0 (2026-09-13)
+Add one bullet per user-facing change under **Unreleased**. Lead with what
+changed for the user and mention the affected viewer when it matters.
 
-## 2026-11-19
+When preparing a release, rename `## Unreleased` to the exact tag (for example,
+`## v1.0.3`) and add a fresh `## Unreleased` above it. CI copies the matching
+section into the GitHub release notes. Use `###` for any headings inside that
+section.
+
+## Unreleased
+
+## v1.0.2
+
+### 2026-11-22
+
+- Large traces open faster. The web viewer reads, decompresses, and parses a single trace in one cancellable worker. The desktop viewer builds detailed analysis data on first use.
+- Fixed: cancelling a web trace load could block later opens. Workspace archives now also open in a cancellable worker.
+- Fixed: desktop compressed traces enforce the expanded-size limit, and oversized lines report which line exceeded the limit.
+- Fixed: desktop workspaces reopen referenced traces, embed the selected member of a multi-trace ZIP, and apply task aliases to anonymized view state.
+- Fixed: the first Statistics help click could recreate the main window on Windows.
+- The Eclipse plug-in opens `.btf`, `.btf.zip`, `.btf.bz2`, and `.btf.gz` files. It uses WebView2 on Windows, and the bundled demo works without browser-native gzip decompression.
+- Build: improved Windows Eclipse and JDK discovery and made desktop bundles use consistent LF line endings.
+
+### 2026-11-19
 - Fixed: plain right-click on the timeline removed the nearest cursor before opening the context menu; it now only opens the menu (Shift+right-click still clears all cursors) (desktop)
 - Fixed: context menu "Remove nearest cursor" did nothing unless a cursor was within 5 px of the click; it now removes the closest cursor (web)
 - Fixed: `btf_viewer.py` CLI crashed with UnicodeEncodeError (e.g. `µs`) when output was piped on Windows legacy code pages such as cp950 (desktop)
 - Build: `make -C BTFViewer` works on Windows from PowerShell/cmd — Makefiles use Git for Windows' `sh.exe` (override with `GIT_SH=...`), and the bundler reads `git show` output as UTF-8
 
-## 2026-10-02
+### 2026-10-02
 - Fixed: Trace Health tick period now follows the trace time scale (and a tick-rate metadata key when present) instead of assuming 1 ms in ns (desktop/web)
 - Fixed: core-affinity masks above 32 bits; bare `resume`/`resume/isr` notes no longer create a phantom task (web/desktop)
 - Statistics: a slice or priority episode still open at trace end is marked as truncated and left out of slice-duration samples, max/min/percentile jumps, and priority plots; CPU% still counts it (desktop/web)
@@ -24,7 +44,7 @@ Since v1.0.0 (2026-09-13)
 - Priority Inheritance and Mutex / Semaphore hold outliers now zoom to the whole span and mark both start and end (desktop/web)
 - HTML export adds a Metric definitions card; the AI evidence package attaches the definitions for the statistics it carries (desktop/web)
 
-## 2026-10-01
+### 2026-10-01
 - Modern UI refresh: unified light/dark theme colors with improved text and focus contrast (desktop/web)
 - AI Assistant: status messages show error/warning icons, not color alone (desktop/web)
 - Expand report: "Back to report" after jumping to evidence; layout restores when the last trace closes; no longer shrinks the report in narrow windows (desktop/web)
@@ -32,13 +52,16 @@ Since v1.0.0 (2026-09-13)
 - Icon rails: accessible names for screen readers (desktop/web)
 - HTML report: follows the shared theme colors
 
-## 2026-09-19
+## v1.0.1
+
+Released 2026-09-19.
+
+### 2026-09-19
 - Accessibility: colorblind-safe palette setting renamed to "Colorblind-safe palette (Okabe-Ito)" with a clearer tooltip describing its task/core-color scope (desktop/web)
 - Fixed: take_mutex/give_mutex STI markers relied on red/green alone; they now also use distinct triangle shapes so mutex direction is never color-only (desktop/web)
 - Fixed: packed worker trace reconstruction built `coreTaskSegStarts` from the LOD segment array instead of the raw one, which could desync core-task row lookup/hit-testing once LOD reduction was active (web)
-- v1.0.1 released
 
-## 2026-09-16
+### 2026-09-16
 - Evidence Pack export moved from Marks panel to Analysis Findings (new on desktop)
 - Keyboard shortcuts: fixed Ctrl/Cmd and Alt modifiers leaking into bare-key shortcuts (web)
 - Desktop: added bare `S` and `+`/`-`/`=`/`_` shortcuts, matching web
@@ -46,13 +69,13 @@ Since v1.0.0 (2026-09-13)
 - Fixed: long tag alias could overlap the data-format control
 - Fixed: data-format control covered the tag label when a row was expanded (web)
 
-## 2026-09-15
+### 2026-09-15
 - AI: tag queries now return value stats (min/avg/max/etc.), not just occurrences
 - Tag rename (alias), saved per trace
 - Fixed: tag alias sometimes not visible (web)
 - Fixed: changing tag format could scroll the Statistics view away
 
-## 2026-09-14
+### 2026-09-14
 - Tag data format: UInt32 / Int32 / Float32
 - Tag chart scale: Linear / Log2
 - Tag chart: "Include zero" axis option
@@ -61,5 +84,6 @@ Since v1.0.0 (2026-09-13)
 - HTML report: animated KPI numbers and entrance effects
 - HTML report: sections expand by default
 
-## 2026-09-13
-- v1.0.0 released
+## v1.0.0
+
+Initial release on 2026-09-13.

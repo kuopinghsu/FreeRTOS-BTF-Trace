@@ -254,15 +254,21 @@ doc: docs-html $(DOC_PDFS)
 # mermaid SVGs — on machines without "trebuchet ms" installed those re-render
 # with ~20 KB of cosmetic coordinate drift.
 DOCS_HTML := $(BUILDS)/btf_viewer.hlp web/src/generated/statistics-en.inline.html
-DOCS_HTML_SRCS := STATISTICS.md STATISTICS_zh-TW.md \
+DOCS_HTML_NODE_SRCS := scripts/package.json scripts/package-lock.json
+DOCS_HTML_NODE_STAMP := scripts/node_modules/.docs-html-deps
+DOCS_HTML_SRCS := STATISTICS.md STATISTICS_zh-TW.md $(DOCS_HTML_NODE_SRCS) \
 	scripts/build_docs_html.py scripts/render_math.mjs
 
 docs-html: $(BUILDS)/.docs-html-stamp
 
-$(BUILDS)/.docs-html-stamp: $(DOCS_HTML_SRCS)
+$(DOCS_HTML_NODE_STAMP): $(DOCS_HTML_NODE_SRCS)
+	npm --prefix scripts ci
+	@$(PYTHON) -c "from pathlib import Path; Path('$@').touch()"
+
+$(BUILDS)/.docs-html-stamp: $(DOCS_HTML_SRCS) $(DOCS_HTML_NODE_STAMP)
 	mkdir -p $(BUILDS)
 	$(PYTHON) scripts/build_docs_html.py
-	@touch $@
+	@$(PYTHON) -c "from pathlib import Path; Path('$@').touch()"
 
 $(DOCS_HTML): $(BUILDS)/.docs-html-stamp
 

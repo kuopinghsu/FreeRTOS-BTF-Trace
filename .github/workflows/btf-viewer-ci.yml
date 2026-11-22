@@ -11,6 +11,8 @@ on:
       - 'BTFViewer/**'
       - 'tracedata/**'
       - '.github/workflows/btf-viewer-ci.yml'
+  release:
+    types: [published]
 
 jobs:
   desktop:
@@ -87,3 +89,26 @@ jobs:
 
       - name: Documentation links, EN/zh-TW parity, PDF freshness
         run: make -C BTFViewer check-docs
+
+  release:
+    name: Package published BTFViewer release
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
+    needs: [desktop, web, docs-gate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Package viewer and publish release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python BTFViewer/scripts/package_release.py "$RELEASE_TAG" "$RUNNER_TEMP/btf-release"
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/btf-release/btf_viewer_$RELEASE_TAG.zip" --clobber
+          gh release edit "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/btf-release/release-notes.md"

@@ -15,7 +15,7 @@ endif
 
 .DEFAULT_GOAL := all
 
-.PHONY: all help run check clean distclean update ci-gate
+.PHONY: all help run check clean distclean update ci-gate docs-html
 
 help:
 	@echo "FreeRTOS-BTF-Trace — make targets"
@@ -34,9 +34,13 @@ help:
 	@echo "BTF Viewer (separate tree):"
 	@echo "  make -C BTFViewer help"
 	@echo "  make ci-gate      Run the BTFViewer CI gate"
+	@echo "  make docs-html    Rebuild BTFViewer Statistics Reference HTML"
 
 ci-gate:
 	$(MAKE) -C BTFViewer ci-gate
+
+docs-html:
+	$(MAKE) -C BTFViewer docs-html
 
 all: check
 	$(MAKE) -C Demo $(NATIVE_BUILD_SHELL) RISCV_PREFIX=$(RISCV_PREFIX)

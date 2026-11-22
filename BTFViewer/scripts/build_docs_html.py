@@ -49,10 +49,10 @@ both hold the SAME content though: a JSON object {"en": "<!doctype ...",
 
 Requires (build-time only, not an app runtime dependency):
     pip install markdown-it-py
-    mmdc (mermaid-cli) on PATH, e.g. `npm install -g @mermaid-js/mermaid-cli`
-    node, and `cd scripts && npm install` (installs mathjax-full; see
-    scripts/package.json — a separate, build-tools-only node_modules,
-    not web/'s)
+    Node.js 22.13 or newer and the local dependencies from scripts/package-lock.json.
+    Use make docs-html, or run npm ci --prefix scripts for a direct build.
+    Set PUPPETEER_EXECUTABLE_PATH to a Chromium-based browser if Puppeteer
+    cannot find one.
 
 Usage:
     python3 scripts/build_docs_html.py
@@ -60,6 +60,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -77,6 +78,7 @@ LANGS: dict[str, Path] = {
     "zh-tw": BTF_ROOT / "STATISTICS_zh-TW.md",
 }
 RENDER_MATH_JS = SCRIPT_DIR / "render_math.mjs"
+MERMAID_CLI = SCRIPT_DIR / "node_modules" / "@mermaid-js" / "mermaid-cli" / "src" / "cli.js"
 
 _MERMAID_RE = re.compile(r"```mermaid\n(.*?)\n```\n?", re.DOTALL)
 _MATH_RE = re.compile(r"```math\n(.*?)\n```\n?", re.DOTALL)
@@ -92,9 +94,21 @@ _CHROME_CANDIDATES = [
 
 
 def _find_chrome() -> str | None:
+    configured = os.environ.get("PUPPETEER_EXECUTABLE_PATH")
+    if configured:
+        return configured
     for cand in _CHROME_CANDIDATES:
         if Path(cand).is_file():
             return cand
+    if sys.platform == "win32":
+        for key in ("LOCALAPPDATA", "ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
+            folder = os.environ.get(key)
+            if not folder:
+                continue
+            for relative in ("Google/Chrome/Application/chrome.exe", "Microsoft/Edge/Application/msedge.exe"):
+                candidate = Path(folder) / relative
+                if candidate.is_file():
+                    return str(candidate)
     return None
 
 
@@ -140,15 +154,21 @@ def _render_mermaid_to_svg(src: str, theme: str, svg_id: str) -> str:
             encoding="utf-8",
         )
         cmd = [
-            "mmdc", "-i", str(mmd), "-o", str(svg), "-b", "transparent",
+            "node", str(MERMAID_CLI), "-i", str(mmd), "-o", str(svg), "-b", "transparent",
             "-t", theme, "-c", str(mermaid_cfg), "-I", svg_id,
         ]
         chrome = _find_chrome()
         if chrome:
             cfg = Path(td) / "puppeteer-config.json"
-            cfg.write_text(f'{{"executablePath": {chrome!r}}}'.replace("'", '"'), encoding="utf-8")
+            cfg.write_text(json.dumps({"executablePath": chrome}), encoding="utf-8")
             cmd += ["-p", str(cfg)]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            subprocess.run(
+                cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                encoding="utf-8", errors="replace",
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(f"Mermaid rendering failed for {svg_id}:\n{exc.stderr.strip()}") from exc
         return svg.read_text(encoding="utf-8")
 
 
@@ -216,7 +236,7 @@ def _render_math(formulas: list[str]) -> dict:
     """
     proc = subprocess.run(
         ["node", str(RENDER_MATH_JS)],
-        input=json.dumps(formulas), capture_output=True, text=True, check=True,
+        input=json.dumps(formulas), capture_output=True, encoding="utf-8", check=True,
     )
     return json.loads(proc.stdout)
 
@@ -480,6 +500,9 @@ def build() -> list[Path]:
 
 
 def main() -> int:
+    if not MERMAID_CLI.is_file():
+        print("Install the docs Node dependencies with npm ci --prefix scripts.", file=sys.stderr)
+        return 1
     missing = [str(p) for p in LANGS.values() if not p.is_file()]
     if missing:
         print(f"warning: missing source(s): {', '.join(missing)}", file=sys.stderr)

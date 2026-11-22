@@ -1,6 +1,6 @@
 # Eclipse plug-in
 
-Status: Phase-0 feasibility POC (`0.1.0`).
+Bundle version `0.1.0`.
 
 The optional Eclipse integration embeds the existing BTFViewer HTML/JavaScript
 application in an SWT `Browser`. Eclipse supplies workspace and local-file access,
@@ -10,85 +10,99 @@ Investigation, and report behavior stays in the shared viewer.
 
 ## Requirements
 
-- Eclipse IDE with PDE and Java 17 or later
-- An SWT Browser backend with modern JavaScript enabled
-- A workspace or local `.btf` file
+- An Eclipse installation with SWT and a Java runtime supported by that Eclipse
+  version. The plug-in targets Java 17 bytecode. Eclipse 4.34 is the build
+  compatibility baseline.
+- On Windows, the editor selects Edge explicitly and requires the Microsoft Edge
+  WebView2 Runtime. On Linux GTK and macOS, it uses Eclipse's default SWT
+  browser backend. Linux GTK installations typically require WebKitGTK.
+  [SWT browser requirements](https://eclipse.dev/eclipse/swt/faq.html)
 
-## Build and install
+## Install
 
-```sh
-make -C BTFViewer eclipse-package
-```
+Use the [Eclipse bundle JAR](builds/com.btfviewer.eclipse_0.1.0.jar) from the
+repository. The Eclipse bundle is distributed separately from the desktop and
+web release ZIP.
 
-This produces one artifact in `BTFViewer/builds`:
+1. Close Eclipse.
+2. Remove any older `com.btfviewer.eclipse_*.jar` from `dropins/`, then copy
+   the current JAR into that directory.
+3. Restart Eclipse with `-clean` once to refresh its bundle cache.
 
-- `com.btfviewer.eclipse_0.1.0.jar` — the compiled OSGi plug-in bundle.
+## Open a trace
 
-To install, close Eclipse, remove any older `com.btfviewer.eclipse_*.jar` from
-Eclipse's `dropins/` directory, and copy the plug-in JAR into that directory.
-Restart Eclipse with `-clean` once so its bundle cache is refreshed.
+Double-click a workspace `.btf`, `.btf.zip`, `.btf.bz2`, or `.btf.gz` file,
+or use **File > Open File…** for a local trace outside the workspace. If another
+editor opens the file, use **Open With > BTFViewer Editor**. Each trace opens in
+a read-only tab titled `BTF: <filename>`.
 
-The committed JAR is a generated build artifact, like `builds/btf_viewer.{html,py}`,
-and has its own freshness gates:
+If the editor cannot initialize its browser or fails to start within 30
+seconds, check the Eclipse Error Log. On Windows, verify that WebView2 is
+installed if the editor reports a browser initialization error.
 
-```sh
-make -C BTFViewer check-eclipse-resources # CI-safe: packaged web/plugin.xml/icons/
-                                           # manifest version/class list vs. sources
-make -C BTFViewer check-eclipse           # + full recompile-and-bytecode-diff
-                                           # (needs ECLIPSE_HOME; skips without one)
-```
+## Build from source
 
-`check-eclipse-resources` runs in CI on every push/PR (no Eclipse SDK needed);
-`check-eclipse` is the stronger local gate for a machine with Eclipse installed.
-After changing plug-in sources, the embedded web viewer, `plugin.xml`, or icons,
-re-run `eclipse-package` and commit the updated JAR.
+Packaging rebuilds the shared HTML and compiles the OSGi JAR into
+`BTFViewer/builds`. The build needs GNU Make, Node.js 22 or newer with npm,
+and a JDK 17 or newer with `javac` and `jar`. On Windows, the Makefiles use
+Git for Windows' shell. Set `GIT_SH` if Git is installed in a different location.
 
-The build defaults to `/Applications/Eclipse.app/Contents/Eclipse` on macOS.
-For another installation, pass its root explicitly:
+Run the command from the repository root. Set `ECLIPSE_HOME` to the directory
+that contains `plugins/`. On macOS, the default is
+`/Applications/Eclipse.app/Contents/Eclipse`.
 
 ```sh
 make -C BTFViewer eclipse-package ECLIPSE_HOME=/path/to/eclipse
 ```
 
-For PDE development, import `BTFViewer/eclipse/com.btfviewer.eclipse` into an
-Eclipse workspace and launch an Eclipse Application.
+```powershell
+$env:JAVA_HOME = 'C:/path/to/jdk'
+make -C BTFViewer eclipse-package "ECLIPSE_HOME=C:/Program Files/eclipse"
+```
 
-## Open a trace
+The build looks for the JDK in `JAVA_HOME`, on `PATH`, and in common Windows
+install locations. If the Eclipse plug-ins are in a separate directory, set
+`ECLIPSE_PLUGINS` to that directory directly.
 
-Double-click a workspace `.btf` file, or use **File > Open File...** for a local
-file outside the workspace. The read-only editor is named `BTF: <filename>`.
-Multiple files can be opened in separate editor tabs. Reload, native commands,
-and preferences belong to later milestones after the feasibility gate.
+For PDE development, run `make -C BTFViewer eclipse-poc` to build and sync
+the embedded viewer, then follow the
+[plug-in project instructions](eclipse/com.btfviewer.eclipse/README.md).
+
+## Verify the bundle
+
+```sh
+make -C BTFViewer check-eclipse-resources
+make -C BTFViewer check-eclipse ECLIPSE_HOME=/path/to/eclipse
+```
+
+The CI resource check compares the packaged HTML, editor declaration, icons,
+bundle version, and Java class presence with the repository. The local check
+also recompiles against the configured Eclipse installation and compares the
+class list. It compares bytecode when the compiler version matches the one
+recorded in the JAR.
+
+Rebuild and commit the JAR when changing the plug-in sources, metadata,
+icons, or shared web viewer. To verify behavior in an Eclipse installation,
+open a plain trace and a compressed trace, check the timeline and Statistics,
+switch between light and dark themes, and test any export formats you use.
 
 ## Browser and data path
 
-Each editor owns a tokenized HTTP server bound only to `127.0.0.1`. It streams
-the selected workspace or local file directly to the shared JavaScript loader, avoiding a full
-`Java String -> JSON -> browser.execute` trace copy. Closing the editor closes
-the server. The bundled viewer is generated from the normal web build and must
-remain byte-for-byte identical to `BTFViewer/builds/btf_viewer.html`.
+Each editor owns a tokenized HTTP server bound to `127.0.0.1`. It streams
+the selected trace as bytes to the shared loader. The server caps transferred
+trace bytes at 256 MiB, and the viewer caps decompressed trace data at 256 MiB.
+Closing the editor closes the server and its active connections. The packaged
+HTML matches the standalone [web build](builds/btf_viewer.html) byte for byte.
 
 ## Theme and bridge
 
 Eclipse light/dark theme changes call the viewer's existing dark-mode setting
-without reloading the trace. JavaScript messages are limited to an allowlist;
-the browser cannot choose arbitrary Java method names. The POC implements
-`viewerReady`, `traceLoaded`, `traceLoadFailed`, and status handling.
-
-## Required feasibility validation
-
-Before later milestones begin, manually verify the same POC on Windows, Linux
-GTK, and macOS. Record Eclipse/SWT versions and results for CSS Grid, Flexbox,
-SVG, Canvas, Timeline rendering, large tables, dark mode, Trace Compare,
-reports, localStorage, Blob, URL.createObjectURL, Promise, async/await, fetch,
-and matchMedia. This repository environment can build and unit-test the shared
-viewer but cannot certify the unavailable operating systems or SWT backends.
+without reloading the trace. The bridge accepts an allowlist of message types.
+The editor acts on `viewerReady`, `traceLoaded`, `traceLoadFailed`, and
+`statusChanged`.
 
 ## Known limitations
 
-- AI network access depends on the SWT browser's networking/CORS behavior and
-  is not part of the initial gate.
-- Export downloads and platform-specific SWT Browser behavior require manual
-  validation.
-- A signed p2 update site, commands, preferences, secure storage, reload, and
-  native compare selection are deferred beyond the Phase-0 gate.
+- AI network access and export downloads depend on the SWT browser backend.
+- The integration provides manual JAR installation and exposes comparison,
+  settings, and reports through the embedded viewer.
