@@ -14,19 +14,18 @@ timeline, statistics, comparison, reports, or analysis logic to Java.
 
 ## Package for installation
 
-From the repository root, run `make -C BTFViewer eclipse-package`. The build
-places the installable plug-in JAR in `BTFViewer/builds`. Copy that JAR into
-Eclipse's `dropins/` directory after removing any older copy, then restart once
-with `-clean`. Set `ECLIPSE_HOME` to the Eclipse directory that
-contains `plugins`. On Windows, for example:
+From the repository root, run `make -C BTFViewer eclipse-update-site` to build
+the offline installer ZIP in `BTFViewer/builds`. Set `ECLIPSE_HOME` to the
+Eclipse directory that contains `plugins` and the p2 publisher. On Windows,
+for example:
 
 ```powershell
 $env:JAVA_HOME = 'C:/path/to/jdk'
-make -C BTFViewer eclipse-package "ECLIPSE_HOME=C:/path/to/eclipse"
+make -C BTFViewer eclipse-update-site "ECLIPSE_HOME=C:/path/to/eclipse"
 ```
 
-Packaging requires a JDK 17 or newer. Set `JAVA_HOME` to the JDK directory
-or add its `bin` directory to `PATH`.
+See the [Eclipse plug-in guide](../../ECLIPSE_PLUGIN.md) for installation and
+the Java requirements for building the update site.
 
 On macOS, the build defaults to `/Applications/Eclipse.app/Contents/Eclipse`.
 

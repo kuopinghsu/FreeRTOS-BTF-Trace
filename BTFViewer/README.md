@@ -87,6 +87,21 @@ cd BTFViewer
 make web
 ```
 
+### Eclipse plug-in
+
+1. Extract `com.btfviewer.eclipse_0.1.0-p2.zip` from the
+   [BTFViewer release package](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/releases).
+   Keep the extracted p2 ZIP intact.
+2. In Eclipse, choose **Help → Install New Software → Add → Archive**.
+   Select the p2 ZIP and choose **Add**.
+3. Select **BTFViewer** under the **BTFViewer** category, complete the
+   wizard, and restart Eclipse when prompted.
+
+In the workspace, double-click a BTF trace or choose **Open With →
+BTFViewer Editor**. On Windows, the plug-in requires the Microsoft Edge
+WebView2 Runtime. See the [Eclipse plug-in guide](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/blob/main/BTFViewer/ECLIPSE_PLUGIN.md)
+for requirements and troubleshooting.
+
 ### Supported files
 
 | Format | Description |

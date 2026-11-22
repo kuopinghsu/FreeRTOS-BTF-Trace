@@ -87,6 +87,18 @@ cd BTFViewer
 make web
 ```
 
+### Eclipse 外掛程式
+
+1. 從 [BTFViewer 發行套件](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/releases)
+   取出 `com.btfviewer.eclipse_0.1.0-p2.zip`，保留此 p2 ZIP 的原始格式。
+2. 在 Eclipse 中選擇 **Help → Install New Software → Add → Archive**，
+   選取 p2 ZIP，然後按 **Add**。
+3. 在 **BTFViewer** 類別下勾選 **BTFViewer**，完成安裝精靈，並依提示重新啟動 Eclipse。
+
+在工作區中按兩下 BTF 追蹤檔案，或選擇 **Open With → BTFViewer Editor**。
+Windows 上的外掛程式需要 Microsoft Edge WebView2 Runtime。
+系統需求及疑難排解請參閱 [Eclipse 外掛程式指南](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/blob/main/BTFViewer/ECLIPSE_PLUGIN.md)。
+
 ### 支援的檔案格式
 
 | 格式 | 說明 |

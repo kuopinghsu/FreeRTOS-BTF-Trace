@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 from shutil import copyfileobj
-from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile, ZipInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,10 +35,21 @@ def package_release(tag: str, output: Path) -> None:
         if not source.is_file():
             raise FileNotFoundError(f"Missing release file: {source.relative_to(ROOT)}")
 
+    eclipse_sites = sorted((ROOT / "builds").glob("com.btfviewer.eclipse_*-p2.zip"))
+    if len(eclipse_sites) != 1:
+        raise ValueError("Expected one BTFViewer Eclipse p2 installer ZIP in builds/")
+    eclipse_site = eclipse_sites[0]
+    bundle = eclipse_site.name.removesuffix("-p2.zip")
+    with ZipFile(eclipse_site) as site:
+        required = {"artifacts.xml", "content.xml", f"plugins/{bundle}.jar"}
+        if not required.issubset(site.namelist()) or site.testzip() is not None:
+            raise ValueError(f"Invalid Eclipse p2 installer: {eclipse_site.name}")
+
     output.mkdir(parents=True, exist_ok=True)
     with ZipFile(output / f"btf_viewer_{tag}.zip", mode="w") as archive:
         for source, entry in viewer_files:
             write_release_file(archive, source, entry)
+        write_release_file(archive, eclipse_site, eclipse_site.name)
         directory = ZipInfo("docs/")
         directory.create_system = 3
         directory.external_attr = (0o40775 << 16) | 0x10
@@ -68,7 +79,7 @@ def main() -> None:
     args = parser.parse_args()
     try:
         package_release(args.tag, args.output)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, BadZipFile) as exc:
         parser.exit(1, f"error: {exc}\n")
 
 

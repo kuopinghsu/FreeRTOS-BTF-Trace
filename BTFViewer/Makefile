@@ -20,7 +20,7 @@ GIT_SH ?= C:/Program Files/Git/bin/sh.exe
 SHELL := $(GIT_SH)
 endif
 
-PYTHON ?= python3
+PYTHON ?= $(if $(filter Windows_NT,$(OS)),python,python3)
 TRACE ?= ../tracedata/example-2cores.btf.gz
 BUILDS := builds
 OUT := $(BUILDS)/btf_viewer.py
@@ -56,7 +56,7 @@ AI_CASES ?=
 AI_CONTEXT ?=
 AI_REPLACE ?=
 
-.PHONY: all help web bundle eclipse-poc eclipse-package eclipse-auto check-bundle check-web check-docs check-builds \
+.PHONY: all help web bundle eclipse-poc eclipse-package eclipse-update-site eclipse-auto check-bundle check-web check-docs check-builds \
 	check-eclipse-resources check-eclipse \
 	test test-web test-all ai-test ai-test-live ai-test-context ai-prompts \
 	ci ci-gate doc docs-html update-images demo demo-voice demo-pack
@@ -64,14 +64,14 @@ AI_REPLACE ?=
 help:
 	@echo "BTF Viewer — make targets"
 	@echo ""
-	@echo "  make              Build web + desktop (default); also refreshes the Eclipse"
-	@echo "                    plug-in JAR if it's stale and an Eclipse SDK is installed"
+	@echo "  make              Build web + desktop and the Eclipse installer ZIP when p2 is available"
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
-	@echo "  make eclipse-package  Installable Eclipse plug-in JAR (fails without ECLIPSE_HOME)"
+	@echo "  make eclipse-package  Standalone Eclipse JAR for manual installation"
+	@echo "  make eclipse-update-site  Build the offline Eclipse installer ZIP"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Fail if builds/btf_viewer.py ≠ fresh bundle from sources"
 	@echo "  make check-web    Rebuild web HTML (local: fail if artifact drifts; CI: build only)"
-	@echo "  make check-eclipse-resources  Fail if the Eclipse plug-in JAR's packaged"
+	@echo "  make check-eclipse-resources  Fail if the Eclipse installer ZIP's plug-in"
 	@echo "                    resources/classes drift from sources (no Eclipse SDK needed; CI-safe)"
 	@echo "  make check-eclipse  Rebuild the Eclipse plug-in and verify its classes"
 	@echo "                    (needs ECLIPSE_HOME; skips cleanly when no Eclipse SDK is found)"
@@ -115,12 +115,12 @@ eclipse-poc: web
 eclipse-package: web
 	$(MAKE) -C eclipse package
 
-# Opportunistic: rebuilds the Eclipse plug-in JAR only when it is stale
-# relative to the just-built web viewer (or plugin sources), and only when an
-# Eclipse SDK is installed - see eclipse/Makefile's $(PLUGIN_JAR) rule. Silent
-# no-op otherwise, so `make` still succeeds without Eclipse installed.
+eclipse-update-site: web
+	$(MAKE) -C eclipse update-site PYTHON="$(PYTHON)"
+
+# Refresh the p2 installer when the configured Eclipse SDK supports it.
 eclipse-auto: web
-	$(MAKE) -C eclipse package-if-sdk
+	$(MAKE) -C eclipse update-site-if-sdk PYTHON="$(PYTHON)"
 
 bundle:
 	mkdir -p $(BUILDS)
@@ -217,7 +217,7 @@ check-web:
 check-docs:
 	$(PYTHON) scripts/ci_gate.py --links --parity --pdf --docs-html
 
-# CI-safe: fails if the committed Eclipse plug-in JAR's packaged web viewer,
+# CI-safe: fails if the plug-in in the committed Eclipse installer ZIP has a web viewer,
 # plugin.xml, icons, manifest version, or class list drift from sources.
 # Compares against whatever builds/btf_viewer.html currently is (run `make
 # web` first if stale) — no Eclipse SDK / javac needed, so this always runs.

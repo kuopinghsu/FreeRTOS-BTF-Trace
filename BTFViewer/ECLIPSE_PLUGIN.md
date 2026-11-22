@@ -20,14 +20,24 @@ Investigation, and report behavior stays in the shared viewer.
 
 ## Install
 
-Use the [Eclipse bundle JAR](builds/com.btfviewer.eclipse_0.1.0.jar) from the
-repository. The Eclipse bundle is distributed separately from the desktop and
-web release ZIP.
+Extract `com.btfviewer.eclipse_0.1.0-p2.zip` from the
+[BTFViewer release package](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/releases),
+download the standalone installer asset, or use the
+[installer ZIP in the repository](builds/com.btfviewer.eclipse_0.1.0-p2.zip).
+Keep the p2 ZIP intact.
 
-1. Close Eclipse.
-2. Remove any older `com.btfviewer.eclipse_*.jar` from `dropins/`, then copy
-   the current JAR into that directory.
-3. Restart Eclipse with `-clean` once to refresh its bundle cache.
+1. If you previously installed BTFViewer in `dropins/`, close Eclipse,
+   remove that copy, and restart Eclipse before installing with the wizard.
+2. In Eclipse, open **Help > Install New Software… > Add… > Archive…**.
+   Select the downloaded ZIP and choose **Add**.
+3. Expand the **BTFViewer** category, select **BTFViewer**, and complete
+   the wizard. Restart Eclipse when prompted.
+
+To remove the plug-in, select **BTFViewer** under **Help > About Eclipse IDE >
+Installation Details > Installed Software**, then choose **Uninstall…**.
+For Eclipse distributions without the installation wizard, build the bundle JAR
+with `make -C BTFViewer eclipse-package` and copy it to `dropins/` with Eclipse
+closed. Restart Eclipse with `-clean` after changing that folder.
 
 ## Open a trace
 
@@ -64,6 +74,36 @@ The build looks for the JDK in `JAVA_HOME`, on `PATH`, and in common Windows
 install locations. If the Eclipse plug-ins are in a separate directory, set
 `ECLIPSE_PLUGINS` to that directory directly.
 
+### Build the offline installer
+
+Use Python 3.9 or later and an Eclipse SDK with the p2 publisher installed.
+Use a Java runtime supported by that SDK. The publisher uses `JAVA_HOME`
+when set. Otherwise, it looks for Eclipse's bundled Java, a JDK discovered
+on Windows, or Java on `PATH`.
+
+Run the normal build with `ECLIPSE_HOME` set to the SDK directory. When the p2
+publisher is present, the build writes the installer ZIP and cleans up the
+temporary JAR after packaging it inside the ZIP. When the publisher is absent,
+the build skips Eclipse packaging. Use `eclipse-package` explicitly if you need
+a standalone JAR for manual installation.
+
+```powershell
+$env:ECLIPSE_HOME = 'C:/Program Files/eclipse'
+make -C BTFViewer
+```
+
+To build just the Eclipse installer and its web viewer, run
+`eclipse-update-site` explicitly. This target requires the publisher.
+
+```sh
+make -C BTFViewer eclipse-update-site "ECLIPSE_HOME=/path/to/eclipse"
+```
+
+Both builds write `com.btfviewer.eclipse_0.1.0-p2.zip` to `BTFViewer/builds`.
+Bump the Eclipse bundle version and rebuild the JAR before distributing
+changed plug-in contents through p2. Eclipse uses the feature and bundle
+versions to identify updates.
+
 For PDE development, run `make -C BTFViewer eclipse-poc` to build and sync
 the embedded viewer, then follow the
 [plug-in project instructions](eclipse/com.btfviewer.eclipse/README.md).
@@ -81,7 +121,7 @@ also recompiles against the configured Eclipse installation and compares the
 class list. It compares bytecode when the compiler version matches the one
 recorded in the JAR.
 
-Rebuild and commit the JAR when changing the plug-in sources, metadata,
+Rebuild and commit the installer ZIP when changing the plug-in sources, metadata,
 icons, or shared web viewer. To verify behavior in an Eclipse installation,
 open a plain trace and a compressed trace, check the timeline and Statistics,
 switch between light and dark themes, and test any export formats you use.

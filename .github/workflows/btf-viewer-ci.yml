@@ -111,7 +111,32 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Package viewer and publish release notes
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Verify installation from the packaged Eclipse update site
+        shell: bash
+        run: |
+          sdk_url=https://archive.eclipse.org/eclipse/downloads/drops4/R-4.34-202411201800
+          sdk_archive=eclipse-SDK-4.34-linux-gtk-x86_64.tar.gz
+          sdk_sha512=5d0de0a777c6ecf3d0555f8fed43b94d5f8f800a2d7500776cd94c3db77a0ab276fa95d6b606e6a90a4c7ae5a8aab6a76d7c5cfbc3d79f324f3ecd67c585ed7b
+          curl --fail --silent --show-error --location --retry 3 "$sdk_url/$sdk_archive" -o "$RUNNER_TEMP/$sdk_archive"
+          printf '%s  %s\n' "$sdk_sha512" "$RUNNER_TEMP/$sdk_archive" | sha512sum --check
+          tar -xzf "$RUNNER_TEMP/$sdk_archive" -C "$RUNNER_TEMP"
+          eclipse_home="$RUNNER_TEMP/eclipse"
+          sites=("$GITHUB_WORKSPACE/BTFViewer/builds"/com.btfviewer.eclipse_*-p2.zip)
+          if [[ ${#sites[@]} -ne 1 || ! -f ${sites[0]} ]]; then
+            echo "::error::Expected one Eclipse installer ZIP."
+            exit 1
+          fi
+          "$eclipse_home/eclipse" -vm "$JAVA_HOME/bin/java" -nosplash -consoleLog -data @none \
+            -application org.eclipse.equinox.p2.director \
+            -repository "jar:file:${sites[0]}!/" \
+            -installIU com.btfviewer.eclipse.feature.feature.group
+
+      - name: Upload release packages and publish notes
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -119,17 +144,19 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           python BTFViewer/scripts/package_release.py "$RELEASE_TAG" "$RUNNER_TEMP/btf-release"
-          asset_name="btf_viewer_$RELEASE_TAG.zip"
-          asset_path="$RUNNER_TEMP/btf-release/$asset_name"
-          checksum=$(sha256sum "$asset_path")
-          digest="sha256:${checksum%% *}"
-          existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
-            | jq -r --arg name "$asset_name" --arg digest "$digest" '
-                .[] | select(.name == $name)
-                | if .state == "uploaded" and .digest == $digest then "match" else "conflict" end')
-          case "$existing" in
-            '') gh release upload "$RELEASE_TAG" "$asset_path" ;;
-            match) echo "Release already contains $asset_name with the expected SHA-256." ;;
-            *) echo "::error::Existing release asset $asset_name could not be verified. It was left in place."; exit 1 ;;
-          esac
+          for asset_path in "$RUNNER_TEMP/btf-release/btf_viewer_$RELEASE_TAG.zip" \
+            BTFViewer/builds/com.btfviewer.eclipse_*-p2.zip; do
+            asset_name=${asset_path##*/}
+            checksum=$(sha256sum "$asset_path")
+            digest="sha256:${checksum%% *}"
+            existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+              | jq -r --arg name "$asset_name" --arg digest "$digest" '
+                  .[] | select(.name == $name)
+                  | if .state == "uploaded" and .digest == $digest then "match" else "conflict" end')
+            case "$existing" in
+              '') gh release upload "$RELEASE_TAG" "$asset_path" ;;
+              match) echo "Release already contains $asset_name with the expected SHA-256." ;;
+              *) echo "::error::Existing release asset $asset_name could not be verified. It was left in place."; exit 1 ;;
+            esac
+          done
           gh release edit "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/btf-release/release-notes.md"
