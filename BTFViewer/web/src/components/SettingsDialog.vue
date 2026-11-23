@@ -160,7 +160,7 @@
               >
               AI Assistant panel
             </label>
-            <label class="settings-check indent">
+            <label v-if="!eclipseHost" class="settings-check indent">
               <input
                 v-model="draft.showCpuLoad"
                 type="checkbox"
@@ -800,6 +800,7 @@ import {
 } from '../utils/aiCase.js'
 
 const props = defineProps({
+  eclipseHost: { type: Boolean, default: false },
   modelValue: { type: Object, required: true },
   timeScale:  { type: String, default: 'ns' },
   initialTab: { type: String, default: 'appearance' },

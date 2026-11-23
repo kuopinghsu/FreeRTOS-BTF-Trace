@@ -377,6 +377,7 @@
         </button>
 
         <button
+          v-if="!eclipseHost"
           type="button"
           class="tb-btn tb-btn-labeled"
           data-demo-target="toolbar_load"
@@ -650,6 +651,7 @@ import { appIconSvgMarkup } from '../utils/htmlReport.js'
 const appIconSvg = appIconSvgMarkup(16)
 
 const props = defineProps({
+  eclipseHost: { type: Boolean, default: false },
   modelValue:  { type: Object,  required: true },
   traceInfo:   { type: String,  default: '' },
   taskFilterActive: { type: Boolean, default: false },

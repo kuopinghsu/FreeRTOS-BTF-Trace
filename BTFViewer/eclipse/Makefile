@@ -10,11 +10,11 @@ export PATH := $(GIT_USR_BIN);$(PATH)
 .SHELLFLAGS := -e -c
 JAVA_EXE_SUFFIX := .exe
 # A 32-bit make process sees the x86 Program Files directory in ProgramFiles.
-JDK_PROGRAM_FILES := $(subst \,/,$(or $(ProgramW6432),$(ProgramFiles)))
-WINDOWS_JDK_CANDIDATES = "$(JDK_PROGRAM_FILES)/Java/latest" \
-	"$(JDK_PROGRAM_FILES)/Java"/jdk-* \
-	"$(JDK_PROGRAM_FILES)/Microsoft"/jdk-* \
-	"$(JDK_PROGRAM_FILES)/Eclipse Adoptium"/jdk-*
+WINDOWS_PROGRAM_FILES := $(subst \,/,$(or $(ProgramW6432),$(ProgramFiles)))
+WINDOWS_JDK_CANDIDATES = "$(WINDOWS_PROGRAM_FILES)/Java/latest" \
+	"$(WINDOWS_PROGRAM_FILES)/Java"/jdk-* \
+	"$(WINDOWS_PROGRAM_FILES)/Microsoft"/jdk-* \
+	"$(WINDOWS_PROGRAM_FILES)/Eclipse Adoptium"/jdk-*
 endif
 JDK_BIN := $(shell \
 	for home in "$(subst \,/,$(subst ",,$(JAVA_HOME)))" PATH $(WINDOWS_JDK_CANDIDATES); do \
@@ -34,8 +34,17 @@ CHECK_JDK = command -v "$(JAVAC)" >/dev/null && command -v "$(JAR)" >/dev/null |
 PLUGIN := com.btfviewer.eclipse
 VIEWER := ../builds/btf_viewer.html
 EMBEDDED := $(PLUGIN)/web/btf_viewer.html
-PLUGIN_VERSION ?= 0.1.1
-ifneq ($(OS),Windows_NT)
+PLUGIN_VERSION ?= 0.1.2
+ifeq ($(OS),Windows_NT)
+ifeq ($(origin ECLIPSE_HOME),undefined)
+ECLIPSE_HOME := $(shell \
+	for home in "$(WINDOWS_PROGRAM_FILES)/eclipse" "$(subst \,/,$(LOCALAPPDATA))/Programs/eclipse"; do \
+		[ -f "$$home/configuration/config.ini" ] || continue; \
+		set -- "$$home/plugins"/org.eclipse.equinox.p2.publisher.eclipse_*.jar; \
+		if [ -f "$$1" ]; then printf '%s' "$$home"; break; fi; \
+	done)
+endif
+else
 ifeq ($(shell uname -s),Darwin)
 ECLIPSE_HOME ?= /Applications/Eclipse.app/Contents/Eclipse
 endif
@@ -144,6 +153,8 @@ update-site-if-sdk:
 		done; \
 	elif [ -n "$(strip $(ECLIPSE_HOME))" ]; then \
 		echo 'SKIP: Eclipse installer ZIP. The configured SDK does not include the Equinox p2 publisher.'; \
+	else \
+		printf '%s\n' 'SKIP: Eclipse installer ZIP. No Eclipse installation with the Equinox p2 publisher was found.' '$(ECLIPSE_SDK_HINT)'; \
 	fi
 
 check-package:

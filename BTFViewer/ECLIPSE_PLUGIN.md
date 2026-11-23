@@ -1,6 +1,6 @@
 # Eclipse plug-in
 
-Bundle version `0.1.1`.
+Bundle version `0.1.2`.
 
 The optional Eclipse integration embeds the existing BTFViewer HTML/JavaScript
 application in an SWT `Browser`. Eclipse supplies workspace and local-file access,
@@ -20,10 +20,10 @@ Investigation, and report behavior stays in the shared viewer.
 
 ## Install
 
-Extract `com.btfviewer.eclipse_0.1.1-p2.zip` from the
+Extract `com.btfviewer.eclipse_0.1.2-p2.zip` from the
 [BTFViewer release package](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/releases),
 download the standalone installer asset, or use the
-[installer ZIP in the repository](builds/com.btfviewer.eclipse_0.1.1-p2.zip).
+[installer ZIP in the repository](builds/com.btfviewer.eclipse_0.1.2-p2.zip).
 Keep the p2 ZIP intact.
 
 1. If you previously installed BTFViewer in `dropins/`, close Eclipse,
@@ -32,6 +32,20 @@ Keep the p2 ZIP intact.
    Select the downloaded ZIP and choose **Add**.
 3. Expand the **BTFViewer** category, select **BTFViewer**, and complete
    the wizard. Restart Eclipse when prompted.
+
+To replace an installed 0.1.2 bundle with a rebuilt 0.1.2 archive,
+uninstall the installed copy, restart, then install the rebuilt archive.
+Open a trace and verify that the **BTFViewer** perspective opens with
+**BTF Analysis** on the right and **BTF CPU Load** at the bottom.
+The version alone cannot distinguish builds.
+
+If the views are missing, Eclipse may have reused the old bundle from its p2
+artifact cache. Close Eclipse, locate `com.btfviewer.eclipse_0.1.2.jar` in
+the installation's `plugins/` directory or its configured shared bundle pool,
+and compare its SHA-256 hash with the JAR under `plugins/` inside the rebuilt
+archive. If the hashes differ, back up the old JAR, replace it with the one
+from the archive, and start Eclipse once with `-clean`. For a shared bundle
+pool, check which other Eclipse installations use the bundle before replacing it.
 
 For Eclipse distributions without the installation wizard, build the bundle JAR
 with `make -C BTFViewer eclipse-package` and copy it to `dropins/` with Eclipse
@@ -64,6 +78,17 @@ If the editor cannot initialize its browser or fails to start within 30
 seconds, check the Eclipse Error Log. On Windows, verify that WebView2 is
 installed if the editor reports a browser initialization error.
 
+## Dock or detach panels
+
+Opening a trace activates the **BTFViewer** perspective. **BTF Analysis**
+shares the right-hand stack with Outline and Task List. **BTF CPU Load**
+shares the bottom stack with Problems, Tasks, Console, and Properties.
+The timeline stays in the editor.
+The views follow the active BTF trace editor. Drag a view tab outside the
+workbench to float it or drag it back to dock it. To restore the default layout,
+choose **Window > Perspective > Reset Perspective…** while in BTFViewer.
+You can also reopen an individual view from **Window > Show View**.
+
 ## Build from source
 
 Packaging rebuilds the shared HTML and compiles the OSGi JAR into
@@ -95,11 +120,12 @@ Use a Java runtime supported by that SDK. The publisher uses `JAVA_HOME`
 when set. Otherwise, it looks for Eclipse's bundled Java, a JDK discovered
 on Windows, or Java on `PATH`.
 
-Run the normal build with `ECLIPSE_HOME` set to the SDK directory. When the p2
-publisher is present, the build writes the installer ZIP and cleans up the
-temporary JAR after packaging it inside the ZIP. When the publisher is absent,
-the build skips Eclipse packaging. Use `eclipse-package` explicitly if you need
-a standalone JAR for manual installation.
+On Windows, the normal build checks `Program Files\eclipse` and
+`%LOCALAPPDATA%\Programs\eclipse` for the p2 publisher. Set `ECLIPSE_HOME`
+if Eclipse is installed elsewhere. The build writes the installer ZIP and
+cleans up the temporary JAR after packaging it. If Eclipse packaging is
+skipped, the build prints the reason. Use `eclipse-package` explicitly if
+you need a standalone JAR for manual installation.
 
 ```powershell
 $env:ECLIPSE_HOME = 'C:/Program Files/eclipse'
@@ -113,7 +139,7 @@ To build just the Eclipse installer and its web viewer, run
 make -C BTFViewer eclipse-update-site "ECLIPSE_HOME=/path/to/eclipse"
 ```
 
-Both builds write `com.btfviewer.eclipse_0.1.1-p2.zip` to `BTFViewer/builds`.
+Both builds write `com.btfviewer.eclipse_0.1.2-p2.zip` to `BTFViewer/builds`.
 Bump the Eclipse bundle version and rebuild the JAR before distributing
 changed plug-in contents through p2. Eclipse uses the feature and bundle
 versions to identify updates.

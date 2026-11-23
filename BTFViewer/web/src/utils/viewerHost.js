@@ -47,6 +47,8 @@ export function installViewerHostApi(api = {}) {
     setTheme: theme => callApi('setTheme', theme),
     openStatistics: () => callApi('openStatistics'),
     openTraceCompare: () => callApi('openTraceCompare'),
+    openPanel: panel => callApi('openPanel', panel),
+    returnPanel: panel => callApi('returnPanel', panel),
   })
   Object.defineProperty(window, 'BTFViewerHost', {
     configurable: true,

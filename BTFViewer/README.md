@@ -89,7 +89,7 @@ make web
 
 ### Eclipse plug-in
 
-1. Extract `com.btfviewer.eclipse_0.1.1-p2.zip` from the
+1. Extract `com.btfviewer.eclipse_0.1.2-p2.zip` from the
    [BTFViewer release package](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/releases).
    Keep the extracted p2 ZIP intact.
 2. In Eclipse, choose **Help → Install New Software → Add → Archive**.

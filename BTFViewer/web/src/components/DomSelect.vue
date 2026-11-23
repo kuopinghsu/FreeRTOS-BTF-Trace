@@ -32,7 +32,7 @@
         />
       </svg>
     </button>
-    <Teleport to="body">
+    <Teleport :to="menuDocument?.body || 'body'">
       <ul
         v-if="open"
         ref="listEl"
@@ -90,6 +90,7 @@ const listEl = ref(null)
 const open = ref(false)
 const listStyle = ref({})
 let closer = null
+const menuDocument = ref(null)
 
 const items = computed(() => normalizeDomSelectOptions(props.options))
 
@@ -107,21 +108,25 @@ function isSelected(opt) {
 function placeMenu() {
   const el = triggerEl.value || rootEl.value
   if (!el) return
+  const { innerWidth, innerHeight } = el.ownerDocument.defaultView
   listStyle.value = placeDomSelectList(el.getBoundingClientRect(), {
     maxHeight: props.maxHeight,
     zIndex: 12050,
+    viewportWidth: innerWidth,
+    viewportHeight: innerHeight,
   })
   if (props.menuWidth) {
-    const width = Math.min(props.menuWidth, window.innerWidth - 16)
-    Object.assign(listStyle.value, { width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px`, left: `${Math.max(8, Math.min(el.getBoundingClientRect().left, window.innerWidth - width - 8))}px` })
+    const width = Math.min(props.menuWidth, innerWidth - 16)
+    Object.assign(listStyle.value, { width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px`, left: `${Math.max(8, Math.min(el.getBoundingClientRect().left, innerWidth - width - 8))}px` })
   }
 }
 
 function unbindCloser() {
   if (!closer) return
-  document.removeEventListener('mousedown', closer)
-  document.removeEventListener('scroll', placeMenu, true)
-  window.removeEventListener('resize', placeMenu)
+  menuDocument.value.removeEventListener('mousedown', closer)
+  menuDocument.value.removeEventListener('scroll', placeMenu, true)
+  menuDocument.value.defaultView?.removeEventListener('resize', placeMenu)
+  menuDocument.value = null
   closer = null
 }
 
@@ -138,9 +143,11 @@ function bindCloser() {
     if (listEl.value?.contains(t)) return
     open.value = false
   }
-  document.addEventListener('mousedown', closer)
-  document.addEventListener('scroll', placeMenu, true)
-  window.addEventListener('resize', placeMenu)
+  const doc = rootEl.value.ownerDocument
+  menuDocument.value = doc
+  doc.addEventListener('mousedown', closer)
+  doc.addEventListener('scroll', placeMenu, true)
+  doc.defaultView?.addEventListener('resize', placeMenu)
 }
 
 watch(open, (v) => {

@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parent.parent
 PKG = ROOT / "btf_viewer_pkg"
@@ -485,11 +486,27 @@ def bundle(pkg_dir: Path, out_path: Path, monolith: Path) -> None:
             parts.append("\n")
 
     parts.append("\nif __name__ == \"__main__\":\n    main()\n")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("".join(parts), encoding="utf-8", newline="\n")
-    mode = out_path.stat().st_mode
-    out_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    write_bundle(out_path, "".join(parts))
     print(f"Bundled {len(BUNDLE_MODULES)} module sections -> {out_path}")
+
+def write_bundle(out_path: Path, source: str) -> None:
+    """Finish writing the new bundle before replacing the existing script."""
+    target = out_path.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.parent / f".btf-{uuid4().hex}.tmp"
+    output = temporary.open("x", encoding="utf-8", newline="\n")
+    try:
+        with output:
+            output.write(source)
+        # Windows chmod only changes the read-only attribute. Keep the
+        # temporary file writable so it can be removed if replacement fails.
+        if sys.platform != "win32":
+            mode = target.stat().st_mode if target.exists() else temporary.stat().st_mode
+            temporary.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -501,7 +518,12 @@ def main() -> None:
     if not args.pkg.is_dir():
         print(f"error: package not found: {args.pkg}", file=sys.stderr)
         raise SystemExit(1)
-    bundle(args.pkg, args.output, args.monolith_doc)
+    try:
+        bundle(args.pkg, args.output, args.monolith_doc)
+    except OSError as error:
+        path = error.filename or str(args.output)
+        detail = f" [WinError {error.winerror}]" if getattr(error, "winerror", None) else ""
+        raise SystemExit(f"error building {str(args.output)!r}: {error.strerror}{detail}: {path!r}") from error
 
 if __name__ == "__main__":
     main()

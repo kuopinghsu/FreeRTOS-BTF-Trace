@@ -5915,14 +5915,17 @@
     </div>
   </div>
 
+  <Teleport :to="plotTarget || 'body'" :disabled="!plotTarget">
   <div
     v-if="openPlotRef"
     class="plot-dialog-overlay"
     @click.self="closePlot"
+    @keydown.esc.stop.prevent="closePlot"
   >
     <div
       class="plot-dialog"
       role="dialog"
+      tabindex="-1"
       aria-modal="true"
       :aria-label="plotData?.title || 'Metrics plot'"
     >
@@ -6465,6 +6468,7 @@
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <script setup>
@@ -6703,6 +6707,7 @@ const props = defineProps({
   tabs:    { type: Array, default: () => [] },
   statsPaused: { type: Boolean, default: false },
   openPlot: { type: Object, default: null },
+  plotTarget: { type: Object, default: null },
   sectionHeights: { type: Object, default: null },
   scopeToCursors: { type: Boolean, default: true },
   analysisSettings: { type: Object, default: () => ({}) },
@@ -7490,10 +7495,11 @@ function quantizeSectionHeight(id, rawH, rowCount = null) {
 }
 
 function onTableResizeStart(id, e, rowCount = null) {
-  _tableResize = { id, startY: e.clientY, startH: tableHeight(id), rowCount }
-  document.body.classList.add('row-resizing')
-  document.addEventListener('mousemove', onTableResizeMove)
-  document.addEventListener('mouseup', onTableResizeEnd)
+  const doc = e.currentTarget.ownerDocument
+  _tableResize = { id, startY: e.clientY, startH: tableHeight(id), rowCount, doc }
+  doc.body.classList.add('row-resizing')
+  doc.addEventListener('mousemove', onTableResizeMove)
+  doc.addEventListener('mouseup', onTableResizeEnd)
 }
 
 function onTableResizeMove(e) {
@@ -7503,10 +7509,11 @@ function onTableResizeMove(e) {
 }
 
 function onTableResizeEnd() {
+  const doc = _tableResize?.doc
   _tableResize = null
-  document.body.classList.remove('row-resizing')
-  document.removeEventListener('mousemove', onTableResizeMove)
-  document.removeEventListener('mouseup', onTableResizeEnd)
+  doc?.body?.classList.remove('row-resizing')
+  doc?.removeEventListener('mousemove', onTableResizeMove)
+  doc?.removeEventListener('mouseup', onTableResizeEnd)
   emit('update:sectionHeights', { ...localSectionHeights.value })
 }
 

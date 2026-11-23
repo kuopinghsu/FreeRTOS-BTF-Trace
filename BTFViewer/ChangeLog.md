@@ -10,6 +10,11 @@ section.
 
 ## Unreleased
 
+- Fixed Eclipse panel theme updates, automatic docking when returning to a trace that loaded in the background, and SVG exports that omitted the docked CPU Load chart.
+
+- The BTFViewer perspective in Eclipse docks Analysis (including Statistics and AI) with Outline and Task List on the right, and CPU Load with Console and Properties at the bottom. Both views follow the active trace editor and can float independently. **Reset Perspective** restores the default layout. Available in Eclipse plug-in 0.1.2.
+- Histograms and other Statistics plot dialogs open over the timeline in Eclipse, including when the Analysis view is floating.
+
 ## v1.0.2
 
 ### 2026-11-22

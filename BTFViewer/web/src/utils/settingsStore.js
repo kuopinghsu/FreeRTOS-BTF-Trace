@@ -267,13 +267,16 @@ export function saveSettings(settings) {
 export function applySettingsToRuntime(settings) {
   const s = normalizeSettings(settings)
   syncTimelineLayoutFromSettings(s)
-  if (typeof document !== 'undefined') {
-    document.documentElement.style.setProperty('--ui-font-size', `${s.uiFontSize}px`)
-    document.documentElement.style.setProperty('--type-section', `${Math.round(s.uiFontSize * 1.05)}px`)
-    document.documentElement.style.setProperty('--type-body', `${s.uiFontSize}px`)
-    document.documentElement.style.setProperty('--type-meta', `${Math.max(11, Math.round(s.uiFontSize * 0.92))}px`)
-  }
+  if (typeof document !== 'undefined') applyUiFontSize(document, s.uiFontSize)
   return s
+}
+
+export function applyUiFontSize(doc, size) {
+  const style = doc.documentElement.style
+  style.setProperty('--ui-font-size', `${size}px`)
+  style.setProperty('--type-section', `${Math.round(size * 1.05)}px`)
+  style.setProperty('--type-body', `${size}px`)
+  style.setProperty('--type-meta', `${Math.max(11, Math.round(size * 0.92))}px`)
 }
 
 /** Format taskDeadlines map for the Settings Display textarea. */

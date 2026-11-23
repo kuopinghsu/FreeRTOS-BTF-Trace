@@ -638,7 +638,7 @@ describe('AI endpoint helpers', () => {
     assert.match(panel, /v-for="t in visibleTemplates"/)
     assert.match(panel, /v-for="group in templateMenuGroups"/)
     assert.match(panel, /class="ai-more-col"/)
-    assert.match(panel, /<Teleport to="body">/)
+    assert.match(panel, /<Teleport :to="panelDocument\.body">/)
     assert.deepEqual(
       AI_TEMPLATE_MENU_GROUPS.at(-1),
       { label: 'What-if / Optimize', ids: ['what_if', 'optimize'] },

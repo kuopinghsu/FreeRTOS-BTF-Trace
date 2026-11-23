@@ -1,5 +1,6 @@
 <template>
   <DomSelect
+    ref="select"
     v-bind="$attrs"
     :model-value="prefs.format"
     :options="options"
@@ -11,7 +12,7 @@
     @keydown.stop
     @update:model-value="onCommand"
   />
-  <Teleport to="body">
+  <Teleport :to="renameDocument?.body || 'body'">
     <div
       v-if="renaming"
       class="tag-alias-overlay"
@@ -69,6 +70,8 @@ const props = defineProps({ channel: { type: String, required: true }, value: { 
 const emit = defineEmits(['change'])
 const prefs = computed(() => tagPreferences(props.value))
 const renaming = ref(false)
+const select = ref(null)
+const renameDocument = ref(null)
 const draftAlias = ref('')
 const aliasInput = ref(null)
 const cancelButton = ref(null)
@@ -83,7 +86,8 @@ function saveAlias() {
 }
 function onCommand(command) {
   if (command !== 'rename') { emit('change', command); return }
-  renameTrigger = document.activeElement
+  renameDocument.value = select.value.$el.ownerDocument
+  renameTrigger = renameDocument.value.activeElement
   draftAlias.value = prefs.value.alias || ''
   renaming.value = true
   nextTick(() => { aliasInput.value?.focus(); aliasInput.value?.select() })

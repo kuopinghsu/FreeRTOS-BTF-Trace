@@ -90,7 +90,7 @@ make web
 ### Eclipse 外掛程式
 
 1. 從 [BTFViewer 發行套件](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/releases)
-   取出 `com.btfviewer.eclipse_0.1.1-p2.zip`，保留此 p2 ZIP 的原始格式。
+   取出 `com.btfviewer.eclipse_0.1.2-p2.zip`，保留此 p2 ZIP 的原始格式。
 2. 在 Eclipse 中選擇 **Help → Install New Software → Add → Archive**，
    選取 p2 ZIP，然後按 **Add**。
 3. 在 **BTFViewer** 類別下勾選 **BTFViewer**，完成安裝精靈，並依提示重新啟動 Eclipse。

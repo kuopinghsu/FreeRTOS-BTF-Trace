@@ -11,7 +11,8 @@ test('standalone host exposes only the explicit API', async () => {
   })
   assert.equal(window.BTFViewerHost.type, 'standalone')
   assert.deepEqual(Object.keys(window.BTFViewerHost).sort(), [
-    'notify', 'openStatistics', 'openTraceCompare', 'openTraceUrl', 'setTheme', 'type',
+    'notify', 'openPanel', 'openStatistics', 'openTraceCompare', 'openTraceUrl',
+    'returnPanel', 'setTheme', 'type',
   ])
   await window.BTFViewerHost.setTheme('dark')
   assert.deepEqual(calls, ['dark'])

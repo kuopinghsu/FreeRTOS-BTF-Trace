@@ -467,7 +467,7 @@
         >
           {{ inlinePrerequisite }}
         </p>
-        <Teleport to="body">
+        <Teleport :to="panelDocument.body">
           <div
             v-if="moreOpen"
             ref="moreMenuEl"
@@ -718,7 +718,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import DomSelect from './DomSelect.vue'
 import { emptyStateMessage } from '../utils/emptyState.js'
 import { statusCueText } from '../utils/uiTheme.js'
@@ -887,6 +887,7 @@ import { templateRefEl } from '../utils/templateRefEl.js'
 import { extractNotebookProposal, NB_PROPOSAL_REPLY_TOKENS } from '../utils/investigationAi.js'
 
 const props = defineProps({
+  panelDocument: { type: Object, default: null },
   analysisContext: { type: Object, default: null },
   /** §9 — compact Notebook context shown while collaborating; null otherwise. */
   notebookCollab: { type: Object, default: null },
@@ -1314,18 +1315,20 @@ function templateDisabled(t) {
 
 function placeMoreMenu() {
   const btn = templateRefEl(moreBtnEl.value)
-  if (!btn) return
+  const view = panelDocument.value.defaultView
+  if (!btn || !view) return
   const r = btn.getBoundingClientRect()
+  const { innerWidth, innerHeight } = view
   const gap = 4
   const spaceAbove = r.top
-  const spaceBelow = window.innerHeight - r.bottom
+  const spaceBelow = innerHeight - r.bottom
   const maxH = Math.max(160, Math.min(560, (spaceAbove >= spaceBelow ? spaceAbove : spaceBelow) - 12))
-  const right = Math.max(8, window.innerWidth - r.right)
+  const right = Math.max(8, innerWidth - r.right)
   if (spaceAbove >= spaceBelow) {
     moreMenuStyle.value = {
       position: 'fixed',
       right: `${right}px`,
-      bottom: `${window.innerHeight - r.top + gap}px`,
+      bottom: `${innerHeight - r.top + gap}px`,
       maxHeight: `${maxH}px`,
     }
   } else {
@@ -1491,16 +1494,17 @@ function onSplitPointerMove(ev) {
 
 function endSplitDrag() {
   if (!splitDrag) return
-  window.removeEventListener('mousemove', onSplitPointerMove)
-  window.removeEventListener('mouseup', endSplitDrag)
+  splitDrag.view.removeEventListener('mousemove', onSplitPointerMove)
+  splitDrag.view.removeEventListener('mouseup', endSplitDrag)
   splitDrag = null
   saveAiSplitBottom(splitBottom.value)
 }
 
 function onSplitPointerDown(ev) {
-  splitDrag = { startY: ev.clientY, startH: splitBottom.value }
-  window.addEventListener('mousemove', onSplitPointerMove)
-  window.addEventListener('mouseup', endSplitDrag)
+  const view = ev.currentTarget.ownerDocument.defaultView
+  splitDrag = { startY: ev.clientY, startH: splitBottom.value, view }
+  view.addEventListener('mousemove', onSplitPointerMove)
+  view.addEventListener('mouseup', endSplitDrag)
 }
 
 function setErrorStatus(msg) {
@@ -1677,7 +1681,7 @@ function onMsgClick(ev) {
 }
 
 function logSelectedText() {
-  return String(window.getSelection?.() || '').replace(/\u2029/g, '\n').trim()
+  return String(panelDocument.value.getSelection?.() || '').replace(/\u2029/g, '\n').trim()
 }
 
 function onLogContextMenu(ev) {
@@ -1715,7 +1719,9 @@ function copyConversation() {
 
 async function writeClipboard(text) {
   try {
-    await navigator.clipboard.writeText(text)
+    const clipboard = panelDocument.value.defaultView?.navigator.clipboard
+    if (!clipboard) throw new Error('Clipboard unavailable')
+    await clipboard.writeText(text)
     status.value = 'Copied to clipboard.'
   } catch {
     status.value = 'Clipboard is not available in this browser.'
@@ -2876,21 +2882,25 @@ function onDocKeyDown(ev) {
   closeLogMenu()
 }
 
-onMounted(() => {
-  document.addEventListener('mousedown', onDocMouseDown)
-  document.addEventListener('keydown', onDocKeyDown)
-  window.addEventListener('resize', placeMoreMenu)
-})
+const panelDocument = computed(() => props.panelDocument || document)
+watch(panelDocument, (doc, previous, onCleanup) => {
+  const view = doc.defaultView
+  doc.addEventListener('mousedown', onDocMouseDown)
+  doc.addEventListener('keydown', onDocKeyDown)
+  view?.addEventListener('resize', placeMoreMenu)
+  onCleanup(() => {
+    closeMore()
+    closeLogMenu()
+    endSplitDrag()
+    doc.removeEventListener('mousedown', onDocMouseDown)
+    doc.removeEventListener('keydown', onDocKeyDown)
+    view?.removeEventListener('resize', placeMoreMenu)
+  })
+}, { immediate: true })
 
 watch(messages, () => emit('sessionChange'), { deep: true })
 watch(investigationPlan, () => emit('sessionChange'))
 
-onBeforeUnmount(() => {
-  endSplitDrag()
-  document.removeEventListener('mousedown', onDocMouseDown)
-  document.removeEventListener('keydown', onDocKeyDown)
-  window.removeEventListener('resize', placeMoreMenu)
-})
 
 defineExpose({
   refreshLoadedTabs,

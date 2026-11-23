@@ -4,12 +4,15 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.jface.util.IPropertyChangeListener;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.SWTError;
 import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.browser.WindowEvent;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
@@ -18,6 +21,7 @@ import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorSite;
 import org.eclipse.ui.IFileEditorInput;
 import org.eclipse.ui.IURIEditorInput;
+import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.part.EditorPart;
@@ -27,6 +31,8 @@ import com.btfviewer.eclipse.bridge.BTFBrowserBridge;
 import com.btfviewer.eclipse.bridge.BTFBrowserMessage;
 import com.btfviewer.eclipse.resources.ViewerResourceServer;
 import com.btfviewer.eclipse.util.JsonUtil;
+import com.btfviewer.eclipse.views.BTFPanelView;
+import com.btfviewer.eclipse.views.BTFPerspective;
 
 /** Read-only Eclipse shell around the existing BTFViewer HTML application. */
 public final class BTFEditor extends EditorPart {
@@ -43,6 +49,10 @@ public final class BTFEditor extends EditorPart {
     private Display display;
     private final Runnable startupTimeout = this::reportStartupTimeout;
     private IPropertyChangeListener themeListener;
+    private final Set<BTFPanelView> pendingPanels = new LinkedHashSet<>();
+    private BTFPanelView openingView;
+    private boolean traceLoaded;
+    private boolean perspectiveOpened;
 
     @Override
     public void init(IEditorSite site, IEditorInput input) throws PartInitException {
@@ -88,6 +98,7 @@ public final class BTFEditor extends EditorPart {
             }
             startingBrowser = false;
             bridge = new BTFBrowserBridge(browser, this::onBrowserMessage);
+            browser.addOpenWindowListener(this::attachPanelPopup);
             setStatus("Loading viewer...");
             if (!browser.setUrl(resources.viewerUri().toASCIIString())) {
                 throw new IOException("SWT Browser rejected the local viewer URL");
@@ -138,14 +149,100 @@ public final class BTFEditor extends EditorPart {
                 call("openTraceUrl", resources.traceUri().toASCIIString(), traceName);
                 setStatus("Loading trace...");
             }
-            case "traceLoaded" -> setStatus("Ready");
+            case "traceLoaded" -> {
+                setStatus("Ready");
+                if (!traceLoaded) {
+                    traceLoaded = true;
+                    showTracePerspective();
+                }
+            }
             case "traceLoadFailed" -> {
                 setStatus(statusMessage("Error", message.stringValue("message")));
                 BTFViewerPlugin.log("BTF trace load failed: " + traceDescription, null);
             }
             case "statusChanged" -> setStatus(statusMessage(
                     message.stringValue("status"), message.stringValue("message")));
+            case "focusTimeline" -> {
+                getSite().getShell().forceActive();
+                getSite().getPage().activate(this);
+            }
+            case "revealAnalysis" -> revealAnalysis();
+            case "plotOpened" -> {
+                getSite().getPage().activate(this);
+                browser.execute("document.querySelector('.plot-dialog')?.focus()");
+            }
+            case "panelOpenFailed" -> {
+                String panel = message.stringValue("panel");
+                if (openingView != null && openingView.panel().equals(panel)) finishPanelRequest();
+            }
             default -> { /* POC receives and validates future messages but has no native action. */ }
+        }
+    }
+
+    private void showTracePerspective() {
+        IWorkbenchPage page = getSite().getPage();
+        if (!traceLoaded || perspectiveOpened || page.getActiveEditor() != this) return;
+        perspectiveOpened = true;
+        page.setPerspective(PlatformUI.getWorkbench().getPerspectiveRegistry().findPerspectiveWithId(BTFPerspective.ID));
+        for (String id : new String[] { BTFPanelView.ANALYSIS_ID, BTFPanelView.CPU_ID }) {
+            if (page.findView(id) instanceof BTFPanelView view) view.refresh();
+        }
+    }
+
+    private void revealAnalysis() {
+        IWorkbenchPage page = getSite().getPage();
+        if (!traceLoaded || page.getActiveEditor() != this) return;
+        try {
+            if (page.showView(BTFPanelView.ANALYSIS_ID) instanceof BTFPanelView view) view.refresh();
+        } catch (PartInitException error) {
+            BTFViewerPlugin.log("Unable to reveal BTF Analysis", error);
+        }
+    }
+
+    public void requestPanel(BTFPanelView view) {
+        if (!traceLoaded || view == openingView) return;
+        pendingPanels.add(view);
+        openNextPanel();
+    }
+
+    private void openNextPanel() {
+        if (openingView != null || browser == null || browser.isDisposed()) return;
+        while (!pendingPanels.isEmpty()) {
+            BTFPanelView view = pendingPanels.iterator().next();
+            pendingPanels.remove(view);
+            if (!view.canAttach(this)) continue;
+            openingView = view;
+            call("openPanel", view.panel());
+            display.timerExec(10_000, panelTimeout);
+            return;
+        }
+    }
+
+    private final Runnable panelTimeout = this::finishPanelRequest;
+
+    private void finishPanelRequest() {
+        display.timerExec(-1, panelTimeout);
+        openingView = null;
+        display.asyncExec(this::openNextPanel);
+    }
+
+    private void attachPanelPopup(WindowEvent event) {
+        BTFPanelView view = openingView;
+        if (view == null) return;
+        event.required = true;
+        try {
+            if (view.canAttach(this)) {
+                event.browser = view.attach(() -> {
+                    if (browser != null && !browser.isDisposed()) call("returnPanel", view.panel());
+                });
+                event.browser.addCloseWindowListener(closeEvent -> display.asyncExec(() -> {
+                    if (!closeEvent.widget.isDisposed()) view.clearBrowser();
+                }));
+            }
+        } catch (SWTError | RuntimeException error) {
+            BTFViewerPlugin.log("Unable to open BTFViewer panel: " + view.panel(), error);
+        } finally {
+            finishPanelRequest();
         }
     }
 
@@ -179,7 +276,14 @@ public final class BTFEditor extends EditorPart {
 
     @Override
     public void setFocus() {
-        if (browser != null && !browser.isDisposed()) browser.setFocus();
+        if (browser != null && !browser.isDisposed()) {
+            browser.setFocus();
+            if (traceLoaded && !perspectiveOpened) {
+                display.asyncExec(() -> {
+                    if (browser != null && !browser.isDisposed()) showTracePerspective();
+                });
+            }
+        }
     }
 
     @Override public boolean isDirty() { return false; }
@@ -189,12 +293,19 @@ public final class BTFEditor extends EditorPart {
 
     @Override
     public void dispose() {
-        if (display != null && !display.isDisposed()) display.timerExec(-1, startupTimeout);
+        openingView = null;
+        pendingPanels.clear();
+        if (display != null && !display.isDisposed()) {
+            display.timerExec(-1, startupTimeout);
+            display.timerExec(-1, panelTimeout);
+        }
         if (themeListener != null) {
             PlatformUI.getWorkbench().getThemeManager().removePropertyChangeListener(themeListener);
             themeListener = null;
         }
-        if (bridge != null && !bridge.isDisposed()) bridge.dispose();
+        if (browser != null && !browser.isDisposed() && bridge != null && !bridge.isDisposed()) {
+            bridge.dispose();
+        }
         if (resources != null) resources.close();
         bridge = null;
         resources = null;

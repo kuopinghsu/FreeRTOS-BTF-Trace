@@ -113,7 +113,7 @@ describe('AI conversation turn layout', () => {
     assert.match(app, /Ctrl\+K/)
     assert.match(aiPanel, /templateMenuGroups/)
     assert.match(aiPanel, /ai-more-col/)
-    assert.match(aiPanel, /<Teleport to="body">/)
+    assert.match(aiPanel, /<Teleport :to="panelDocument\.body">/)
     assert.doesNotMatch(aiPanel, /moreBtnEl\.value =/)
     assert.match(app, /body:has\(\.app:not\(\.dark\)\)/)
     assert.match(aiPanel, /class="ai-plan-status"/)

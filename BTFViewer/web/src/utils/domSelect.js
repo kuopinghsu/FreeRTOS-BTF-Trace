@@ -3,15 +3,15 @@
  * Used by DomSelect so option lists stay in the page DOM for tab capture.
  *
  * @param {DOMRectReadOnly | { left: number, top: number, width: number, bottom: number }} rect
- * @param {{ maxHeight?: number, gap?: number, zIndex?: number }} [opts]
+ * @param {{ maxHeight?: number, gap?: number, zIndex?: number, viewportWidth?: number, viewportHeight?: number }} [opts]
  * @returns {Record<string, string>}
  */
 export function placeDomSelectList(rect, opts = {}) {
   const maxH = Number(opts.maxHeight) || 280
   const gap = Number(opts.gap) || 2
   const zIndex = Number(opts.zIndex) || 12050
-  const vw = typeof window !== 'undefined' ? window.innerWidth : 1024
-  const vh = typeof window !== 'undefined' ? window.innerHeight : 768
+  const vw = opts.viewportWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1024)
+  const vh = opts.viewportHeight ?? (typeof window !== 'undefined' ? window.innerHeight : 768)
   const left = Math.max(8, Math.min(Math.round(rect.left), vw - 8))
   const width = Math.round(rect.width)
   const spaceBelow = vh - rect.bottom - 8

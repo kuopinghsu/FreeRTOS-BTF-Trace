@@ -74,14 +74,13 @@ public final class BTFPanelView extends ViewPart {
         return CPU_ID.equals(getSite().getId()) ? "cpu" : "analysis";
     }
 
-    public Browser attach(String traceName, Runnable onClosed) {
+    public Browser attach(Runnable onClosed) {
         browser = new Browser(parent, "win32".equals(SWT.getPlatform()) ? SWT.EDGE : SWT.NONE);
         browser.addDisposeListener(event -> {
             browser = null;
             onClosed.run();
         });
         layout.topControl = browser;
-        setContentDescription(traceName);
         parent.layout();
         return browser;
     }
@@ -90,7 +89,6 @@ public final class BTFPanelView extends ViewPart {
         if (browser != null && !browser.isDisposed()) browser.dispose();
         if (hint != null && !hint.isDisposed()) {
             layout.topControl = hint;
-            setContentDescription("");
             parent.layout();
         }
     }

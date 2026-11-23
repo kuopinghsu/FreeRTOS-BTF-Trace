@@ -11,7 +11,8 @@ public record BTFBrowserMessage(String type, String json) {
             "\\\"type\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"\\\\])*)\\\"");
     private static final Set<String> ALLOWED_TYPES = Set.of(
             "viewerReady", "traceLoaded", "traceLoadFailed", "timestampSelected",
-            "evidenceSelected", "compareRequested", "exportRequested", "statusChanged");
+            "evidenceSelected", "compareRequested", "exportRequested", "statusChanged",
+            "panelOpenFailed", "plotOpened", "focusTimeline", "revealAnalysis");
 
     public static BTFBrowserMessage parse(String json) {
         if (json == null || json.length() > 256_000) {

@@ -180,7 +180,7 @@ For the Web application, open `BTFViewer/builds/btf_viewer.html` in a browser.
 
 Desktop requirements: Python 3.8+ and PySide6 6.4 or later.
 
-To install BTFViewer in Eclipse, extract `com.btfviewer.eclipse_0.1.1-p2.zip`
+To install BTFViewer in Eclipse, extract `com.btfviewer.eclipse_0.1.2-p2.zip`
 from the [BTFViewer release package](https://github.com/kuopinghsu/FreeRTOS-BTF-Trace/releases).
 Keep the extracted p2 ZIP intact. In Eclipse, choose **Help → Install New
 Software… → Add… → Archive…**, select the p2 ZIP, install **BTFViewer**, and

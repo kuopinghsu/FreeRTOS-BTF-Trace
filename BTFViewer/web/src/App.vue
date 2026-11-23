@@ -1,5 +1,6 @@
 <template>
   <div
+    ref="viewerRoot"
     class="app"
     :class="{ dark: timelineOptions.darkMode, 'drag-over': dragOver, 'focus-mode': focusMode && !!trace }"
     @dragenter.prevent="onDragEnter"
@@ -10,6 +11,7 @@
     <!-- Toolbar -->
     <Toolbar
       ref="toolbarRef"
+      :eclipse-host="eclipseHost"
       :model-value="timelineOptions"
       :trace-info="traceInfo"
       :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
@@ -652,7 +654,7 @@
         </div>
 
         <div
-          v-if="trace && timelineOptions.showCpuLoad"
+          v-if="trace && timelineOptions.showCpuLoad && !eclipseHost"
           class="panel-resizer-h"
           role="separator"
           aria-label="Resize CPU load panel"
@@ -660,10 +662,11 @@
           @mousedown.prevent="onCpuLoadResizeStart"
         />
 
+        <Teleport :to="eclipsePanels.cpu?.target || 'body'" :disabled="!eclipsePanels.cpu">
         <CpuLoadPanel
-          v-if="trace && timelineOptions.showCpuLoad"
+          v-if="trace && (eclipseHost ? eclipsePanels.cpu : timelineOptions.showCpuLoad)"
           ref="cpuLoadPanelRef"
-          :style="{ height: cpuLoadPaneHeight + 'px', flexShrink: 0 }"
+          :style="{ height: eclipsePanels.cpu ? '100%' : cpuLoadPaneHeight + 'px', flexShrink: 0 }"
           :trace="trace"
           :viewport="timelineViewport"
           :view-mode="timelineOptions.viewMode"
@@ -686,10 +689,11 @@
           @viewport-change="onCpuLoadViewportChange"
           @toggle-expand-all="onCpuLoadToggleExpandAll"
         />
+        </Teleport>
       </div>
 
       <div
-        v-if="trace"
+        v-if="trace && !eclipseHost"
         class="panel-resizer"
         :class="{ 'is-collapsed': rightPanelCollapsed }"
         role="separator"
@@ -701,14 +705,16 @@
       />
 
       <!-- Right panel -->
+      <Teleport :to="eclipsePanels.analysis?.target || 'body'" :disabled="!eclipsePanels.analysis">
       <div
         v-if="trace"
+        v-show="!eclipseHost || eclipsePanels.analysis"
         class="right-panel"
-        :class="{ collapsed: rightPanelCollapsed }"
-        :style="{ width: (rightPanelCollapsed ? 44 : effectiveRightPanelWidth) + 'px' }"
+        :class="{ collapsed: rightPanelCollapsed && !eclipsePanels.analysis }"
+        :style="{ width: eclipsePanels.analysis ? '100%' : (rightPanelCollapsed ? 44 : effectiveRightPanelWidth) + 'px' }"
       >
         <div
-          v-show="!rightPanelCollapsed"
+          v-show="!rightPanelCollapsed || eclipsePanels.analysis"
           class="rp-main"
         >
           <div class="rp-page-header">
@@ -716,7 +722,7 @@
               {{ rightPanelTitle }}
             </h2>
             <button
-              v-if="reportExpandAllowed"
+              v-if="reportExpandAllowed && !eclipsePanels.analysis"
               type="button"
               class="rp-expand-btn"
               data-testid="rp-expand-btn"
@@ -951,6 +957,7 @@
             <div
               v-else-if="rightPanelTab !== 'ai' || !aiTabVisible"
               class="panel-page panel-page-stats"
+              ref="statsPageEl"
             >
               <div class="panel-section flex-fill">
                 <StatisticsPanel
@@ -960,6 +967,7 @@
                   :tabs="tabs"
                   :stats-paused="statsPaused"
                   :open-plot="activeTab?.openPlot ?? null"
+                  :plot-target="eclipseHost ? viewerRoot : null"
                   :section-heights="statsSectionHeights"
                   :scope-to-cursors="activeTab?.scopeToCursors !== false"
                   :analysis-settings="appSettings"
@@ -984,7 +992,7 @@
                   @open-pair-heatmap="onOpenPairHeatmap"
                   @open-pair-chord="onOpenPairChord"
                   @filter-timeline="onStatsFilterTimeline"
-                  @open-settings="openSettingsDialog"
+                  @open-settings="openSettingsFromAnalysis"
                   @query-ai="queryAnalysisWithAi"
                   @clear-scope="onStatsScopeChange(false)"
                   @clear-filter="clearAllActiveFilters"
@@ -1009,6 +1017,7 @@
               <div class="panel-section flex-fill">
                 <AiAssistantPanel
                   ref="aiPanelRef"
+                  :panel-document="eclipsePanels.analysis?.target.ownerDocument"
                   :analysis-context="aiAnalysisContext"
                   :notebook-collab="notebookCollab"
                   :show-clear-filters="!!activeFilterSummaryLabel"
@@ -1027,7 +1036,7 @@
                   :execute-tools="onAiExecuteTools"
                   :undo-tools="onAiUndoTools"
                   :get-gui-state="aiGuiStateForReport"
-                  @open-settings="openSettingsDialog('ai')"
+                  @open-settings="openSettingsFromAnalysis('ai')"
                   @update:response-language="onAiResponseLanguage"
                   @jump="onAiJump"
                   @range="onAiRange"
@@ -1165,6 +1174,7 @@
             <span class="rail-tip">AI</span>
           </button>
           <button
+            v-if="!eclipsePanels.analysis"
             type="button"
             class="rail-btn rail-collapse"
             :aria-label="rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'"
@@ -1206,11 +1216,13 @@
           </button>
         </nav>
       </div>
+      </Teleport>
     </div>
 
     <!-- Settings dialog -->
     <SettingsDialog
       v-if="settingsOpen"
+      :eclipse-host="eclipseHost"
       :model-value="appSettings"
       :time-scale="trace?.timeScale || 'ns'"
       :initial-tab="settingsInitialTab"
@@ -1317,12 +1329,12 @@
               <div class="k">
                 F
               </div><div>Fit Trace — zoom to show the entire trace</div>
-              <div class="k">
+              <div v-if="!eclipseHost" class="k">
                 Shift+F
-              </div><div>Toggle Focus Mode</div>
-              <div class="k">
+              </div><div v-if="!eclipseHost">Toggle Focus Mode</div>
+              <div v-if="!eclipseHost" class="k">
                 Esc
-              </div><div>Exit Focus Mode</div>
+              </div><div v-if="!eclipseHost">Exit Focus Mode</div>
               <div class="k">
                 G
               </div><div>Toggle grid</div>
@@ -1456,9 +1468,9 @@
               <div class="k">
                 CPU LOAD
               </div><div>Shows global load by default, or task-specific load when a task is selected</div>
-              <div class="k">
+              <div v-if="!eclipseHost" class="k">
                 Load toggle
-              </div><div>Use the toolbar <b>Load</b> button to show/hide the CPU load panel</div>
+              </div><div v-if="!eclipseHost">Use the toolbar <b>Load</b> button to show/hide the CPU load panel</div>
               <div class="k">
                 CPU overlay
               </div><div>Cursors, bookmarks, and annotations appear as vertical lines; hover shows load % on each row</div>
@@ -2108,6 +2120,7 @@ import {
   uiThemeTokens,
 } from './utils/uiTheme.js'
 import { installViewerHostApi, notifyViewerHost } from './utils/viewerHost.js'
+import { createEclipsePanelWindow } from './utils/eclipsePanelWindow.js'
 import { experimentPercentsFromCompare, newUserInvestigationTemplate } from './utils/aiCase.js'
 import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
 import {
@@ -2127,7 +2140,7 @@ import {
   commandPaletteRank,
   workspacePresetCollapsed,
 } from './config.js'
-import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, normalizeSettings,
+import { loadSettings, saveSettings, applySettingsToRuntime, applyUiFontSize, resizeTabCursors, normalizeSettings,
   loadAiBaselineProfile, saveAiBaselineProfile,
   loadAiUserInvestigationTemplates, saveAiUserInvestigationTemplates,
   clearAiPersistentState,
@@ -2260,6 +2273,7 @@ const timelinePanelRef = ref(null)
 const findPanelRef = ref(null)
 const toolbarRef = ref(null)
 const statsPanelRef = ref(null)
+const statsPageEl = ref(null)
 const aiPanelRef = ref(null)
 const marksPanelRef = ref(null)
 const leftPaneRef = ref(null)
@@ -2461,6 +2475,35 @@ function loadRpCollapsed() {
   try { return localStorage.getItem(RP_COLLAPSED_KEY) === '1' } catch { return false }
 }
 const rightPanelCollapsed = ref(loadRpCollapsed())
+const eclipseHost = ref(false)
+const viewerRoot = ref(null)
+const eclipsePanels = reactive({ analysis: null, cpu: null })
+
+function openEclipsePanel(panel) {
+  if (!Object.hasOwn(eclipsePanels, panel) || eclipsePanels[panel]) return
+  try {
+    const view = createEclipsePanelWindow(panel, timelineOptions.darkMode)
+    applyUiFontSize(view.target.ownerDocument, appSettings.uiFontSize)
+    const shortcuts = new AbortController()
+    view.target.ownerDocument.defaultView.addEventListener('keydown', onEclipsePanelKeydown, {
+      signal: shortcuts.signal,
+    })
+    eclipsePanels[panel] = markRaw({ ...view, shortcuts })
+    if (panel === 'analysis' && rightPanelTab.value === 'find') {
+      nextTick(() => findPanelRef.value?.focusInput())
+    }
+  } catch {
+    notifyViewerHost('panelOpenFailed', { panel })
+    showToast('Could not open the Eclipse panel.', 'error')
+  }
+}
+
+function returnEclipsePanel(panel) {
+  if (!Object.hasOwn(eclipsePanels, panel)) return
+  eclipsePanels[panel]?.shortcuts.abort()
+  eclipsePanels[panel] = null
+}
+
 function setRightPanelCollapsed(next) {
   if (next && reportExpanded.value) setReportExpanded(false)
   rightPanelCollapsed.value = next
@@ -2476,6 +2519,41 @@ function selectRightPanelTab(tab) {
   if (rightPanelCollapsed.value) setRightPanelCollapsed(false)
   if (reportExpanded.value && !reportExpandTabAllowed(tab)) setReportExpanded(false)
 }
+
+function openAnalysisTab(tab) {
+  selectRightPanelTab(tab)
+  if (eclipseHost.value && trace.value) notifyViewerHost('revealAnalysis')
+}
+
+const pendingStatsSection = ref(null)
+
+function openStatsSection(id, options = {}) {
+  pendingStatsSection.value = { tabId: activeTabId.value, options: { id, expand: true, scroll: id, ...options } }
+  openAnalysisTab('stats')
+}
+
+watch([pendingStatsSection, activeTabId, rightPanelTab, statsPageEl, statsPanelRef, () => eclipsePanels.analysis],
+  ([request, tabId, panel, page, stats, analysis], _, onCleanup) => {
+    if (!request) return
+    if (request.tabId !== tabId || panel !== 'stats') {
+      pendingStatsSection.value = null
+      return
+    }
+    if (!page || !stats || (eclipseHost.value && !analysis)) return
+
+    const scrollWhenVisible = () => {
+      if (pendingStatsSection.value !== request || !page.clientWidth || !page.clientHeight) return
+      pendingStatsSection.value = null
+      stats.applyDemoSections(request.options)
+    }
+    if (page.clientWidth && page.clientHeight) {
+      scrollWhenVisible()
+    } else {
+      const observer = new ResizeObserver(scrollWhenVisible)
+      observer.observe(page)
+      onCleanup(() => observer.disconnect())
+    }
+  }, { flush: 'post' })
 
 const reportExpanded = ref(false)
 const reportReturnPending = ref(false)
@@ -2675,12 +2753,7 @@ function restoreEvidenceJump(entry) {
   syncTimelineViewport()
   if (entry.task) onHighlightClick(String(entry.task))
   if (entry.stats_section) {
-    rightPanelTab.value = 'stats'
-    nextTick(() => {
-      statsPanelRef.value?.applyDemoSections?.({
-        id: entry.stats_section, expand: true, scroll: entry.stats_section,
-      })
-    })
+    openStatsSection(entry.stats_section)
   }
 }
 
@@ -3413,6 +3486,7 @@ const timelineOptions = reactive({
 watch(() => timelineOptions.darkMode, (v) => {
   setDarkMode(v)
   applyUiThemeVars()
+  for (const panel of Object.values(eclipsePanels)) panel?.target.classList.toggle('dark', v)
 }, { immediate: true })
 
 function tabUndoStack(tab = activeTab.value) {
@@ -3509,6 +3583,9 @@ function focusStatisticsPanel(force = false) {
 
 function applyAppSettings(next, { silent = false, persist = true } = {}) {
   const runtime = applySettingsToRuntime(next)
+  for (const panel of Object.values(eclipsePanels)) {
+    if (panel) applyUiFontSize(panel.target.ownerDocument, runtime.uiFontSize)
+  }
   Object.assign(appSettings, runtime)
   // New object/array refs so StatisticsPanel watches apply expand/collapse + pins.
   appSettings.statsSectionCollapsed = mergeSectionCollapsed(runtime.statsSectionCollapsed)
@@ -3525,6 +3602,11 @@ function applyAppSettings(next, { silent = false, persist = true } = {}) {
 
 let settingsRevertSnapshot = null
 const settingsInitialTab = ref('appearance')
+
+function openSettingsFromAnalysis(tab) {
+  openSettingsDialog(tab)
+  if (eclipseHost.value) notifyViewerHost('focusTimeline')
+}
 
 function openSettingsDialog(tab = 'appearance') {
   helpOpen.value = false
@@ -4267,7 +4349,7 @@ const taskInspectorText = computed(() => taskInspectorLine(
 ))
 const paletteHits = computed(() => {
   const q = String(paletteQuery.value || '').trim()
-  const actions = [...COMMAND_PALETTE_ACTIONS]
+  const actions = COMMAND_PALETTE_ACTIONS.filter(([id]) => !eclipseHost.value || id !== 'focus')
   // Synthetic Stats section jumps — only when filtering so idle list stays short.
   if (q) actions.push(...commandPaletteStatsSectionActions())
   return commandPaletteRank(
@@ -4507,6 +4589,13 @@ async function attachParsedTrace(name, packedOrTrace, {
 
     putTrace(name, packedOrTrace).catch(() => {})
     scheduleSessionSave()
+    notifyViewerHost('traceLoaded', {
+      name,
+      start: trace.timeMin ?? null,
+      end: trace.timeMax ?? null,
+      tasks: trace.taskNames?.length ?? 0,
+      cores: trace.coreNames?.length ?? 0,
+    })
 
     setTimeout(() => {
       import('./utils/statsWorkerClient.js')
@@ -4591,14 +4680,6 @@ async function openHostTraceUrl(traceRef, requestedName = '') {
       error.viewerReported = true
       throw error
     }
-    const loaded = trace.value
-    notifyViewerHost('traceLoaded', {
-      name,
-      start: loaded?.timeMin ?? null,
-      end: loaded?.timeMax ?? null,
-      tasks: loaded?.taskNames?.length ?? 0,
-      cores: loaded?.coreNames?.length ?? 0,
-    })
   } catch (err) {
     const message = err?.message || `Failed to load ${name}`
     if (!err?.viewerReported && err?.name !== 'AbortError') onFileError(message)
@@ -4715,10 +4796,10 @@ function runPaletteAction(id) {
   bumpPaletteUsage(aid)
   if (aid === 'analysis') analysisOpen.value = true
   else if (aid === 'notebook') openNotebookDialog()
-  else if (aid === 'statistics') rightPanelTab.value = 'stats'
-  else if (aid === 'find') rightPanelTab.value = 'find'
-  else if (aid === 'marks') rightPanelTab.value = 'marks'
-  else if (aid === 'ai') rightPanelTab.value = 'ai'
+  else if (aid === 'statistics') openAnalysisTab('stats')
+  else if (aid === 'find') focusFindPanel()
+  else if (aid === 'marks') openAnalysisTab('marks')
+  else if (aid === 'ai') openAnalysisTab('ai')
   else if (aid === 'compare') compareOpen.value = true
   else if (aid === 'heatmap') onOpenHeatmap()
   else if (aid === 'focus') toggleFocusMode()
@@ -4729,20 +4810,12 @@ function runPaletteAction(id) {
     applyWorkspacePreset(aid)
   } else if (aid.startsWith('stats-section:')) {
     const sid = aid.slice('stats-section:'.length).trim()
-    rightPanelTab.value = 'stats'
-    nextTick(() => {
-      statsPanelRef.value?.applyDemoSections?.({
-        id: sid,
-        expand: true,
-        scroll: sid,
-        collapse_others: false,
-      })
-    })
+    openStatsSection(sid, { collapse_others: false })
   }
 }
 
 function applyWorkspacePreset(id) {
-  rightPanelTab.value = 'stats'
+  openAnalysisTab('stats')
   appSettings.statsSectionCollapsed = workspacePresetCollapsed(
     id, defaultSectionCollapsed())
   saveSettings(appSettings)
@@ -4931,7 +5004,9 @@ function onStatsSegmentJump(ns, meta = {}) {
 }
 
 function onOpenPlotChange(v) {
+  const opening = v && !activeTab.value?.openPlot
   if (activeTab.value) activeTab.value.openPlot = v
+  if (opening && eclipseHost.value) notifyViewerHost('plotOpened')
   scheduleSessionSave()
 }
 
@@ -5021,7 +5096,7 @@ function focusFindPanel() {
     appSettings.showFind = true
     saveSettings(appSettings)
   }
-  rightPanelTab.value = 'find'
+  openAnalysisTab('find')
   nextTick(() => findPanelRef.value?.focusInput())
 }
 
@@ -5034,7 +5109,7 @@ async function focusAiAndAsk(templateIdOrPayload) {
     appSettings.showAi = true
     saveSettings(appSettings)
   }
-  rightPanelTab.value = 'ai'
+  openAnalysisTab('ai')
   let templateId = templateIdOrPayload
   let findingId = ''
   let prompt = null
@@ -5094,12 +5169,10 @@ function onApplyFindingScope(finding) {
  * or "Limit to C1–Cn"; the recommended cursor window stays a suggestion the
  * user applies explicitly via "Apply cursors".
  */
-async function onOpenFindingStatistics({ finding, sectionId } = {}) {
+function onOpenFindingStatistics({ finding, sectionId } = {}) {
   if (!finding || !sectionId) return
   // Keep Findings inbox open so Timeline Evidence stays visible (Step 2 #5/#16).
-  rightPanelTab.value = 'stats'
-  await nextTick()
-  statsPanelRef.value?.applyDemoSections?.({ id: sectionId, expand: true, scroll: 'section' })
+  openStatsSection(sectionId, { scroll: 'section' })
 }
 
 function onFindingsTriageUpdate(state) {
@@ -5207,12 +5280,8 @@ function onInspectorInspectTask(mk) {
   if (mk) onHighlightClick(mk)
 }
 
-async function onInspectorOpenLoadBalance() {
-  rightPanelTab.value = 'stats'
-  await nextTick()
-  statsPanelRef.value?.applyDemoSections?.({
-    id: 'cores', expand: true, scroll: 'section', collapse_others: false,
-  })
+function onInspectorOpenLoadBalance() {
+  openStatsSection('cores', { scroll: 'section', collapse_others: false })
 }
 
 async function queryCompareWithAi(payload) {
@@ -5231,7 +5300,7 @@ async function queryCompareWithAi(payload) {
     appSettings.showAi = true
     saveSettings(appSettings)
   }
-  rightPanelTab.value = 'ai'
+  openAnalysisTab('ai')
   await nextTick()
   if (!aiPanelRef.value) await nextTick()
   await aiPanelRef.value?.askCompare?.(idA, idB, payload?.sectionLabel || '')
@@ -5253,7 +5322,7 @@ async function queryValidateExperimentWithAi(payload) {
     appSettings.showAi = true
     saveSettings(appSettings)
   }
-  rightPanelTab.value = 'ai'
+  openAnalysisTab('ai')
   await nextTick()
   if (!aiPanelRef.value) await nextTick()
   await aiPanelRef.value?.askValidateExperiment?.(idA, idB)
@@ -5374,10 +5443,7 @@ function onAiOpenStats(sectionId) {
   // Accept a header title / loose spelling ("Ready-Gap (Starvation)") too.
   const sid = resolveStatsSectionId(sectionId) || String(sectionId || '').trim()
   if (!sid) return
-  rightPanelTab.value = 'stats'
-  nextTick(() => {
-    statsPanelRef.value?.applyDemoSections?.({ id: sid, expand: true, scroll: sid })
-  })
+  openStatsSection(sid)
 }
 
 function onAiRange({ lo, hi } = {}) {
@@ -5405,11 +5471,7 @@ function applyExploreRange(spec = {}) {
   }
   syncTimelineViewport()
   if (spec.section) {
-    nextTick(() => {
-      statsPanelRef.value?.applyDemoSections?.({
-        id: spec.section, expand: true, scroll: spec.section,
-      })
-    })
+    openStatsSection(spec.section)
   }
   if (spec.note && spec.ns != null) {
     addAnnotationAtNs(Number(spec.ns), spec.note)
@@ -6252,10 +6314,8 @@ async function onCompareInvestigate({
   if (activateId != null && tabs.value.some(t => t.id === activateId)) {
     activeTabId.value = activateId
   }
-  rightPanelTab.value = 'stats'
   const sid = String(sectionId || 'response').trim() || 'response'
-  await nextTick()
-  statsPanelRef.value?.applyDemoSections?.({ id: sid, expand: true, scroll: sid })
+  openStatsSection(sid)
   const taskName = String(task || '').trim()
   if (taskName) {
     await nextTick()
@@ -6380,9 +6440,7 @@ async function onFileDrop(e) {
 }
 
 async function onCopyClipboardDirect() {
-  const blob = timelineOptions.showCpuLoad
-    ? await captureLeftPaneBlob()
-    : await timelinePanelRef.value?.captureScreenshotBlob?.()
+  const { blob, includesCpuLoad } = await captureLeftPaneBlob()
   if (!blob) {
     showToast('Unable to capture screenshot.', 'error')
     return
@@ -6394,6 +6452,7 @@ async function onCopyClipboardDirect() {
     showToast('Copied to clipboard', 'info')
   } catch {
     if (snapshotImageUrl.value) URL.revokeObjectURL(snapshotImageUrl.value)
+    snapshotDownloadFilename.value = screenshotFilename(includesCpuLoad)
     snapshotImageUrl.value = URL.createObjectURL(blob)
     snapshotEditorOpen.value = true
     showToast('Clipboard blocked — use Save/Copy in the editor', 'info')
@@ -6401,18 +6460,14 @@ async function onCopyClipboardDirect() {
 }
 
 async function onCopyScreenshot() {
-  const blob = timelineOptions.showCpuLoad
-    ? await captureLeftPaneBlob()
-    : await timelinePanelRef.value?.captureScreenshotBlob?.()
+  const { blob, includesCpuLoad } = await captureLeftPaneBlob()
   if (!blob) {
     showToast('Unable to capture screenshot.', 'error')
     return
   }
   // Open snapshot editor so user can annotate before copying/saving
   if (snapshotImageUrl.value) URL.revokeObjectURL(snapshotImageUrl.value)
-  snapshotDownloadFilename.value = timelineOptions.showCpuLoad
-    ? 'timeline-with-load.png'
-    : 'timeline-snapshot.png'
+  snapshotDownloadFilename.value = screenshotFilename(includesCpuLoad)
   snapshotImageUrl.value   = URL.createObjectURL(blob)
   snapshotEditorOpen.value = true
 }
@@ -6426,9 +6481,9 @@ function onSnapshotEditorClose() {
 }
 
 async function onExportSvg() {
-  const blob = timelineOptions.showCpuLoad
-    ? await captureLeftPaneSvgBlob()
-    : timelinePanelRef.value?.captureAsSvg?.()
+  const cpu = cpuLoadPanelRef.value?.panelRef
+  const combined = cpu?.clientHeight > 0 ? await captureLeftPaneSvgBlob(cpu) : null
+  const blob = combined ?? timelinePanelRef.value?.captureAsSvg?.()
   if (!blob) {
     showToast('Unable to generate SVG export.', 'error')
     return
@@ -6436,7 +6491,7 @@ async function onExportSvg() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = timelineOptions.showCpuLoad ? 'timeline-with-load.svg' : 'timeline-export.svg'
+  a.download = combined ? 'timeline-with-load.svg' : 'timeline-export.svg'
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -6811,50 +6866,75 @@ async function captureLeftPaneBlob() {
   const captureW = leftPane?.clientWidth ?? 0
 
   const timelineBlob = await timelinePanelRef.value?.captureScreenshotBlob?.()
-  if (!timelineBlob) return null
-
-  if (!timelineOptions.showCpuLoad) return timelineBlob
+  const timelineOnly = { blob: timelineBlob, includesCpuLoad: false }
+  if (!timelineBlob) return timelineOnly
 
   const cpuEl = cpuLoadPanelRef.value?.panelRef
-  if (!cpuEl) return timelineBlob
+  if (!cpuEl) return timelineOnly
 
   const cpuH = cpuEl.clientHeight
-  if (captureW <= 0 || cpuH <= 0) return timelineBlob
+  const cpuW = cpuEl.clientWidth
+  if (captureW <= 0 || cpuW <= 0 || cpuH <= 0) return timelineOnly
 
   try {
     const cpuBlob = await domToBlob(cpuEl, {
       cacheBust: true,
       pixelRatio: 1,
-      width: captureW,
+      width: cpuW,
       height: cpuH,
       filter: captureFilter,
     })
-    if (!cpuBlob) return timelineBlob
+    if (!cpuBlob) return timelineOnly
     const [topImg, bottomImg] = await Promise.all([
       loadImageFromBlob(timelineBlob),
       loadImageFromBlob(cpuBlob),
     ])
-    return await stitchImagesVertical(topImg, bottomImg, captureW)
+    const stitched = await stitchImagesVertical(topImg, bottomImg, captureW)
+    return stitched ? { blob: stitched, includesCpuLoad: true } : timelineOnly
   } catch {
-    return timelineBlob
+    return timelineOnly
   }
 }
 
-async function captureLeftPaneSvgBlob() {
+function screenshotFilename(includesCpuLoad) {
+  return includesCpuLoad ? 'timeline-with-load.png' : 'timeline-snapshot.png'
+}
+
+async function captureLeftPaneSvgBlob(cpu) {
   const root = leftPaneRef.value
-  if (!root) return null
+  if (!root?.clientWidth || !root.clientHeight) return null
+
+  const width = root.clientWidth
+  const height = root.clientHeight
+  const cpuHeight = cpu.clientHeight
+  const cpuWidth = cpu.clientWidth
+  if (!cpuWidth || !cpuHeight) return null
+  const options = { cacheBust: true, filter: captureFilter }
 
   try {
-    const dataUrl = await domToSvg(root, {
-      cacheBust: true,
-      width: root.clientWidth,
-      height: root.clientHeight,
-      filter: captureFilter,
-    })
-    const response = await fetch(dataUrl)
-    return await response.blob()
+    const timelineUrl = await domToSvg(root, { ...options, width, height })
+    if (root.contains(cpu)) return await (await fetch(timelineUrl)).blob()
+
+    const cpuUrl = await domToSvg(cpu, { ...options, width: cpuWidth, height: cpuHeight })
+    const parser = new DOMParser()
+    const parseSvg = async url => parser.parseFromString(
+      await (await fetch(url)).text(), 'image/svg+xml',
+    ).documentElement
+    const [timeline, load] = await Promise.all([parseSvg(timelineUrl), parseSvg(cpuUrl)])
+    const namespace = 'http://www.w3.org/2000/svg'
+    if (timeline.namespaceURI !== namespace || load.namespaceURI !== namespace) return null
+    const scaledCpuHeight = cpuHeight * width / cpuWidth
+    const svgDocument = parser.parseFromString(
+      `<svg xmlns="${namespace}" width="${width}" height="${height + scaledCpuHeight}"/>`, 'image/svg+xml',
+    )
+    load.setAttribute('y', String(height))
+    load.setAttribute('viewBox', `0 0 ${cpuWidth} ${cpuHeight}`)
+    load.setAttribute('width', String(width))
+    load.setAttribute('height', String(scaledCpuHeight))
+    svgDocument.documentElement.append(timeline, load)
+    return new Blob([new XMLSerializer().serializeToString(svgDocument)], { type: 'image/svg+xml' })
   } catch {
-    return timelinePanelRef.value?.captureAsSvg?.() || null
+    return null
   }
 }
 
@@ -7127,10 +7207,7 @@ function onCorridorJump(payload) {
     timelinePanelRef.value?.zoomToTimeRange(payload.binLo, payload.binHi, 0.05, { programmatic: true })
     if (payload.lockTaskKey) onHighlightClick(payload.lockTaskKey)
     autofitCpuLoadPaneHeight()
-    rightPanelTab.value = 'stats'
-    statsPanelRef.value?.applyDemoSections?.({
-      id: 'core_pairs', expand: true, scroll: 'core_pairs', collapse_others: false,
-    })
+    openStatsSection('core_pairs', { collapse_others: false })
   })
   showToast(
     `Jumped to hotspot ${payload.pairLabel || ''}`.trim(),
@@ -7170,10 +7247,7 @@ function onCorridorSpotlight(payload) {
       scheduleRender()
     }
     autofitCpuLoadPaneHeight()
-    rightPanelTab.value = 'stats'
-    statsPanelRef.value?.applyDemoSections?.({
-      id: 'migrations', expand: true, scroll: 'migrations', collapse_others: false,
-    })
+    openStatsSection('migrations', { collapse_others: false })
   })
 
   const n = payload.mergeKeys?.length || 0
@@ -7291,6 +7365,16 @@ function openAboutDialog() {
   helpOpen.value = false
   if (settingsOpen.value) onSettingsCancel()
   aboutOpen.value = true
+}
+
+function onEclipsePanelKeydown(e) {
+  if (e.defaultPrevented || e.isComposing || e.altKey) return
+  const mod = e.ctrlKey || e.metaKey
+  if (!mod && e.key !== 'F3' && !(e.key === 'F1' && e.shiftKey)) return
+  onGlobalKeydown(e)
+  if (e.defaultPrevented && !(mod && e.key.toLowerCase() === 'f')) {
+    notifyViewerHost('focusTimeline')
+  }
 }
 
 function onGlobalKeydown(e) {
@@ -7610,7 +7694,7 @@ function onGlobalKeydown(e) {
       break
     case 'f':
       // F = Fit Trace; Shift+F = toggle Focus Mode (F never toggles Focus Mode).
-      if (!mod) {
+      if (!mod && (!e.shiftKey || !eclipseHost.value)) {
         if (e.shiftKey) toggleFocusMode()
         else onFit()
         e.preventDefault()
@@ -7717,6 +7801,8 @@ onMounted(async () => {
   window.addEventListener('resize', onWorkspaceResize)
   uninstallViewerHost = installViewerHostApi({
     openTraceUrl: openHostTraceUrl,
+    openPanel: openEclipsePanel,
+    returnPanel: returnEclipsePanel,
     setTheme(theme) {
       const value = String(theme || '').toLowerCase()
       if (value !== 'light' && value !== 'dark') throw new Error(`Unsupported theme: ${theme}`)
@@ -7725,11 +7811,14 @@ onMounted(async () => {
     },
     openStatistics() {
       focusStatisticsPanel(true)
+      openAnalysisTab('stats')
     },
     openTraceCompare() {
       onOpenTraceCompare()
     },
   })
+  eclipseHost.value = window.BTFViewerHost.type === 'eclipse'
+  if (eclipseHost.value) focusMode.value = false
   await restoreSessionTabs(saved)
   if (saved?.aiCase) {
     await nextTick()
@@ -7748,6 +7837,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  for (const panel of Object.keys(eclipsePanels)) returnEclipsePanel(panel)
   uninstallViewerHost?.()
   uninstallViewerHost = null
   if (_statusBarFlashTimer) {
@@ -8324,6 +8414,11 @@ body {
   height: 100vh;
   background: var(--bg);
   color: var(--fg);
+}
+
+.eclipse-panel-window > .right-panel {
+  flex: 1;
+  min-height: 0;
 }
 
 .trace-quality-banner {

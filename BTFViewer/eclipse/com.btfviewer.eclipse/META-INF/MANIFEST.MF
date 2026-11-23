@@ -2,7 +2,7 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: BTFViewer Eclipse Integration
 Bundle-SymbolicName: com.btfviewer.eclipse;singleton:=true
-Bundle-Version: 0.1.1.qualifier
+Bundle-Version: 0.1.2.qualifier
 Bundle-Activator: com.btfviewer.eclipse.BTFViewerPlugin
 Bundle-Vendor: BTFViewer
 Bundle-RequiredExecutionEnvironment: JavaSE-17

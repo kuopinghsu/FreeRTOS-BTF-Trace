@@ -19,6 +19,20 @@
       <contentTypeBinding contentTypeId="com.btfviewer.eclipse.compressedTrace"/>
     </editor>
   </extension>
+  <extension point="org.eclipse.ui.views">
+    <category id="com.btfviewer.eclipse.views" name="BTFViewer"/>
+    <view id="com.btfviewer.eclipse.analysis" name="BTF Analysis"
+        category="com.btfviewer.eclipse.views"
+        class="com.btfviewer.eclipse.views.BTFPanelView"/>
+    <view id="com.btfviewer.eclipse.cpu" name="BTF CPU Load"
+        category="com.btfviewer.eclipse.views"
+        class="com.btfviewer.eclipse.views.BTFPanelView"/>
+  </extension>
+  <extension point="org.eclipse.ui.perspectives">
+    <perspective id="com.btfviewer.eclipse.perspective" name="BTFViewer"
+        icon="icons/btfviewer.svg"
+        class="com.btfviewer.eclipse.views.BTFPerspective"/>
+  </extension>
   <extension point="org.eclipse.ui.ide.editorAssociationOverride">
     <editorAssociationOverride
         id="com.btfviewer.eclipse.compressedTraceEditor"
