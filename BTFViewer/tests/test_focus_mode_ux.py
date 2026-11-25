@@ -66,8 +66,16 @@ class FocusModeSourceTests(unittest.TestCase):
         )
 
     def test_web_help_lists_focus_mode_keys(self) -> None:
-        self.assertRegex(APP_VUE, r"Shift\+F\s*</div><div>Toggle Focus Mode</div>")
-        self.assertRegex(APP_VUE, r">\s*Esc\s*</div><div>Exit Focus Mode</div>")
+        self.assertRegex(
+            APP_VUE,
+            r'<div v-if="!eclipseHost" class="k">\s*Shift\+F\s*</div>'
+            r'\s*<div v-if="!eclipseHost">Toggle Focus Mode</div>',
+        )
+        self.assertRegex(
+            APP_VUE,
+            r'<div v-if="!eclipseHost" class="k">\s*Esc\s*</div>'
+            r'\s*<div v-if="!eclipseHost">Exit Focus Mode</div>',
+        )
 
     def test_web_keeps_visible_exit_focus_control(self) -> None:
         self.assertIn('class="focus-exit"', APP_VUE)

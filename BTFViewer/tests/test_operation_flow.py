@@ -82,8 +82,8 @@ class OpenStatisticsIsNavigationOnly(unittest.TestCase):
     """Step 1.2 — the finding `Open Statistics` action opens a section only."""
 
     def test_web_handler_does_not_touch_scope(self):
-        body = _js_body(APP_VUE, "async function onOpenFindingStatistics(")
-        self.assertIn("applyDemoSections", body)
+        body = _js_body(APP_VUE, "function onOpenFindingStatistics(")
+        self.assertIn("openStatsSection(sectionId, { scroll: 'section' })", body)
         self.assertNotIn("onApplyFindingScope", body)
         self.assertNotIn("applyExploreRange", body)
         self.assertNotIn("cursors.value =", body)
@@ -221,14 +221,14 @@ class SharedAiContextPath(unittest.TestCase):
 class StatisticsNavigationHasNoSideState(unittest.TestCase):
     """Step 3.3 — all routes into a Statistics section share one navigator."""
 
-    def test_web_routes_use_apply_demo_sections(self):
-        for fn in ("onOpenFindingStatistics", "onAiOpenStats"):
-            body = _js_body(APP_VUE, f"function {fn}(") \
-                if f"function {fn}(" in APP_VUE \
-                else _js_body(APP_VUE, f"async function {fn}(")
-            self.assertIn("applyDemoSections", body, fn)
+    def test_web_routes_use_shared_section_navigator(self):
+        for fn in ("onOpenFindingStatistics", "onAiOpenStats", "openStatsSection"):
+            body = _js_body(APP_VUE, f"function {fn}(")
+            expected = "pendingStatsSection.value =" if fn == "openStatsSection" else "openStatsSection("
+            self.assertIn(expected, body, fn)
             self.assertNotIn("cursors.value =", body)
             self.assertNotIn("scopeToCursors =", body)
+        self.assertIn("stats.applyDemoSections(request.options)", APP_VUE)
 
 
 class WorkspacePresetsAreLayoutOnly(unittest.TestCase):
