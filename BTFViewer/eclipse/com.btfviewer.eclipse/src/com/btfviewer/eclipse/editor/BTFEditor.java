@@ -4,8 +4,13 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.jface.util.IPropertyChangeListener;
@@ -20,9 +25,13 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorSite;
 import org.eclipse.ui.IFileEditorInput;
+import org.eclipse.ui.IPerspectiveDescriptor;
+import org.eclipse.ui.IPerspectiveListener;
 import org.eclipse.ui.IURIEditorInput;
 import org.eclipse.ui.IWorkbenchPage;
+import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PartInitException;
+import org.eclipse.ui.PerspectiveAdapter;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.part.EditorPart;
 
@@ -32,11 +41,29 @@ import com.btfviewer.eclipse.bridge.BTFBrowserMessage;
 import com.btfviewer.eclipse.resources.ViewerResourceServer;
 import com.btfviewer.eclipse.util.JsonUtil;
 import com.btfviewer.eclipse.views.BTFPanelView;
-import com.btfviewer.eclipse.views.BTFPerspective;
 
 /** Read-only Eclipse shell around the existing BTFViewer HTML application. */
 public final class BTFEditor extends EditorPart {
     public static final String EDITOR_ID = "com.btfviewer.eclipse.editor";
+    // Views are shared by all trace editors on the same workbench page.
+    private static final Map<IWorkbenchPage, Map<String, Set<String>>> VISIBLE_PANELS_BY_PAGE =
+            new WeakHashMap<>();
+    private static final Set<IWorkbenchWindow> TRACKED_WINDOWS =
+            Collections.newSetFromMap(new WeakHashMap<>());
+    private static final IPerspectiveListener PANEL_LAYOUT_LISTENER = new PerspectiveAdapter() {
+        @Override
+        public void perspectiveClosed(IWorkbenchPage page, IPerspectiveDescriptor perspective) {
+            clearPanelVisibility(page, perspective);
+        }
+
+        @Override
+        public void perspectiveChanged(IWorkbenchPage page, IPerspectiveDescriptor perspective,
+                String changeId) {
+            if (IWorkbenchPage.CHANGE_RESET_COMPLETE.equals(changeId)) {
+                clearPanelVisibility(page, perspective);
+            }
+        }
+    };
 
     private IFile traceFile;
     private Path localTrace;
@@ -52,7 +79,6 @@ public final class BTFEditor extends EditorPart {
     private final Set<BTFPanelView> pendingPanels = new LinkedHashSet<>();
     private BTFPanelView openingView;
     private boolean traceLoaded;
-    private boolean perspectiveOpened;
 
     @Override
     public void init(IEditorSite site, IEditorInput input) throws PartInitException {
@@ -106,6 +132,9 @@ public final class BTFEditor extends EditorPart {
             if (!viewerReady) display.timerExec(30_000, startupTimeout);
             themeListener = event -> applyTheme();
             PlatformUI.getWorkbench().getThemeManager().addPropertyChangeListener(themeListener);
+            IWorkbenchWindow window = getSite().getWorkbenchWindow();
+            if (TRACKED_WINDOWS.add(window)) window.addPerspectiveListener(PANEL_LAYOUT_LISTENER);
+            window.addPerspectiveListener(perspectiveListener);
         } catch (IOException | SWTError error) {
             BTFViewerPlugin.log("Unable to initialize the BTFViewer editor", error);
             if (bridge != null && !bridge.isDisposed()) bridge.dispose();
@@ -153,7 +182,7 @@ public final class BTFEditor extends EditorPart {
                 setStatus("Ready");
                 if (!traceLoaded) {
                     traceLoaded = true;
-                    showTracePerspective();
+                    showPanelViews();
                 }
             }
             case "traceLoadFailed" -> {
@@ -179,13 +208,66 @@ public final class BTFEditor extends EditorPart {
         }
     }
 
-    private void showTracePerspective() {
+    /**
+     * Show both trace panels in whichever perspective is active. The views are
+     * declared as hidden placeholders, so Eclipse docks them where plugin.xml
+     * says (CPU Load in the bottom area, Analysis in its own pane right of the
+     * editor) instead of leaving the user to open and drag them. VIEW_VISIBLE
+     * shows them without taking focus from the timeline.
+     */
+    private void showPanelViews() {
+        if (!traceLoaded || browser == null || browser.isDisposed()) return;
         IWorkbenchPage page = getSite().getPage();
-        if (!traceLoaded || perspectiveOpened || page.getActiveEditor() != this) return;
-        perspectiveOpened = true;
-        page.setPerspective(PlatformUI.getWorkbench().getPerspectiveRegistry().findPerspectiveWithId(BTFPerspective.ID));
-        for (String id : new String[] { BTFPanelView.ANALYSIS_ID, BTFPanelView.CPU_ID }) {
-            if (page.findView(id) instanceof BTFPanelView view) view.refresh();
+        if (page == null || page.getActiveEditor() != this) return;
+        IPerspectiveDescriptor perspective = page.getPerspective();
+        if (perspective == null) return;
+        Set<String> visiblePanels = VISIBLE_PANELS_BY_PAGE
+                .computeIfAbsent(page, key -> new HashMap<>())
+                .computeIfAbsent(perspective.getId(), id -> new HashSet<>());
+        for (String id : new String[] { BTFPanelView.CPU_ID, BTFPanelView.ANALYSIS_ID }) {
+            if (visiblePanels.contains(id)) continue;
+            try {
+                if (page.showView(id, null, IWorkbenchPage.VIEW_VISIBLE) instanceof BTFPanelView view) {
+                    view.refresh();
+                    if (page.isPartVisible(view)) visiblePanels.add(id);
+                }
+            } catch (PartInitException error) {
+                BTFViewerPlugin.log("Unable to open BTF panel view: " + id, error);
+            }
+        }
+    }
+
+    /**
+     * Reset Perspective rebuilds the layout from the perspective factory, which
+     * closes both panels because they are declared as hidden placeholders. Any
+     * still-open trace editor should get its panels back, so reopen them once
+     * the reset has finished.
+     */
+    private final IPerspectiveListener perspectiveListener = new PerspectiveAdapter() {
+        @Override
+        public void perspectiveActivated(IWorkbenchPage page, IPerspectiveDescriptor perspective) {
+            if (page == getSite().getPage()) schedulePanelViews();
+        }
+
+        @Override
+        public void perspectiveChanged(IWorkbenchPage page, IPerspectiveDescriptor perspective,
+                String changeId) {
+            if (!IWorkbenchPage.CHANGE_RESET_COMPLETE.equals(changeId)
+                    || page != getSite().getPage() || perspective == null) return;
+            schedulePanelViews();
+        }
+    };
+
+    private static void clearPanelVisibility(IWorkbenchPage page, IPerspectiveDescriptor perspective) {
+        Map<String, Set<String>> panelsByPerspective = VISIBLE_PANELS_BY_PAGE.get(page);
+        if (panelsByPerspective != null && perspective != null) {
+            panelsByPerspective.remove(perspective.getId());
+        }
+    }
+
+    private void schedulePanelViews() {
+        if (traceLoaded && display != null && !display.isDisposed()) {
+            display.asyncExec(this::showPanelViews);
         }
     }
 
@@ -278,11 +360,7 @@ public final class BTFEditor extends EditorPart {
     public void setFocus() {
         if (browser != null && !browser.isDisposed()) {
             browser.setFocus();
-            if (traceLoaded && !perspectiveOpened) {
-                display.asyncExec(() -> {
-                    if (browser != null && !browser.isDisposed()) showTracePerspective();
-                });
-            }
+            schedulePanelViews();
         }
     }
 
@@ -302,6 +380,12 @@ public final class BTFEditor extends EditorPart {
         if (themeListener != null) {
             PlatformUI.getWorkbench().getThemeManager().removePropertyChangeListener(themeListener);
             themeListener = null;
+        }
+        // init() can throw before setSite(), and Eclipse still calls dispose()
+        // on the half-built editor, so getSite() may legitimately be null here.
+        IEditorSite site = getEditorSite();
+        if (site != null && site.getWorkbenchWindow() != null) {
+            site.getWorkbenchWindow().removePerspectiveListener(perspectiveListener);
         }
         if (browser != null && !browser.isDisposed() && bridge != null && !bridge.isDisposed()) {
             bridge.dispose();

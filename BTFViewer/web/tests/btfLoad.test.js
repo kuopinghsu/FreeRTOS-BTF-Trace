@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import { describe, it } from 'node:test'
 import { gzipSync, zipSync } from 'fflate'
 import bz2 from 'bz2'
@@ -29,6 +28,12 @@ const MINI_B = `#version 1.0.0
 100,Core_0,0,T,[0/2]B,0,resume
 150,Core_0,0,T,[0/2]B,0,preempt
 `
+
+// MINI compressed with bzip2 and encoded as base64.
+const MINI_BZ2 = Buffer.from(
+  'QlpoOTFBWSZTWWVIEOMAAAPfgAAQSAXwACgADAqqJ98AIABURTeqaNG1NAPRpM1BKp+qG1Aeo0aAaDTnt0oEBxBEVDoxkUjhVqRbK+IpFo6BgEnqq62GTCc6taFxcuDeTY5wMPY0H4u5IpwoSDKkCHGA',
+  'base64',
+)
 
 describe('isBtfOpenName', () => {
   it('accepts plain and compressed names', () => {
@@ -66,23 +71,17 @@ describe('decompressBtfBytes', () => {
   })
 
   it('inflates bz2', () => {
-    const bzBytes = execFileSync('python3', ['-c',
-      'import bz2,sys; sys.stdout.buffer.write(bz2.compress(sys.stdin.buffer.read()))'],
-      { input: MINI })
-    const bytes = new Uint8Array(bzBytes)
+    const bytes = new Uint8Array(MINI_BZ2)
     assert.equal(sniffCompression(bytes), 'bz2')
     assert.equal(compressionFromName('t.btf.bz2'), 'bz2')
     assert.equal(typeof bz2.decompress, 'function')
     assert.equal(bzip2BlockCount(bytes), 1)
-    assert.match(decompressBtfBytes(bytes, 't.btf.bz2'), /resume/)
+    assert.equal(decompressBtfBytes(bytes, 't.btf.bz2'), MINI)
   })
 
   it('uses bzip2 block bounds before decompression', () => {
-    const bzBytes = execFileSync('python3', ['-c',
-      'import bz2,sys; sys.stdout.buffer.write(bz2.compress(sys.stdin.buffer.read()))'],
-      { input: MINI })
     assert.throws(
-      () => decompressBtfEntries(new Uint8Array(bzBytes), 't.btf.bz2', { maxExpanded: 1024 }),
+      () => decompressBtfEntries(new Uint8Array(MINI_BZ2), 't.btf.bz2', { maxExpanded: 1024 }),
       /decompressed size exceeds/,
     )
   })

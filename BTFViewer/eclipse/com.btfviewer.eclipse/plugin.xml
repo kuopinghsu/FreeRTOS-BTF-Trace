@@ -23,15 +23,63 @@
     <category id="com.btfviewer.eclipse.views" name="BTFViewer"/>
     <view id="com.btfviewer.eclipse.analysis" name="BTF Analysis"
         category="com.btfviewer.eclipse.views"
+        icon="icons/analysis.svg"
         class="com.btfviewer.eclipse.views.BTFPanelView"/>
     <view id="com.btfviewer.eclipse.cpu" name="BTF CPU Load"
         category="com.btfviewer.eclipse.views"
+        icon="icons/cpu-load.svg"
         class="com.btfviewer.eclipse.views.BTFPanelView"/>
+  </extension>
+  <extension point="org.eclipse.ui.menus">
+    <menuContribution locationURI="toolbar:org.eclipse.ui.main.toolbar?after=additions">
+      <toolbar id="com.btfviewer.eclipse.toolbar" label="BTFViewer">
+        <command id="com.btfviewer.eclipse.toolbar.showCpu"
+            commandId="org.eclipse.ui.views.showView"
+            label="Show BTF CPU Load" tooltip="Show BTF CPU Load"
+            icon="icons/cpu-load.svg" style="push">
+          <parameter name="org.eclipse.ui.views.showView.viewId" value="com.btfviewer.eclipse.cpu"/>
+        </command>
+        <command id="com.btfviewer.eclipse.toolbar.showAnalysis"
+            commandId="org.eclipse.ui.views.showView"
+            label="Show BTF Analysis" tooltip="Show BTF Analysis"
+            icon="icons/analysis.svg" style="push">
+          <parameter name="org.eclipse.ui.views.showView.viewId" value="com.btfviewer.eclipse.analysis"/>
+        </command>
+      </toolbar>
+    </menuContribution>
   </extension>
   <extension point="org.eclipse.ui.perspectives">
     <perspective id="com.btfviewer.eclipse.perspective" name="BTFViewer"
         icon="icons/btfviewer.svg"
         class="com.btfviewer.eclipse.views.BTFPerspective"/>
+  </extension>
+  <extension point="org.eclipse.ui.perspectiveExtensions">
+    <!-- One wildcard entry covers every perspective, including third-party and
+         future ones. Both views are hidden placeholders, so they stay closed
+         until a trace is opened; BTFEditor then shows them and Eclipse docks
+         them here. Anchoring to the editor area (org.eclipse.ui.editorss) is
+         deliberate: it is the only layout part guaranteed to exist in every
+         perspective, and it gives each view its own pane instead of tabbing it
+         behind an unrelated view such as Project Explorer or XPG Repository.
+
+         Note the ratios are fractions of the EDITOR AREA, not of the window:
+         in C/C++ the editor area already starts right of Project Explorer, so
+         the right split reserves about a third of the editor area for Analysis. -->
+    <perspectiveExtension targetID="*">
+      <view id="com.btfviewer.eclipse.cpu" visible="false"
+          relationship="bottom" ratio="0.70f" relative="org.eclipse.ui.editorss"/>
+      <view id="com.btfviewer.eclipse.analysis" visible="false"
+          relationship="right" ratio="0.66f" relative="org.eclipse.ui.editorss"/>
+      <viewShortcut id="com.btfviewer.eclipse.cpu"/>
+      <viewShortcut id="com.btfviewer.eclipse.analysis"/>
+      <perspectiveShortcut id="com.btfviewer.eclipse.perspective"/>
+    </perspectiveExtension>
+    <perspectiveExtension targetID="com.btfviewer.eclipse.perspective">
+      <perspectiveShortcut id="org.eclipse.cdt.ui.CPerspective"/>
+      <perspectiveShortcut id="org.eclipse.debug.ui.DebugPerspective"/>
+      <perspectiveShortcut id="com.tensilica.xide.trace.ui.TracePerspective"/>
+      <perspectiveShortcut id="org.eclipse.ui.resourcePerspective"/>
+    </perspectiveExtension>
   </extension>
   <extension point="org.eclipse.ui.ide.editorAssociationOverride">
     <editorAssociationOverride

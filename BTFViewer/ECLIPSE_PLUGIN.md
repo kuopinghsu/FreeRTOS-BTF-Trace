@@ -33,19 +33,42 @@ Keep the p2 ZIP intact.
 3. Expand the **BTFViewer** category, select **BTFViewer**, and complete
    the wizard. Restart Eclipse when prompted.
 
-To replace an installed 0.1.2 bundle with a rebuilt 0.1.2 archive,
-uninstall the installed copy, restart, then install the rebuilt archive.
-Open a trace and verify that the **BTFViewer** perspective opens with
-**BTF Analysis** on the right and **BTF CPU Load** at the bottom.
-The version alone cannot distinguish builds.
+Always bump `PLUGIN_VERSION` in `BTFViewer/eclipse/Makefile` (and the matching
+`Bundle-Version` in `META-INF/MANIFEST.MF`) before distributing changed plug-in
+contents. p2 caches artifacts by bundle id **and version**, so reinstalling a
+rebuilt archive that reuses the installed version silently keeps the old JAR —
+uninstall/reinstall and **Reset Perspective** will both appear to do nothing.
 
-If the views are missing, Eclipse may have reused the old bundle from its p2
-artifact cache. Close Eclipse, locate `com.btfviewer.eclipse_0.1.2.jar` in
-the installation's `plugins/` directory or its configured shared bundle pool,
-and compare its SHA-256 hash with the JAR under `plugins/` inside the rebuilt
-archive. If the hashes differ, back up the old JAR, replace it with the one
-from the archive, and start Eclipse once with `-clean`. For a shared bundle
-pool, check which other Eclipse installations use the bundle before replacing it.
+If you must reinstall the same version, clear the cached copy first. Close
+Eclipse, then confirm which JAR is actually loaded:
+
+```sh
+# Hash the JAR inside the archive you are installing...
+unzip -p com.btfviewer.eclipse_0.1.2-p2.zip \
+  plugins/com.btfviewer.eclipse_0.1.2.jar | sha256sum
+# ...and the one Eclipse already has.
+sha256sum /path/to/eclipse/plugins/com.btfviewer.eclipse_0.1.2.jar
+```
+
+If the hashes differ, back up the installed JAR, replace it with the one from
+the archive, and start Eclipse once with `-clean`. For a shared bundle pool,
+check which other Eclipse installations use the bundle before replacing it.
+
+If installation instead reports **The artifact file for
+osgi.bundle,com.btfviewer.eclipse,0.1.2 was not found**, check **Help >
+About Eclipse IDE > Installation Details**. When BTFViewer is absent there
+and both the bundle JAR and feature directory are missing, p2 may still be
+recording them in the local artifact registry.
+
+Close Eclipse and back up the affected bundle pool's `artifacts.xml` (usually
+in the Eclipse installation directory). Remove only the orphaned
+`osgi.bundle` record for `com.btfviewer.eclipse` and the
+`org.eclipse.update.feature` record for `com.btfviewer.eclipse.feature`, both
+at version `0.1.2`, from the local registry. Reduce the enclosing
+`<artifacts size="…">` count by the number of records removed. Reopen Eclipse
+and retry installation using the current p2 ZIP. If BTFViewer is still listed
+as installed, or another Eclipse installation shares the pool, check those
+profiles before editing the registry.
 
 For Eclipse distributions without the installation wizard, build the bundle JAR
 with `make -C BTFViewer eclipse-package` and copy it to `dropins/` with Eclipse
@@ -80,14 +103,28 @@ installed if the editor reports a browser initialization error.
 
 ## Dock or detach panels
 
-Opening a trace activates the **BTFViewer** perspective. **BTF Analysis**
-shares the right-hand stack with Outline and Task List. **BTF CPU Load**
-shares the bottom stack with Problems, Tasks, Console, and Properties.
-The timeline stays in the editor.
+Opening a trace shows **BTF CPU Load** and **BTF Analysis** without changing
+your perspective. Each gets its own pane rather than being tabbed behind an
+existing view: **BTF Analysis** (Statistics) docks to the right of the editor,
+and **BTF CPU Load** docks across the bottom. The
+same placement applies in every perspective — C/C++, Debug, Resource, and any
+third-party one — because the layout is anchored to the editor area, which
+every perspective has. The timeline stays in the editor and keeps focus.
+
+**Reset Perspective** rebuilds the layout from the perspective definition,
+which closes both panels. Any open trace editor reopens them automatically in
+their default panes once the reset finishes.
+
+The dedicated **BTFViewer** perspective (**Window > Perspective > Open
+Perspective > BTFViewer**) uses the same arrangement and adds Project Explorer
+on the left, plus shortcuts back to whichever of **C/C++**, **Debug**,
+**Trace**, and **Resource** your installation provides.
 The views follow the active BTF trace editor. Drag a view tab outside the
 workbench to float it or drag it back to dock it. To restore the default layout,
 choose **Window > Perspective > Reset Perspective…** while in BTFViewer.
-You can also reopen an individual view from **Window > Show View**.
+Use **Show BTF CPU Load** or **Show BTF Analysis** on the Eclipse toolbar to
+reopen or select either view. Both views are also available from
+**Window > Show View**.
 
 ## Build from source
 

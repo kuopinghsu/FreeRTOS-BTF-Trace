@@ -5923,14 +5923,31 @@
     @keydown.esc.stop.prevent="closePlot"
   >
     <div
+      ref="plotDialogEl"
       class="plot-dialog"
+      :style="{ transform: `translate(${plotOffset.x}px, ${plotOffset.y}px)` }"
       role="dialog"
       tabindex="-1"
       aria-modal="true"
       :aria-label="plotData?.title || 'Metrics plot'"
     >
-      <div class="plot-dialog-header">
-        <div class="plot-dialog-title">
+      <div
+        class="plot-dialog-header"
+        :class="{ 'is-dragging': plotDragging }"
+        @pointerdown="startPlotDrag"
+        @pointermove="movePlotDrag"
+        @lostpointercapture="endPlotDrag"
+      >
+        <div
+          class="plot-dialog-title"
+          tabindex="0"
+          role="group"
+          aria-label="Move plot window with arrow keys"
+          @keydown.left.stop.prevent="setPlotOffset(plotOffset.x - 16, plotOffset.y)"
+          @keydown.right.stop.prevent="setPlotOffset(plotOffset.x + 16, plotOffset.y)"
+          @keydown.up.stop.prevent="setPlotOffset(plotOffset.x, plotOffset.y - 16)"
+          @keydown.down.stop.prevent="setPlotOffset(plotOffset.x, plotOffset.y + 16)"
+        >
           {{ plotData?.title }}
         </div>
         <label
@@ -7367,6 +7384,57 @@ const openPlotRef = computed({
   get: () => props.openPlot,
   set: (v) => emit('update:openPlot', v),
 })
+const plotDialogEl = ref(null)
+const plotOffset = ref({ x: 0, y: 0 })
+const plotDragging = ref(false)
+let plotDrag = null
+
+function setPlotOffset(x, y) {
+  const dialog = plotDialogEl.value
+  const overlay = dialog.parentElement
+  const maxX = Math.max(0, (overlay.clientWidth - dialog.offsetWidth) / 2)
+  const maxY = Math.max(0, (overlay.clientHeight - dialog.offsetHeight) / 2)
+  plotOffset.value = {
+    x: Math.min(maxX, Math.max(-maxX, x)),
+    y: Math.min(maxY, Math.max(-maxY, y)),
+  }
+}
+
+function startPlotDrag(event) {
+  if (!event.isPrimary || event.button !== 0 || event.target.closest('button, label')) return
+  event.currentTarget.setPointerCapture(event.pointerId)
+  plotDrag = {
+    pointerId: event.pointerId,
+    x: event.clientX - plotOffset.value.x,
+    y: event.clientY - plotOffset.value.y,
+  }
+  plotDragging.value = true
+}
+
+function movePlotDrag(event) {
+  if (plotDrag?.pointerId !== event.pointerId) return
+  setPlotOffset(event.clientX - plotDrag.x, event.clientY - plotDrag.y)
+}
+
+function endPlotDrag(event) {
+  if (event && plotDrag?.pointerId !== event.pointerId) return
+  plotDrag = null
+  plotDragging.value = false
+}
+
+watch(plotDialogEl, (dialog, _, onCleanup) => {
+  if (!dialog) {
+    endPlotDrag()
+    plotOffset.value = { x: 0, y: 0 }
+    return
+  }
+  const observer = new ResizeObserver(() => {
+    if (plotDialogEl.value === dialog) setPlotOffset(plotOffset.value.x, plotOffset.value.y)
+  })
+  observer.observe(dialog.parentElement)
+  onCleanup(() => observer.disconnect())
+})
+
 const plotContentRef = ref(null)
 const scatterSvgEl = ref(null)
 const histogramSvgEl = ref(null)
@@ -12199,12 +12267,24 @@ defineExpose({
 .plot-dialog-header {
   justify-content: space-between;
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.plot-dialog-header.is-dragging {
+  cursor: grabbing;
 }
 
 .plot-dialog-title {
   font-size: 14px;
   font-weight: 700;
   color: var(--fg);
+}
+
+.plot-dialog-title:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
 }
 
 .plot-close-btn {
